@@ -34,6 +34,7 @@ use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::thread_lifecycle::LifecycleService;
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
 /// empty in-memory instance **only** if loading fails — but shout about the
@@ -408,6 +409,7 @@ impl AppStateBuilder {
 
         let live_config = Arc::new(LiveConfigCell::new(self.config.clone()));
         let events = EventStreamHub::new(self.event_tx);
+        let lifecycle = LifecycleService::new(self.garyx_db.clone());
         let state = Arc::new(AppState {
             runtime: RuntimeState {
                 start_time,
@@ -438,6 +440,7 @@ impl AppStateBuilder {
                 meetings,
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
+                lifecycle: lifecycle.clone(),
             },
             integration: IntegrationState {
                 bridge: self.bridge,
@@ -457,6 +460,7 @@ impl AppStateBuilder {
             cron_service.set_app_state(Arc::downgrade(&state));
             cron_service.set_garyx_db(state.ops.garyx_db.clone());
         }
+        lifecycle.attach_state(Arc::downgrade(&state));
 
         state
     }

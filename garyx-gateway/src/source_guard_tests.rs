@@ -65,7 +65,8 @@ fn raw_destructive_database_methods_are_crate_private_and_call_site_guarded() {
             "sqlite_thread_store.rs:.run_blocking(move |db| db.delete_thread_record_with_projections(&key))"
         ]
     );
-    assert!(store.contains(".start_delete(key.clone(), async move"));
+    assert!(store.contains(".reserve_delete(self, thread_id)"));
+    assert!(store.contains(".abort_and_drain_delete(&reservation)"));
 }
 
 #[test]

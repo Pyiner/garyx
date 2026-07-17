@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use garyx_bridge::claude_provider::ClaudeCliProvider;
 use garyx_bridge::codex_provider::CodexAgentProvider;
-use garyx_bridge::provider_trait::ProviderRuntime;
+use garyx_bridge::provider_trait::{ClearSessionOutcome, ProviderRuntime};
 use garyx_models::local_paths::{
     agent_memory_dir_for_gary_home, agent_memory_root_file_for_gary_home, gary_home_dir,
 };
@@ -130,8 +130,14 @@ async fn test_claude_session_management() {
     assert_eq!(sid, sid2);
 
     // Clear
-    assert!(provider.clear_session("test::sess").await);
-    assert!(!provider.clear_session("test::sess").await);
+    assert_eq!(
+        provider.clear_session("test::sess").await,
+        ClearSessionOutcome::Cleared
+    );
+    assert_eq!(
+        provider.clear_session("test::sess").await,
+        ClearSessionOutcome::AlreadyAbsent
+    );
 }
 
 #[tokio::test]
@@ -145,7 +151,10 @@ async fn test_codex_session_management() {
         .expect("get_or_create_session failed");
     assert!(sid.is_empty(), "Expected empty placeholder for new session");
 
-    assert!(provider.clear_session("test::codex::sess").await);
+    assert_eq!(
+        provider.clear_session("test::codex::sess").await,
+        ClearSessionOutcome::AlreadyAbsent
+    );
 }
 
 // ---------------------------------------------------------------------------

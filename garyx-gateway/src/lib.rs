@@ -50,6 +50,7 @@ mod task_projection;
 pub use task_projection::seed_task_counter_from_legacy;
 mod task_tree;
 pub mod tasks;
+mod thread_lifecycle;
 pub mod thread_logs;
 mod thread_meta_projection;
 mod thread_runtime;

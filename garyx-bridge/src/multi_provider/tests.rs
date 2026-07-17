@@ -25,7 +25,7 @@ use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::MultiProviderBridge;
 use crate::provider_trait::{
-    BridgeError, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ClearSessionOutcome, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
 };
 
 fn run_request(
@@ -722,12 +722,16 @@ impl ProviderRuntime for ClearSessionProvider {
         Ok(format!("sdk-{session_key}"))
     }
 
-    async fn clear_session(&self, session_key: &str) -> bool {
+    async fn clear_session(&self, session_key: &str) -> ClearSessionOutcome {
         self.cleared_sessions
             .lock()
             .unwrap()
             .push(session_key.to_owned());
-        self.should_clear.load(Ordering::Relaxed)
+        if self.should_clear.load(Ordering::Relaxed) {
+            ClearSessionOutcome::Cleared
+        } else {
+            ClearSessionOutcome::RetryableFailure
+        }
     }
 }
 
@@ -4356,7 +4360,10 @@ async fn test_clear_thread_state_keeps_affinity_when_provider_clear_fails() {
         .set_thread_workspace_binding("sess::clear-fail", Some("/tmp/workspace".to_owned()))
         .await;
 
-    assert!(!bridge.clear_thread_state("sess::clear-fail", None).await);
+    assert_eq!(
+        bridge.clear_thread_state("sess::clear-fail", None).await,
+        ClearSessionOutcome::RetryableFailure
+    );
     assert_eq!(
         provider.cleared_sessions(),
         vec!["sess::clear-fail".to_owned()]
@@ -4378,7 +4385,7 @@ async fn test_clear_thread_state_keeps_affinity_when_provider_clear_fails() {
 }
 
 #[tokio::test]
-async fn test_clear_thread_state_removes_affinity_after_provider_clear_succeeds() {
+async fn test_clear_thread_state_reports_success_before_local_state_is_dropped() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(ClearSessionProvider::new(ProviderType::ClaudeCode, true));
     bridge.register_provider("p1", provider.clone()).await;
@@ -4387,7 +4394,10 @@ async fn test_clear_thread_state_removes_affinity_after_provider_clear_succeeds(
         .set_thread_workspace_binding("sess::clear-ok", Some("/tmp/workspace-ok".to_owned()))
         .await;
 
-    assert!(bridge.clear_thread_state("sess::clear-ok", None).await);
+    assert_eq!(
+        bridge.clear_thread_state("sess::clear-ok", None).await,
+        ClearSessionOutcome::Cleared
+    );
     assert_eq!(
         provider.cleared_sessions(),
         vec!["sess::clear-ok".to_owned()]
@@ -4396,13 +4406,20 @@ async fn test_clear_thread_state_removes_affinity_after_provider_clear_succeeds(
         bridge
             .resolve_provider_for_thread("sess::clear-ok", "telegram", "main")
             .await,
-        None
+        Some("p1".to_owned())
     );
     assert!(
-        !bridge
+        bridge
             .thread_workspace_bindings_snapshot()
             .await
             .contains_key("sess::clear-ok")
+    );
+    bridge.drop_thread_state("sess::clear-ok").await;
+    assert_eq!(
+        bridge
+            .resolve_provider_for_thread("sess::clear-ok", "telegram", "main")
+            .await,
+        None
     );
 }
 

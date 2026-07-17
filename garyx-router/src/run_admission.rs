@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
@@ -9,13 +9,13 @@ use garyx_models::strip_server_owned_agent_metadata;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
-use crate::{ThreadStore, is_thread_key};
+use crate::{ThreadStore, ThreadTerminalState, is_thread_key};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunAdmissionError {
     #[error("thread not found: {0}")]
     NotFound(String),
-    #[error("thread is archived: {0}")]
+    #[error("thread is terminal: {0}")]
     Archived(String),
     #[error("thread is being archived or deleted: {0}")]
     Stale(String),
@@ -28,12 +28,77 @@ pub enum RunAdmissionError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThreadMutationState {
+enum StableState {
     Live,
-    Archiving,
     Archived,
-    Deleting,
     Deleted,
+}
+
+impl StableState {
+    fn from_terminal(terminal: Option<ThreadTerminalState>) -> Self {
+        match terminal {
+            None => Self::Live,
+            Some(ThreadTerminalState::Archived) => Self::Archived,
+            Some(ThreadTerminalState::Deleted) => Self::Deleted,
+        }
+    }
+
+    fn terminal(self) -> Option<ThreadTerminalState> {
+        match self {
+            Self::Live => None,
+            Self::Archived => Some(ThreadTerminalState::Archived),
+            Self::Deleted => Some(ThreadTerminalState::Deleted),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnedStateKind {
+    Deciding,
+    Archiving,
+    Deleting,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThreadCoordinationState {
+    Uncalibrated,
+    Live,
+    Deciding { owner_token: u64 },
+    Archiving { owner_token: u64 },
+    Archived,
+    Deleting { owner_token: u64 },
+    Deleted,
+}
+
+impl ThreadCoordinationState {
+    fn from_stable(state: StableState) -> Self {
+        match state {
+            StableState::Live => Self::Live,
+            StableState::Archived => Self::Archived,
+            StableState::Deleted => Self::Deleted,
+        }
+    }
+
+    fn stable(self) -> Option<StableState> {
+        match self {
+            Self::Live => Some(StableState::Live),
+            Self::Archived => Some(StableState::Archived),
+            Self::Deleted => Some(StableState::Deleted),
+            Self::Uncalibrated
+            | Self::Deciding { .. }
+            | Self::Archiving { .. }
+            | Self::Deleting { .. } => None,
+        }
+    }
+
+    fn owned(self) -> Option<(OwnedStateKind, u64)> {
+        match self {
+            Self::Deciding { owner_token } => Some((OwnedStateKind::Deciding, owner_token)),
+            Self::Archiving { owner_token } => Some((OwnedStateKind::Archiving, owner_token)),
+            Self::Deleting { owner_token } => Some((OwnedStateKind::Deleting, owner_token)),
+            Self::Uncalibrated | Self::Live | Self::Archived | Self::Deleted => None,
+        }
+    }
 }
 
 struct LeaseEntry {
@@ -42,17 +107,21 @@ struct LeaseEntry {
 }
 
 struct ThreadCoordinationEntry {
-    state: ThreadMutationState,
-    next_lease_id: u64,
+    epoch: u64,
+    state: ThreadCoordinationState,
     leases: HashMap<u64, LeaseEntry>,
+    /// Calibration, decision, and mutation tokens all live here. An entry is
+    /// never normally evicted while any token remains unsettled.
+    pending_tokens: HashSet<u64>,
 }
 
-impl Default for ThreadCoordinationEntry {
-    fn default() -> Self {
+impl ThreadCoordinationEntry {
+    fn uncalibrated(epoch: u64) -> Self {
         Self {
-            state: ThreadMutationState::Live,
-            next_lease_id: 1,
+            epoch,
+            state: ThreadCoordinationState::Uncalibrated,
             leases: HashMap::new(),
+            pending_tokens: HashSet::new(),
         }
     }
 }
@@ -65,11 +134,16 @@ pub trait ThreadRunAborter: Send + Sync {
 }
 
 /// Store-owned linearization domain for run admission and destructive thread
-/// mutations. All guards release synchronously in `Drop`, so cancellation and
-/// panic cannot strand a lease.
+/// mutations.
+///
+/// Durable tombstones are the only source of truth. Entries begin in
+/// `Uncalibrated` and are populated through a two-phase durable read. Every
+/// installed state receives a process-global monotonic epoch so an old token
+/// can never match an entry that was evicted and recreated.
 pub struct ThreadRunCoordinator {
     entries: Mutex<HashMap<String, ThreadCoordinationEntry>>,
     aborter: Mutex<Option<Arc<dyn ThreadRunAborter>>>,
+    next_nonce: AtomicU64,
     changed: Notify,
 }
 
@@ -84,6 +158,7 @@ impl ThreadRunCoordinator {
         Self {
             entries: Mutex::new(HashMap::new()),
             aborter: Mutex::new(None),
+            next_nonce: AtomicU64::new(0),
             changed: Notify::new(),
         }
     }
@@ -95,6 +170,15 @@ impl ThreadRunCoordinator {
             .clone()
     }
 
+    fn nonce(&self) -> u64 {
+        self.next_nonce
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .expect("thread coordinator nonce exhausted")
+            + 1
+    }
+
     pub fn set_aborter(&self, aborter: Arc<dyn ThreadRunAborter>) {
         *self
             .aborter
@@ -102,28 +186,90 @@ impl ThreadRunCoordinator {
             .unwrap_or_else(|poison| poison.into_inner()) = Some(aborter);
     }
 
-    fn reserve_request(
+    /// Two-phase read-through calibration. Neither the coordinator mutex nor
+    /// any registry mutex is held across the durable store await.
+    async fn ensure_calibrated(
+        &self,
+        store: &dyn ThreadStore,
+        thread_id: &str,
+    ) -> Result<(), RunAdmissionError> {
+        loop {
+            let (expected_epoch, calibration_token) = {
+                let mut entries = self
+                    .entries
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let initial_epoch = self.nonce();
+                let entry = entries
+                    .entry(thread_id.to_owned())
+                    .or_insert_with(|| ThreadCoordinationEntry::uncalibrated(initial_epoch));
+                if entry.state != ThreadCoordinationState::Uncalibrated {
+                    return Ok(());
+                }
+                let token = self.nonce();
+                entry.pending_tokens.insert(token);
+                (entry.epoch, token)
+            };
+
+            let durable = store.terminal_state(thread_id).await;
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let mut remove_failed_entry = false;
+            if let Some(entry) = entries.get_mut(thread_id) {
+                if let Ok(terminal) = &durable
+                    && entry.epoch == expected_epoch
+                    && entry.state == ThreadCoordinationState::Uncalibrated
+                {
+                    entry.epoch = self.nonce();
+                    entry.state =
+                        ThreadCoordinationState::from_stable(StableState::from_terminal(*terminal));
+                }
+                entry.pending_tokens.remove(&calibration_token);
+                remove_failed_entry = durable.is_err()
+                    && entry.state == ThreadCoordinationState::Uncalibrated
+                    && entry.leases.is_empty()
+                    && entry.pending_tokens.is_empty();
+            }
+            if remove_failed_entry {
+                entries.remove(thread_id);
+            }
+            drop(entries);
+            self.changed.notify_waiters();
+
+            durable.map_err(|error| RunAdmissionError::Store(error.to_string()))?;
+            // Another state installation may have won while the durable read
+            // was in flight. Loop and consume that newer state.
+        }
+    }
+
+    async fn reserve_request(
         self: &Arc<Self>,
+        store: &dyn ThreadStore,
         thread_id: &str,
     ) -> Result<ThreadRunLease, RunAdmissionError> {
+        self.ensure_calibrated(store, thread_id).await?;
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let entry = entries.entry(thread_id.to_owned()).or_default();
+        let Some(entry) = entries.get_mut(thread_id) else {
+            return Err(RunAdmissionError::Stale(thread_id.to_owned()));
+        };
         match entry.state {
-            ThreadMutationState::Live => {}
-            ThreadMutationState::Archived => {
+            ThreadCoordinationState::Live => {}
+            ThreadCoordinationState::Archived | ThreadCoordinationState::Deleted => {
                 return Err(RunAdmissionError::Archived(thread_id.to_owned()));
             }
-            ThreadMutationState::Archiving
-            | ThreadMutationState::Deleting
-            | ThreadMutationState::Deleted => {
+            ThreadCoordinationState::Uncalibrated
+            | ThreadCoordinationState::Deciding { .. }
+            | ThreadCoordinationState::Archiving { .. }
+            | ThreadCoordinationState::Deleting { .. } => {
                 return Err(RunAdmissionError::Stale(thread_id.to_owned()));
             }
         }
-        let lease_id = entry.next_lease_id;
-        entry.next_lease_id = entry.next_lease_id.saturating_add(1);
+        let lease_id = self.nonce();
         let valid = Arc::new(AtomicBool::new(true));
         entry.leases.insert(
             lease_id,
@@ -163,17 +309,236 @@ impl ThreadRunCoordinator {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .get(thread_id)
-            .is_some_and(|entry| {
-                matches!(
-                    entry.state,
-                    ThreadMutationState::Archiving | ThreadMutationState::Deleting
-                )
-            })
+            .is_some_and(|entry| entry.state.owned().is_some())
     }
 
-    /// Reserve archive before any endpoint side effect and spawn an owned
-    /// mutation future. Dropping the caller's JoinHandle detaches the task;
-    /// the reservation remains until the operation has definitely completed.
+    pub async fn reserve_archive(
+        self: &Arc<Self>,
+        store: &dyn ThreadStore,
+        thread_id: &str,
+    ) -> Result<ArchiveBarrier, CoordinationError> {
+        self.ensure_calibrated(store, thread_id)
+            .await
+            .map_err(CoordinationError::from_admission)?;
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let entry = entries
+            .get_mut(thread_id)
+            .ok_or(CoordinationError::Unavailable)?;
+        let Some(prior) = entry.state.stable() else {
+            return Err(CoordinationError::Unavailable);
+        };
+
+        // Persistent terminal truth wins over any short-lived inactive lease
+        // created before calibration completed. Only a live active run is a
+        // deterministic archive conflict.
+        if prior == StableState::Live && entry.leases.values().any(|lease| lease.active) {
+            let reservation =
+                self.install_reservation(thread_id, entry, prior, OwnedStateKind::Deciding);
+            return Ok(ArchiveBarrier::ActiveLease(reservation));
+        }
+
+        for lease in entry.leases.values() {
+            lease.valid.store(false, Ordering::Release);
+        }
+        let reservation =
+            self.install_reservation(thread_id, entry, prior, OwnedStateKind::Archiving);
+        drop(entries);
+        self.changed.notify_waiters();
+        Ok(ArchiveBarrier::Ready(reservation))
+    }
+
+    /// Reserve a short decision transaction without performing destructive
+    /// run invalidation. Used after delete binding preflight rejects.
+    pub async fn reserve_decision(
+        self: &Arc<Self>,
+        store: &dyn ThreadStore,
+        thread_id: &str,
+    ) -> Result<LifecycleReservation, CoordinationError> {
+        self.ensure_calibrated(store, thread_id)
+            .await
+            .map_err(CoordinationError::from_admission)?;
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let entry = entries
+            .get_mut(thread_id)
+            .ok_or(CoordinationError::Unavailable)?;
+        let prior = entry.state.stable().ok_or(CoordinationError::Unavailable)?;
+        Ok(self.install_reservation(thread_id, entry, prior, OwnedStateKind::Deciding))
+    }
+
+    pub async fn reserve_delete(
+        self: &Arc<Self>,
+        store: &dyn ThreadStore,
+        thread_id: &str,
+    ) -> Result<LifecycleReservation, CoordinationError> {
+        self.ensure_calibrated(store, thread_id)
+            .await
+            .map_err(CoordinationError::from_admission)?;
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let entry = entries
+            .get_mut(thread_id)
+            .ok_or(CoordinationError::Unavailable)?;
+        let prior = entry.state.stable().ok_or(CoordinationError::Unavailable)?;
+        for lease in entry.leases.values() {
+            lease.valid.store(false, Ordering::Release);
+        }
+        let reservation =
+            self.install_reservation(thread_id, entry, prior, OwnedStateKind::Deleting);
+        drop(entries);
+        self.changed.notify_waiters();
+        Ok(reservation)
+    }
+
+    fn install_reservation(
+        self: &Arc<Self>,
+        thread_id: &str,
+        entry: &mut ThreadCoordinationEntry,
+        prior: StableState,
+        kind: OwnedStateKind,
+    ) -> LifecycleReservation {
+        let owner_token = self.nonce();
+        let epoch = self.nonce();
+        entry.epoch = epoch;
+        entry.state = match kind {
+            OwnedStateKind::Deciding => ThreadCoordinationState::Deciding { owner_token },
+            OwnedStateKind::Archiving => ThreadCoordinationState::Archiving { owner_token },
+            OwnedStateKind::Deleting => ThreadCoordinationState::Deleting { owner_token },
+        };
+        entry.pending_tokens.insert(owner_token);
+        LifecycleReservation {
+            coordinator: Arc::clone(self),
+            token: ReservationToken {
+                thread_id: thread_id.to_owned(),
+                epoch,
+                expected_state: kind,
+                owner_token,
+            },
+            prior,
+            commit_witness: LifecycleCommitWitness::default(),
+            settled: false,
+        }
+    }
+
+    pub async fn abort_and_drain_delete(
+        &self,
+        reservation: &LifecycleReservation,
+    ) -> Result<(), CoordinationError> {
+        if reservation.token.expected_state != OwnedStateKind::Deleting
+            || !self.reservation_is_current(&reservation.token)
+        {
+            return Err(CoordinationError::Unavailable);
+        }
+        let aborter = self
+            .aborter
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .cloned();
+        if let Some(aborter) = aborter {
+            aborter
+                .abort_and_drain_thread(&reservation.token.thread_id)
+                .await
+                .map_err(CoordinationError::Abort)?;
+        }
+        self.wait_for_no_leases(&reservation.token).await
+    }
+
+    async fn wait_for_no_leases(&self, token: &ReservationToken) -> Result<(), CoordinationError> {
+        loop {
+            let notified = self.changed.notified();
+            let status = {
+                let entries = self
+                    .entries
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let Some(entry) = entries.get(&token.thread_id) else {
+                    return Err(CoordinationError::Unavailable);
+                };
+                if !token.matches(entry) {
+                    return Err(CoordinationError::Unavailable);
+                }
+                entry.leases.is_empty()
+            };
+            if status {
+                return Ok(());
+            }
+            notified.await;
+        }
+    }
+
+    fn reservation_is_current(&self, token: &ReservationToken) -> bool {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(&token.thread_id)
+            .is_some_and(|entry| token.matches(entry))
+    }
+
+    fn release_lease(&self, thread_id: &str, lease_id: u64) {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let remove = if let Some(entry) = entries.get_mut(thread_id) {
+            entry.leases.remove(&lease_id);
+            entry.state == ThreadCoordinationState::Live
+                && entry.leases.is_empty()
+                && entry.pending_tokens.is_empty()
+        } else {
+            false
+        };
+        if remove {
+            entries.remove(thread_id);
+        }
+        drop(entries);
+        self.changed.notify_waiters();
+    }
+
+    fn settle_reservation(&self, token: &ReservationToken, durable: StableState) -> bool {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut matched = false;
+        let mut remove = false;
+        if let Some(entry) = entries.get_mut(&token.thread_id) {
+            if token.matches(entry) {
+                matched = true;
+                entry.pending_tokens.remove(&token.owner_token);
+                entry.epoch = self.nonce();
+                entry.state = ThreadCoordinationState::from_stable(durable);
+                remove = durable == StableState::Live
+                    && entry.leases.is_empty()
+                    && entry.pending_tokens.is_empty();
+            } else {
+                // Defensive cleanup is safe because owner tokens are globally
+                // unique. It never changes a newer entry's state.
+                entry.pending_tokens.remove(&token.owner_token);
+            }
+        }
+        if remove {
+            entries.remove(&token.thread_id);
+        }
+        drop(entries);
+        self.changed.notify_waiters();
+        matched
+    }
+
+    /// A successful ordinary write cannot clear a durable terminal tombstone.
+    /// The hook remains during the step-1 migration so existing stores compile;
+    /// it intentionally performs no terminal-cache mutation.
+    pub fn record_written(&self, _thread_id: &str) {}
+
+    // Temporary step-1 adapters for the old routes. Step 2 migrates the last
+    // call sites to the calibrated reservation API and removes these methods.
     pub fn start_archive<F, T, E>(
         self: &Arc<Self>,
         thread_id: String,
@@ -184,28 +549,13 @@ impl ThreadRunCoordinator {
         T: Send + 'static,
         E: Send + 'static,
     {
-        {
-            let mut entries = self
-                .entries
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            let entry = entries.entry(thread_id.clone()).or_default();
-            if entry.state != ThreadMutationState::Live {
-                return Err(ArchiveReservationError::Unavailable);
-            }
-            if !entry.leases.is_empty() {
-                return Err(ArchiveReservationError::ActiveLease);
-            }
-            entry.state = ThreadMutationState::Archiving;
-        }
-
-        let coordinator = Arc::clone(self);
+        let reservation =
+            self.legacy_reserve(&thread_id, OwnedStateKind::Archiving, true, false)?;
         Ok(tokio::spawn(async move {
-            let mut reservation =
-                MutationReservation::new(coordinator, thread_id, ThreadMutationState::Archiving);
+            let mut reservation = reservation;
             match operation.await {
                 Ok(value) => {
-                    reservation.complete(ThreadMutationState::Archived);
+                    reservation.settle_committed(Some(ThreadTerminalState::Archived));
                     Ok(value)
                 }
                 Err(error) => Err(error),
@@ -213,10 +563,6 @@ impl ThreadRunCoordinator {
         }))
     }
 
-    /// Enter deleting, invalidate every request/active token, abort and drain
-    /// provider tasks, wait for synchronous guard drops, then run the owned
-    /// storage mutation. Every failure restores `live` after it is known that
-    /// the record remains.
     pub fn start_delete<F, T, E>(
         self: &Arc<Self>,
         thread_id: String,
@@ -227,37 +573,17 @@ impl ThreadRunCoordinator {
         T: Send + 'static,
         E: Send + 'static,
     {
-        let unavailable = {
-            let mut entries = self
-                .entries
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            let entry = entries.entry(thread_id.clone()).or_default();
-            match entry.state {
-                ThreadMutationState::Live
-                | ThreadMutationState::Archived
-                | ThreadMutationState::Deleted => {
-                    entry.state = ThreadMutationState::Deleting;
-                    for lease in entry.leases.values() {
-                        lease.valid.store(false, Ordering::Release);
-                    }
-                    false
+        let reservation =
+            match self.legacy_reserve(&thread_id, OwnedStateKind::Deleting, false, true) {
+                Ok(reservation) => reservation,
+                Err(_) => {
+                    return tokio::spawn(async { Err(CoordinatedDeleteError::Unavailable) });
                 }
-                ThreadMutationState::Archiving | ThreadMutationState::Deleting => true,
-            }
-        };
-        if unavailable {
-            return tokio::spawn(async { Err(CoordinatedDeleteError::Unavailable) });
-        }
+            };
         self.changed.notify_waiters();
-
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
-            let mut reservation = MutationReservation::new(
-                Arc::clone(&coordinator),
-                thread_id.clone(),
-                ThreadMutationState::Deleting,
-            );
+            let mut reservation = reservation;
             let aborter = coordinator
                 .aborter
                 .lock()
@@ -270,10 +596,13 @@ impl ThreadRunCoordinator {
                     .await
                     .map_err(CoordinatedDeleteError::Abort)?;
             }
-            coordinator.wait_for_no_leases(&thread_id).await;
+            coordinator
+                .wait_for_no_leases(&reservation.token)
+                .await
+                .map_err(|_| CoordinatedDeleteError::Unavailable)?;
             match operation.await {
                 Ok(value) => {
-                    reservation.complete(ThreadMutationState::Deleted);
+                    reservation.settle_committed(Some(ThreadTerminalState::Deleted));
                     Ok(value)
                 }
                 Err(error) => Err(CoordinatedDeleteError::Operation(error)),
@@ -281,75 +610,82 @@ impl ThreadRunCoordinator {
         })
     }
 
-    async fn wait_for_no_leases(&self, thread_id: &str) {
-        loop {
-            let notified = self.changed.notified();
-            if self.lease_count(thread_id) == 0 {
-                return;
-            }
-            notified.await;
-        }
-    }
-
-    fn release_lease(&self, thread_id: &str, lease_id: u64) {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(entry) = entries.get_mut(thread_id) {
-            entry.leases.remove(&lease_id);
-            if entry.state == ThreadMutationState::Live && entry.leases.is_empty() {
-                entries.remove(thread_id);
-            }
-        }
-        drop(entries);
-        self.changed.notify_waiters();
-    }
-
-    /// A successful record write after a completed delete recreates the key
-    /// as a new live record. Writes racing an in-progress mutation never
-    /// cancel that mutation's reservation.
-    pub fn record_written(&self, thread_id: &str) {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if entries
-            .get(thread_id)
-            .is_some_and(|entry| entry.state == ThreadMutationState::Deleted)
-        {
-            entries.remove(thread_id);
-        }
-        drop(entries);
-        self.changed.notify_waiters();
-    }
-
-    fn finish_mutation(
-        &self,
+    fn legacy_reserve(
+        self: &Arc<Self>,
         thread_id: &str,
-        expected: ThreadMutationState,
-        terminal: Option<ThreadMutationState>,
-    ) {
+        kind: OwnedStateKind,
+        reject_any_lease: bool,
+        invalidate_leases: bool,
+    ) -> Result<LifecycleReservation, ArchiveReservationError> {
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let Some(entry) = entries.get_mut(thread_id) else {
-            return;
+        let initial_epoch = self.nonce();
+        let entry =
+            entries
+                .entry(thread_id.to_owned())
+                .or_insert_with(|| ThreadCoordinationEntry {
+                    epoch: initial_epoch,
+                    state: ThreadCoordinationState::Live,
+                    leases: HashMap::new(),
+                    pending_tokens: HashSet::new(),
+                });
+        let Some(prior) = entry.state.stable() else {
+            return Err(ArchiveReservationError::Unavailable);
         };
-        if entry.state != expected {
-            return;
+        if reject_any_lease && !entry.leases.is_empty() {
+            return Err(ArchiveReservationError::ActiveLease);
         }
-        if let Some(terminal) = terminal {
-            entry.state = terminal;
-        } else if entry.leases.is_empty() {
-            entries.remove(thread_id);
-        } else {
-            entry.state = ThreadMutationState::Live;
+        if invalidate_leases {
+            for lease in entry.leases.values() {
+                lease.valid.store(false, Ordering::Release);
+            }
         }
-        drop(entries);
+        Ok(self.install_reservation(thread_id, entry, prior, kind))
+    }
+
+    #[cfg(test)]
+    fn force_evict_for_test(&self, thread_id: &str) {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(thread_id);
         self.changed.notify_waiters();
     }
+
+    #[cfg(test)]
+    fn entry_epoch_for_test(&self, thread_id: &str) -> Option<u64> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(thread_id)
+            .map(|entry| entry.epoch)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CoordinationError {
+    #[error("thread lifecycle mutation is already in progress")]
+    Unavailable,
+    #[error("thread store backend failed: {0}")]
+    Store(String),
+    #[error("failed to abort and drain thread runs: {0}")]
+    Abort(String),
+}
+
+impl CoordinationError {
+    fn from_admission(error: RunAdmissionError) -> Self {
+        match error {
+            RunAdmissionError::Store(message) => Self::Store(message),
+            other => Self::Store(other.to_string()),
+        }
+    }
+}
+
+pub enum ArchiveBarrier {
+    Ready(LifecycleReservation),
+    ActiveLease(LifecycleReservation),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -370,40 +706,115 @@ pub enum CoordinatedDeleteError<E> {
     Operation(E),
 }
 
-struct MutationReservation {
-    coordinator: Arc<ThreadRunCoordinator>,
+#[derive(Debug, Clone)]
+struct ReservationToken {
     thread_id: String,
-    expected: ThreadMutationState,
-    completed: bool,
+    epoch: u64,
+    expected_state: OwnedStateKind,
+    owner_token: u64,
 }
 
-impl MutationReservation {
-    fn new(
-        coordinator: Arc<ThreadRunCoordinator>,
-        thread_id: String,
-        expected: ThreadMutationState,
-    ) -> Self {
-        Self {
-            coordinator,
-            thread_id,
-            expected,
-            completed: false,
+impl ReservationToken {
+    fn matches(&self, entry: &ThreadCoordinationEntry) -> bool {
+        entry.epoch == self.epoch
+            && entry.state.owned() == Some((self.expected_state, self.owner_token))
+    }
+}
+
+/// RAII owner token for a coordinator decision or lifecycle mutation.
+///
+/// A caller must mark a durable commit synchronously after SQLite returns.
+/// If it panics before explicit settlement, Drop applies that committed state;
+/// otherwise Drop restores the calibrated prior state through the same full
+/// tuple CAS.
+pub struct LifecycleReservation {
+    coordinator: Arc<ThreadRunCoordinator>,
+    token: ReservationToken,
+    prior: StableState,
+    commit_witness: LifecycleCommitWitness,
+    settled: bool,
+}
+
+/// Cloneable commit marker handed to an owned blocking child. The child marks
+/// it immediately after SQLite returns a committed lifecycle/decision result,
+/// before its JoinHandle becomes ready. If the supervisor is aborted, the
+/// reaper-held reservation observes this marker in Drop and applies durable
+/// state instead of restoring its prior cache snapshot.
+#[derive(Clone, Default)]
+pub struct LifecycleCommitWitness {
+    durable_terminal: Arc<Mutex<Option<Option<ThreadTerminalState>>>>,
+}
+
+impl LifecycleCommitWitness {
+    pub fn mark_committed(&self, durable_terminal: Option<ThreadTerminalState>) {
+        *self
+            .durable_terminal
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(durable_terminal);
+    }
+
+    fn committed_terminal(&self) -> Option<Option<ThreadTerminalState>> {
+        *self
+            .durable_terminal
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+}
+
+impl LifecycleReservation {
+    pub fn thread_id(&self) -> &str {
+        &self.token.thread_id
+    }
+
+    pub fn prior_terminal(&self) -> Option<ThreadTerminalState> {
+        self.prior.terminal()
+    }
+
+    pub fn is_current(&self) -> bool {
+        self.coordinator.reservation_is_current(&self.token)
+    }
+
+    pub fn commit_witness(&self) -> LifecycleCommitWitness {
+        self.commit_witness.clone()
+    }
+
+    pub fn mark_committed(&mut self, durable_terminal: Option<ThreadTerminalState>) {
+        self.commit_witness.mark_committed(durable_terminal);
+    }
+
+    pub fn settle_committed(&mut self, durable_terminal: Option<ThreadTerminalState>) {
+        self.mark_committed(durable_terminal);
+        self.settle_to(StableState::from_terminal(durable_terminal));
+    }
+
+    pub fn settle_decision(&mut self, durable_terminal: Option<ThreadTerminalState>) {
+        self.settle_to(StableState::from_terminal(durable_terminal));
+    }
+
+    pub fn settle_transient(&mut self, durable_terminal: Option<ThreadTerminalState>) {
+        self.settle_to(StableState::from_terminal(durable_terminal));
+    }
+
+    fn settle_to(&mut self, durable: StableState) {
+        if !self.settled {
+            self.coordinator.settle_reservation(&self.token, durable);
+            self.settled = true;
         }
     }
-
-    fn complete(&mut self, terminal: ThreadMutationState) {
-        self.coordinator
-            .finish_mutation(&self.thread_id, self.expected, Some(terminal));
-        self.completed = true;
-    }
 }
 
-impl Drop for MutationReservation {
+impl Drop for LifecycleReservation {
     fn drop(&mut self) {
-        if !self.completed {
-            self.coordinator
-                .finish_mutation(&self.thread_id, self.expected, None);
+        if self.settled {
+            return;
         }
+        let durable = self
+            .commit_witness
+            .committed_terminal()
+            .map(StableState::from_terminal)
+            .unwrap_or(self.prior);
+        self.coordinator.settle_reservation(&self.token, durable);
+        self.settled = true;
     }
 }
 
@@ -435,7 +846,7 @@ impl ThreadRunLease {
         let entry = entries
             .get_mut(&self.thread_id)
             .ok_or_else(|| RunAdmissionError::Stale(self.thread_id.clone()))?;
-        if entry.state != ThreadMutationState::Live {
+        if entry.state != ThreadCoordinationState::Live {
             return Err(RunAdmissionError::Stale(self.thread_id.clone()));
         }
         let lease = entry
@@ -484,8 +895,8 @@ impl AdmittedRun {
         }
     }
 
-    /// Point-read the backing store and acquire a request lease. Callers cannot
-    /// supply a pre-read record as proof.
+    /// Point-read the backing store and acquire a calibrated request lease.
+    /// Callers cannot supply a pre-read record as proof.
     pub async fn thread_bound(
         store: Arc<dyn ThreadStore>,
         request: AgentRunRequest,
@@ -494,7 +905,9 @@ impl AdmittedRun {
             return Err(RunAdmissionError::InvalidThreadId(request.thread_id));
         }
         let coordinator = store.run_coordinator();
-        let lease = coordinator.reserve_request(&request.thread_id)?;
+        let lease = coordinator
+            .reserve_request(store.as_ref(), &request.thread_id)
+            .await?;
         let exists = store
             .get(&request.thread_id)
             .await
@@ -502,13 +915,6 @@ impl AdmittedRun {
             .is_some();
         if !exists {
             return Err(RunAdmissionError::NotFound(request.thread_id));
-        }
-        if store
-            .is_archived(&request.thread_id)
-            .await
-            .map_err(|error| RunAdmissionError::Store(error.to_string()))?
-        {
-            return Err(RunAdmissionError::Archived(request.thread_id));
         }
         lease.ensure_valid()?;
         Ok(Self {
@@ -545,12 +951,19 @@ impl AdmittedRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AtomicRecordMerge, InMemoryThreadStore, ThreadStoreError};
     use garyx_models::provider::ProviderType;
-    use serde_json::json;
-    use std::sync::atomic::AtomicBool;
+    use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn request(thread_id: &str) -> AgentRunRequest {
         AgentRunRequest::new(thread_id, "hello", "run::1", "api", "main", HashMap::new())
+    }
+
+    async fn store_with_thread(thread_id: &str) -> Arc<dyn ThreadStore> {
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        store.set(thread_id, json!({})).await.unwrap();
+        store
     }
 
     #[tokio::test]
@@ -577,21 +990,11 @@ mod tests {
             AdmittedRun::provider_tool(request("thread::1"), ProviderType::ClaudeCode),
             Err(RunAdmissionError::InvalidProviderToolId(_))
         ));
-        assert!(matches!(
-            AdmittedRun::provider_tool(request("cron::1"), ProviderType::ClaudeCode),
-            Err(RunAdmissionError::InvalidProviderToolId(_))
-        ));
-    }
-
-    async fn store_with_thread(thread_id: &str) -> Arc<dyn ThreadStore> {
-        let store: Arc<dyn ThreadStore> = Arc::new(crate::InMemoryThreadStore::new());
-        store.set(thread_id, json!({})).await.unwrap();
-        store
     }
 
     #[tokio::test]
     async fn thread_bound_admission_requires_a_real_record_and_drop_releases_lease() {
-        let store: Arc<dyn ThreadStore> = Arc::new(crate::InMemoryThreadStore::new());
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         assert!(matches!(
             AdmittedRun::thread_bound(store.clone(), request("thread::missing")).await,
             Err(RunAdmissionError::NotFound(_))
@@ -607,252 +1010,276 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archive_with_a_lease_conflicts_before_running_any_side_effect() {
+    async fn calibrated_archive_distinguishes_active_from_inactive_lease() {
         let thread_id = "thread::archive-conflict";
         let store = store_with_thread(thread_id).await;
         let admitted = AdmittedRun::thread_bound(store.clone(), request(thread_id))
             .await
             .unwrap();
-        let side_effect = Arc::new(AtomicBool::new(false));
-        let effect = side_effect.clone();
-        let result = store
-            .run_coordinator()
-            .start_archive(thread_id.to_owned(), async move {
-                effect.store(true, Ordering::Release);
-                Ok::<_, ()>(())
-            });
-        assert!(matches!(result, Err(ArchiveReservationError::ActiveLease)));
-        assert!(!side_effect.load(Ordering::Acquire));
-        drop(admitted);
-    }
+        let (_request, mut lease) = admitted.into_dispatch_parts();
+        let mut lease = lease.take().unwrap();
+        lease.promote_to_active().unwrap();
 
-    #[tokio::test]
-    async fn archive_reservation_survives_caller_cancellation_and_blocks_admission() {
-        let thread_id = "thread::archive-owned";
-        let store = store_with_thread(thread_id).await;
-        let started = Arc::new(Notify::new());
-        let release = Arc::new(Notify::new());
-        let started_in_task = started.clone();
-        let release_in_task = release.clone();
-        let handle = store
+        let barrier = store
             .run_coordinator()
-            .start_archive(thread_id.to_owned(), async move {
-                started_in_task.notify_one();
-                release_in_task.notified().await;
-                Ok::<_, ()>(())
-            })
+            .reserve_archive(store.as_ref(), thread_id)
+            .await
             .unwrap();
-        started.notified().await;
-        drop(handle);
+        let ArchiveBarrier::ActiveLease(mut decision) = barrier else {
+            panic!("live active lease must take the persistent decision path");
+        };
+        assert!(
+            lease.ensure_valid().is_ok(),
+            "archive conflict must not kill the run"
+        );
+        decision.settle_decision(None);
+        drop(lease);
 
-        assert!(matches!(
-            AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
-            Err(RunAdmissionError::Stale(_))
-        ));
-        release.notify_one();
-        tokio::task::yield_now().await;
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        assert!(matches!(
-            AdmittedRun::thread_bound(store, request(thread_id)).await,
-            Err(RunAdmissionError::Archived(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn delete_invalidates_tokens_waits_for_drop_and_is_cancellation_safe() {
-        let thread_id = "thread::delete-owned";
-        let store = store_with_thread(thread_id).await;
         let admitted = AdmittedRun::thread_bound(store.clone(), request(thread_id))
             .await
             .unwrap();
         let (_request, lease) = admitted.into_dispatch_parts();
         let lease = lease.unwrap();
-        let operation_started = Arc::new(AtomicBool::new(false));
-        let started = operation_started.clone();
-        let handle = store
+        let barrier = store
             .run_coordinator()
-            .start_delete(thread_id.to_owned(), async move {
-                started.store(true, Ordering::Release);
-                Ok::<_, ()>(())
-            });
-        tokio::task::yield_now().await;
+            .reserve_archive(store.as_ref(), thread_id)
+            .await
+            .unwrap();
+        let ArchiveBarrier::Ready(mut reservation) = barrier else {
+            panic!("an inactive request token is not an active-run conflict");
+        };
         assert!(matches!(
             lease.ensure_valid(),
             Err(RunAdmissionError::Stale(_))
         ));
-        assert!(!operation_started.load(Ordering::Acquire));
-        assert!(matches!(
-            AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
-            Err(RunAdmissionError::Stale(_))
-        ));
+        reservation.settle_transient(None);
+    }
 
-        // Dropping the caller-owned handle must not cancel deleting. The
-        // coordinator task remains blocked until the lease guard drops.
-        drop(handle);
-        drop(lease);
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        assert!(operation_started.load(Ordering::Acquire));
-        assert!(matches!(
-            AdmittedRun::thread_bound(store, request(thread_id)).await,
-            Err(RunAdmissionError::Stale(_))
-        ));
+    struct SequencedTerminalStore {
+        inner: InMemoryThreadStore,
+        calls: AtomicUsize,
+        first_started: Notify,
+        release_first: Notify,
+        first_terminal: Option<ThreadTerminalState>,
+        later_terminal: Option<ThreadTerminalState>,
+    }
+
+    impl SequencedTerminalStore {
+        async fn with_record(
+            thread_id: &str,
+            first_terminal: Option<ThreadTerminalState>,
+            later_terminal: Option<ThreadTerminalState>,
+        ) -> Arc<Self> {
+            let store = Arc::new(Self {
+                inner: InMemoryThreadStore::new(),
+                calls: AtomicUsize::new(0),
+                first_started: Notify::new(),
+                release_first: Notify::new(),
+                first_terminal,
+                later_terminal,
+            });
+            store.inner.set(thread_id, json!({})).await.unwrap();
+            store
+        }
+    }
+
+    #[async_trait]
+    impl ThreadStore for SequencedTerminalStore {
+        fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+            self.inner.run_coordinator()
+        }
+
+        async fn terminal_state(
+            &self,
+            _thread_id: &str,
+        ) -> Result<Option<ThreadTerminalState>, ThreadStoreError> {
+            let call = self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            if call == 0 {
+                let snapshot = self.first_terminal;
+                self.first_started.notify_one();
+                self.release_first.notified().await;
+                Ok(snapshot)
+            } else {
+                Ok(self.later_terminal)
+            }
+        }
+
+        async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
+            self.inner.get(thread_id).await
+        }
+        async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
+            self.inner.set(thread_id, data).await
+        }
+        async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+            self.inner.delete(thread_id).await
+        }
+        async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
+            self.inner.list_keys(prefix).await
+        }
+        async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+            self.inner.exists(thread_id).await
+        }
+        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+            self.inner.update(thread_id, updates).await
+        }
+        async fn update_many_atomic(
+            &self,
+            entries: Vec<AtomicRecordMerge>,
+        ) -> Result<(), ThreadStoreError> {
+            self.inner.update_many_atomic(entries).await
+        }
     }
 
     #[tokio::test]
-    async fn failed_delete_returns_to_live() {
-        let thread_id = "thread::delete-failure";
-        let store = store_with_thread(thread_id).await;
-        let result = store
-            .run_coordinator()
-            .start_delete(thread_id.to_owned(), async {
-                Err::<(), _>("injected delete failure")
-            })
+    async fn stale_calibration_snapshot_cannot_overwrite_a_new_archive_reservation() {
+        let thread_id = "thread::calibration-fence";
+        let store = SequencedTerminalStore::with_record(
+            thread_id,
+            Some(ThreadTerminalState::Deleted),
+            None,
+        )
+        .await;
+        let first_store: Arc<dyn ThreadStore> = store.clone();
+        let first = tokio::spawn(async move {
+            AdmittedRun::thread_bound(first_store, request(thread_id)).await
+        });
+        store.first_started.notified().await;
+
+        let coordinator = store.run_coordinator();
+        let barrier = coordinator
+            .reserve_archive(store.as_ref(), thread_id)
             .await
             .unwrap();
-        assert!(matches!(result, Err(CoordinatedDeleteError::Operation(_))));
-        AdmittedRun::thread_bound(store, request(thread_id))
-            .await
-            .expect("failed delete must restore live admission");
-    }
-
-    #[tokio::test]
-    async fn a_record_recreated_after_delete_gets_a_fresh_live_admission_domain() {
-        let thread_id = "thread::delete-recreate";
-        let store = store_with_thread(thread_id).await;
-        assert!(store.delete(thread_id).await.unwrap());
-        assert!(!store.delete(thread_id).await.unwrap());
-        store.set(thread_id, json!({})).await.unwrap();
-        AdmittedRun::thread_bound(store, request(thread_id))
-            .await
-            .expect("a newly written record must not inherit the deleted tombstone");
-    }
-
-    #[tokio::test]
-    async fn delete_cannot_overwrite_an_owned_archive_reservation() {
-        let thread_id = "thread::archive-delete-race";
-        let store = store_with_thread(thread_id).await;
-        let archive_started = Arc::new(Notify::new());
-        let archive_release = Arc::new(Notify::new());
-        let started = archive_started.clone();
-        let release = archive_release.clone();
-        let archive = store
-            .run_coordinator()
-            .start_archive(thread_id.to_owned(), async move {
-                started.notify_one();
-                release.notified().await;
-                Ok::<_, ()>(())
-            })
-            .unwrap();
-        archive_started.notified().await;
-
-        let delete_side_effect = Arc::new(AtomicBool::new(false));
-        let effect = delete_side_effect.clone();
-        let result = store
-            .run_coordinator()
-            .start_delete(thread_id.to_owned(), async move {
-                effect.store(true, Ordering::Release);
-                Ok::<_, ()>(())
-            })
-            .await
-            .unwrap();
-        assert!(matches!(result, Err(CoordinatedDeleteError::Unavailable)));
-        assert!(!delete_side_effect.load(Ordering::Acquire));
+        let ArchiveBarrier::Ready(mut reservation) = barrier else {
+            panic!("second calibration should install live then reserve archive");
+        };
+        store.release_first.notify_one();
         assert!(matches!(
-            AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
+            first.await.unwrap(),
             Err(RunAdmissionError::Stale(_))
         ));
+        assert!(
+            reservation.is_current(),
+            "stale durable snapshot overwrote reservation"
+        );
+        reservation.settle_transient(None);
+    }
 
-        archive_release.notify_one();
-        archive.await.unwrap().unwrap();
+    #[tokio::test]
+    async fn pending_calibration_token_prevents_last_lease_eviction() {
+        let thread_id = "thread::pending-token";
+        let store = SequencedTerminalStore::with_record(thread_id, None, None).await;
+        let first_store: Arc<dyn ThreadStore> = store.clone();
+        let first = tokio::spawn(async move {
+            AdmittedRun::thread_bound(first_store, request(thread_id)).await
+        });
+        store.first_started.notified().await;
+
+        let second_store: Arc<dyn ThreadStore> = store.clone();
+        let second = AdmittedRun::thread_bound(second_store, request(thread_id))
+            .await
+            .unwrap();
+        let coordinator = store.run_coordinator();
+        let epoch = coordinator.entry_epoch_for_test(thread_id).unwrap();
+        drop(second);
+        assert_eq!(
+            coordinator.entry_epoch_for_test(thread_id),
+            Some(epoch),
+            "last lease release evicted an entry with an unsettled calibration token"
+        );
+
+        store.release_first.notify_one();
+        drop(first.await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn global_epoch_rejects_old_completion_after_forced_entry_eviction() {
+        let thread_id = "thread::epoch-aba";
+        let store = store_with_thread(thread_id).await;
+        let coordinator = store.run_coordinator();
+        let ArchiveBarrier::Ready(mut old) = coordinator
+            .reserve_archive(store.as_ref(), thread_id)
+            .await
+            .unwrap()
+        else {
+            panic!("archive reservation expected");
+        };
+        let old_epoch = coordinator.entry_epoch_for_test(thread_id).unwrap();
+        coordinator.force_evict_for_test(thread_id);
+
+        let fresh = coordinator
+            .reserve_delete(store.as_ref(), thread_id)
+            .await
+            .unwrap();
+        let fresh_epoch = coordinator.entry_epoch_for_test(thread_id).unwrap();
+        assert!(fresh_epoch > old_epoch, "entry recreation reused an epoch");
+        old.settle_transient(None);
+        assert!(
+            fresh.is_current(),
+            "old completion overwrote the fresh reservation"
+        );
+        drop(fresh);
+    }
+
+    #[tokio::test]
+    async fn dropped_committed_reservation_applies_durable_terminal() {
+        let thread_id = "thread::commit-drop";
+        let store = store_with_thread(thread_id).await;
+        let coordinator = store.run_coordinator();
+        let ArchiveBarrier::Ready(mut reservation) = coordinator
+            .reserve_archive(store.as_ref(), thread_id)
+            .await
+            .unwrap()
+        else {
+            panic!("archive reservation expected");
+        };
+        reservation.mark_committed(Some(ThreadTerminalState::Archived));
+        drop(reservation);
         assert!(matches!(
             AdmittedRun::thread_bound(store, request(thread_id)).await,
             Err(RunAdmissionError::Archived(_))
         ));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn archive_blocking_mutation_outlives_cancelled_caller() {
-        let thread_id = "thread::archive-blocking";
-        let store = store_with_thread(thread_id).await;
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let handle = store
+    #[tokio::test]
+    async fn decision_and_transient_completion_restore_calibrated_terminal_state() {
+        let deleted_id = "thread::deleted-decision";
+        let deleted = Arc::new(InMemoryThreadStore::new());
+        deleted
+            .seed_terminal_state(deleted_id, ThreadTerminalState::Deleted)
+            .await;
+        let deleted_store: Arc<dyn ThreadStore> = deleted;
+        let ArchiveBarrier::Ready(mut archive) = deleted_store
             .run_coordinator()
-            .start_archive(thread_id.to_owned(), async move {
-                tokio::task::spawn_blocking(move || {
-                    started_tx.send(()).unwrap();
-                    release_rx.recv().unwrap();
-                })
-                .await
-                .unwrap();
-                Ok::<_, ()>(())
-            })
-            .unwrap();
-        started_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .unwrap();
-        drop(handle);
+            .reserve_archive(deleted_store.as_ref(), deleted_id)
+            .await
+            .unwrap()
+        else {
+            panic!("terminal state must reach the durable result matrix");
+        };
+        assert_eq!(archive.prior_terminal(), Some(ThreadTerminalState::Deleted));
+        archive.settle_decision(Some(ThreadTerminalState::Deleted));
         assert!(matches!(
-            AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
-            Err(RunAdmissionError::Stale(_))
+            AdmittedRun::thread_bound(deleted_store, request(deleted_id)).await,
+            Err(RunAdmissionError::Archived(_))
         ));
-        release_tx.send(()).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if matches!(
-                    AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
-                    Err(RunAdmissionError::Archived(_))
-                ) {
-                    return;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn delete_blocking_mutation_outlives_cancelled_caller() {
-        let thread_id = "thread::delete-blocking";
-        let store = store_with_thread(thread_id).await;
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let handle = store
+        let archived_id = "thread::archived-transient";
+        let archived = Arc::new(InMemoryThreadStore::new());
+        archived
+            .seed_terminal_state(archived_id, ThreadTerminalState::Archived)
+            .await;
+        let archived_store: Arc<dyn ThreadStore> = archived;
+        let mut delete = archived_store
             .run_coordinator()
-            .start_delete(thread_id.to_owned(), async move {
-                tokio::task::spawn_blocking(move || {
-                    started_tx.send(()).unwrap();
-                    release_rx.recv().unwrap();
-                })
-                .await
-                .unwrap();
-                Ok::<_, ()>(())
-            });
-        started_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
+            .reserve_delete(archived_store.as_ref(), archived_id)
+            .await
             .unwrap();
-        drop(handle);
+        assert_eq!(delete.prior_terminal(), Some(ThreadTerminalState::Archived));
+        delete.settle_transient(Some(ThreadTerminalState::Archived));
         assert!(matches!(
-            AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
-            Err(RunAdmissionError::Stale(_))
+            AdmittedRun::thread_bound(archived_store, request(archived_id)).await,
+            Err(RunAdmissionError::Archived(_))
         ));
-        release_tx.send(()).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if !store.run_coordinator().mutation_in_progress(thread_id)
-                    && matches!(
-                        AdmittedRun::thread_bound(store.clone(), request(thread_id)).await,
-                        Err(RunAdmissionError::Stale(_))
-                    )
-                {
-                    // `Deleted` intentionally presents as typed stale.
-                    return;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
     }
 }

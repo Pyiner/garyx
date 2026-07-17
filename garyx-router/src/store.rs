@@ -7,6 +7,34 @@ use crate::ThreadRunCoordinator;
 use crate::endpoint_projection::ChannelEndpointProjection;
 use crate::tasks::TaskProjectionReader;
 
+/// Durable terminal state recorded by the canonical thread tombstone.
+///
+/// Both variants reject record writes. The distinction is retained for
+/// lifecycle result-matrix decisions and diagnostics.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadTerminalState {
+    Archived,
+    Deleted,
+}
+
+impl ThreadTerminalState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Archived => "archived",
+            Self::Deleted => "deleted",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "archived" => Some(Self::Archived),
+            "deleted" => Some(Self::Deleted),
+            _ => None,
+        }
+    }
+}
+
 /// Abstract interface for thread storage.
 ///
 /// Implementations can be in-memory, SQLite, etc. All methods are async to
@@ -33,9 +61,17 @@ pub trait ThreadStore: Send + Sync {
         ThreadRunCoordinator::shared_fallback()
     }
 
-    /// Whether the canonical record has a durable archive tombstone.
-    async fn is_archived(&self, _thread_id: &str) -> Result<bool, ThreadStoreError> {
-        Ok(false)
+    /// The canonical durable terminal tombstone, if one exists.
+    async fn terminal_state(
+        &self,
+        _thread_id: &str,
+    ) -> Result<Option<ThreadTerminalState>, ThreadStoreError> {
+        Ok(None)
+    }
+
+    /// Whether the canonical record has any durable terminal tombstone.
+    async fn is_archived(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+        Ok(self.terminal_state(thread_id).await?.is_some())
     }
 
     /// Retrieve thread data by key. `Ok(None)` means the thread does not

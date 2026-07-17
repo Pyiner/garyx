@@ -312,3 +312,46 @@ fn test_purge_endpoint_binding_drops_current_and_endpoint_entries() {
             .contains_key(endpoint_key)
     );
 }
+
+#[test]
+fn delayed_conditional_endpoint_invalidation_preserves_a_new_owner() {
+    let mut router = make_router();
+    let endpoint_key = "telegram::main::chat-rebound";
+    router.switch_to_thread(endpoint_key, "thread::new-owner");
+    router
+        .thread_nav
+        .endpoint_thread_map
+        .insert(endpoint_key.to_owned(), "thread::new-owner".to_owned());
+
+    assert!(!router.purge_endpoint_binding_if_owned(endpoint_key, "thread::old-owner"));
+    assert_eq!(
+        router
+            .thread_nav
+            .binding_thread_map
+            .get(endpoint_key)
+            .map(String::as_str),
+        Some("thread::new-owner")
+    );
+    assert_eq!(
+        router
+            .thread_nav
+            .endpoint_thread_map
+            .get(endpoint_key)
+            .map(String::as_str),
+        Some("thread::new-owner")
+    );
+
+    assert!(router.purge_endpoint_binding_if_owned(endpoint_key, "thread::new-owner"));
+    assert!(
+        !router
+            .thread_nav
+            .binding_thread_map
+            .contains_key(endpoint_key)
+    );
+    assert!(
+        !router
+            .thread_nav
+            .endpoint_thread_map
+            .contains_key(endpoint_key)
+    );
+}

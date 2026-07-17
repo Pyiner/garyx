@@ -36,7 +36,8 @@ use crate::provider_common::{
     normalize_non_empty, resolve_run_id_with, runtime_env_overlay,
 };
 use crate::provider_trait::{
-    BridgeError, ProviderModelDefaults, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ClearSessionOutcome, ProviderModelDefaults, ProviderRuntime,
+    ProviderRuntimeSelection, StreamCallback,
 };
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
@@ -2572,16 +2573,32 @@ impl ProviderRuntime for CodexAgentProvider {
         Ok(String::new())
     }
 
-    async fn clear_session(&self, thread_id: &str) -> bool {
-        self.session_map.lock().await.remove(thread_id);
-        self.active_session_turns.lock().await.remove(thread_id);
-        self.active_session_callbacks.lock().await.remove(thread_id);
-        self.active_session_pending_acks
+    async fn clear_session(&self, thread_id: &str) -> ClearSessionOutcome {
+        let mut removed = self.session_map.lock().await.remove(thread_id).is_some();
+        removed |= self
+            .active_session_turns
             .lock()
             .await
-            .remove(thread_id);
+            .remove(thread_id)
+            .is_some();
+        removed |= self
+            .active_session_callbacks
+            .lock()
+            .await
+            .remove(thread_id)
+            .is_some();
+        removed |= self
+            .active_session_pending_acks
+            .lock()
+            .await
+            .remove(thread_id)
+            .is_some();
         self.shutdown_thread_client(thread_id).await;
-        true
+        if removed {
+            ClearSessionOutcome::Cleared
+        } else {
+            ClearSessionOutcome::AlreadyAbsent
+        }
     }
 }
 

@@ -30,7 +30,8 @@ use crate::provider_common::{
     resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
 };
 use crate::provider_trait::{
-    BridgeError, ProviderModelDefaults, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ClearSessionOutcome, ProviderModelDefaults, ProviderRuntime,
+    ProviderRuntimeSelection, StreamCallback,
 };
 
 // ---------------------------------------------------------------------------
@@ -2541,7 +2542,7 @@ impl ProviderRuntime for ClaudeCliProvider {
         Ok(new_id)
     }
 
-    async fn clear_session(&self, thread_id: &str) -> bool {
+    async fn clear_session(&self, thread_id: &str) -> ClearSessionOutcome {
         let _ = self.interrupt_streaming_session(thread_id).await;
         let stale_run_ids: Vec<String> = {
             let map = self.run_session_map.lock().await;
@@ -2561,7 +2562,11 @@ impl ProviderRuntime for ClaudeCliProvider {
             removed = removed.is_some(),
             "cleared session"
         );
-        removed.is_some()
+        if removed.is_some() {
+            ClearSessionOutcome::Cleared
+        } else {
+            ClearSessionOutcome::AlreadyAbsent
+        }
     }
 }
 

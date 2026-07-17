@@ -15,7 +15,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use garyx_router::{
-    ThreadRunCoordinator, ThreadStore, ThreadStoreError, ThreadTranscriptStore, is_thread_key,
+    ThreadRunCoordinator, ThreadStore, ThreadStoreError, ThreadTerminalState,
+    ThreadTranscriptStore, is_thread_key,
 };
 use serde_json::Value;
 
@@ -152,11 +153,14 @@ impl ThreadStore for SqliteThreadStore {
         self.run_coordinator.clone()
     }
 
-    async fn is_archived(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<ThreadTerminalState>, ThreadStoreError> {
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
         garyx_db
-            .run_blocking(move |db| db.is_thread_archived(&key))
+            .run_blocking(move |db| db.thread_terminal_state(&key))
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
@@ -195,17 +199,27 @@ impl ThreadStore for SqliteThreadStore {
         let lock = self.key_lock(thread_id);
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
-        self.run_coordinator
-            .start_delete(key.clone(), async move {
-                let _guard = lock.lock().await;
-                garyx_db
-                    .run_blocking(move |db| db.delete_thread_record_with_projections(&key))
-                    .await
-                    .map_err(|error| ThreadStoreError::Backend(error.to_string()))
-            })
+        let mut reservation = self
+            .run_coordinator
+            .reserve_delete(self, thread_id)
             .await
-            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?
-            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
+        self.run_coordinator
+            .abort_and_drain_delete(&reservation)
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
+        let prior = reservation.prior_terminal();
+        let _guard = lock.lock().await;
+        let removed = garyx_db
+            .run_blocking(move |db| db.delete_thread_record_with_projections(&key))
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
+        if removed || prior.is_some() {
+            reservation.settle_committed(Some(ThreadTerminalState::Deleted));
+        } else {
+            reservation.settle_decision(None);
+        }
+        Ok(removed)
     }
 
     async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
@@ -251,6 +265,9 @@ impl ThreadStore for SqliteThreadStore {
         // Read-merge-write under the per-key lock: equivalent to an atomic
         // top-level merge because no other writer for this key can
         // interleave, and the write itself is a single transaction.
+        if self.terminal_state(thread_id).await?.is_some() {
+            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
+        }
         let mut data = self
             .get(thread_id)
             .await?
@@ -288,6 +305,9 @@ impl ThreadStore for SqliteThreadStore {
         let mut writes = Vec::with_capacity(entries.len());
         for entry in entries {
             let key = entry.thread_id;
+            if self.terminal_state(&key).await?.is_some() {
+                return Err(ThreadStoreError::Archived(key));
+            }
             let current = self.get(&key).await?;
             let mut data = match current {
                 Some(data) => data,
@@ -458,6 +478,26 @@ mod contract_tests {
         assert!(!store.delete("thread::alpha").await.expect("re-delete"));
         assert_eq!(store.get("thread::alpha").await.expect("get"), None);
         assert!(!store.exists("thread::alpha").await.expect("exists"));
+        assert_eq!(
+            store.terminal_state("thread::alpha").await.unwrap(),
+            Some(ThreadTerminalState::Deleted)
+        );
+        assert!(matches!(
+            store
+                .set("thread::alpha", json!({"thread_id": "thread::alpha"}))
+                .await,
+            Err(ThreadStoreError::Archived(_))
+        ));
+        assert!(matches!(
+            store
+                .update_many_atomic(vec![garyx_router::AtomicRecordMerge {
+                    thread_id: "thread::alpha".to_owned(),
+                    fields: json!({"label": "resurrected"}),
+                    create_if_missing: false,
+                }])
+                .await,
+            Err(ThreadStoreError::Archived(_))
+        ));
     }
 
     #[tokio::test]

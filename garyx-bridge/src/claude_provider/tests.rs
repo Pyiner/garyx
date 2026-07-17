@@ -51,8 +51,14 @@ async fn test_session_map_clear() {
     let provider = make_provider();
 
     let _ = provider.get_or_create_session("sess::a").await.unwrap();
-    assert!(provider.clear_session("sess::a").await);
-    assert!(!provider.clear_session("sess::a").await);
+    assert_eq!(
+        provider.clear_session("sess::a").await,
+        ClearSessionOutcome::Cleared
+    );
+    assert_eq!(
+        provider.clear_session("sess::a").await,
+        ClearSessionOutcome::AlreadyAbsent
+    );
 
     let new_sid = provider.get_or_create_session("sess::a").await.unwrap();
     assert!(!new_sid.is_empty());
@@ -3467,7 +3473,10 @@ async fn test_clear_session_cleans_all_state() {
         .await
         .insert("run-stale".to_owned(), pending_ack_queue(&[]));
 
-    assert!(provider.clear_session("sess::x").await);
+    assert_eq!(
+        provider.clear_session("sess::x").await,
+        ClearSessionOutcome::Cleared
+    );
 
     // All state should be cleaned
     assert!(provider.session_map.lock().await.get("sess::x").is_none());

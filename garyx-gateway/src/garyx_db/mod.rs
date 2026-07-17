@@ -13,12 +13,12 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use garyx_router::{KnownChannelEndpoint, is_thread_key};
+use garyx_router::{KnownChannelEndpoint, ThreadTerminalState, bindings_from_value, is_thread_key};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter,
     types::Value as SqlValue,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -241,6 +241,154 @@ pub struct ThreadPinsPage {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StoreIncarnation {
     pub store_incarnation_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleOperationKind {
+    Archive,
+    Delete,
+}
+
+impl LifecycleOperationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Archive => "archive",
+            Self::Delete => "delete",
+        }
+    }
+
+    fn parse(value: &str) -> GaryxDbResult<Self> {
+        match value {
+            "archive" => Ok(Self::Archive),
+            "delete" => Ok(Self::Delete),
+            other => Err(GaryxDbError::Configuration(format!(
+                "invalid lifecycle operation kind '{other}'"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleOperationOutcome {
+    AppliedChanged,
+    AppliedNoop,
+    RejectedConflict,
+    RejectedNotFound,
+}
+
+impl LifecycleOperationOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AppliedChanged => "applied_changed",
+            Self::AppliedNoop => "applied_noop",
+            Self::RejectedConflict => "rejected_conflict",
+            Self::RejectedNotFound => "rejected_not_found",
+        }
+    }
+
+    fn parse(value: &str) -> GaryxDbResult<Self> {
+        match value {
+            "applied_changed" => Ok(Self::AppliedChanged),
+            "applied_noop" => Ok(Self::AppliedNoop),
+            "rejected_conflict" => Ok(Self::RejectedConflict),
+            "rejected_not_found" => Ok(Self::RejectedNotFound),
+            other => Err(GaryxDbError::Configuration(format!(
+                "invalid lifecycle operation outcome '{other}'"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleOperationRecord {
+    pub store_incarnation: String,
+    pub operation_id: String,
+    pub kind: LifecycleOperationKind,
+    pub thread_id: String,
+    pub fingerprint: String,
+    pub outcome: LifecycleOperationOutcome,
+    pub result_payload: Option<Value>,
+    pub detail: Option<Value>,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupOutboxStep {
+    EndpointRuntimeInvalidate,
+    RuntimeTeardown,
+    TranscriptRemove,
+    ThreadLogRemove,
+}
+
+impl CleanupOutboxStep {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EndpointRuntimeInvalidate => "endpoint_runtime_invalidate",
+            Self::RuntimeTeardown => "runtime_teardown",
+            Self::TranscriptRemove => "transcript_remove",
+            Self::ThreadLogRemove => "thread_log_remove",
+        }
+    }
+
+    fn parse(value: &str) -> GaryxDbResult<Self> {
+        match value {
+            "endpoint_runtime_invalidate" => Ok(Self::EndpointRuntimeInvalidate),
+            "runtime_teardown" => Ok(Self::RuntimeTeardown),
+            "transcript_remove" => Ok(Self::TranscriptRemove),
+            "thread_log_remove" => Ok(Self::ThreadLogRemove),
+            other => Err(GaryxDbError::Configuration(format!(
+                "invalid cleanup outbox step '{other}'"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CleanupOutboxJob {
+    pub job_id: i64,
+    pub thread_id: String,
+    pub step: CleanupOutboxStep,
+    pub payload: Option<Value>,
+    pub attempt_count: u32,
+    pub next_attempt_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LifecycleMutationInput {
+    pub expected_store_incarnation: String,
+    pub operation_id: String,
+    pub kind: LifecycleOperationKind,
+    pub thread_id: String,
+    pub fingerprint: String,
+    pub endpoint_keys: Vec<String>,
+    pub enabled_channel_accounts: BTreeSet<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LifecycleDecisionInput {
+    pub expected_store_incarnation: String,
+    pub operation_id: String,
+    pub kind: LifecycleOperationKind,
+    pub thread_id: String,
+    pub fingerprint: String,
+    pub outcome: LifecycleOperationOutcome,
+    pub detail: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LifecycleTransactionResult {
+    Completed {
+        operation: LifecycleOperationRecord,
+        durable_terminal: Option<ThreadTerminalState>,
+    },
+    Existing(LifecycleOperationRecord),
+    WrongIncarnation {
+        current_store_incarnation: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1700,12 +1848,35 @@ impl GaryxDbService {
         let archived_at = now_string();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        let terminal = read_thread_terminal_state(&tx, &thread_id)?;
+        if terminal == Some(ThreadTerminalState::Deleted)
+            || terminal == Some(ThreadTerminalState::Archived)
+        {
+            return Ok(false);
+        }
+        let record_exists = tx
+            .query_row(
+                "SELECT 1 FROM thread_records WHERE key = ?1",
+                params![thread_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
         tx.execute(
-            "INSERT INTO archived_threads (thread_id, archived_at)
-             VALUES (?1, ?2)
-             ON CONFLICT(thread_id) DO UPDATE SET archived_at = excluded.archived_at",
+            "INSERT INTO archived_threads (thread_id, archived_at, kind)
+             VALUES (?1, ?2, 'archived')
+             ON CONFLICT(thread_id) DO UPDATE SET
+                archived_at = excluded.archived_at,
+                kind = CASE
+                    WHEN archived_threads.kind = 'deleted' THEN 'deleted'
+                    ELSE excluded.kind
+                END",
             params![thread_id, archived_at],
         )?;
+        if !record_exists {
+            tx.commit()?;
+            return Ok(false);
+        }
         let removed = tx.execute(
             "DELETE FROM thread_records WHERE key = ?1",
             params![thread_id],
@@ -1742,6 +1913,463 @@ impl GaryxDbService {
             )
             .optional()?;
         Ok(archived.is_some())
+    }
+
+    pub fn thread_terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> GaryxDbResult<Option<ThreadTerminalState>> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::ArchivedThreadRead)?;
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.read_conn()?;
+        conn.query_row(
+            "SELECT kind FROM archived_threads WHERE thread_id = ?1",
+            params![thread_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|kind| parse_terminal_state(&kind))
+        .transpose()
+    }
+
+    pub fn lifecycle_operation(
+        &self,
+        store_incarnation: &str,
+        operation_id: &str,
+    ) -> GaryxDbResult<Option<LifecycleOperationRecord>> {
+        let conn = self.read_conn()?;
+        read_lifecycle_operation(&conn, store_incarnation, operation_id)
+    }
+
+    pub(crate) fn execute_lifecycle_mutation(
+        &self,
+        input: LifecycleMutationInput,
+    ) -> GaryxDbResult<LifecycleTransactionResult> {
+        self.execute_lifecycle_transaction(
+            input.expected_store_incarnation,
+            input.operation_id,
+            input.kind,
+            input.thread_id,
+            input.fingerprint,
+            input.endpoint_keys,
+            input.enabled_channel_accounts,
+            None,
+        )
+    }
+
+    pub(crate) fn execute_lifecycle_decision(
+        &self,
+        input: LifecycleDecisionInput,
+    ) -> GaryxDbResult<LifecycleTransactionResult> {
+        self.execute_lifecycle_transaction(
+            input.expected_store_incarnation,
+            input.operation_id,
+            input.kind,
+            input.thread_id,
+            input.fingerprint,
+            Vec::new(),
+            BTreeSet::new(),
+            Some((input.outcome, input.detail)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_lifecycle_transaction(
+        &self,
+        expected_store_incarnation: String,
+        operation_id: String,
+        kind: LifecycleOperationKind,
+        thread_id: String,
+        fingerprint: String,
+        endpoint_keys: Vec<String>,
+        enabled_channel_accounts: BTreeSet<(String, String)>,
+        forced_decision: Option<(LifecycleOperationOutcome, Value)>,
+    ) -> GaryxDbResult<LifecycleTransactionResult> {
+        let expected_store_incarnation =
+            normalize_required("expected_store_incarnation", &expected_store_incarnation)?;
+        let operation_id = normalize_required("operation_id", &operation_id)?;
+        let thread_id = normalize_thread_id(&thread_id)?;
+        let fingerprint = normalize_required("fingerprint", &fingerprint)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let current_store_incarnation = read_store_incarnation_id(&tx)?;
+        if current_store_incarnation != expected_store_incarnation {
+            return Ok(LifecycleTransactionResult::WrongIncarnation {
+                current_store_incarnation,
+            });
+        }
+        if let Some(existing) =
+            read_lifecycle_operation(&tx, &expected_store_incarnation, &operation_id)?
+        {
+            return Ok(LifecycleTransactionResult::Existing(existing));
+        }
+
+        let record_body = tx
+            .query_row(
+                "SELECT body FROM thread_records WHERE key = ?1",
+                params![thread_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let terminal = read_thread_terminal_state(&tx, &thread_id)?;
+        let record_value = record_body
+            .as_deref()
+            .map(serde_json::from_str::<Value>)
+            .transpose()
+            .map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "thread record '{thread_id}' contains invalid JSON: {error}"
+                ))
+            })?;
+
+        let matrix = lifecycle_matrix(kind, record_value.is_some(), terminal);
+        let (outcome, detail, durable_terminal, mutates_terminal) = match matrix {
+            LifecycleMatrixAction::ApplyChanged(next) => (
+                LifecycleOperationOutcome::AppliedChanged,
+                None,
+                Some(next),
+                true,
+            ),
+            LifecycleMatrixAction::ApplyNoop(next, write_terminal) => (
+                LifecycleOperationOutcome::AppliedNoop,
+                None,
+                Some(next),
+                write_terminal,
+            ),
+            LifecycleMatrixAction::RejectNotFound(terminal) => (
+                LifecycleOperationOutcome::RejectedNotFound,
+                Some(lifecycle_not_found_detail(&thread_id, terminal)),
+                terminal,
+                false,
+            ),
+            LifecycleMatrixAction::ProceedActive => {
+                if let Some((outcome, detail)) = forced_decision {
+                    let outcome = match outcome {
+                        LifecycleOperationOutcome::RejectedConflict
+                        | LifecycleOperationOutcome::RejectedNotFound => outcome,
+                        _ => {
+                            return Err(GaryxDbError::BadRequest(
+                                "a lifecycle decision must be rejected_conflict or rejected_not_found"
+                                    .to_owned(),
+                            ));
+                        }
+                    };
+                    (outcome, Some(detail), terminal, false)
+                } else {
+                    let has_enabled_binding = kind == LifecycleOperationKind::Delete
+                        && record_value.as_ref().is_some_and(|record| {
+                            bindings_from_value(record).iter().any(|binding| {
+                                enabled_channel_accounts.contains(&(
+                                    binding.channel.clone(),
+                                    binding.account_id.clone(),
+                                ))
+                            })
+                        });
+                    if has_enabled_binding {
+                        (
+                            LifecycleOperationOutcome::RejectedConflict,
+                            Some(json_detail(
+                                "active_channel_binding",
+                                "cannot delete thread with active channel bindings",
+                            )),
+                            None,
+                            false,
+                        )
+                    } else {
+                        let next = match kind {
+                            LifecycleOperationKind::Archive => ThreadTerminalState::Archived,
+                            LifecycleOperationKind::Delete => ThreadTerminalState::Deleted,
+                        };
+                        (
+                            LifecycleOperationOutcome::AppliedChanged,
+                            None,
+                            Some(next),
+                            true,
+                        )
+                    }
+                }
+            }
+        };
+
+        let mut detached_endpoint_keys = BTreeSet::new();
+        let should_cleanup = outcome == LifecycleOperationOutcome::AppliedChanged;
+        if mutates_terminal {
+            tx.execute(
+                "INSERT INTO archived_threads (thread_id, archived_at, kind)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(thread_id) DO UPDATE SET
+                    archived_at = excluded.archived_at,
+                    kind = CASE
+                        WHEN archived_threads.kind = 'deleted' THEN 'deleted'
+                        ELSE excluded.kind
+                    END",
+                params![
+                    thread_id,
+                    now_string(),
+                    durable_terminal
+                        .expect("terminal mutation must carry a durable state")
+                        .as_str()
+                ],
+            )?;
+        }
+
+        if should_cleanup {
+            let mut stmt = tx.prepare(
+                "SELECT endpoint_key FROM thread_channel_endpoints
+                 WHERE thread_id = ?1 ORDER BY endpoint_key ASC",
+            )?;
+            let rows = stmt.query_map(params![thread_id], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                detached_endpoint_keys.insert(row?);
+            }
+            drop(stmt);
+            for endpoint_key in endpoint_keys {
+                let endpoint_key = endpoint_key.trim();
+                if endpoint_key.is_empty() {
+                    continue;
+                }
+                let owned = tx
+                    .query_row(
+                        "SELECT 1 FROM thread_channel_endpoints
+                         WHERE endpoint_key = ?1 AND thread_id = ?2",
+                        params![endpoint_key, thread_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if owned {
+                    detached_endpoint_keys.insert(endpoint_key.to_owned());
+                }
+            }
+
+            tx.execute(
+                "DELETE FROM thread_records WHERE key = ?1",
+                params![thread_id],
+            )?;
+            remove_thread_meta_projection_tx(&tx, &thread_id)?;
+            remove_task_projection_tx(&tx, &thread_id)?;
+            remove_recent_thread_tx(&tx, &thread_id)?;
+            let removed_pin = tx.execute(
+                "DELETE FROM thread_pins WHERE thread_id = ?1",
+                params![thread_id],
+            )? > 0;
+            bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
+            let removed_favorite = tx.execute(
+                "DELETE FROM thread_favorites WHERE thread_id = ?1",
+                params![thread_id],
+            )? > 0;
+            bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
+
+            for endpoint_key in &detached_endpoint_keys {
+                enqueue_cleanup_job(
+                    &tx,
+                    &thread_id,
+                    CleanupOutboxStep::EndpointRuntimeInvalidate,
+                    Some(&serde_json::json!({
+                        "endpoint_key": endpoint_key,
+                        "expected_thread_id": thread_id,
+                    })),
+                )?;
+            }
+            let provider_key = record_value.as_ref().and_then(|record| {
+                record
+                    .get("provider_key")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            });
+            enqueue_cleanup_job(
+                &tx,
+                &thread_id,
+                CleanupOutboxStep::RuntimeTeardown,
+                Some(&serde_json::json!({ "provider_key": provider_key })),
+            )?;
+            enqueue_cleanup_job(&tx, &thread_id, CleanupOutboxStep::TranscriptRemove, None)?;
+            enqueue_cleanup_job(&tx, &thread_id, CleanupOutboxStep::ThreadLogRemove, None)?;
+        }
+
+        let result_payload = matches!(
+            outcome,
+            LifecycleOperationOutcome::AppliedChanged | LifecycleOperationOutcome::AppliedNoop
+        )
+        .then(|| {
+            serde_json::json!({
+                "detached_endpoint_keys": detached_endpoint_keys.into_iter().collect::<Vec<_>>(),
+            })
+        });
+        let operation = LifecycleOperationRecord {
+            store_incarnation: expected_store_incarnation,
+            operation_id,
+            kind,
+            thread_id,
+            fingerprint,
+            outcome,
+            result_payload,
+            detail,
+            completed_at: now_string(),
+        };
+        insert_lifecycle_operation(&tx, &operation)?;
+        tx.commit()?;
+        Ok(LifecycleTransactionResult::Completed {
+            operation,
+            durable_terminal,
+        })
+    }
+
+    pub fn next_cleanup_outbox_job(&self, now: &str) -> GaryxDbResult<Option<CleanupOutboxJob>> {
+        let conn = self.read_conn()?;
+        let row = conn
+            .query_row(
+                "SELECT job.job_id, job.thread_id, job.step, job.payload,
+                        job.attempt_count, job.next_attempt_at, job.created_at
+                   FROM cleanup_outbox AS job
+                  WHERE job.status = 'pending'
+                    AND (job.next_attempt_at IS NULL OR job.next_attempt_at <= ?1)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM cleanup_outbox AS earlier
+                         WHERE earlier.thread_id = job.thread_id
+                           AND earlier.job_id < job.job_id
+                           AND earlier.status <> 'done'
+                    )
+                  ORDER BY job.job_id ASC
+                  LIMIT 1",
+                params![now],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(cleanup_job_from_row).transpose()
+    }
+
+    pub fn mark_cleanup_outbox_done(&self, job_id: i64) -> GaryxDbResult<bool> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE cleanup_outbox
+                SET status = 'done', settled_at = ?2, next_attempt_at = NULL
+              WHERE job_id = ?1 AND status = 'pending'",
+            params![job_id, now_string()],
+        )? > 0)
+    }
+
+    pub fn retry_cleanup_outbox_job(
+        &self,
+        job_id: i64,
+        next_attempt_at: &str,
+    ) -> GaryxDbResult<bool> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE cleanup_outbox
+                SET attempt_count = attempt_count + 1,
+                    next_attempt_at = ?2
+              WHERE job_id = ?1 AND status = 'pending'",
+            params![job_id, next_attempt_at],
+        )? > 0)
+    }
+
+    pub fn pending_cleanup_outbox_count(&self) -> GaryxDbResult<usize> {
+        let conn = self.read_conn()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM cleanup_outbox WHERE status = 'pending'",
+            [],
+            |row| row.get(0),
+        )?;
+        usize::try_from(count).map_err(|_| {
+            GaryxDbError::Configuration("cleanup outbox count exceeds usize".to_owned())
+        })
+    }
+
+    pub fn prune_lifecycle_history(&self, completed_before: &str) -> GaryxDbResult<(usize, usize)> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let operations = tx.execute(
+            "DELETE FROM lifecycle_operations WHERE completed_at < ?1",
+            params![completed_before],
+        )?;
+        let jobs = tx.execute(
+            "DELETE FROM cleanup_outbox
+              WHERE status = 'done' AND settled_at < ?1",
+            params![completed_before],
+        )?;
+        tx.commit()?;
+        Ok((operations, jobs))
+    }
+
+    /// At boot the bridge run index is empty, so every still-queued input is
+    /// necessarily orphaned.  Settle it once under the writer transaction;
+    /// history GET remains a pure projection after this pass.
+    pub fn recover_orphaned_pending_user_inputs(&self) -> GaryxDbResult<usize> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare(
+            "SELECT key, body FROM thread_records
+              WHERE key LIKE 'thread::%'
+                AND instr(body, '\"pending_user_inputs\"') > 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        drop(stmt);
+
+        let mut settled = 0usize;
+        for (thread_id, body) in records {
+            let mut value: Value = serde_json::from_str(&body).map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "thread record '{thread_id}' contains invalid JSON: {error}"
+                ))
+            })?;
+            let Some(inputs) = value
+                .get_mut("pending_user_inputs")
+                .and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            let mut changed = false;
+            for input in inputs {
+                let Some(input) = input.as_object_mut() else {
+                    continue;
+                };
+                let queued = input
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("queued")
+                    .eq_ignore_ascii_case("queued");
+                if queued {
+                    input.insert("status".to_owned(), Value::String("abandoned".to_owned()));
+                    settled += 1;
+                    changed = true;
+                }
+            }
+            if changed {
+                tx.execute(
+                    "UPDATE thread_records SET body = ?2 WHERE key = ?1",
+                    params![
+                        thread_id,
+                        serde_json::to_string(&value).map_err(|error| {
+                            GaryxDbError::Configuration(format!(
+                                "failed to serialize recovered thread '{thread_id}': {error}"
+                            ))
+                        })?
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(settled)
     }
 
     pub fn list_workspaces(&self) -> GaryxDbResult<Vec<WorkspaceRecord>> {
@@ -3913,8 +4541,11 @@ impl GaryxDbService {
         Ok(())
     }
 
-    /// Single-transaction delete of a thread record, all its projection
-    /// rows, pin, and favorite. Returns whether the record existed.
+    /// Single-transaction terminal delete of a thread record, all its
+    /// projection rows, pin, and favorite. Deleting an existing record or
+    /// upgrading an archived tombstone leaves `deleted`; a genuinely missing
+    /// thread with no tombstone remains missing, matching the lifecycle
+    /// result matrix's rejected-not-found branch.
     pub(crate) fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
@@ -3923,6 +4554,35 @@ impl GaryxDbService {
         let key = normalize_required("key", key)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        let record_exists = tx
+            .query_row(
+                "SELECT 1 FROM thread_records WHERE key = ?1",
+                params![key],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        let terminal = if is_thread_key(&key) {
+            read_thread_terminal_state(&tx, &key)?
+        } else {
+            None
+        };
+        if is_thread_key(&key)
+            && (terminal == Some(ThreadTerminalState::Deleted)
+                || (!record_exists && terminal.is_none()))
+        {
+            return Ok(false);
+        }
+        if is_thread_key(&key) {
+            tx.execute(
+                "INSERT INTO archived_threads (thread_id, archived_at, kind)
+                 VALUES (?1, ?2, 'deleted')
+                 ON CONFLICT(thread_id) DO UPDATE SET
+                    archived_at = excluded.archived_at,
+                    kind = 'deleted'",
+                params![key, now_string()],
+            )?;
+        }
         let removed = tx.execute("DELETE FROM thread_records WHERE key = ?1", params![key])? > 0;
         remove_thread_meta_projection_tx(&tx, &key)?;
         remove_task_projection_tx(&tx, &key)?;
@@ -3930,16 +4590,13 @@ impl GaryxDbService {
         let removed_pin =
             tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])? > 0;
         bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
-        tx.execute(
+        let removed_favorite = tx.execute(
             "DELETE FROM thread_favorites WHERE thread_id = ?1",
             params![key],
-        )?;
-        // Ordinary delete has no durable tombstone. Every successful thread
-        // deletion advances the fence even when there was no favorite row,
-        // so a pre-delete orphan write cannot land after record recreation.
-        if removed && is_thread_key(&key) {
-            bump_thread_favorites_revision_tx(&tx)?;
-        }
+        )? > 0;
+        // The terminal tombstone is now the resurrection fence, so the
+        // collection revision changes only when the favorite collection did.
+        bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
         tx.commit()?;
         Ok(removed)
     }
@@ -4296,6 +4953,220 @@ fn record_projection_state_tx(
     Ok(())
 }
 
+enum LifecycleMatrixAction {
+    ProceedActive,
+    ApplyChanged(ThreadTerminalState),
+    ApplyNoop(ThreadTerminalState, bool),
+    RejectNotFound(Option<ThreadTerminalState>),
+}
+
+fn lifecycle_matrix(
+    kind: LifecycleOperationKind,
+    record_exists: bool,
+    terminal: Option<ThreadTerminalState>,
+) -> LifecycleMatrixAction {
+    match (kind, record_exists, terminal) {
+        (LifecycleOperationKind::Archive, true, None)
+        | (LifecycleOperationKind::Delete, true, None) => LifecycleMatrixAction::ProceedActive,
+        (LifecycleOperationKind::Archive, false, None) => {
+            LifecycleMatrixAction::ApplyNoop(ThreadTerminalState::Archived, true)
+        }
+        (LifecycleOperationKind::Delete, false, None) => {
+            LifecycleMatrixAction::RejectNotFound(None)
+        }
+        (LifecycleOperationKind::Archive, _, Some(ThreadTerminalState::Archived)) => {
+            LifecycleMatrixAction::ApplyNoop(ThreadTerminalState::Archived, false)
+        }
+        (LifecycleOperationKind::Delete, _, Some(ThreadTerminalState::Archived)) => {
+            LifecycleMatrixAction::ApplyChanged(ThreadTerminalState::Deleted)
+        }
+        (LifecycleOperationKind::Archive, _, Some(ThreadTerminalState::Deleted)) => {
+            LifecycleMatrixAction::RejectNotFound(Some(ThreadTerminalState::Deleted))
+        }
+        (LifecycleOperationKind::Delete, _, Some(ThreadTerminalState::Deleted)) => {
+            LifecycleMatrixAction::ApplyNoop(ThreadTerminalState::Deleted, false)
+        }
+    }
+}
+
+fn json_detail(code: &str, message: &str) -> Value {
+    serde_json::json!({ "code": code, "message": message })
+}
+
+fn lifecycle_not_found_detail(thread_id: &str, terminal: Option<ThreadTerminalState>) -> Value {
+    serde_json::json!({
+        "code": "thread_not_found",
+        "message": format!("thread not found: {thread_id}"),
+        "terminal_kind": terminal.map(ThreadTerminalState::as_str),
+    })
+}
+
+fn read_thread_terminal_state(
+    conn: &Connection,
+    thread_id: &str,
+) -> GaryxDbResult<Option<ThreadTerminalState>> {
+    conn.query_row(
+        "SELECT kind FROM archived_threads WHERE thread_id = ?1",
+        params![thread_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .map(|kind| parse_terminal_state(&kind))
+    .transpose()
+}
+
+fn parse_terminal_state(value: &str) -> GaryxDbResult<ThreadTerminalState> {
+    ThreadTerminalState::parse(value).ok_or_else(|| {
+        GaryxDbError::Configuration(format!("invalid terminal thread tombstone kind '{value}'"))
+    })
+}
+
+fn read_lifecycle_operation(
+    conn: &Connection,
+    store_incarnation: &str,
+    operation_id: &str,
+) -> GaryxDbResult<Option<LifecycleOperationRecord>> {
+    let row = conn
+        .query_row(
+            "SELECT kind, thread_id, fingerprint, outcome, result_payload,
+                    detail, completed_at
+               FROM lifecycle_operations
+              WHERE store_incarnation = ?1 AND operation_id = ?2",
+            params![store_incarnation, operation_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((kind, thread_id, fingerprint, outcome, result_payload, detail, completed_at)) = row
+    else {
+        return Ok(None);
+    };
+    Ok(Some(LifecycleOperationRecord {
+        store_incarnation: store_incarnation.to_owned(),
+        operation_id: operation_id.to_owned(),
+        kind: LifecycleOperationKind::parse(&kind)?,
+        thread_id,
+        fingerprint,
+        outcome: LifecycleOperationOutcome::parse(&outcome)?,
+        result_payload: result_payload
+            .map(|payload| serde_json::from_str(&payload))
+            .transpose()
+            .map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "invalid lifecycle result payload for operation '{operation_id}': {error}"
+                ))
+            })?,
+        detail: detail
+            .map(|payload| serde_json::from_str(&payload))
+            .transpose()
+            .map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "invalid lifecycle detail for operation '{operation_id}': {error}"
+                ))
+            })?,
+        completed_at,
+    }))
+}
+
+fn insert_lifecycle_operation(
+    tx: &Transaction<'_>,
+    operation: &LifecycleOperationRecord,
+) -> GaryxDbResult<()> {
+    let result_payload = operation
+        .result_payload
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| GaryxDbError::Configuration(error.to_string()))?;
+    let detail = operation
+        .detail
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| GaryxDbError::Configuration(error.to_string()))?;
+    tx.execute(
+        "INSERT INTO lifecycle_operations (
+            store_incarnation, operation_id, kind, thread_id, fingerprint,
+            outcome, result_payload, detail, completed_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            operation.store_incarnation,
+            operation.operation_id,
+            operation.kind.as_str(),
+            operation.thread_id,
+            operation.fingerprint,
+            operation.outcome.as_str(),
+            result_payload,
+            detail,
+            operation.completed_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn enqueue_cleanup_job(
+    tx: &Transaction<'_>,
+    thread_id: &str,
+    step: CleanupOutboxStep,
+    payload: Option<&Value>,
+) -> GaryxDbResult<()> {
+    let payload = payload
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| GaryxDbError::Configuration(error.to_string()))?;
+    tx.execute(
+        "INSERT INTO cleanup_outbox (
+            thread_id, step, payload, status, attempt_count, next_attempt_at,
+            created_at, settled_at
+         ) VALUES (?1, ?2, ?3, 'pending', 0, NULL, ?4, NULL)",
+        params![thread_id, step.as_str(), payload, now_string()],
+    )?;
+    Ok(())
+}
+
+fn cleanup_job_from_row(
+    row: (
+        i64,
+        String,
+        String,
+        Option<String>,
+        i64,
+        Option<String>,
+        String,
+    ),
+) -> GaryxDbResult<CleanupOutboxJob> {
+    let (job_id, thread_id, step, payload, attempt_count, next_attempt_at, created_at) = row;
+    Ok(CleanupOutboxJob {
+        job_id,
+        thread_id,
+        step: CleanupOutboxStep::parse(&step)?,
+        payload: payload
+            .map(|payload| serde_json::from_str(&payload))
+            .transpose()
+            .map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "invalid cleanup payload for job {job_id}: {error}"
+                ))
+            })?,
+        attempt_count: u32::try_from(attempt_count).map_err(|_| {
+            GaryxDbError::Configuration(format!(
+                "invalid cleanup attempt_count {attempt_count} for job {job_id}"
+            ))
+        })?,
+        next_attempt_at,
+        created_at,
+    })
+}
+
 fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(
@@ -4339,8 +5210,46 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         CREATE TABLE IF NOT EXISTS archived_threads (
             thread_id TEXT PRIMARY KEY,
-            archived_at TEXT NOT NULL
+            archived_at TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'archived'
+                CHECK (kind IN ('archived', 'deleted'))
         ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS lifecycle_operations (
+            store_incarnation TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('archive', 'delete')),
+            thread_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN (
+                'applied_changed', 'applied_noop',
+                'rejected_conflict', 'rejected_not_found'
+            )),
+            result_payload TEXT,
+            detail TEXT,
+            completed_at TEXT NOT NULL,
+            PRIMARY KEY (store_incarnation, operation_id)
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS cleanup_outbox (
+            job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT NOT NULL,
+            step TEXT NOT NULL CHECK (step IN (
+                'endpoint_runtime_invalidate', 'runtime_teardown',
+                'transcript_remove', 'thread_log_remove'
+            )),
+            payload TEXT,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'done')),
+            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+            next_attempt_at TEXT,
+            created_at TEXT NOT NULL,
+            settled_at TEXT
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_cleanup_outbox_pending
+            ON cleanup_outbox(status, next_attempt_at)
+            WHERE status = 'pending';
 
         CREATE TABLE IF NOT EXISTS recent_threads (
             thread_id TEXT PRIMARY KEY,
@@ -4563,6 +5472,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     ensure_thread_pins_meta_row(conn)?;
     ensure_thread_favorites_meta_row(conn)?;
     ensure_store_incarnation_row(conn)?;
+    ensure_archived_threads_kind_column(conn)?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_thread_pins_sort_order
              ON thread_pins(sort_order ASC, pinned_at DESC, thread_id ASC);",
@@ -5799,6 +6709,25 @@ fn rotate_store_incarnation_tx(conn: &Connection) -> GaryxDbResult<String> {
     Ok(next)
 }
 
+fn ensure_archived_threads_kind_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(archived_threads)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "kind" {
+            return Ok(());
+        }
+    }
+    // Every pre-cutover row was produced by archive, so the only correct
+    // migration value is `archived`.
+    conn.execute(
+        "ALTER TABLE archived_threads
+         ADD COLUMN kind TEXT NOT NULL DEFAULT 'archived'
+         CHECK (kind IN ('archived', 'deleted'))",
+        [],
+    )?;
+    Ok(())
+}
+
 fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(workspaces)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -6186,35 +7115,59 @@ mod tests {
             GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"),
         );
 
-        // Calibrate a single read on this machine.
-        let single_ms = {
-            let conn = service.read_conn().expect("read conn");
-            run_slow_read(&conn).max(1)
-        };
-
-        let readers = 4u128;
-        let started = std::time::Instant::now();
+        // Hold every acquired connection until the main thread releases the
+        // gate. This proves the pool exposes four independent connections
+        // without depending on CPU throughput or wall-clock ratios while the
+        // rest of the test binary is running in parallel.
+        let readers = READ_POOL_SIZE;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(readers + 1));
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
         let handles: Vec<_> = (0..readers)
             .map(|_| {
                 let service = std::sync::Arc::clone(&service);
+                let start = std::sync::Arc::clone(&start);
+                let release = std::sync::Arc::clone(&release);
+                let acquired_tx = acquired_tx.clone();
                 std::thread::spawn(move || {
+                    start.wait();
                     let conn = service.read_conn().expect("read conn");
-                    run_slow_read(&conn);
+                    let _: i64 = conn
+                        .query_row("SELECT 1", [], |row| row.get(0))
+                        .expect("read query");
+                    acquired_tx.send(()).expect("report acquired connection");
+                    let (released, wake) = &*release;
+                    let mut released = released.lock().expect("release lock");
+                    while !*released {
+                        released = wake.wait(released).expect("release wait");
+                    }
                 })
             })
             .collect();
+        drop(acquired_tx);
+        start.wait();
+
+        let mut acquired = 0;
+        while acquired < readers
+            && acquired_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        {
+            acquired += 1;
+        }
+        {
+            let (released, wake) = &*release;
+            *released.lock().expect("release lock") = true;
+            wake.notify_all();
+        }
         for handle in handles {
             handle.join().expect("reader thread");
         }
-        let wall_ms = started.elapsed().as_millis().max(1);
 
-        // One shared read connection serializes the four reads
-        // (wall ≈ 4× single); a pool must let them overlap. The 3× bound
-        // leaves headroom for scheduling noise while still failing hard on
-        // full serialization.
-        assert!(
-            wall_ms < single_ms * readers * 3 / 4,
-            "concurrent reads serialized behind one connection: wall={wall_ms}ms single={single_ms}ms readers={readers}"
+        assert_eq!(
+            acquired, readers,
+            "readers did not acquire every pool connection concurrently"
         );
     }
 
@@ -9310,7 +10263,7 @@ mod tests {
     }
 
     #[test]
-    fn favorite_cleanup_interleavings_and_unconditional_plain_delete_bump_close_orphan_writes() {
+    fn terminal_tombstones_fence_favorite_cleanup_without_noop_revision_bumps() {
         let archived = GaryxDbService::memory().expect("archive database");
         seed_favorite_thread(&archived, "thread::archive-first", false);
         let incarnation = archived.store_incarnation_id().unwrap();
@@ -9362,33 +10315,53 @@ mod tests {
                 .delete_thread_record_with_projections("thread::delete-recreate")
                 .expect("plain delete without favorite")
         );
-        assert_eq!(deleted.list_thread_favorites().unwrap().revision, 1);
-        seed_favorite_thread(&deleted, "thread::delete-recreate", false);
+        assert_eq!(deleted.list_thread_favorites().unwrap().revision, 0);
+        assert!(matches!(
+            deleted.write_thread_record_with_projections(
+                "thread::delete-recreate",
+                "{}",
+                None,
+                None,
+            ),
+            Err(GaryxDbError::ThreadArchived(_))
+        ));
         assert!(matches!(
             deleted
                 .set_thread_favorite("thread::delete-recreate", true, 0, &incarnation)
-                .expect("orphan pre-delete write"),
-            FavoriteThreadResult::Conflict(ref page) if page.revision == 1
+                .expect("post-delete favorite write"),
+            FavoriteThreadResult::NotFound(ref page) if page.revision == 0
         ));
-        assert!(
-            deleted
-                .list_thread_favorites()
-                .unwrap()
-                .favorites
-                .is_empty()
-        );
 
-        deleted
-            .set_thread_favorite("thread::delete-recreate", true, 1, &incarnation)
-            .expect("fresh favorite");
+        let delete_with_favorite = GaryxDbService::memory().expect("favorite delete database");
+        seed_favorite_thread(&delete_with_favorite, "thread::delete-favorite", false);
+        let incarnation = delete_with_favorite.store_incarnation_id().unwrap();
+        delete_with_favorite
+            .set_thread_favorite("thread::delete-favorite", true, 0, &incarnation)
+            .expect("favorite before delete");
         assert!(
-            deleted
-                .delete_thread_record_with_projections("thread::delete-recreate")
+            delete_with_favorite
+                .delete_thread_record_with_projections("thread::delete-favorite")
                 .expect("delete with favorite")
         );
-        let page = deleted.list_thread_favorites().unwrap();
-        assert_eq!(page.revision, 3, "plain delete bumps exactly once");
+        let page = delete_with_favorite.list_thread_favorites().unwrap();
+        assert_eq!(
+            page.revision, 2,
+            "delete bumps only for the removed favorite"
+        );
         assert!(page.favorites.is_empty());
+        assert!(
+            !delete_with_favorite
+                .delete_thread_record_with_projections("thread::delete-favorite")
+                .expect("repeat delete")
+        );
+        assert_eq!(
+            delete_with_favorite
+                .list_thread_favorites()
+                .unwrap()
+                .revision,
+            2,
+            "repeat terminal delete must not bump an unchanged collection"
+        );
     }
 
     #[test]
@@ -9685,6 +10658,14 @@ mod tests {
     fn archive_and_runtime_delete_each_bump_pin_revision_once() {
         let archived = GaryxDbService::memory().expect("archive db");
         archived
+            .write_thread_record_with_projections(
+                "thread::archived",
+                r#"{"thread_id":"thread::archived"}"#,
+                None,
+                None,
+            )
+            .expect("archive candidate record");
+        archived
             .pin_thread("thread::archived")
             .expect("archive candidate pin");
         archived
@@ -9709,6 +10690,14 @@ mod tests {
         );
 
         let deleted = GaryxDbService::memory().expect("delete db");
+        deleted
+            .write_thread_record_with_projections(
+                "thread::deleted",
+                r#"{"thread_id":"thread::deleted"}"#,
+                None,
+                None,
+            )
+            .expect("delete candidate record");
         deleted
             .pin_thread("thread::deleted")
             .expect("delete candidate pin");
@@ -10784,6 +11773,367 @@ mod tests {
                 .expect("list endpoints after remove")
                 .is_empty()
         );
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum LifecycleSeedState {
+        Active,
+        Missing,
+        Archived,
+        Deleted,
+    }
+
+    fn seed_lifecycle_state(db: &GaryxDbService, thread_id: &str, state: LifecycleSeedState) {
+        match state {
+            LifecycleSeedState::Active => db
+                .write_thread_record_with_projections(
+                    thread_id,
+                    &json!({"thread_id": thread_id}).to_string(),
+                    None,
+                    None,
+                )
+                .expect("seed active lifecycle thread"),
+            LifecycleSeedState::Missing => {}
+            LifecycleSeedState::Archived => {
+                db.archive_thread_record(thread_id)
+                    .expect("seed archived tombstone");
+            }
+            LifecycleSeedState::Deleted => {
+                db.write_thread_record_with_projections(
+                    thread_id,
+                    &json!({"thread_id": thread_id}).to_string(),
+                    None,
+                    None,
+                )
+                .expect("seed thread before delete");
+                assert!(
+                    db.delete_thread_record_with_projections(thread_id)
+                        .expect("seed deleted tombstone")
+                );
+            }
+        }
+    }
+
+    fn expected_lifecycle_matrix(
+        kind: LifecycleOperationKind,
+        state: LifecycleSeedState,
+    ) -> (LifecycleOperationOutcome, Option<ThreadTerminalState>) {
+        match (kind, state) {
+            (LifecycleOperationKind::Archive, LifecycleSeedState::Active) => (
+                LifecycleOperationOutcome::AppliedChanged,
+                Some(ThreadTerminalState::Archived),
+            ),
+            (LifecycleOperationKind::Archive, LifecycleSeedState::Missing)
+            | (LifecycleOperationKind::Archive, LifecycleSeedState::Archived) => (
+                LifecycleOperationOutcome::AppliedNoop,
+                Some(ThreadTerminalState::Archived),
+            ),
+            (LifecycleOperationKind::Archive, LifecycleSeedState::Deleted) => (
+                LifecycleOperationOutcome::RejectedNotFound,
+                Some(ThreadTerminalState::Deleted),
+            ),
+            (LifecycleOperationKind::Delete, LifecycleSeedState::Active)
+            | (LifecycleOperationKind::Delete, LifecycleSeedState::Archived) => (
+                LifecycleOperationOutcome::AppliedChanged,
+                Some(ThreadTerminalState::Deleted),
+            ),
+            (LifecycleOperationKind::Delete, LifecycleSeedState::Missing) => {
+                (LifecycleOperationOutcome::RejectedNotFound, None)
+            }
+            (LifecycleOperationKind::Delete, LifecycleSeedState::Deleted) => (
+                LifecycleOperationOutcome::AppliedNoop,
+                Some(ThreadTerminalState::Deleted),
+            ),
+        }
+    }
+
+    #[test]
+    fn lifecycle_matrix_is_identical_immediately_and_after_reopen() {
+        let kinds = [
+            LifecycleOperationKind::Archive,
+            LifecycleOperationKind::Delete,
+        ];
+        let states = [
+            LifecycleSeedState::Active,
+            LifecycleSeedState::Missing,
+            LifecycleSeedState::Archived,
+            LifecycleSeedState::Deleted,
+        ];
+        let mut assertions = 0usize;
+        for reopen in [false, true] {
+            for kind in kinds {
+                for seed_state in states {
+                    let dir = tempfile::tempdir().expect("temp dir");
+                    let path = dir.path().join("garyx-db.sqlite3");
+                    let mut db = Some(GaryxDbService::open(&path).expect("open lifecycle db"));
+                    let thread_id = "thread::matrix";
+                    seed_lifecycle_state(db.as_ref().unwrap(), thread_id, seed_state);
+                    let incarnation = db
+                        .as_ref()
+                        .unwrap()
+                        .store_incarnation_id()
+                        .expect("incarnation");
+                    if reopen {
+                        drop(db.take());
+                        db = Some(GaryxDbService::open(&path).expect("reopen lifecycle db"));
+                    }
+                    let db = db.unwrap();
+                    let expected = expected_lifecycle_matrix(kind, seed_state);
+                    let result = db
+                        .execute_lifecycle_mutation(LifecycleMutationInput {
+                            expected_store_incarnation: incarnation,
+                            operation_id: format!(
+                                "matrix-{}-{}-{}",
+                                kind.as_str(),
+                                match seed_state {
+                                    LifecycleSeedState::Active => "active",
+                                    LifecycleSeedState::Missing => "missing",
+                                    LifecycleSeedState::Archived => "archived",
+                                    LifecycleSeedState::Deleted => "deleted",
+                                },
+                                reopen
+                            ),
+                            kind,
+                            thread_id: thread_id.to_owned(),
+                            fingerprint: format!("fingerprint-{assertions}"),
+                            endpoint_keys: Vec::new(),
+                            enabled_channel_accounts: BTreeSet::new(),
+                        })
+                        .expect("execute lifecycle matrix cell");
+                    let LifecycleTransactionResult::Completed {
+                        operation,
+                        durable_terminal,
+                    } = result
+                    else {
+                        panic!("matrix cell did not complete: {result:?}");
+                    };
+                    assert_eq!(operation.outcome, expected.0);
+                    assert_eq!(durable_terminal, expected.1);
+                    assert_eq!(
+                        db.thread_terminal_state(thread_id).unwrap(),
+                        expected.1,
+                        "wrong durable tombstone for {kind:?}/{seed_state:?}/reopen={reopen}"
+                    );
+                    assertions += 1;
+                }
+            }
+        }
+        assert_eq!(assertions, 16);
+    }
+
+    #[test]
+    fn lifecycle_ledger_is_fingerprinted_incarnation_scoped_and_identity_first() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let thread_id = "thread::ledger";
+        seed_lifecycle_state(&db, thread_id, LifecycleSeedState::Active);
+        let first_incarnation = db.store_incarnation_id().unwrap();
+        let operation_id = "operation-ledger";
+        let first = db
+            .execute_lifecycle_mutation(LifecycleMutationInput {
+                expected_store_incarnation: first_incarnation.clone(),
+                operation_id: operation_id.to_owned(),
+                kind: LifecycleOperationKind::Archive,
+                thread_id: thread_id.to_owned(),
+                fingerprint: "fingerprint-one".to_owned(),
+                endpoint_keys: Vec::new(),
+                enabled_channel_accounts: BTreeSet::new(),
+            })
+            .unwrap();
+        assert!(matches!(
+            first,
+            LifecycleTransactionResult::Completed { .. }
+        ));
+        let replay = db
+            .execute_lifecycle_mutation(LifecycleMutationInput {
+                expected_store_incarnation: first_incarnation.clone(),
+                operation_id: operation_id.to_owned(),
+                kind: LifecycleOperationKind::Delete,
+                thread_id: "thread::different".to_owned(),
+                fingerprint: "fingerprint-two".to_owned(),
+                endpoint_keys: Vec::new(),
+                enabled_channel_accounts: BTreeSet::new(),
+            })
+            .unwrap();
+        let LifecycleTransactionResult::Existing(existing) = replay else {
+            panic!("ledger belt did not return existing row");
+        };
+        assert_eq!(existing.fingerprint, "fingerprint-one");
+
+        let second_incarnation = db.rotate_store_incarnation().unwrap().store_incarnation_id;
+        let wrong = db
+            .execute_lifecycle_mutation(LifecycleMutationInput {
+                expected_store_incarnation: first_incarnation,
+                operation_id: operation_id.to_owned(),
+                kind: LifecycleOperationKind::Archive,
+                thread_id: thread_id.to_owned(),
+                fingerprint: "fingerprint-one".to_owned(),
+                endpoint_keys: Vec::new(),
+                enabled_channel_accounts: BTreeSet::new(),
+            })
+            .unwrap();
+        assert!(matches!(
+            wrong,
+            LifecycleTransactionResult::WrongIncarnation {
+                current_store_incarnation
+            } if current_store_incarnation == second_incarnation
+        ));
+        let second = db
+            .execute_lifecycle_mutation(LifecycleMutationInput {
+                expected_store_incarnation: second_incarnation.clone(),
+                operation_id: operation_id.to_owned(),
+                kind: LifecycleOperationKind::Archive,
+                thread_id: thread_id.to_owned(),
+                fingerprint: "fingerprint-one".to_owned(),
+                endpoint_keys: Vec::new(),
+                enabled_channel_accounts: BTreeSet::new(),
+            })
+            .unwrap();
+        assert!(matches!(
+            second,
+            LifecycleTransactionResult::Completed { .. }
+        ));
+        assert!(
+            db.lifecycle_operation(&second_incarnation, operation_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn cleanup_outbox_skips_blocked_threads_but_never_overtakes_same_thread() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let due = "2026-07-17T00:00:00.000Z";
+        let future = "2999-01-01T00:00:00.000Z";
+        let now = "2026-07-17T00:00:01.000Z";
+        {
+            let conn = db.conn().unwrap();
+            conn.execute(
+                "INSERT INTO cleanup_outbox (thread_id, step, status, attempt_count, next_attempt_at, created_at)
+                 VALUES ('thread::blocked', 'runtime_teardown', 'pending', 0, ?1, ?2)",
+                params![future, due],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cleanup_outbox (thread_id, step, status, attempt_count, next_attempt_at, created_at)
+                 VALUES ('thread::blocked', 'transcript_remove', 'pending', 0, NULL, ?1)",
+                params![due],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cleanup_outbox (thread_id, step, status, attempt_count, next_attempt_at, created_at)
+                 VALUES ('thread::ready', 'runtime_teardown', 'pending', 0, NULL, ?1)",
+                params![due],
+            )
+            .unwrap();
+        }
+        let ready = db.next_cleanup_outbox_job(now).unwrap().unwrap();
+        assert_eq!(ready.thread_id, "thread::ready");
+        db.retry_cleanup_outbox_job(ready.job_id, future).unwrap();
+        assert!(db.next_cleanup_outbox_job(now).unwrap().is_none());
+        let persisted = {
+            let conn = db.read_conn().unwrap();
+            conn.query_row(
+                "SELECT attempt_count, next_attempt_at FROM cleanup_outbox WHERE job_id = ?1",
+                params![ready.job_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(persisted, (1, future.to_owned()));
+    }
+
+    #[test]
+    fn startup_recovery_abandons_only_orphaned_queued_inputs_in_one_pass() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let thread_id = "thread::orphaned-inputs";
+        db.write_thread_record_with_projections(
+            thread_id,
+            &json!({
+                "thread_id": thread_id,
+                "pending_user_inputs": [
+                    {"id": "queued", "status": "queued"},
+                    {"id": "implicit"},
+                    {"id": "running", "status": "running"},
+                    {"id": "done", "status": "abandoned"}
+                ]
+            })
+            .to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(db.recover_orphaned_pending_user_inputs().unwrap(), 2);
+        assert_eq!(db.recover_orphaned_pending_user_inputs().unwrap(), 0);
+        let body: Value =
+            serde_json::from_str(&db.get_thread_record_body(thread_id).unwrap().unwrap()).unwrap();
+        let statuses = body["pending_user_inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|input| input["status"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec!["abandoned", "abandoned", "running", "abandoned"]
+        );
+    }
+
+    #[test]
+    fn missing_raw_delete_does_not_create_a_tombstone_but_real_delete_does() {
+        let db = GaryxDbService::memory().expect("db opens");
+        assert!(
+            !db.delete_thread_record_with_projections("thread::missing-delete")
+                .unwrap()
+        );
+        assert_eq!(
+            db.thread_terminal_state("thread::missing-delete").unwrap(),
+            None
+        );
+        seed_lifecycle_state(&db, "thread::real-delete", LifecycleSeedState::Active);
+        assert!(
+            db.delete_thread_record_with_projections("thread::real-delete")
+                .unwrap()
+        );
+        assert_eq!(
+            db.thread_terminal_state("thread::real-delete").unwrap(),
+            Some(ThreadTerminalState::Deleted)
+        );
+        assert!(matches!(
+            db.write_thread_record_with_projections("thread::real-delete", "{}", None, None),
+            Err(GaryxDbError::ThreadArchived(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_archive_tombstones_migrate_to_explicit_archived_kind() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("open legacy db");
+            conn.execute_batch(
+                "CREATE TABLE archived_threads (
+                    thread_id TEXT PRIMARY KEY,
+                    archived_at TEXT NOT NULL
+                 );
+                 INSERT INTO archived_threads (thread_id, archived_at)
+                 VALUES ('thread::legacy-archive', '2026-07-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+        let db = GaryxDbService::open(&path).expect("migrate legacy tombstone schema");
+        assert_eq!(
+            db.thread_terminal_state("thread::legacy-archive").unwrap(),
+            Some(ThreadTerminalState::Archived)
+        );
+        let columns = {
+            let conn = db.read_conn().unwrap();
+            let mut stmt = conn.prepare("PRAGMA table_info(archived_threads)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(columns.iter().any(|column| column == "kind"));
     }
 
     #[test]

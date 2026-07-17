@@ -10,6 +10,8 @@ use garyx_router::{
 };
 use tokio::sync::broadcast;
 
+use crate::provider_trait::ClearSessionOutcome;
+
 mod lifecycle;
 mod persistence;
 mod provider_factory;
@@ -223,7 +225,7 @@ impl MultiProviderBridge {
         &self,
         thread_id: &str,
         provider_key_hint: Option<&str>,
-    ) -> bool {
+    ) -> ClearSessionOutcome {
         let provider_key = self
             .inner
             .thread_affinity
@@ -239,18 +241,12 @@ impl MultiProviderBridge {
             });
 
         let Some(provider_key) = provider_key else {
-            return false;
+            return ClearSessionOutcome::AlreadyAbsent;
         };
         let Some(provider) = self.get_provider(&provider_key).await else {
-            return false;
+            return ClearSessionOutcome::AlreadyAbsent;
         };
-        if !provider.clear_session(thread_id).await {
-            return false;
-        }
-
-        self.inner.thread_affinity.write().await.remove(thread_id);
-        self.remove_thread_workspace_binding(thread_id).await;
-        true
+        provider.clear_session(thread_id).await
     }
 
     pub async fn thread_workspace_bindings_snapshot(&self) -> HashMap<String, String> {

@@ -131,6 +131,26 @@ impl RuntimeAssembler {
         // under the data-dir lock before Gateway binds its listener. It must
         // not allocate new activity ordering: completed runs stay in place.
         state.ops.garyx_db.clear_stale_active_runs()?;
+        let recovered_inputs = state.ops.garyx_db.recover_orphaned_pending_user_inputs()?;
+        if recovered_inputs > 0 {
+            tracing::info!(
+                recovered_inputs,
+                "settled orphaned queued user inputs during startup"
+            );
+        }
+        let lifecycle_cutoff = (chrono::Utc::now() - chrono::Duration::days(7))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let (pruned_operations, pruned_cleanup_jobs) = state
+            .ops
+            .garyx_db
+            .prune_lifecycle_history(&lifecycle_cutoff)?;
+        if pruned_operations > 0 || pruned_cleanup_jobs > 0 {
+            tracing::info!(
+                pruned_operations,
+                pruned_cleanup_jobs,
+                "pruned expired lifecycle operation history"
+            );
+        }
 
         // Bind the bridge to AppState's final SQLite store handle so provider
         // persistence, routing, and history all share the same truth source.

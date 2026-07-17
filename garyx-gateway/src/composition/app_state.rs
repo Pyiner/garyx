@@ -29,6 +29,7 @@ use crate::meetings::MeetingService;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::thread_lifecycle::LifecycleService;
 
 pub struct RuntimeState {
     pub start_time: Instant,
@@ -61,6 +62,7 @@ pub struct OpsState {
     pub meetings: Arc<MeetingService>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
+    pub(crate) lifecycle: Arc<LifecycleService>,
 }
 
 pub struct ChannelEndpointSnapshotCache {
@@ -405,6 +407,7 @@ impl AppState {
                 meetings: self.ops.meetings.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
+                lifecycle: self.ops.lifecycle.clone(),
             },
             integration: IntegrationState {
                 bridge: self.integration.bridge.clone(),

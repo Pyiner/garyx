@@ -11,7 +11,7 @@ pub mod provider_trait;
 mod run_graph;
 
 pub use multi_provider::MultiProviderBridge;
-pub use provider_trait::{BridgeError, ProviderRuntime};
+pub use provider_trait::{BridgeError, ClearSessionOutcome, ProviderRuntime};
 
 #[cfg(test)]
 mod api_guard_tests;

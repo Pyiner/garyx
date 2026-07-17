@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use axum::body::Body;
 use futures_util::StreamExt;
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
+use garyx_bridge::provider_trait::{
+    BridgeError, ClearSessionOutcome, ProviderRuntime, StreamCallback,
+};
 use garyx_models::config::{
     ApiAccount, CronAction, CronJobConfig, CronJobKind, CronSchedule, GaryxConfig,
     PluginAccountEntry,
@@ -2911,12 +2913,16 @@ impl ProviderRuntime for SlowDeleteProvider {
         Ok(format!("sdk-{session_key}"))
     }
 
-    async fn clear_session(&self, session_key: &str) -> bool {
+    async fn clear_session(&self, session_key: &str) -> ClearSessionOutcome {
         self.cleared_sessions
             .lock()
             .unwrap()
             .push(session_key.to_owned());
-        self.clear_succeeds
+        if self.clear_succeeds {
+            ClearSessionOutcome::Cleared
+        } else {
+            ClearSessionOutcome::RetryableFailure
+        }
     }
 }
 

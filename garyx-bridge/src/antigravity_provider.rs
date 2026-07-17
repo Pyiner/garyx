@@ -23,7 +23,8 @@ use crate::provider_common::{
     metadata_bool, normalize_non_empty, resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
 };
 use crate::provider_trait::{
-    BridgeError, ProviderModelDefaults, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ClearSessionOutcome, ProviderModelDefaults, ProviderRuntime,
+    ProviderRuntimeSelection, StreamCallback,
 };
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
@@ -1285,7 +1286,7 @@ impl ProviderRuntime for AntigravityCliProvider {
             .unwrap_or_default())
     }
 
-    async fn clear_session(&self, thread_id: &str) -> bool {
+    async fn clear_session(&self, thread_id: &str) -> ClearSessionOutcome {
         let active_run_ids = {
             let run_session_map = self.run_session_map.lock().await;
             run_session_map
@@ -1297,7 +1298,11 @@ impl ProviderRuntime for AntigravityCliProvider {
         for run_id in active_run_ids {
             let _ = self.abort(&run_id).await;
         }
-        self.session_map.lock().await.remove(thread_id).is_some()
+        if self.session_map.lock().await.remove(thread_id).is_some() {
+            ClearSessionOutcome::Cleared
+        } else {
+            ClearSessionOutcome::AlreadyAbsent
+        }
     }
 }
 

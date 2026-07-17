@@ -32,7 +32,7 @@ pub mod storage {
     pub use crate::message_ledger::{
         MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore,
     };
-    pub use crate::store::{ThreadStore, ThreadStoreError};
+    pub use crate::store::{ThreadStore, ThreadStoreError, ThreadTerminalState};
     pub use crate::thread_history::{
         BackfillOutcome, DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
         THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError, ThreadHistoryRepository,
@@ -74,11 +74,14 @@ pub use router::{
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
 pub use run_admission::{
-    AdmittedRun, ArchiveReservationError, CoordinatedDeleteError, RunAdmissionError,
+    AdmittedRun, ArchiveBarrier, ArchiveReservationError, CoordinatedDeleteError,
+    CoordinationError, LifecycleCommitWitness, LifecycleReservation, RunAdmissionError,
     ThreadRunAborter, ThreadRunCoordinator, ThreadRunLease,
 };
 pub use runtime_context::build_runtime_context_metadata;
-pub use store::{AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadStoreExt};
+pub use store::{
+    AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadStoreExt, ThreadTerminalState,
+};
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
     CreateTaskInput, EnterReview, NewTaskAgentGate, ScanTaskProjectionReader, TaskHistoryPage,

@@ -130,6 +130,37 @@ impl MessageRouter {
         self.clear_binding_thread_context(endpoint_key);
     }
 
+    /// Conditionally invalidate volatile endpoint routing entries left by a
+    /// lifecycle transaction. A delayed outbox replay must never remove an
+    /// endpoint that has since been rebound to a different thread.
+    pub fn purge_endpoint_binding_if_owned(
+        &mut self,
+        endpoint_key: &str,
+        expected_thread_id: &str,
+    ) -> bool {
+        let removed_binding = self
+            .thread_nav
+            .binding_thread_map
+            .get(endpoint_key)
+            .is_some_and(|thread_id| thread_id == expected_thread_id)
+            && self
+                .thread_nav
+                .binding_thread_map
+                .remove(endpoint_key)
+                .is_some();
+        let removed_endpoint = self
+            .thread_nav
+            .endpoint_thread_map
+            .get(endpoint_key)
+            .is_some_and(|thread_id| thread_id == expected_thread_id)
+            && self
+                .thread_nav
+                .endpoint_thread_map
+                .remove(endpoint_key)
+                .is_some();
+        removed_binding || removed_endpoint
+    }
+
     pub(crate) fn clear_binding_thread_context(&mut self, binding_context_key: &str) {
         self.thread_nav
             .binding_thread_map

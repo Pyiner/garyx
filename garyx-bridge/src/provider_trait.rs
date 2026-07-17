@@ -45,6 +45,14 @@ pub enum BridgeError {
 /// Streaming callback receives structured stream events.
 pub type StreamCallback = Box<dyn Fn(StreamEvent) + Send + Sync>;
 
+/// Idempotent outcome of clearing provider-owned thread state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearSessionOutcome {
+    Cleared,
+    AlreadyAbsent,
+    RetryableFailure,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderRuntimeSelection {
     pub model: Option<String>,
@@ -185,9 +193,9 @@ pub trait ProviderRuntime: Send + Sync {
     async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError>;
 
     /// Clear / reset provider-side conversation history for a Garyx thread.
-    async fn clear_session(&self, thread_id: &str) -> bool {
+    async fn clear_session(&self, thread_id: &str) -> ClearSessionOutcome {
         let _ = thread_id;
-        true
+        ClearSessionOutcome::AlreadyAbsent
     }
 }
 

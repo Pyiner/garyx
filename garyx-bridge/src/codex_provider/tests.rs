@@ -2112,7 +2112,10 @@ async fn test_clear_session() {
         .await
         .insert("sess::1".to_owned(), ("run_1".to_owned(), Arc::new(|_| {})));
 
-    assert!(provider.clear_session("sess::1").await);
+    assert_eq!(
+        provider.clear_session("sess::1").await,
+        ClearSessionOutcome::Cleared
+    );
     assert!(provider.session_map.lock().await.get("sess::1").is_none());
     assert!(
         provider
