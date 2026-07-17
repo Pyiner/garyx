@@ -94,6 +94,10 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   field meaning, icon semantics, and Gateway-backed data models.
 - Mobile may adapt layout and interaction for iOS, but must not invent new
   top-level concepts.
+- Garyx iOS product work targets only the latest iOS release (currently iOS
+  26). Do not add or validate new compatibility behavior for earlier iOS
+  versions unless explicitly requested; leave existing fallback code unchanged
+  when it is outside the task scope.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
 - Electron `contextBridge` exposes `window.garyxDesktop` as a frozen
