@@ -347,9 +347,12 @@ struct GaryxCapsuleFocusedPreviewView: View {
     let selection: GaryxCapsulePreviewSelection
     @StateObject private var loader = GaryxCapsuleFocusedPreviewLoader()
     @StateObject private var gestureBridge = GaryxCapsuleDismissGestureBridge()
+    @State private var settleDriver = GaryxGestureSettleDriver.displayLinked()
     @State private var retryGeneration = 0
     @State private var showsDeleteConfirmation = false
     @State private var dragState = GaryxCapsuleDragDismissState()
+    @State private var dragGestureOrigin = CGSize.zero
+    @State private var dragGestureActive = false
     @State private var webAtTop = true
     @State private var morphState = GaryxChromeMorphPresentationState.hidden
     @State private var pendingChromeAction: GaryxCapsuleChromeAction?
@@ -443,7 +446,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
         }
         .onDisappear {
             loader.cancelForDismiss(model: model)
-            handleGestureCancelled()
+            invalidateGestureMotion()
         }
         .confirmationDialog(
             "Delete capsule?",
@@ -646,8 +649,10 @@ struct GaryxCapsuleFocusedPreviewView: View {
     private func handleSceneSignal(_ signal: GaryxCapsulePreviewSceneSignal) {
         switch signal.phase {
         case .inactive:
+            invalidateGestureMotion()
             loader.cancelForScene(model: model, event: .sceneInactive)
         case .background:
+            invalidateGestureMotion()
             loader.cancelForScene(model: model, event: .sceneBackground)
         case .active:
             Task { await handleSceneActive() }
@@ -671,12 +676,26 @@ struct GaryxCapsuleFocusedPreviewView: View {
     }
 
     private func handleGestureChanged(startX: CGFloat, translation: CGSize) {
+        if !dragGestureActive {
+            dragGestureActive = true
+            if let interrupted = settleDriver.interrupt() {
+                dragState.translation = capsuleTranslation(
+                    phase: dragState.phase,
+                    distance: interrupted.value
+                )
+            }
+            dragGestureOrigin = dragState.translation
+        }
+        let accumulatedTranslation = CGSize(
+            width: dragGestureOrigin.width + translation.width,
+            height: dragGestureOrigin.height + translation.height
+        )
         var next = dragState
         GaryxCapsuleDragDismiss.reduce(
             state: &next,
             event: .changed(
                 startX: startX,
-                translation: translation,
+                translation: accumulatedTranslation,
                 webAtTop: webAtTop,
                 panelPresented: morphState.isPresented || showsDeleteConfirmation
             )
@@ -685,6 +704,9 @@ struct GaryxCapsuleFocusedPreviewView: View {
     }
 
     private func handleGestureReleased(velocity: CGSize, containerWidth: CGFloat) {
+        let releasedState = dragState
+        dragGestureActive = false
+        dragGestureOrigin = .zero
         var next = dragState
         let effect = GaryxCapsuleDragDismiss.reduce(
             state: &next,
@@ -692,24 +714,87 @@ struct GaryxCapsuleFocusedPreviewView: View {
         )
         switch effect {
         case .dismiss:
+            settleDriver.invalidate()
             dragState = next
             loader.cancelForDismiss(model: model)
             dismiss()
         case .snapBack:
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                dragState = next
-            }
+            settleCapsuleBack(
+                from: releasedState,
+                releaseVelocity: velocity,
+                targetState: next,
+                curve: .init(response: 0.34, dampingRatio: 0.82)
+            )
         case .none:
+            settleDriver.invalidate()
             dragState = next
         }
     }
 
     private func handleGestureCancelled() {
+        let cancelledState = dragState
+        dragGestureActive = false
+        dragGestureOrigin = .zero
         var next = dragState
         GaryxCapsuleDragDismiss.reduce(state: &next, event: .cancelled)
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+        guard cancelledState.phase.ownsGesture else {
+            settleDriver.invalidate()
             dragState = next
+            return
         }
+        settleCapsuleBack(
+            from: cancelledState,
+            releaseVelocity: .zero,
+            targetState: next,
+            curve: .init(response: 0.28, dampingRatio: 0.9)
+        )
+    }
+
+    private func settleCapsuleBack(
+        from state: GaryxCapsuleDragDismissState,
+        releaseVelocity: CGSize,
+        targetState: GaryxCapsuleDragDismissState,
+        curve: GaryxMotionPhysics.SpringCurve
+    ) {
+        let phase = state.phase
+        let initialDistance = phase == .horizontalDismiss
+            ? state.translation.width
+            : state.translation.height
+        let initialVelocity = phase == .horizontalDismiss
+            ? releaseVelocity.width
+            : releaseVelocity.height
+        settleDriver.settle(
+            from: initialDistance,
+            to: 0,
+            initialVelocity: initialVelocity,
+            curve: curve,
+            onUpdate: { sample in
+                dragState = GaryxCapsuleDragDismissState(
+                    phase: phase,
+                    translation: capsuleTranslation(phase: phase, distance: sample.value)
+                )
+            },
+            onCompletion: {
+                dragState = targetState
+            }
+        )
+    }
+
+    private func capsuleTranslation(
+        phase: GaryxCapsuleDragPhase,
+        distance: CGFloat
+    ) -> CGSize {
+        let distance = max(0, distance)
+        return phase == .horizontalDismiss
+            ? CGSize(width: distance, height: 0)
+            : CGSize(width: 0, height: distance)
+    }
+
+    private func invalidateGestureMotion() {
+        settleDriver.invalidate()
+        dragGestureOrigin = .zero
+        dragGestureActive = false
+        dragState = GaryxCapsuleDragDismissState()
     }
 
     private func copyLink() {
