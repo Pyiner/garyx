@@ -66,6 +66,58 @@ reinterpreted in feature code.
   never rotates it. Legacy-import recovery rotates the identity atomically in
   the import-marker transaction and does not need this extra command.
 
+## Thread Lifecycle And Terminal Tombstones
+
+- The row in `archived_threads` is the canonical durable terminal tombstone.
+  Its `kind` is either `archived` or `deleted`; both kinds fence resurrection.
+  The distinction exists for lifecycle result-matrix decisions and diagnostics,
+  not to permit writes to archived threads.
+- The tombstone is the only terminal-state truth source. Coordinator state is a
+  read-through cache that must calibrate from the tombstone before admission or
+  mutation decisions and may install a terminal state only after the matching
+  SQLite commit. A missing process-local coordinator entry never means `Live`.
+- Every production thread-record write path — including set, update, batch,
+  bridge persistence, and legacy import — must check for either tombstone kind
+  in the same SQLite transaction as the write and reject the write. Do not add
+  an archived-only check, a preflight-only check, or a write path that bypasses
+  the canonical store. Historical bare deletes from before this cutover remain
+  accepted history; reads must not synthesize tombstones for them.
+- Archive and delete are replay-safe lifecycle operations. The expected store
+  incarnation is checked before completed lookup or in-flight registration;
+  the durable ledger key is `(store_incarnation, operation_id)`, and a replay
+  must match the complete canonical request fingerprint. Completed success
+  replays return the original result payload, including the first detached
+  endpoint-key set.
+- Deterministic rejection is committed in a decision transaction before it is
+  published. Internal or transient failure is not written as a completed
+  decision and remains eligible for a same-operation-id retry.
+- An applied lifecycle transaction atomically commits its terminal tombstone,
+  removes the canonical record and its projections/pin/favorite state, performs
+  persistent endpoint detaches, records the completed ledger outcome, and
+  inserts all required volatile-cleanup jobs. No read route, boot reconcile, or
+  process-local cache update may substitute for this transaction boundary.
+
+### Lifecycle Cleanup Outbox
+
+- `cleanup_outbox` is the durable handoff for post-commit volatile cleanup:
+  conditional endpoint-runtime invalidation, provider/runtime teardown,
+  transcript removal, and thread-log removal. A successful lifecycle response
+  means the durable transaction committed; it does not mean every outbox step
+  already ran.
+- The worker starts once during gateway boot and resumes all pending jobs from
+  SQLite, so a crash after commit or before the initial wake cannot lose
+  cleanup. Ready jobs from different threads may progress independently, but a
+  later job for one thread must never overtake that thread's earlier pending
+  job. Read routes never drain or repair the outbox.
+- Cleanup steps are replay-safe. A failed step stays pending with a persisted
+  attempt count and bounded backoff. Endpoint invalidation carries the expected
+  owner and must not erase a later rebound owner. Transcript/log deletion and
+  already-absent provider state are successful replays.
+- Runtime teardown is ordered: provider clear must reach `Cleared` or
+  `AlreadyAbsent` before local affinity/workspace state is dropped and the job
+  is marked done. `RetryableFailure` retains that local routing state and keeps
+  the job pending; this retain-until-cleared behavior must not be reverted.
+
 ## Recent Threads And Active Runs
 
 - Mobile recent-thread lists read the gateway SQLite `recent_threads`
