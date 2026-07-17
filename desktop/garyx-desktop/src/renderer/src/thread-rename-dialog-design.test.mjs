@@ -4,9 +4,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-// Contract for the conversation rename dialog. The values below come from the
+// Contract for the conversation rename dialog. Its geometry comes from the
 // live Codex Mac app (Chrome 150) measured over CDP on 2026-07-17: 420×188,
 // 20px insets, 12px section spacing, a 39px input, and 32px action buttons.
+// Garyx deliberately strengthens muted-copy contrast and keyboard focus.
 
 const rendererDir = path.dirname(fileURLToPath(import.meta.url));
 const read = (relativePath) =>
@@ -43,24 +44,28 @@ function expectRule(rules, selector, declarations) {
   }
 }
 
-test('rename dialog pins the measured Codex surface and geometry', () => {
+test('rename dialog pins Codex geometry and accessible text states', () => {
   const rules = parseRules(read('styles/dialogs.css'));
 
   expectRule(rules, '.app-dialog-overlay.thread-rename-overlay', [
-    'background: rgba(0, 0, 0, 0.133) !important',
+    'background: rgba(0, 0, 0, 0.133)',
   ]);
-  expectRule(rules, '.thread-rename-dialog[data-slot="dialog-content"]', [
-    '--app-dialog-card-width: min(420px, var(--app-dialog-available-width))',
-    'padding: 0',
-    'border: 0',
-    'border-radius: 25px',
-    'background: rgba(255, 255, 255, 0.9)',
-    'color: rgb(13, 13, 13)',
-    'font: 445 16px/24px -apple-system, "system-ui", "Segoe UI", sans-serif',
-    '-webkit-backdrop-filter: blur(24px)',
-    'backdrop-filter: blur(24px)',
-    'box-shadow: 0 0 0 0.5px rgba(13, 13, 13, 0.08), 0 4px 8px -2px rgba(0, 0, 0, 0.1)',
-  ]);
+  expectRule(
+    rules,
+    '.thread-rename-dialog[data-slot="dialog-content"][data-size="compact"]',
+    [
+      '--app-dialog-card-width: min(420px, var(--app-dialog-available-width))',
+      'padding: 0',
+      'border: 0',
+      'border-radius: 25px',
+      'background: rgba(255, 255, 255, 0.9)',
+      'color: rgb(13, 13, 13)',
+      'font: 445 16px/24px -apple-system, "system-ui", "Segoe UI", sans-serif',
+      '-webkit-backdrop-filter: blur(24px)',
+      'backdrop-filter: blur(24px)',
+      'box-shadow: 0 0 0 0.5px rgba(13, 13, 13, 0.08), 0 4px 8px -2px rgba(0, 0, 0, 0.1)',
+    ],
+  );
   expectRule(rules, '.thread-rename-form', [
     'display: flex',
     'flex-direction: column',
@@ -78,7 +83,7 @@ test('rename dialog pins the measured Codex surface and geometry', () => {
     'line-height: 28px',
   ]);
   expectRule(rules, '.thread-rename-description[data-slot="dialog-description"]', [
-    'color: rgba(13, 13, 13, 0.495)',
+    'color: rgba(13, 13, 13, 0.62)',
     'font-size: 14px',
     'font-weight: 445',
     'line-height: 21px',
@@ -92,6 +97,13 @@ test('rename dialog pins the measured Codex surface and geometry', () => {
     'background: transparent',
     'font: 445 14px/21px -apple-system, "system-ui", "Segoe UI", sans-serif',
     'box-shadow: 0 1px 2px -1px rgba(0, 0, 0, 0.08)',
+  ]);
+  expectRule(rules, '.thread-rename-input:focus-visible', [
+    'border-color: rgb(1, 105, 204)',
+    'box-shadow: 0 0 0 2px rgba(1, 105, 204, 0.2), 0 1px 2px -1px rgba(0, 0, 0, 0.08)',
+  ]);
+  expectRule(rules, '.thread-rename-input::placeholder', [
+    'color: rgba(13, 13, 13, 0.62)',
   ]);
   expectRule(rules, '.thread-rename-actions', [
     'height: 32px',
@@ -147,13 +159,27 @@ test('rename dialog pins Codex close and action states', () => {
   ]);
 });
 
-test('rename dialog owns an explicit overlay hook and Codex-sized close icon', () => {
+test('rename dialog owns its overlay and Radix open-focus behavior', () => {
   const source = read('ConversationHeaderTitle.tsx');
   const dialogSource = read('components/ui/dialog.tsx');
+  const titleRootSource = read('app-shell/components/ConversationTitleRoot.tsx');
+  const channelPluginsCss = read('styles/channel-plugins.css');
 
   assert.match(source, /overlayClassName="thread-rename-overlay"/);
   assert.match(source, /<X aria-hidden size=\{16\} strokeWidth=\{2\} \/>/);
   assert.match(source, /placeholder=\{t\('Add title…'\)\}/);
+  assert.match(
+    source,
+    /const titleInputRef = useRef<HTMLInputElement \| null>\(null\)/,
+  );
+  assert.match(
+    source,
+    /onOpenAutoFocus=\{\(event\) => \{[\s\S]*?event\.preventDefault\(\);[\s\S]*?input\.focus\(\);[\s\S]*?input\.select\(\);[\s\S]*?\}\}/,
+  );
+  assert.doesNotMatch(titleRootSource, /threadTitleInputRef/);
+  assert.doesNotMatch(channelPluginsCss, /\[data-slot="dialog-overlay"\]/);
+  assert.doesNotMatch(channelPluginsCss, /\.modal-overlay/);
+  assert.doesNotMatch(channelPluginsCss, /\.tasks-modal-backdrop/);
   assert.match(dialogSource, /overlayClassName\?: string/);
   assert.match(dialogSource, /<DialogOverlay className=\{overlayClassName\} \/>/);
 });

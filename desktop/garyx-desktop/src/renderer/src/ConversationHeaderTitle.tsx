@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Archive, MoreHorizontal, Pencil, Star, StarOff, X } from 'lucide-react';
 
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
@@ -43,7 +43,6 @@ type ConversationHeaderTitleProps = {
   onTitleDraftChange: (value: string) => void;
   savingTitle: boolean;
   titleDraft: string;
-  titleInputRef: RefObject<HTMLInputElement | null>;
 };
 
 export function ConversationHeaderTitle({
@@ -68,10 +67,10 @@ export function ConversationHeaderTitle({
   onTitleDraftChange,
   savingTitle,
   titleDraft,
-  titleInputRef,
 }: ConversationHeaderTitleProps) {
   const { t } = useI18n();
   const [archiveConfirming, setArchiveConfirming] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
   const { entries: pluginCatalog } = useChannelPluginCatalog();
   const iconDataUrlByChannel = useMemo(
     () =>
@@ -225,6 +224,15 @@ export function ConversationHeaderTitle({
               >
                 <DialogContent
                   className="thread-rename-dialog"
+                  onOpenAutoFocus={(event) => {
+                    const input = titleInputRef.current;
+                    if (!input) {
+                      return;
+                    }
+                    event.preventDefault();
+                    input.focus();
+                    input.select();
+                  }}
                   overlayClassName="thread-rename-overlay"
                   showCloseButton={false}
                   size="compact"

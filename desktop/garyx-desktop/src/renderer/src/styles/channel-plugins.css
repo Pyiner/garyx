@@ -241,14 +241,6 @@
   --tw-ring-shadow: 0 0 #0000 !important;
 }
 
-.modal-overlay,
-.tasks-modal-backdrop,
-[data-slot="dialog-overlay"] {
-  background: var(--app-modal-backdrop-bg) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
 /* ── Reduced Motion ── */
 @media (prefers-reduced-motion: reduce) {
   .agent-avatar--active,

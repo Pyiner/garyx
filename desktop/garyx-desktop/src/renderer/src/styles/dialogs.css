@@ -729,11 +729,11 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .app-dialog-overlay.thread-rename-overlay {
-  background: rgba(0, 0, 0, 0.133) !important;
+  background: rgba(0, 0, 0, 0.133);
 }
 
 /* Measured from the live Codex Mac rename dialog via CDP on 2026-07-17. */
-.thread-rename-dialog[data-slot="dialog-content"] {
+.thread-rename-dialog[data-slot="dialog-content"][data-size="compact"] {
   --app-dialog-card-width: min(420px, var(--app-dialog-available-width));
   gap: 0;
   overflow: hidden;
@@ -806,7 +806,8 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .thread-rename-description[data-slot="dialog-description"] {
-  color: rgba(13, 13, 13, 0.495);
+  /* Darker than Codex's 49.5% muted copy so 14px text clears AA contrast. */
+  color: rgba(13, 13, 13, 0.62);
   font-size: 14px;
   font-weight: 445;
   line-height: 21px;
@@ -826,8 +827,14 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .thread-rename-input:focus {
+  outline: none;
   border-color: rgba(13, 13, 13, 0.08);
   box-shadow: 0 1px 2px -1px rgba(0, 0, 0, 0.08);
+}
+
+.thread-rename-input:focus-visible {
+  border-color: rgb(1, 105, 204);
+  box-shadow: 0 0 0 2px rgba(1, 105, 204, 0.2), 0 1px 2px -1px rgba(0, 0, 0, 0.08);
 }
 
 .thread-rename-input:disabled {
@@ -835,7 +842,8 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .thread-rename-input::placeholder {
-  color: rgba(13, 13, 13, 0.495);
+  /* Match the accessible description tone without changing input geometry. */
+  color: rgba(13, 13, 13, 0.62);
 }
 
 .thread-rename-actions {

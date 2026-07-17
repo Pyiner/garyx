@@ -2,12 +2,13 @@
 // "Local state colocation list": ConversationHeaderTitle owns title edit
 // state).
 //
-// Owns the edit lifecycle — draft, editing flag, saving flag, the input
-// ref and its focus/select effect — so per-keystroke draft updates
-// re-render only this root, not the shell. The shell passes the derived
-// context (active thread, canEdit, view flags) and keeps an imperative
-// handle for the one out-of-band writer: the transcript controller's
-// remote title sync, whose not-editing guard moves here with the state.
+// Owns the edit lifecycle — draft, editing flag, and saving flag — so
+// per-keystroke draft updates re-render only this root, not the shell.
+// The rendered dialog owns its DOM ref and Radix open-focus behavior. The
+// shell passes the derived context (active thread, canEdit, view flags) and
+// keeps an imperative handle for the one out-of-band writer: the transcript
+// controller's remote title sync, whose not-editing guard moves here with the
+// state.
 
 import {
   forwardRef,
@@ -85,7 +86,6 @@ export const ConversationTitleRoot = forwardRef<
   const [titleDraft, setTitleDraft] = useState(DEFAULT_SESSION_TITLE);
   const [savingTitle, setSavingTitle] = useState(false);
   const [editingThreadTitle, setEditingThreadTitle] = useState(false);
-  const threadTitleInputRef = useRef<HTMLInputElement | null>(null);
   const editingThreadTitleRef = useRef(false);
   editingThreadTitleRef.current = editingThreadTitle;
 
@@ -119,18 +119,6 @@ export const ConversationTitleRoot = forwardRef<
       setTitleDraft(activeThread?.title || DEFAULT_SESSION_TITLE);
     }
   }, [editingThreadTitle, activeThread?.title]);
-
-  useEffect(() => {
-    if (!editingThreadTitle) {
-      return;
-    }
-    const node = threadTitleInputRef.current;
-    if (!node) {
-      return;
-    }
-    node.focus();
-    node.select();
-  }, [editingThreadTitle]);
 
   function beginThreadTitleEdit() {
     if (!canEditThreadTitle || !activeThread) {
@@ -186,7 +174,6 @@ export const ConversationTitleRoot = forwardRef<
       onTitleDraftChange={setTitleDraft}
       savingTitle={savingTitle}
       titleDraft={titleDraft}
-      titleInputRef={threadTitleInputRef}
     />
   );
 });
