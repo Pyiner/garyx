@@ -41,6 +41,7 @@ struct GaryxStatusPill: View {
 struct GaryxGlobalErrorToastHost: View {
     @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
     let topOffset: CGFloat
     let onClearError: (String) -> Void
 
@@ -77,14 +78,24 @@ struct GaryxGlobalErrorToastHost: View {
     }
 
     private var toastTransition: AnyTransition {
-        if reduceMotion {
+        if usesCrossFade {
             return .opacity
         }
         return .move(edge: .top).combined(with: .opacity)
     }
 
     private var toastAnimation: Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.18)
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        ) ? .easeOut(duration: 0.18) : nil
+    }
+
+    private var usesCrossFade: Bool {
+        GaryxAccessibilityTransitionPolicy.usesCrossFade(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
     }
 
     private func present(_ message: String?) {

@@ -39,6 +39,7 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var drawerDragActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
 
     @State private var dragOffset: CGFloat = 0
     @State private var dragAxis: GaryxTaskTreeDragAxis?
@@ -64,7 +65,7 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                 // both offsets, so drag and settle animations stay in sync.
                 // Reduce Motion keeps the crossfade presentation and skips
                 // the push.
-                .offset(x: reduceMotion ? 0 : -reveal)
+                .offset(x: usesCrossFade ? 0 : -reveal)
                 .overlay {
                     if progress > 0 {
                         // While revealed, the visible conversation strip
@@ -168,8 +169,8 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                 .accessibilityHidden(true)
             }
             // Reduce Motion: crossfade + scrim only, no interactive slide.
-            .opacity(reduceMotion ? Double(progress) : 1)
-            .offset(x: reduceMotion ? 0 : panelWidth - reveal)
+            .opacity(usesCrossFade ? Double(progress) : 1)
+            .offset(x: usesCrossFade ? 0 : panelWidth - reveal)
             .disabled(dragActive)
             .simultaneousGesture(closingGesture(panelWidth: panelWidth))
             .ignoresSafeArea(edges: [.top, .bottom])
@@ -283,7 +284,7 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
     }
 
     private func finishGesture(open: Bool) {
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : GaryxMobileMotion.sidebar) {
+        withAnimation(settleAnimation) {
             if open {
                 model.openTaskTreeSidebar()
             } else {
@@ -294,9 +295,20 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
     }
 
     private func resetDrag() {
-        withAnimation(GaryxMobileMotion.sidebar) {
+        withAnimation(settleAnimation) {
             dragOffset = 0
         }
+    }
+
+    private var usesCrossFade: Bool {
+        GaryxAccessibilityTransitionPolicy.usesCrossFade(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
+    }
+
+    private var settleAnimation: Animation {
+        usesCrossFade ? .easeInOut(duration: 0.2) : GaryxMobileMotion.sidebar
     }
 
     private func closePanel() {

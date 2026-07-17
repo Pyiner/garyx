@@ -16,6 +16,7 @@ struct GaryxMobileApp: App {
                 .environment(model.homeObservationStore)
                 .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
                 .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
+                .garyxAccessibilityPreferences()
                 .onChange(of: scenePhase) { _, phase in
                     model.handleScenePhase(phase)
                 }

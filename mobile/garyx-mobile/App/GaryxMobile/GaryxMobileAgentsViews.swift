@@ -710,6 +710,7 @@ private struct GaryxAgentEditSheet: View {
 
 private struct GaryxAvatarEditorSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
     @EnvironmentObject private var model: GaryxMobileModel
     let identifier: String
     let displayName: String
@@ -741,7 +742,7 @@ private struct GaryxAvatarEditorSection: View {
                 .id(avatarSignature)
                 .transition(.opacity)
                 .animation(
-                    reduceMotion ? nil : .easeInOut(duration: 0.2),
+                    animatesTransition ? .easeInOut(duration: 0.2) : nil,
                     value: avatarSignature
                 )
                 .accessibilityLabel("Agent avatar preview")
@@ -789,6 +790,13 @@ private struct GaryxAvatarEditorSection: View {
         .onDisappear {
             cancelUpload()
         }
+    }
+
+    private var animatesTransition: Bool {
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
     }
 
     @ViewBuilder
@@ -1276,6 +1284,7 @@ private struct GaryxAvatarStyleSheet: View {
 private struct GaryxAvatarGenerationPreview: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
     let title: String
     let identifier: String
     let displayName: String
@@ -1325,11 +1334,11 @@ private struct GaryxAvatarGenerationPreview: View {
             }
             .frame(width: 104, height: 104)
             .animation(
-                reduceMotion ? nil : .easeInOut(duration: 0.18),
+                animatesTransition ? .easeInOut(duration: 0.18) : nil,
                 value: imageSignature
             )
             .animation(
-                reduceMotion ? nil : .easeInOut(duration: 0.16),
+                animatesTransition ? .easeInOut(duration: 0.16) : nil,
                 value: isLoading
             )
             .accessibilityElement(children: .ignore)
@@ -1347,6 +1356,13 @@ private struct GaryxAvatarGenerationPreview: View {
 
     private var overlayForeground: Color {
         reduceTransparency ? Color.primary : Color(uiColor: .systemBackground)
+    }
+
+    private var animatesTransition: Bool {
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
     }
 
     private var imageSignature: String {

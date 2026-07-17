@@ -21,14 +21,26 @@ struct GaryxHomeNewThreadFab: View {
 
 private struct GaryxHomeFabPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .scaleEffect(configuration.isPressed && !usesCrossFade ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.12),
-                value: configuration.isPressed
-            )
+            .animation(pressAnimation, value: configuration.isPressed)
+    }
+
+    private var usesCrossFade: Bool {
+        GaryxAccessibilityTransitionPolicy.usesCrossFade(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
+    }
+
+    private var pressAnimation: Animation? {
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        ) ? .easeOut(duration: 0.12) : nil
     }
 }
