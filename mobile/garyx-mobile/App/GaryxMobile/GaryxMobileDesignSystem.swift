@@ -238,24 +238,24 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if reduceTransparency {
-            opaqueFallback(content: content)
-        } else {
 #if compiler(>=6.2)
-            if #available(iOS 26, *) {
+        if #available(iOS 26, *) {
+            if reduceTransparency {
+                opaqueFallback(content: content)
+            } else {
                 switch style {
                 case .automatic:
                     content.glassEffect(isEnabled ? .regular : .identity, in: shape)
                 case .regular:
                     content.glassEffect(resolvedGlass, in: shape)
                 }
-            } else {
-                fallback(content: content)
             }
-#else
+        } else {
             fallback(content: content)
-#endif
         }
+#else
+        fallback(content: content)
+#endif
     }
 
     @ViewBuilder
@@ -319,21 +319,21 @@ struct GaryxAdaptiveGlassContainer<Content: View>: View {
     }
 
     var body: some View {
-        if reduceTransparency {
-            content()
-        } else {
 #if compiler(>=6.2)
-            if #available(iOS 26, *) {
+        if #available(iOS 26, *) {
+            if reduceTransparency {
+                content()
+            } else {
                 GlassEffectContainer(spacing: spacing) {
                     content()
                 }
-            } else {
-                content()
             }
-#else
+        } else {
             content()
-#endif
         }
+#else
+        content()
+#endif
     }
 }
 
