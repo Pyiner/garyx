@@ -1,10 +1,11 @@
-# iOS 线程列表统一化 —— 设计 v10（§1-§9 已 PASS 定稿；§10 增补待复审）
+# iOS 线程列表统一化 —— 设计 v11（§1-§9 已 PASS 定稿；§10 增补待复审）
 
 作者：Gary
 日期：2026-07-17
 基线：main `3dff1111a`（§10 基线：main `c050ea8b3`，S1/S2 已合入）
 
 修订记录：
+- **v11**（2026-07-17）：按 #TASK-2368 二轮（FAIL，R2-F01..F04）修订 §10：① S5 扩含**Swift legacy adapter 语义中和**（excluded 推导恒 false，字段/类型留 S4 删）+ generated 点查→cache 覆盖→capability 全链 e2e 合同（R2-F01）；② cutover 增加**事务起点冻结快照**（`pre_cutover_recent_ids` + 原 seq ASC 序），a/b 步只写 canonical+`thread_meta`（同事务投影派生、禁触 recent allocator），recent 成员统一由 c 步精确同步，`new_ids = target − pre_cutover`；存量清洗覆盖**四个 JSON 路径**（两拼写×两层级）；迁移注册序钉在 `thread_meta_summary_v1`/`recent_thread_activity_seq_v1` 之后；parity 升级为 canonical/thread_meta/recent **三方双向**（R2-F02）；③ side-chat selector 钉死为 `body.source=="side_chat" OR body.metadata.source=="side_chat"`（parent-only/exclusion-only 不命中）（R2-F03）；④ 重排全序改**保序优先 + 计数插位**：现有行绝对保序，新行 placement index = 满足 `(last_active_at, thread_id) < (ts, new_id)` 的现有行数（时间戳倒挂下仍确定，无环）（R2-F04）。
 - **v10**（2026-07-17）：按 #TASK-2368 增补评审（FAIL，F-01..F-06）重写 §10：① cutover 改**双向精确重建**——补 `visible−recent` 之外还删 `recent−visible_live` 孤儿行（实测 5 条无 canonical 记录），parity 测试改双向 EXCEPT（F-01）；② 谓词表述修正：删除 `is_recent_thread_excluded` 整个 helper（hidden 判定本就独立存在），`excluded_from_recent` 派生恒 false（F-02）；③ 中间态闭合：S5 功能层面一次退役到位——canonical 存量 96 条 flag 同 cutover 清洗、创建/更新入口 strip 废弃 key（覆盖旧客户端）、router 镜像键删除、automation wire 停发 `excludeFromRecent`；S4 只删死代码（列/adapter 镜像/capability 门禁/last-open 门禁）（F-03）；④ side chat 归一走 **canonical 层**：按 canonical side-chat 选择器把 `body.hidden` 归一 true 再同事务派生投影，禁止只翻投影列/硬编码条数（F-04）；⑤ marker 采用 `import_generation_cutover_gate` 模式按代重跑（F-05）；⑥ `activity_seq` 重排算法合同钉死：fresh 连续块 `[H+1,H+N]`、H=max(meta 高水位,行 max)、完整全序定义、meta/索引/marker 同事务（F-06）；⑦ 确认不 rotate incarnation（评审专项核定）。
 - **v9**（2026-07-17）：新增 §10 成员集严格对齐增补（老板裁决：automation 生成线程=普通线程去特殊化；全部列表共享同一数据宇宙、查询期过滤）。新切片 S5：`is_recent_thread_excluded` 收窄 hidden-only、cron 停写 `exclude_from_recent`、side chat 改挂 hidden、一次性 cutover `recent_membership_v2`（补行 + activity_seq 插位重排 + side chat 双隐）；`exclude_from_recent` 概念残余面并入 S4 删除。§5.1/§2.4 的成员集论述由 §10 取代。
 - **v8**（2026-07-17）：按七轮评审（FAIL，R7-F01/F02）修订：① summaries 窗口 raw 段排序补齐现行确定性 tiebreak：`favorited_at DESC, thread_id ASC`（毫秒同值可达；补"499 recent + 2 同毫秒 raw 反向插入"的第 500 位合同测试）（R7-F01）；② canonical q **完全归服务端所有**（SQL 匹配 + cursor digest）；**客户端 provider identity 改用 trim 后原始 q + 单调 instanceID**，撤销"客户端 identity 用规范化 q"的自相矛盾表述——客户端永不复刻 `normalize_for_search`（R7-F02）。
@@ -279,12 +280,14 @@ struct GaryxThreadRowCapabilities {
    b. 桌面 side chat 创建停写 `exclude_from_recent`（hidden 已在写，无需改）；
    c. **服务端创建/更新入口统一剥离废弃 key**：`exclude_from_recent`（两拼写、两层级）在 metadata 入库前 strip——chokepoint 覆盖旧桌面客户端与任意 API 写入面；router `threads.rs` 镜像键表删除该键。
 2. **成员集谓词**：删除 `is_recent_thread_excluded` 整个 helper（recent 投影的 hidden 判定本就独立存在，保留）；`thread_meta.excluded_from_recent` 派生改**恒 false**（列本体 S4 删）。
-3. **wire 停回放**：`automation.rs:1277` drilldown DTO 停发 `excludeFromRecent` 字段（S2 adapter 对缺失字段解析为非 excluded，中间态自洽；adapter/capability/last-open 门禁等客户端消费面在 S4 删除，清单见 10.5）。
-4. **一次性版本化 cutover `recent_membership_v2`**（`import_generation_cutover_gate` 模式：记录 `based_on_import_generation`，legacy 归档恢复重导入后**按代重跑**——评审 F-05），单事务内五步：
-   a. **canonical 归一**：按 canonical side-chat 语义选择器（实现时核实确切标记，禁止硬编码条数/用 exclusion flag 猜测）把 legacy side chat 的 `thread_records.body.hidden` 归一为 true；
-   b. **canonical 洗存量 flag**：全部 canonical record body 剥离 `exclude_from_recent`（顶层+metadata，96 条级）；
-   c. **精确重建目标集（双向）**：以 canonical live universe 为准——补 `visible − recent` 行，**删除 `recent − visible_live` 孤儿行**（评审 F-01：现库 5 条）；
-   d. **`activity_seq` 重排（评审 F-06 算法合同）**：取 fresh 连续块 `[H+1, H+N]`，`H = max(recent_threads_meta 高水位, 现行 max(activity_seq))`；全序定义 = 现有行按当前 `activity_seq ASC` 保持相对序，新行按 `(last_activity_ts, thread_id)` 与现有行的 `last_active_at` 归并插位（同刻现有行在前，再按 `thread_id`；时间戳缺失/不可解析按 epoch 0 沉底）；按该序赋 `H+1..H+N`（fresh block 天然规避 UNIQUE 冲突，实测 3501 行 ~0.01s）；同事务更新 meta 高水位与索引；
+3. **wire 停回放 + 客户端语义中和（R2-F01）**：`automation.rs:1277` drilldown DTO 停发 `excludeFromRecent` 字段；**同时 S5 内中和 Swift legacy adapter 语义**——`/api/threads/:id` 点查路径对 `automation_thread_mode=generated_thread`/exclusion flag 的 excluded 推导**改恒 false**（字段与类型骨架留 S4 删；否则 legacy 点查会把 generated 线程重新写回 excluded，整条 favorite/last-open 门禁在 S4 前不是死代码）。新增端到端合同测试：generated canonical 点查 → cache 整条覆盖 → favorite `.addAndRemove`、last-open 可写。相应 fixture（"generated mode ⇒ excluded"矩阵行）同步改写。
+4. **一次性版本化 cutover `recent_membership_v2`**（`import_generation_cutover_gate` 模式：记录 `based_on_import_generation`，legacy 归档恢复重导入后**按代重跑**——评审 F-05；**注册序钉在 `thread_meta_summary_v1` 与 `recent_thread_activity_seq_v1` 之后**），单事务内六步，**步骤间职责合同（R2-F02）**——事务起点先冻结快照，a/b 只动 canonical+`thread_meta`，recent 成员改动全部收敛到 c/d：
+   a. **冻结快照**：`pre_cutover_recent_ids`（现 recent 成员集）+ 现有行按 `activity_seq ASC` 的顺序表；
+   b. **canonical 归一 + 洗存量 flag**（同步同事务重派生 `thread_meta` 行——不得只裸改 canonical SQL 留投影陈旧，也**不得走会 upsert recent/分配新 seq 的常规全量写路径**）：
+      - side chat：selector 钉死为 **`body.source == "side_chat" OR body.metadata.source == "side_chat"`**（R2-F03；parent-only、exclusion-only 标记**不命中**；实测 19 条全部双层带 source 标记），命中者 `body.hidden` 归一 true；
+      - 存量 exclusion flag 剥离覆盖**四个 JSON 路径**：`exclude_from_recent`/`excludeFromRecent` × 顶层/metadata（恢复归档可能含 camelCase 存量）；
+   c. **精确重建目标集（双向）**：以 canonical live universe 为准——`new_ids = target_ids − pre_cutover_recent_ids` 补行，删除 `recent − visible_live` 孤儿行（现库实测 5 条，无 canonical 记录）；
+   d. **`activity_seq` 重排（R2-F04 定稿：保序优先 + 计数插位，时间戳倒挂下仍全序确定）**：取 fresh 连续块 `[H+1, H+N]`，`H = max(recent_threads_meta 高水位, 现行 max(activity_seq))`，`H+N` 不得超 safe-integer CHECK 上界；顺序构造 = 以 a 步冻结的现有行 ASC 顺序表为基座（**现有行相对序绝对不变**，不与其时间戳再比较——现有 seq 本就不保证按时间戳单调，归并比较会成环），每个新行的插入位置 = **满足 `(parse(last_active_at) ?? 0, thread_id) < (parse(ts) ?? 0, new_thread_id)` 的现有行计数**（纯计数插位，倒挂现有行不影响确定性）；多个新行之间先按 `(ts, thread_id)` ASC 排序再稳定插入；时间戳缺失/不可解析取 epoch 0（落位 ASC 头部 = 展示 `ORDER BY activity_seq DESC` 的底部）；tiebreak 的 `thread_id` 为字节序 ASC，作用于 seq 赋值序（展示序恒为 seq DESC）；按最终顺序表赋 `H+1..H+N`（fresh block 规避 UNIQUE，实测 3501 行 ~0.01s）；同事务更新 meta 高水位与索引；
    e. durable marker 与数据同事务提交（崩溃=整体回滚下次重跑，幂等）。
 5. **不 rotate store incarnation**（评审专项 (a) 已核：favorites CAS 只依赖 incarnation+revision，`activity_seq` 仅排序用、无跨启动持久引用；widget 不持久化 seq/cursor；客户端以 `server_boot_id` 变化整体重置分页即足够）。
 
@@ -303,8 +306,9 @@ struct GaryxThreadRowCapabilities {
 
 ### 10.6 S5 验证
 
-- **双向** membership parity：`visible_live EXCEPT recent` 与 `recent EXCEPT visible_live` 皆空（长期回归钉）；
-- cutover：幂等、按 import generation 重跑、插位序（构造混合活动时间 + 同刻 tiebreak 用例）、孤儿行删除、canonical flag 清洗（顶层+metadata 零残留 SQL 断言）、side chat canonical hidden 归一、重排后 favorites snapshot 相对序守恒、meta 高水位/UNIQUE/索引一致性；
-- 创建入口剥离废弃 key 的行为测试（老客户端 payload 注入 exclusion → 入库后 canonical 无该键）；
+- **三方双向** membership parity（R2-F02）：canonical visible ≡ `thread_meta.default_list_hidden=0` ≡ recent 成员，两两双向 EXCEPT 皆空（长期回归钉）；
+- cutover：幂等、按 import generation 重跑、注册序断言、插位序用例矩阵（混合活动时间、**现有行时间戳倒挂**、同刻现有-新行冲突、缺失时间戳沉底、`H+N` safe-integer 上界）、孤儿行删除、canonical flag 清洗（**四路径**零残留 SQL 断言）、side chat selector 矩阵（top-only source / metadata-only source / 双层并存 / parent-only 不命中 / exclusion-only 不命中 / 畸形 payload）、重排后 favorites snapshot 相对序守恒、meta 高水位/UNIQUE/索引一致性；
+- 创建入口剥离废弃 key 的行为测试（老客户端 payload 注入两拼写 exclusion → 入库后 canonical 无该键）；
+- **客户端中和 e2e 合同**（R2-F01）：generated canonical `/api/threads/:id` 点查 → cache 整条覆盖 → favorite `.addAndRemove`、last-open 可写（SwiftPM）；
 - 既有 `tasks=` 三值过滤语义不变；信封 characterization 全数保持；
-- `cargo test -p garyx-gateway --lib` 全绿 + tier1 --changed。
+- `cargo test -p garyx-gateway --lib` 全绿 + tier1 --changed + SwiftPM（adapter 中和面）。
