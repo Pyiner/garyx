@@ -9,6 +9,7 @@ import type {
 } from "@shared/contracts";
 
 import { pickPreferredWorkspace } from "./thread-model.ts";
+import { runLifecycleMutation } from "./app-shell/lifecycle-ingress.ts";
 
 type DesktopStateSetter = (
   value:
@@ -193,6 +194,10 @@ export async function deleteThread(input: {
   targetIsAutomationThread: boolean;
   targetIsBusy: boolean;
   selectedThreadId?: string | null;
+  gatewayScope: string;
+  runtimeEpoch: number;
+  expectedStoreIncarnation: string;
+  isLifecycleCurrent?: (gatewayScope: string, runtimeEpoch: number) => boolean;
   setError: (value: string | null) => void;
   setDeletingThreadId: (
     value: string | ((current: string | null) => string | null),
@@ -221,16 +226,42 @@ export async function deleteThread(input: {
   input.setDeletingThreadId(nextTargetThreadId);
   input.setError(null);
   try {
-    const result = await input.api.deleteThread({
-      threadId: nextTargetThreadId,
-    });
-    if (result.kind !== "ok") {
-      input.setError(
-        result.kind === "definitiveEndpointResponse"
-          ? result.error.message || result.error.code
-          : result.message,
-      );
-      if (result.kind === "ambiguous") {
+    const operationId = globalThis.crypto.randomUUID();
+    const result = await runLifecycleMutation(
+      {
+        gatewayScope: input.gatewayScope,
+        runtimeEpoch: input.runtimeEpoch,
+        operationId,
+        expectedStoreIncarnation: input.expectedStoreIncarnation,
+        threadId: nextTargetThreadId,
+      },
+      ({ operationId: stableOperationId, expectedStoreIncarnation }) =>
+        input.api.deleteThread({
+          threadId: nextTargetThreadId,
+          operationId: stableOperationId,
+          expectedStoreIncarnation,
+        }),
+      {
+        isCurrent: ({ gatewayScope, runtimeEpoch }) =>
+          input.isLifecycleCurrent?.(gatewayScope, runtimeEpoch) ?? true,
+      },
+    );
+    if (result.kind !== "applied") {
+      if (result.kind === "cancelled") {
+        return;
+      }
+      input.setError(result.message);
+      if (result.kind === "operationIdConflict") {
+        console.error("Thread lifecycle operation_id conflict", {
+          operationId,
+          threadId: nextTargetThreadId,
+        });
+      }
+      if (
+        result.kind === "exhausted" ||
+        result.kind === "operationIdConflict" ||
+        (result.kind === "rejected" && result.code === "wrong_incarnation")
+      ) {
         input.onAmbiguousLifecycle?.();
       }
       return;

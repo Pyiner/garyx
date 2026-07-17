@@ -48,6 +48,9 @@ impl std::error::Error for RawGatewayError {}
 const GATEWAY_GET_TIMEOUT: Duration = Duration::from_secs(5);
 /// Per-attempt timeout for mutating gateway requests.
 const GATEWAY_MUTATION_TIMEOUT: Duration = Duration::from_secs(10);
+/// Per-attempt timeout for replay-safe thread lifecycle requests. The server's
+/// six-second join window must fit inside this transport budget.
+pub(super) const GATEWAY_LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Backoff before the second and third attempts.
 const GATEWAY_RETRY_BACKOFFS: [Duration; 2] =
     [Duration::from_millis(250), Duration::from_millis(750)];
@@ -533,6 +536,22 @@ pub(super) async fn delete_gateway_raw(
         .delete(&url)
         .timeout(GATEWAY_MUTATION_TIMEOUT);
     execute_gateway_raw(builder, gateway, GatewayRetryPolicy::ConnectOnly).await
+}
+
+/// One lifecycle transport attempt. The lifecycle caller owns the operation
+/// ID and the whole retry budget; this layer must never silently resend.
+pub(super) async fn thread_lifecycle_gateway_raw_once(
+    gateway: &GatewayEndpoint,
+    method: reqwest::Method,
+    path: &str,
+    payload: &Value,
+) -> Result<RawGatewayResponse, RawGatewayError> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let builder = shared_http_client()
+        .request(method, &url)
+        .json(payload)
+        .timeout(GATEWAY_LIFECYCLE_TIMEOUT);
+    execute_gateway_raw(builder, gateway, GatewayRetryPolicy::SingleShot).await
 }
 
 pub(super) fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error>> {

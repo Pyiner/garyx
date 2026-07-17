@@ -1476,6 +1476,8 @@ test("archive and delete transport errors are single-attempt ambiguous outcomes"
     gatewayUrl: "https://garyx.example.test",
     gatewayAuthToken: "",
   };
+  const operationId = "10000000-0000-4000-8000-000000000001";
+  const incarnation = "20000000-0000-4000-8000-000000000002";
   const attemptsByMethod = new Map();
   setGatewayFetch(async (_url, init) => {
     const method = init?.method || "GET";
@@ -1483,12 +1485,145 @@ test("archive and delete transport errors are single-attempt ambiguous outcomes"
     throw new TypeError("network connection lost");
   });
   try {
-    const archived = await archiveRemoteThread(settings, "thread::archive");
-    const deleted = await deleteRemoteThread(settings, "thread::delete");
+    const archived = await archiveRemoteThread(
+      settings,
+      "thread::archive",
+      operationId,
+      incarnation,
+    );
+    const deleted = await deleteRemoteThread(
+      settings,
+      "thread::delete",
+      operationId,
+      incarnation,
+    );
     assert.equal(archived.kind, "ambiguous");
     assert.equal(deleted.kind, "ambiguous");
     assert.equal(attemptsByMethod.get("POST"), 1);
     assert.equal(attemptsByMethod.get("DELETE"), 1);
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("archive and delete send the required lifecycle identity on every single attempt", async () => {
+  const requests = [];
+  setGatewayFetch(async (url, init) => {
+    requests.push({
+      url: String(url),
+      method: init.method,
+      body: JSON.parse(init.body),
+    });
+    return new Response(
+      JSON.stringify({
+        operation_id: "10000000-0000-4000-8000-000000000001",
+        outcome: "applied_changed",
+        thread_id: "thread::lifecycle",
+        changed: true,
+        archived: true,
+        deleted: true,
+        detached_endpoint_keys: [],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    const settings = {
+      gatewayUrl: "https://garyx.example.test",
+      gatewayAuthToken: "",
+    };
+    const operationId = "10000000-0000-4000-8000-000000000001";
+    const incarnation = "20000000-0000-4000-8000-000000000002";
+    assert.equal(
+      (
+        await archiveRemoteThread(
+          settings,
+          "thread::lifecycle",
+          operationId,
+          incarnation,
+          ["telegram::main::1000000001"],
+        )
+      ).kind,
+      "ok",
+    );
+    assert.equal(
+      (
+        await deleteRemoteThread(
+          settings,
+          "thread::lifecycle",
+          operationId,
+          incarnation,
+        )
+      ).kind,
+      "ok",
+    );
+    assert.deepEqual(requests, [
+      {
+        url: "https://garyx.example.test/api/threads/thread%3A%3Alifecycle/archive",
+        method: "POST",
+        body: {
+          operationId,
+          expectedStoreIncarnation: incarnation,
+          endpointKeys: ["telegram::main::1000000001"],
+        },
+      },
+      {
+        url: "https://garyx.example.test/api/threads/thread%3A%3Alifecycle",
+        method: "DELETE",
+        body: {
+          operationId,
+          expectedStoreIncarnation: incarnation,
+        },
+      },
+    ]);
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("lifecycle success with a mismatched operation identity remains ambiguous", async () => {
+  setGatewayFetch(async () =>
+    new Response(
+      JSON.stringify({
+        operation_id: "10000000-0000-4000-8000-000000000099",
+        outcome: "applied_changed",
+        thread_id: "thread::lifecycle",
+        changed: true,
+        archived: true,
+        deleted: true,
+        detached_endpoint_keys: [],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  );
+  try {
+    const result = await archiveRemoteThread(
+      { gatewayUrl: "https://garyx.example.test", gatewayAuthToken: "" },
+      "thread::lifecycle",
+      "10000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+    );
+    assert.equal(result.kind, "ambiguous");
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("invalid lifecycle identity is notSent before transport dispatch", async () => {
+  let attempts = 0;
+  setGatewayFetch(async () => {
+    attempts += 1;
+    throw new Error("must not dispatch");
+  });
+  try {
+    const result = await deleteRemoteThread(
+      { gatewayUrl: "https://garyx.example.test", gatewayAuthToken: "" },
+      "thread::lifecycle",
+      "not-an-operation-id",
+      "20000000-0000-4000-8000-000000000002",
+    );
+    assert.equal(result.kind, "notSent");
+    assert.equal(attempts, 0);
   } finally {
     setGatewayFetch(null);
   }

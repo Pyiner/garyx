@@ -74,16 +74,28 @@ final class GaryxGatewayClientTests: XCTestCase {
     }
 
     func testArchiveThreadRequestEncodesEndpointKeys() throws {
-        let request = GaryxArchiveThreadRequest(endpointKeys: [
-            "telegram::main::1000000001",
-            "api::main::loop"
-        ])
+        let request = GaryxArchiveThreadRequest(
+            operationId: "10000000-0000-4000-8000-000000000001",
+            expectedStoreIncarnation: "20000000-0000-4000-8000-000000000002",
+            endpointKeys: [
+                "telegram::main::1000000001",
+                "api::main::loop"
+            ]
+        )
 
         let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
 
         XCTAssertEqual(
             object?["endpointKeys"] as? [String],
             ["telegram::main::1000000001", "api::main::loop"]
+        )
+        XCTAssertEqual(
+            object?["operationId"] as? String,
+            "10000000-0000-4000-8000-000000000001"
+        )
+        XCTAssertEqual(
+            object?["expectedStoreIncarnation"] as? String,
+            "20000000-0000-4000-8000-000000000002"
         )
     }
 
@@ -1057,12 +1069,22 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         do { _ = try await client.updateThread(threadId: "thread::patch", label: "Next") } catch {}
         XCTAssertEqual(attempts.value(), 1)
-        let archive = await client.archiveThread(threadId: "thread::archive")
+        let operationId = "10000000-0000-4000-8000-000000000001"
+        let incarnation = "20000000-0000-4000-8000-000000000002"
+        let archive = await client.archiveThread(
+            threadId: "thread::archive",
+            operationId: operationId,
+            expectedStoreIncarnation: incarnation
+        )
         guard case .ambiguous = archive else {
             return XCTFail("Post-dispatch archive failure must be ambiguous")
         }
         XCTAssertEqual(attempts.value(), 2)
-        let delete = await client.deleteThread(threadId: "thread::delete")
+        let delete = await client.deleteThread(
+            threadId: "thread::delete",
+            operationId: operationId,
+            expectedStoreIncarnation: incarnation
+        )
         guard case .ambiguous = delete else {
             return XCTFail("Post-dispatch delete failure must be ambiguous")
         }
@@ -1081,8 +1103,28 @@ final class GaryxGatewayClientTests: XCTestCase {
         GaryxURLProtocolStub.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(
+                request.timeoutInterval,
+                GaryxLifecycleMutationPolicy.transportTimeoutSeconds
+            )
+            XCTAssertEqual(
                 URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
                 "/garyx/api/threads/thread%3A%3Aarchive%2Fa/archive"
+            )
+            let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+            let payload = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            XCTAssertEqual(
+                payload["operationId"] as? String,
+                "10000000-0000-4000-8000-000000000001"
+            )
+            XCTAssertEqual(
+                payload["expectedStoreIncarnation"] as? String,
+                "20000000-0000-4000-8000-000000000002"
+            )
+            XCTAssertEqual(
+                payload["endpointKeys"] as? [String],
+                ["telegram::main::1000000001"]
             )
             let response = try XCTUnwrap(
                 HTTPURLResponse(
@@ -1099,6 +1141,9 @@ final class GaryxGatewayClientTests: XCTestCase {
                     {
                       "archived": true,
                       "deleted": true,
+                      "changed": true,
+                      "operation_id": "10000000-0000-4000-8000-000000000001",
+                      "outcome": "applied_changed",
                       "thread_id": "thread::archive/a",
                       "detached_endpoint_keys": ["telegram::main::1000000001"]
                     }
@@ -1117,6 +1162,8 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         let result = await client.archiveThread(
             threadId: "thread::archive/a",
+            operationId: "10000000-0000-4000-8000-000000000001",
+            expectedStoreIncarnation: "20000000-0000-4000-8000-000000000002",
             endpointKeys: ["telegram::main::1000000001"]
         )
 
@@ -1125,8 +1172,79 @@ final class GaryxGatewayClientTests: XCTestCase {
         }
         XCTAssertEqual(archive.archived, true)
         XCTAssertEqual(archive.deleted, true)
+        XCTAssertEqual(archive.changed, true)
+        XCTAssertEqual(archive.operationId, "10000000-0000-4000-8000-000000000001")
+        XCTAssertEqual(archive.outcome, "applied_changed")
         XCTAssertEqual(archive.threadId, "thread::archive/a")
         XCTAssertEqual(archive.detachedEndpointKeys, ["telegram::main::1000000001"])
+    }
+
+    func testDeleteThreadSendsIdentityAndTreatsMismatchedSuccessAsAmbiguous() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(
+                request.timeoutInterval,
+                GaryxLifecycleMutationPolicy.transportTimeoutSeconds
+            )
+            let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+            let payload = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            XCTAssertEqual(
+                payload["operationId"] as? String,
+                "10000000-0000-4000-8000-000000000001"
+            )
+            XCTAssertEqual(
+                payload["expectedStoreIncarnation"] as? String,
+                "20000000-0000-4000-8000-000000000002"
+            )
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "deleted": true,
+                      "changed": true,
+                      "operation_id": "10000000-0000-4000-8000-000000000099",
+                      "outcome": "applied_changed",
+                      "thread_id": "thread::delete"
+                    }
+                    """.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+        let result = await client.deleteThread(
+            threadId: "thread::delete",
+            operationId: "10000000-0000-4000-8000-000000000001",
+            expectedStoreIncarnation: "20000000-0000-4000-8000-000000000002"
+        )
+        guard case .ambiguous = result else {
+            return XCTFail("A mismatched lifecycle success must remain ambiguous")
+        }
     }
 
     func testClaudeCodeAuthClientUsesProviderAuthRoutes() async throws {

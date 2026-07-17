@@ -836,6 +836,45 @@ fn parse_thread_list_include_hidden() {
 }
 
 #[test]
+fn parse_thread_lifecycle_commands() {
+    let archive = Cli::parse_from([
+        "garyx",
+        "thread",
+        "archive",
+        "thread::abc",
+        "--endpoint-key",
+        "api::main::loop",
+        "--json",
+    ]);
+    match archive.command {
+        Some(Commands::Thread {
+            action:
+                ThreadAction::Archive {
+                    thread_id,
+                    endpoint_keys,
+                    json,
+                },
+        }) => {
+            assert_eq!(thread_id, "thread::abc");
+            assert_eq!(endpoint_keys, ["api::main::loop"]);
+            assert!(json);
+        }
+        _ => panic!("expected Thread::Archive"),
+    }
+
+    let delete = Cli::parse_from(["garyx", "thread", "delete", "thread::abc", "--json"]);
+    match delete.command {
+        Some(Commands::Thread {
+            action: ThreadAction::Delete { thread_id, json },
+        }) => {
+            assert_eq!(thread_id, "thread::abc");
+            assert!(json);
+        }
+        _ => panic!("expected Thread::Delete"),
+    }
+}
+
+#[test]
 fn parse_thread_send_thread_target() {
     let cli = Cli::parse_from([
         "garyx",
@@ -2433,7 +2472,7 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
 #[tokio::test]
 async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind() {
     use crate::runtime_assembler::RuntimeAssembler;
-    use garyx_gateway::garyx_db::{GaryxDbService, RecentThreadDraft};
+    use garyx_gateway::garyx_db::{GaryxDbService, RecentThreadDraft, ThreadRecordProjections};
     use garyx_models::config::GaryxConfig;
     use garyx_models::local_paths::garyx_database_path_for_data_dir;
 
@@ -2441,22 +2480,42 @@ async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind(
     let session_dir = tmp.path().join("custom-data");
     let database_path = garyx_database_path_for_data_dir(&session_dir);
     let database = GaryxDbService::open(&database_path).expect("seed database");
+    let thread_id = "thread::startup-orphan";
+    let run_id = "run::startup-orphan";
+    let thread_body = serde_json::json!({
+        "thread_id": thread_id,
+        "label": "Startup orphan",
+        "created_at": "2026-07-16T00:00:00Z",
+        "updated_at": "2026-07-16T00:00:00Z",
+        "history": {"recent_committed_run_ids": [run_id]},
+        "pending_user_inputs": [{"id": "queued", "status": "queued"}],
+        "last_user_message_preview": "stale"
+    });
     database
-        .upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::startup-orphan".to_owned(),
-            title: "Startup orphan".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: None,
-            agent_id: None,
-            message_count: 1,
-            last_message_preview: "stale".to_owned(),
-            recent_run_id: Some("run::startup-orphan".to_owned()),
-            active_run_id: Some("run::startup-orphan".to_owned()),
-            run_state: "running".to_owned(),
-            updated_at: None,
-            last_active_at: "2026-07-16T00:00:00Z".to_owned(),
-        })
+        .write_thread_record_with_projections(
+            thread_id,
+            &thread_body.to_string(),
+            None,
+            Some(ThreadRecordProjections {
+                thread_meta: None,
+                task: None,
+                recent: Some(RecentThreadDraft {
+                    thread_id: thread_id.to_owned(),
+                    title: "Startup orphan".to_owned(),
+                    workspace_dir: None,
+                    thread_type: "chat".to_owned(),
+                    provider_type: None,
+                    agent_id: None,
+                    message_count: 1,
+                    last_message_preview: "stale".to_owned(),
+                    recent_run_id: Some(run_id.to_owned()),
+                    active_run_id: Some(run_id.to_owned()),
+                    run_state: "running".to_owned(),
+                    updated_at: None,
+                    last_active_at: "2026-07-16T00:00:00Z".to_owned(),
+                }),
+            }),
+        )
         .unwrap();
     drop(database);
 
@@ -2473,10 +2532,24 @@ async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind(
         .list_recent_threads(10, 0)
         .unwrap()
         .into_iter()
-        .find(|row| row.thread_id == "thread::startup-orphan")
+        .find(|row| row.thread_id == thread_id)
         .expect("orphan row");
     assert_eq!(row.active_run_id, None);
     assert_eq!(row.run_state, "completed");
+    let recovered_body: serde_json::Value = serde_json::from_str(
+        &assembly
+            .state
+            .ops
+            .garyx_db
+            .get_thread_record_body(thread_id)
+            .unwrap()
+            .expect("canonical orphan record"),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered_body["pending_user_inputs"][0]["status"],
+        "abandoned"
+    );
     assert!(session_dir.join("garyx.lock").exists());
 }
 

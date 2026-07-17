@@ -262,6 +262,17 @@ extension GaryxMobileModel {
         )
 
         let runtimeGeneration = gatewayRuntimeGeneration
+        guard let request = makeLifecycleMutationRequest(
+            kind: .archive,
+            threadId: normalizedThreadId,
+            endpointKeys: endpointKeys
+        ) else {
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            refreshResidentThreadListStores()
+            await recoverLifecycleIdentity()
+            return
+        }
         // Preserve the conversation-surface contract: leaving the archived
         // thread is immediate. Only the Home List row set waits for the
         // remote commit, which is the collection-view crash boundary.
@@ -279,13 +290,18 @@ extension GaryxMobileModel {
             lastError = displayMessage(for: error)
             return
         }
-        let result = await gatewayClient.archiveThread(
-            threadId: normalizedThreadId,
-            endpointKeys: endpointKeys
-        )
+        let result: GaryxMobileLifecycleCompletion<GaryxArchiveThreadResult> =
+            await performLifecycleMutation(request: request) { attempt in
+                await gatewayClient.archiveThread(
+                    threadId: attempt.request.threadId,
+                    operationId: attempt.request.operationId,
+                    expectedStoreIncarnation: attempt.request.expectedStoreIncarnation,
+                    endpointKeys: attempt.request.endpointKeys
+                )
+            }
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         switch result {
-        case .ok:
+        case .applied:
             // A native SwiftUI List cannot safely delete a swipe-action row
             // and reinsert it in the same update cycle when the request
             // fails. Commit every visible row-set mutation exactly once,
@@ -309,26 +325,39 @@ extension GaryxMobileModel {
 
             await refreshRemoteState()
             await refreshThreads(source: .userAction)
-        case .definitiveEndpointResponse(let response):
+        case .rejected(let code, let message):
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
-            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
-            refreshResidentThreadListStores()
-            lastError = response.error.message ?? response.error.code
-        case .notSent(let message):
-            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
-            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            let reconstructionTickets: [GaryxThreadReconstructionTicket]
+            if code == "wrong_incarnation" {
+                reconstructionTickets = homeThreadListStore.markArchiveTransitionAmbiguous(
+                    threadId: normalizedThreadId
+                )
+            } else {
+                homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+                reconstructionTickets = []
+            }
             refreshResidentThreadListStores()
             lastError = message
-        case .ambiguous(let response):
+            if code == "wrong_incarnation" {
+                await forceReplaceThreadFeedsAfterAmbiguousLifecycle(
+                    reconstructionTickets: reconstructionTickets
+                )
+            }
+        case .operationIdConflict(let message), .exhausted(let message):
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             let tickets = homeThreadListStore.markArchiveTransitionAmbiguous(
                 threadId: normalizedThreadId
             )
             refreshResidentThreadListStores()
-            lastError = response.message
+            lastError = message
             await forceReplaceThreadFeedsAfterAmbiguousLifecycle(
                 reconstructionTickets: tickets
             )
+        case .cancelled:
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            refreshResidentThreadListStores()
+            return
         }
     }
 }

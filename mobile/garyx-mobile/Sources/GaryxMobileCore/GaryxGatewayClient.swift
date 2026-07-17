@@ -237,6 +237,33 @@ public enum GaryxGatewayMutationResult<Response: Sendable>: Sendable {
 extension GaryxGatewayDefinitiveEndpointResponse: Equatable where Response: Equatable {}
 extension GaryxGatewayMutationResult: Equatable where Response: Equatable {}
 
+private func lifecycleSuccessIsValid(
+    operationId: String?,
+    expectedOperationId: String,
+    threadId: String?,
+    expectedThreadId: String,
+    outcome: String?,
+    changed: Bool?,
+    deleted: Bool?,
+    archived: Bool?,
+    detachedEndpointKeys: [String]?,
+    isArchive: Bool
+) -> Bool {
+    guard operationId == expectedOperationId,
+          threadId == expectedThreadId,
+          let outcome,
+          outcome == "applied_changed" || outcome == "applied_noop",
+          changed == (outcome == "applied_changed"),
+          deleted == true else {
+        return false
+    }
+    guard detachedEndpointKeys != nil else { return false }
+    if isArchive {
+        return archived == true
+    }
+    return true
+}
+
 public enum GaryxGatewayRetryClassifier {
     /// Transport errors that retryable reads may replay.
     public static func isConnectionEstablishmentError(_ error: Error) -> Bool {
@@ -581,14 +608,47 @@ public final class GaryxGatewayClient {
     }
 
     public func deleteThread(
-        threadId: String
+        threadId: String,
+        operationId: String,
+        expectedStoreIncarnation: String
     ) async -> GaryxGatewayMutationResult<GaryxDeleteResult> {
         do {
-            let request = try makeRequest(
+            var request = try makeRequest(
                 path: "/api/threads/\(threadId.urlPathEncoded)",
-                method: "DELETE"
+                method: "DELETE",
+                timeoutInterval: GaryxLifecycleMutationPolicy.transportTimeoutSeconds
             )
-            return await sendMutation(request, expectedOperation: "thread_delete")
+            request.httpBody = try encoder.encode(
+                GaryxDeleteThreadRequest(
+                    operationId: operationId,
+                    expectedStoreIncarnation: expectedStoreIncarnation
+                )
+            )
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let result: GaryxGatewayMutationResult<GaryxDeleteResult> =
+                await sendMutation(request, expectedOperation: "thread_delete")
+            guard case .ok(let response) = result else { return result }
+            guard lifecycleSuccessIsValid(
+                operationId: response.operationId,
+                expectedOperationId: operationId,
+                threadId: response.threadId,
+                expectedThreadId: threadId,
+                outcome: response.outcome,
+                changed: response.changed,
+                deleted: response.deleted,
+                archived: nil,
+                detachedEndpointKeys: response.detachedEndpointKeys,
+                isArchive: false
+            ) else {
+                return .ambiguous(
+                    GaryxGatewayAmbiguousResponse(
+                        message: "Gateway returned an invalid thread delete result.",
+                        status: 200,
+                        body: nil
+                    )
+                )
+            }
+            return result
         } catch {
             return .notSent(error.localizedDescription)
         }
@@ -596,18 +656,48 @@ public final class GaryxGatewayClient {
 
     public func archiveThread(
         threadId: String,
+        operationId: String,
+        expectedStoreIncarnation: String,
         endpointKeys: [String] = []
     ) async -> GaryxGatewayMutationResult<GaryxArchiveThreadResult> {
         do {
             var request = try makeRequest(
                 path: "/api/threads/\(threadId.urlPathEncoded)/archive",
-                method: "POST"
+                method: "POST",
+                timeoutInterval: GaryxLifecycleMutationPolicy.transportTimeoutSeconds
             )
             request.httpBody = try encoder.encode(
-                GaryxArchiveThreadRequest(endpointKeys: endpointKeys)
+                GaryxArchiveThreadRequest(
+                    operationId: operationId,
+                    expectedStoreIncarnation: expectedStoreIncarnation,
+                    endpointKeys: endpointKeys
+                )
             )
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            return await sendMutation(request, expectedOperation: "thread_archive")
+            let result: GaryxGatewayMutationResult<GaryxArchiveThreadResult> =
+                await sendMutation(request, expectedOperation: "thread_archive")
+            guard case .ok(let response) = result else { return result }
+            guard lifecycleSuccessIsValid(
+                operationId: response.operationId,
+                expectedOperationId: operationId,
+                threadId: response.threadId,
+                expectedThreadId: threadId,
+                outcome: response.outcome,
+                changed: response.changed,
+                deleted: response.deleted,
+                archived: response.archived,
+                detachedEndpointKeys: response.detachedEndpointKeys,
+                isArchive: true
+            ) else {
+                return .ambiguous(
+                    GaryxGatewayAmbiguousResponse(
+                        message: "Gateway returned an invalid thread archive result.",
+                        status: 200,
+                        body: nil
+                    )
+                )
+            }
+            return result
         } catch {
             return .notSent(error.localizedDescription)
         }

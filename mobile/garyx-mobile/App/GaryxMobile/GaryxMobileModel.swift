@@ -474,6 +474,8 @@ final class GaryxMobileModel: ObservableObject {
     var pendingDirectFollowUpsByThread: [String: [(userId: String, assistantId: String)]] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
     var pendingThreadArchives = GaryxPendingThreadArchiveState()
+    /// Deterministic test seam; production uses the Core policy delay.
+    var lifecycleRetryDelayOverrideNanoseconds: UInt64?
     var auxiliaryAllRecentThreadsRefreshTask: Task<Void, Never>?
     var auxiliaryAllRecentThreadsRefreshTaskId: UUID?
     var gatewayRuntimeGeneration = UUID()

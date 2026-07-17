@@ -1308,6 +1308,8 @@ function registerIpcHandlers(): void {
     async (_event, input: ArchiveThreadInput) => {
       return archiveDesktopThread({
         threadId: input.threadId,
+        operationId: input.operationId,
+        expectedStoreIncarnation: input.expectedStoreIncarnation,
         endpointKeys: input.endpointKeys || [],
       });
     },
@@ -1316,7 +1318,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "garyx:delete-thread",
     async (_event, input: DeleteThreadInput) => {
-      return deleteDesktopThread(input.threadId || input.sessionId || "");
+      return deleteDesktopThread(input);
     },
   );
 

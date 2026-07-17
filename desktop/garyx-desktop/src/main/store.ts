@@ -1861,11 +1861,18 @@ export async function renameDesktopThread(
   return getDesktopState();
 }
 
-export async function deleteDesktopThread(
-  threadId: string,
-): Promise<DesktopGatewayMutationResult<DesktopState>> {
+export async function deleteDesktopThread(input: {
+  threadId: string;
+  operationId: string;
+  expectedStoreIncarnation: string;
+}): Promise<DesktopGatewayMutationResult<DesktopState>> {
   const current = await getDesktopState();
-  const result = await deleteRemoteThread(current.settings, threadId);
+  const result = await deleteRemoteThread(
+    current.settings,
+    input.threadId,
+    input.operationId,
+    input.expectedStoreIncarnation,
+  );
   if (result.kind !== 'ok') {
     return result.kind === 'definitiveEndpointResponse'
       ? { ...result, value: null }
@@ -1874,19 +1881,23 @@ export async function deleteDesktopThread(
   return {
     ...result,
     value: withSortedEntities(
-      desktopStateWithoutThread(await getDesktopState(), threadId),
+      desktopStateWithoutThread(await getDesktopState(), input.threadId),
     ),
   };
 }
 
 export async function archiveDesktopThread(input: {
   threadId: string;
+  operationId: string;
+  expectedStoreIncarnation: string;
   endpointKeys?: string[];
 }): Promise<DesktopGatewayMutationResult<DesktopState>> {
   const current = await getDesktopState();
   const result = await archiveRemoteThread(
     current.settings,
     input.threadId,
+    input.operationId,
+    input.expectedStoreIncarnation,
     input.endpointKeys || [],
   );
   if (result.kind !== 'ok') {

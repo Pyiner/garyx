@@ -223,6 +223,11 @@ import {
 import { useRecentThreadFeeds } from "./useRecentThreadFeeds";
 import { useThreadFavorites } from "./useThreadFavorites";
 import { presentedFavoriteRows } from "./favorites-ingress";
+import {
+  lifecycleUiSettlement,
+  resolveLifecycleStoreIncarnation,
+  runLifecycleMutation,
+} from "./lifecycle-ingress";
 import type { RecentThreadFeedState } from "./recent-thread-feeds";
 import { recordTranscriptRender } from "./transcript-render-probe";
 import {
@@ -1858,6 +1863,21 @@ export function AppShell() {
     sharedSummaries:
       desktopState?.threads || EMPTY_DESKTOP_THREAD_SUMMARIES,
   });
+  const lifecycleStoreIncarnation = resolveLifecycleStoreIncarnation([
+    threadFavorites.state.storeIncarnationId,
+    recentThreadFeeds.state.feeds.all.storeIncarnationId,
+    recentThreadFeeds.state.feeds.nonTask.storeIncarnationId,
+  ]);
+  const lifecycleRuntimeEpoch =
+    threadFavorites.state.runtimeEpoch + recentThreadFeeds.state.runtimeEpoch;
+  const lifecycleIdentityRef = useRef({
+    gatewayScope: desktopState?.entitiesGatewayUrl || "",
+    runtimeEpoch: lifecycleRuntimeEpoch,
+  });
+  lifecycleIdentityRef.current = {
+    gatewayScope: desktopState?.entitiesGatewayUrl || "",
+    runtimeEpoch: lifecycleRuntimeEpoch,
+  };
   const favoriteThreads = useMemo(() => {
     return presentedFavoriteRows(
       threadFavorites.state,
@@ -3727,6 +3747,12 @@ export function AppShell() {
       setError("Delete this automation from the Automation view.");
       return;
     }
+    if (!lifecycleStoreIncarnation) {
+      setError("Thread storage identity is unavailable. Refresh and try again.");
+      recentThreadFeeds.forceReplacement();
+      threadFavorites.refreshSnapshot();
+      return;
+    }
 
     const endpointKeys = new Set(
       (desktopState.endpoints || [])
@@ -3767,19 +3793,47 @@ export function AppShell() {
 
     try {
       const api = getDesktopApi();
-      const archivedResult = await api.archiveThread({
-        threadId: targetThreadId,
-        endpointKeys: Array.from(endpointKeys).sort(),
-      });
-      if (archivedResult.kind !== "ok") {
-        recentThreadFeeds.rollbackRemoval(recentRollback);
-        setError(
-          archivedResult.kind === "definitiveEndpointResponse"
-            ? archivedResult.error.message || archivedResult.error.code
-            : archivedResult.message,
-        );
+      const operationId = globalThis.crypto.randomUUID();
+      const gatewayScope = desktopState.entitiesGatewayUrl || "";
+      const runtimeEpoch = lifecycleRuntimeEpoch;
+      const archivedResult = await runLifecycleMutation(
+        {
+          gatewayScope,
+          runtimeEpoch,
+          operationId,
+          expectedStoreIncarnation: lifecycleStoreIncarnation,
+          threadId: targetThreadId,
+        },
+        ({ operationId: stableOperationId, expectedStoreIncarnation }) =>
+          api.archiveThread({
+            threadId: targetThreadId,
+            operationId: stableOperationId,
+            expectedStoreIncarnation,
+            endpointKeys: Array.from(endpointKeys).sort(),
+          }),
+        {
+          isCurrent: (identity) =>
+            lifecycleIdentityRef.current.gatewayScope === identity.gatewayScope &&
+            lifecycleIdentityRef.current.runtimeEpoch === identity.runtimeEpoch,
+        },
+      );
+      const settlement = lifecycleUiSettlement(archivedResult);
+      if (archivedResult.kind !== "applied") {
+        if (settlement.rollbackOptimistic) {
+          recentThreadFeeds.rollbackRemoval(recentRollback);
+        }
+        if (archivedResult.kind === "cancelled") {
+          return;
+        }
+        setError(settlement.errorMessage);
+        if (settlement.operationIdConflict) {
+          console.error("Thread lifecycle operation_id conflict", {
+            operationId,
+            threadId: targetThreadId,
+          });
+        }
         void refreshDesktopState().catch(() => null);
-        if (archivedResult.kind === "ambiguous") {
+        if (settlement.requireFullReplacement) {
           recentThreadFeeds.forceReplacement();
           threadFavorites.refreshSnapshot();
         }
@@ -3788,6 +3842,10 @@ export function AppShell() {
       setDesktopState(
         desktopStateWithoutThread(archivedResult.value, targetThreadId),
       );
+      if (settlement.requireFullReplacement) {
+        recentThreadFeeds.forceReplacement();
+        threadFavorites.refreshSnapshot();
+      }
     } catch (archiveError) {
       recentThreadFeeds.rollbackRemoval(recentRollback);
       setError(

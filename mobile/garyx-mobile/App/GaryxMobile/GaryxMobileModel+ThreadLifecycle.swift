@@ -1,8 +1,100 @@
 import Foundation
+import os
+
+private let lifecycleMutationLogger = Logger(
+    subsystem: "com.garyx.mobile",
+    category: "thread-lifecycle"
+)
+
+enum GaryxMobileLifecycleCompletion<Response: Sendable>: Sendable {
+    case applied(Response)
+    case rejected(code: String, message: String)
+    case operationIdConflict(message: String)
+    case exhausted(message: String)
+    case cancelled
+}
 
 // Thread selection and open, new-thread drafts and creation, bot-group
 // open, archive/delete/rename, and per-thread runtime settings updates.
 extension GaryxMobileModel {
+    func makeLifecycleMutationRequest(
+        kind: GaryxLifecycleMutationKind,
+        threadId: String,
+        endpointKeys: [String] = []
+    ) -> GaryxLifecycleMutationRequest? {
+        let identities = Set(
+            [
+                recentThreadFeeds.allFeed.storeIncarnationId,
+                recentThreadFeeds.nonTaskFeed.storeIncarnationId,
+                threadFavoritesState.storeIncarnationId,
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        )
+        guard identities.count == 1, let incarnation = identities.first else {
+            return nil
+        }
+        return GaryxLifecycleMutationRequest(
+            kind: kind,
+            threadId: threadId,
+            endpointKeys: endpointKeys,
+            expectedStoreIncarnation: incarnation,
+            gatewayScope: currentGatewayScopeId,
+            runtimeGeneration: gatewayRuntimeGeneration
+        )
+    }
+
+    func performLifecycleMutation<Response: Decodable & Sendable>(
+        request: GaryxLifecycleMutationRequest,
+        dispatch: (GaryxLifecycleMutationAttempt) async -> GaryxGatewayMutationResult<Response>
+    ) async -> GaryxMobileLifecycleCompletion<Response> {
+        var state = GaryxLifecycleMutationState(request: request)
+        while let attempt = state.nextAttempt() {
+            guard lifecycleRequestIsCurrent(request), !Task.isCancelled else {
+                return .cancelled
+            }
+            let result = await dispatch(attempt)
+            guard lifecycleRequestIsCurrent(request), !Task.isCancelled else {
+                return .cancelled
+            }
+            switch state.settle(result) {
+            case .applied(let response):
+                return .applied(response)
+            case .rejected(let code, let message):
+                return .rejected(code: code, message: message)
+            case .operationIdConflict(let message):
+                lifecycleMutationLogger.error(
+                    "operation_id conflict operation=\(request.operationId, privacy: .public) thread=\(request.threadId, privacy: .public)"
+                )
+                return .operationIdConflict(message: message)
+            case .exhausted(let message):
+                return .exhausted(message: message)
+            case .retry(let policyDelay):
+                let delay = lifecycleRetryDelayOverrideNanoseconds ?? policyDelay
+                if delay > 0 {
+                    do {
+                        try await Task.sleep(nanoseconds: delay)
+                    } catch {
+                        return .cancelled
+                    }
+                }
+            }
+        }
+        return .cancelled
+    }
+
+    private func lifecycleRequestIsCurrent(
+        _ request: GaryxLifecycleMutationRequest
+    ) -> Bool {
+        request.runtimeGeneration == gatewayRuntimeGeneration
+            && request.gatewayScope == currentGatewayScopeId
+    }
+
+    func recoverLifecycleIdentity() async {
+        lastError = "Thread storage identity is unavailable. Refresh and try again."
+        await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
+    }
+
     func isThreadSummaryRunning(_ thread: GaryxThreadSummary) -> Bool {
         GaryxThreadSummaryRunStateResolver.isRunning(thread)
     }
@@ -345,17 +437,32 @@ extension GaryxMobileModel {
             lastError = displayMessage(for: error)
             return
         }
+        guard let request = makeLifecycleMutationRequest(
+            kind: .delete,
+            threadId: thread.id
+        ) else {
+            await recoverLifecycleIdentity()
+            return
+        }
+        let mutationEpoch = threadMutationHubStore.value.gatewayRuntimeEpoch
         let mutationId = nextThreadMutationId(kind: "delete", threadId: thread.id)
         _ = threadMutationHubStore.value.began(
             mutationId: mutationId,
             kind: .archive(threadId: thread.id),
-            gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch
+            gatewayRuntimeEpoch: mutationEpoch
         )
         refreshResidentThreadListStores()
-        let result = await gatewayClient.deleteThread(threadId: thread.id)
+        let result: GaryxMobileLifecycleCompletion<GaryxDeleteResult> =
+            await performLifecycleMutation(request: request) { attempt in
+                await gatewayClient.deleteThread(
+                    threadId: attempt.request.threadId,
+                    operationId: attempt.request.operationId,
+                    expectedStoreIncarnation: attempt.request.expectedStoreIncarnation
+                )
+            }
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         switch result {
-        case .ok:
+        case .applied:
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""
@@ -366,7 +473,7 @@ extension GaryxMobileModel {
             }
             _ = threadMutationHubStore.value.committed(
                 mutationId: mutationId,
-                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                gatewayRuntimeEpoch: mutationEpoch,
                 authority: GaryxThreadMutationAuthority(
                     membership: .remove(threadId: thread.id)
                 )
@@ -378,32 +485,45 @@ extension GaryxMobileModel {
             threadResidencyTracker.remove(thread.id)
             clearTranscriptCache(for: thread.id)
             await refreshThreads(source: .userAction)
-        case .definitiveEndpointResponse(let response):
-            _ = threadMutationHubStore.value.rolledBack(
-                mutationId: mutationId,
-                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
-                message: response.error.message ?? response.error.code
-            )
+        case .rejected(let code, let message):
+            let reconstructionTickets: [GaryxThreadReconstructionTicket]
+            if code == "wrong_incarnation" {
+                reconstructionTickets = threadMutationHubStore.value.ambiguous(
+                    mutationId: mutationId,
+                    gatewayRuntimeEpoch: mutationEpoch
+                )
+            } else {
+                _ = threadMutationHubStore.value.rolledBack(
+                    mutationId: mutationId,
+                    gatewayRuntimeEpoch: mutationEpoch,
+                    message: message
+                )
+                reconstructionTickets = []
+            }
             refreshResidentThreadListStores()
-            lastError = response.error.message ?? response.error.code
-        case .notSent(let message):
-            _ = threadMutationHubStore.value.rolledBack(
+            lastError = message
+            if code == "wrong_incarnation" {
+                await forceReplaceThreadFeedsAfterAmbiguousLifecycle(
+                    reconstructionTickets: reconstructionTickets
+                )
+            }
+        case .operationIdConflict(let message), .exhausted(let message):
+            let tickets = threadMutationHubStore.value.ambiguous(
                 mutationId: mutationId,
-                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
-                message: message
+                gatewayRuntimeEpoch: mutationEpoch
             )
             refreshResidentThreadListStores()
             lastError = message
-        case .ambiguous(let response):
-            let tickets = threadMutationHubStore.value.ambiguous(
-                mutationId: mutationId,
-                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch
-            )
-            refreshResidentThreadListStores()
-            lastError = response.message
             await forceReplaceThreadFeedsAfterAmbiguousLifecycle(
                 reconstructionTickets: tickets
             )
+        case .cancelled:
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: mutationEpoch
+            )
+            refreshResidentThreadListStores()
+            return
         }
     }
 

@@ -1498,36 +1498,166 @@ export async function updateRemoteThread(
 export async function deleteRemoteThread(
   settings: DesktopSettings,
   threadId: string,
+  operationId: string,
+  expectedStoreIncarnation: string,
 ): Promise<GatewayMutationResult<unknown>> {
+  const normalizedThreadId = threadId.trim();
+  const normalizedOperationId = operationId.trim();
+  const normalizedIncarnation = expectedStoreIncarnation.trim();
+  if (
+    !normalizedThreadId.startsWith("thread::") ||
+    !isUuid(normalizedOperationId) ||
+    !isUuid(normalizedIncarnation)
+  ) {
+    return {
+      kind: "notSent",
+      message: "The thread lifecycle mutation is missing a valid identity.",
+    };
+  }
   return requestMutationJson<unknown>(
     settings,
-    `/api/threads/${encodeURIComponent(threadId)}`,
+    `/api/threads/${encodeURIComponent(normalizedThreadId)}`,
     "mutationSingleAttempt",
     "thread_delete",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        operationId: normalizedOperationId,
+        expectedStoreIncarnation: normalizedIncarnation,
+      }),
     },
-    (payload) => payload,
+    (payload) =>
+      decodeLifecycleSuccessPayload(
+        payload,
+        "delete",
+        normalizedOperationId,
+        normalizedThreadId,
+      ),
   );
 }
 
 export async function archiveRemoteThread(
   settings: DesktopSettings,
   threadId: string,
+  operationId: string,
+  expectedStoreIncarnation: string,
   endpointKeys: string[] = [],
 ): Promise<GatewayMutationResult<unknown>> {
+  const normalizedThreadId = threadId.trim();
+  const normalizedOperationId = operationId.trim();
+  const normalizedIncarnation = expectedStoreIncarnation.trim();
+  if (
+    !normalizedThreadId.startsWith("thread::") ||
+    !isUuid(normalizedOperationId) ||
+    !isUuid(normalizedIncarnation)
+  ) {
+    return {
+      kind: "notSent",
+      message: "The thread lifecycle mutation is missing a valid identity.",
+    };
+  }
   return requestMutationJson<unknown>(
     settings,
-    `/api/threads/${encodeURIComponent(threadId)}/archive`,
+    `/api/threads/${encodeURIComponent(normalizedThreadId)}/archive`,
     "mutationSingleAttempt",
     "thread_archive",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({ endpointKeys }),
+      body: JSON.stringify({
+        operationId: normalizedOperationId,
+        expectedStoreIncarnation: normalizedIncarnation,
+        endpointKeys,
+      }),
     },
-    (payload) => payload,
+    (payload) =>
+      decodeLifecycleSuccessPayload(
+        payload,
+        "archive",
+        normalizedOperationId,
+        normalizedThreadId,
+      ),
+  );
+}
+
+function decodeLifecycleSuccessPayload(
+  payload: unknown,
+  kind: "archive" | "delete",
+  operationId: string,
+  threadId: string,
+): unknown {
+  const context = `thread ${kind} response`;
+  const record = requireContractRecord(payload, context);
+  const echoedOperationId = requireContractNonEmptyString(
+    requireContractField(record, "operation_id", context),
+    `${context}.operation_id`,
+  );
+  if (echoedOperationId !== operationId) {
+    throw new GatewayContractError(
+      `${context}.operation_id`,
+      "must match the request operation ID",
+    );
+  }
+  const echoedThreadId = requireContractNonEmptyString(
+    requireContractField(record, "thread_id", context),
+    `${context}.thread_id`,
+  );
+  if (echoedThreadId !== threadId) {
+    throw new GatewayContractError(
+      `${context}.thread_id`,
+      "must match the requested thread",
+    );
+  }
+  const outcome = requireContractNonEmptyString(
+    requireContractField(record, "outcome", context),
+    `${context}.outcome`,
+  );
+  if (outcome !== "applied_changed" && outcome !== "applied_noop") {
+    throw new GatewayContractError(
+      `${context}.outcome`,
+      "must be an applied lifecycle outcome",
+    );
+  }
+  const changed = requireContractBoolean(
+    requireContractField(record, "changed", context),
+    `${context}.changed`,
+  );
+  if (changed !== (outcome === "applied_changed")) {
+    throw new GatewayContractError(
+      `${context}.changed`,
+      "must agree with the lifecycle outcome",
+    );
+  }
+  if (
+    requireContractBoolean(
+      requireContractField(record, "deleted", context),
+      `${context}.deleted`,
+    ) !== true
+  ) {
+    throw new GatewayContractError(`${context}.deleted`, "must be true");
+  }
+  if (
+    kind === "archive" &&
+    requireContractBoolean(
+      requireContractField(record, "archived", context),
+      `${context}.archived`,
+    ) !== true
+  ) {
+    throw new GatewayContractError(`${context}.archived`, "must be true");
+  }
+  requireContractArray(
+    requireContractField(record, "detached_endpoint_keys", context),
+    `${context}.detached_endpoint_keys`,
+  ).forEach((value, index) => {
+    requireContractString(value, `${context}.detached_endpoint_keys[${index}]`);
+  });
+  return payload;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+    value.trim(),
   );
 }
 

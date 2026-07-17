@@ -46,33 +46,64 @@ public struct GaryxChatHealth: Decodable, Equatable, Sendable {
 
 public struct GaryxDeleteResult: Decodable, Equatable, Sendable {
     public var deleted: Bool?
+    public var changed: Bool?
+    public var operationId: String?
+    public var outcome: String?
     public var id: String?
     public var taskId: String?
     public var threadId: String?
+    public var detachedEndpointKeys: [String]?
 
     enum CodingKeys: String, CodingKey {
         case deleted
+        case changed
+        case operationId = "operation_id"
+        case outcome
         case id
         case taskId = "task_id"
         case taskIdCamel = "taskId"
         case threadId = "thread_id"
         case threadIdCamel = "threadId"
+        case detachedEndpointKeys = "detached_endpoint_keys"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted)
+        changed = try container.decodeIfPresent(Bool.self, forKey: .changed)
+        operationId = try container.garyxDecodeFirstString(.operationId)
+        outcome = try container.decodeIfPresent(String.self, forKey: .outcome)
         id = try container.garyxDecodeFirstString(.id)
         taskId = try container.garyxDecodeFirstString(.taskId, .taskIdCamel)
         threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel)
+        detachedEndpointKeys = try container.garyxDecodeFirstStringArray(.detachedEndpointKeys)
+    }
+}
+
+
+public struct GaryxDeleteThreadRequest: Encodable, Equatable, Sendable {
+    public var operationId: String
+    public var expectedStoreIncarnation: String
+
+    public init(operationId: String, expectedStoreIncarnation: String) {
+        self.operationId = operationId
+        self.expectedStoreIncarnation = expectedStoreIncarnation
     }
 }
 
 
 public struct GaryxArchiveThreadRequest: Encodable, Equatable, Sendable {
+    public var operationId: String
+    public var expectedStoreIncarnation: String
     public var endpointKeys: [String]
 
-    public init(endpointKeys: [String] = []) {
+    public init(
+        operationId: String,
+        expectedStoreIncarnation: String,
+        endpointKeys: [String] = []
+    ) {
+        self.operationId = operationId
+        self.expectedStoreIncarnation = expectedStoreIncarnation
         self.endpointKeys = endpointKeys
     }
 }
@@ -81,12 +112,18 @@ public struct GaryxArchiveThreadRequest: Encodable, Equatable, Sendable {
 public struct GaryxArchiveThreadResult: Decodable, Equatable, Sendable {
     public var archived: Bool?
     public var deleted: Bool?
+    public var changed: Bool?
+    public var operationId: String?
+    public var outcome: String?
     public var threadId: String?
     public var detachedEndpointKeys: [String]?
 
     enum CodingKeys: String, CodingKey {
         case archived
         case deleted
+        case changed
+        case operationId = "operation_id"
+        case outcome
         case threadId = "thread_id"
         case threadIdCamel = "threadId"
         case detachedEndpointKeys = "detached_endpoint_keys"
@@ -97,6 +134,9 @@ public struct GaryxArchiveThreadResult: Decodable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived)
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted)
+        changed = try container.decodeIfPresent(Bool.self, forKey: .changed)
+        operationId = try container.garyxDecodeFirstString(.operationId)
+        outcome = try container.decodeIfPresent(String.self, forKey: .outcome)
         threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel)
         detachedEndpointKeys = try container.garyxDecodeFirstStringArray(
             .detachedEndpointKeys,

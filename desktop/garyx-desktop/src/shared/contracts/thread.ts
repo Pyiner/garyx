@@ -303,12 +303,14 @@ export interface UpdateThreadRuntimeSettingsInput {
 
 export interface DeleteThreadInput {
   threadId: string;
-  // Compatibility fallback for older callers. Prefer `threadId`.
-  sessionId?: string;
+  operationId: string;
+  expectedStoreIncarnation: string;
 }
 
 export interface ArchiveThreadInput {
   threadId: string;
+  operationId: string;
+  expectedStoreIncarnation: string;
   endpointKeys?: string[];
 }
 

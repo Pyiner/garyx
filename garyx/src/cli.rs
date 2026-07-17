@@ -1127,6 +1127,25 @@ pub(crate) enum ThreadAction {
         #[arg(long)]
         json: bool,
     },
+    /// Archive a thread with replay-safe lifecycle semantics
+    Archive {
+        /// Canonical thread id, e.g. thread::abc
+        thread_id: String,
+        /// Endpoint key to detach with the archive (repeatable)
+        #[arg(long = "endpoint-key")]
+        endpoint_keys: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Permanently delete a thread with replay-safe lifecycle semantics
+    Delete {
+        /// Canonical thread id, e.g. thread::abc
+        thread_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show a thread's message history, tool calls, and runtime records
     History {
         /// Canonical thread id
