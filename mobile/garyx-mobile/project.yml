@@ -2,7 +2,7 @@ name: GaryxMobile
 options:
   bundleIdPrefix: com.garyx
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
 settings:
   base:
     MARKETING_VERSION: 0.1.0
@@ -33,7 +33,7 @@ targets:
   GaryxMobile:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: App/GaryxMobile
       - path: Sources/GaryxMobileCore
@@ -71,7 +71,7 @@ targets:
   GaryxRecentThreadsWidget:
     type: app-extension
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Widget/GaryxRecentThreadsWidget
       - path: Sources/GaryxMobileCore/GaryxAvatarCache.swift
@@ -99,7 +99,7 @@ targets:
   GaryxMobileTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Tests/GaryxMobileTests
     dependencies:
@@ -120,7 +120,7 @@ targets:
   GaryxMobileUITests:
     type: bundle.ui-testing
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: UITests/GaryxMobileUITests
     dependencies:
