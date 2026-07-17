@@ -227,6 +227,8 @@ struct GaryxStopButtonStyle: ButtonStyle {
 }
 
 private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     let style: GaryxAdaptiveGlassStyle
     let isInteractive: Bool
     let tint: Color?
@@ -236,20 +238,41 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        if reduceTransparency {
+            opaqueFallback(content: content)
+        } else {
 #if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            switch style {
-            case .automatic:
-                content.glassEffect(isEnabled ? .regular : .identity, in: shape)
-            case .regular:
-                content.glassEffect(resolvedGlass, in: shape)
+            if #available(iOS 26, *) {
+                switch style {
+                case .automatic:
+                    content.glassEffect(isEnabled ? .regular : .identity, in: shape)
+                case .regular:
+                    content.glassEffect(resolvedGlass, in: shape)
+                }
+            } else {
+                fallback(content: content)
+            }
+#else
+            fallback(content: content)
+#endif
+        }
+    }
+
+    @ViewBuilder
+    private func opaqueFallback(content: Content) -> some View {
+        if isEnabled {
+            content.background {
+                shape
+                    .fill(Color(uiColor: .secondarySystemBackground))
+                    .overlay {
+                        if let tint {
+                            shape.fill(tint)
+                        }
+                    }
             }
         } else {
-            fallback(content: content)
+            content
         }
-#else
-        fallback(content: content)
-#endif
     }
 
     @ViewBuilder
@@ -285,6 +308,8 @@ enum GaryxAdaptiveGlassStyle {
 }
 
 struct GaryxAdaptiveGlassContainer<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     let spacing: CGFloat
     private let content: () -> Content
 
@@ -294,17 +319,21 @@ struct GaryxAdaptiveGlassContainer<Content: View>: View {
     }
 
     var body: some View {
+        if reduceTransparency {
+            content()
+        } else {
 #if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            GlassEffectContainer(spacing: spacing) {
+            if #available(iOS 26, *) {
+                GlassEffectContainer(spacing: spacing) {
+                    content()
+                }
+            } else {
                 content()
             }
-        } else {
-            content()
-        }
 #else
-        content()
+            content()
 #endif
+        }
     }
 }
 
