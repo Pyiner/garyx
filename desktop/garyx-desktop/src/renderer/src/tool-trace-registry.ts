@@ -545,7 +545,14 @@ export function resolveMergedToolTrace(
     projectionDisplayValue(toolUse, projection.call) ??
     projectionDisplayValue(toolResult, projection.call);
   const projectedResult = projectionDisplayValue(toolResult, projection.result);
-  const projectedSummary = truncateSingleLine(firstProjectedMeaningfulLine(projectedCall), 132);
+  const projectedSummaryValue =
+    projectionDisplayValue(toolUse, projection.summary) ??
+    projectionDisplayValue(toolResult, projection.summary) ??
+    (projection.call?.format === 'json' ? undefined : projectedCall);
+  const projectedSummary = truncateSingleLine(
+    firstProjectedMeaningfulLine(projectedSummaryValue),
+    132,
+  );
   const projectedPathBadge =
     projection.call?.format === 'path'
       ? pathTail(projectedCall) || projectedCall

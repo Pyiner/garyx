@@ -838,6 +838,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
     public var toolName: String?
     public var kind: GaryxRenderToolKind
     public var visibility: GaryxRenderToolVisibility
+    public var summary: GaryxRenderToolFieldSelector?
     public var call: GaryxRenderToolFieldSelector?
     public var result: GaryxRenderToolFieldSelector?
     public var status: String?
@@ -848,6 +849,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
         toolName: String? = nil,
         kind: GaryxRenderToolKind,
         visibility: GaryxRenderToolVisibility = .normal,
+        summary: GaryxRenderToolFieldSelector? = nil,
         call: GaryxRenderToolFieldSelector? = nil,
         result: GaryxRenderToolFieldSelector? = nil,
         status: String? = nil,
@@ -857,6 +859,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
         self.toolName = toolName
         self.kind = kind
         self.visibility = visibility
+        self.summary = summary
         self.call = call
         self.result = result
         self.status = status
@@ -868,6 +871,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
         case toolName = "tool_name"
         case kind
         case visibility
+        case summary
         case call
         case result
         case status
@@ -1235,7 +1239,7 @@ private extension GaryxRenderToolEntry {
             title: resolvedProjection?.title ?? "Tool",
             inputText: resolvedProjection?.call?.text,
             resultText: resolvedProjection?.result?.text,
-            summaryText: resolvedProjection?.call?.previewText,
+            summaryText: resolvedProjection?.collapsedSummaryText,
             inputLabel: resolvedProjection?.call?.label ?? "Call",
             resultLabel: resolvedProjection?.result?.label ?? "Result",
             status: mobileStatus,

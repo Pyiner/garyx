@@ -31,6 +31,12 @@ const projection = {
   tool_name: "commandExecution",
   kind: "command",
   visibility: "normal",
+  summary: {
+    root: "content",
+    path: ["description"],
+    format: "text",
+    label: "call",
+  },
   call: {
     root: "content",
     path: ["command"],
@@ -142,6 +148,13 @@ test("projection selector and running-state changes rerender", () => {
   );
   assert.equal(
     turnRenderRowPresentationEqual(toolRow(), toolRow({ running: true })),
+    false,
+  );
+
+  const changedSummaryProjection = structuredClone(projection);
+  changedSummaryProjection.summary.path = ["differentDescription"];
+  assert.equal(
+    renderToolProjectionEqual(projection, changedSummaryProjection),
     false,
   );
 });

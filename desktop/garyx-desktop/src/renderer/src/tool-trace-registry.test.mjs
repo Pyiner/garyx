@@ -554,6 +554,76 @@ test('server projection shows only the selected Codex command fields', () => {
   assert.deepEqual(merged.badges.slice(-2), ['exit 0', '12 ms']);
 });
 
+test('Claude command keeps its description in the row and its command in CALL', () => {
+  const description = 'Read schema definition';
+  const command = "sed -n '5,60p' src/schema.rs";
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        tool: 'Bash',
+        input: { description, command },
+      },
+      toolUseId: 'tool:claude-command',
+      toolName: 'Bash',
+    },
+    undefined,
+    {
+      tool_name: 'Bash',
+      kind: 'command',
+      visibility: 'normal',
+      summary: {
+        root: 'content',
+        path: ['input', 'description'],
+        format: 'text',
+        label: 'call',
+      },
+      call: {
+        root: 'content',
+        path: ['input', 'command'],
+        format: 'code',
+        label: 'command',
+      },
+    },
+  );
+
+  assert.equal(merged.summary, description);
+  assert.equal(merged.inputDetail, command);
+  assert.equal(merged.inputLabel, 'Command');
+});
+
+test('structured Web parameters stay out of the collapsed row summary', () => {
+  const parameters = {
+    action: null,
+    id: 'exec-00000000-0000-0000-0000-000000000001',
+    query: '',
+    type: 'webSearch',
+  };
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: parameters,
+      toolUseId: parameters.id,
+      toolName: 'webSearch',
+    },
+    undefined,
+    {
+      tool_name: 'webSearch',
+      kind: 'web',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        format: 'json',
+        label: 'parameters',
+      },
+    },
+  );
+
+  assert.equal(merged.summary, undefined);
+  assert.ok(merged.inputDetail?.includes('"type": "webSearch"'));
+  assert.equal(merged.inputLabel, 'Parameters');
+});
+
 test('projection with no result selector never falls back to the JSON envelope', () => {
   const merged = resolveMergedToolTrace(
     {

@@ -86,6 +86,10 @@ pub struct RenderToolFieldProjection {
     pub tool_name: Option<String>,
     pub kind: RenderToolKind,
     pub visibility: RenderToolVisibility,
+    /// Optional concise label for the collapsed tool row. `call` remains the
+    /// substantive value shown when the activity is expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<RenderToolFieldSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call: Option<RenderToolFieldSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,6 +112,7 @@ impl RenderToolFieldProjection {
             tool_name,
             kind,
             visibility,
+            summary: None,
             call: None,
             result: None,
             status: None,
@@ -125,9 +130,12 @@ impl RenderToolFieldProjection {
         } else {
             projection.call = call_selector(message, kind);
         }
+        projection.summary = call_summary_selector(message, kind)
+            .filter(|summary| projection.call.as_ref() != Some(summary));
         projection.absorb_metadata(message);
 
         (projection.tool_name.is_some()
+            || projection.summary.is_some()
             || projection.call.is_some()
             || projection.result.is_some()
             || projection.status.is_some()
@@ -147,6 +155,9 @@ impl RenderToolFieldProjection {
             && result.visibility != RenderToolVisibility::Normal
         {
             self.visibility = result.visibility;
+        }
+        if self.summary.is_none() {
+            self.summary = result.summary;
         }
         if self.call.is_none() {
             self.call = result.call;
@@ -337,37 +348,25 @@ fn tool_visibility(tool_name: Option<&str>) -> RenderToolVisibility {
     }
 }
 
+const CALL_SUMMARY_KEYS: &[&str] = &["label", "description", "toolSummary", "toolAction"];
+
+fn call_summary_selector(
+    message: &Map<String, Value>,
+    kind: RenderToolKind,
+) -> Option<RenderToolFieldSelector> {
+    let (root, prefix, input) = call_input_object(message)?;
+    select_object_field(root, &prefix, input, CALL_SUMMARY_KEYS, kind, false)
+}
+
 fn call_selector(
     message: &Map<String, Value>,
     kind: RenderToolKind,
 ) -> Option<RenderToolFieldSelector> {
     let (root, prefix, input) = call_input_object(message)?;
     let keys: &[&str] = match kind {
-        RenderToolKind::Command => &[
-            "label",
-            "description",
-            "toolSummary",
-            "toolAction",
-            "cmd",
-            "command",
-            "CommandLine",
-        ],
-        RenderToolKind::FileRead => &[
-            "label",
-            "description",
-            "toolSummary",
-            "toolAction",
-            "file_path",
-            "filePath",
-            "AbsolutePath",
-            "path",
-            "file",
-        ],
+        RenderToolKind::Command => &["cmd", "command", "CommandLine"],
+        RenderToolKind::FileRead => &["file_path", "filePath", "AbsolutePath", "path", "file"],
         RenderToolKind::FileWrite | RenderToolKind::FileEdit => &[
-            "label",
-            "description",
-            "toolSummary",
-            "toolAction",
             "file_path",
             "filePath",
             "AbsolutePath",
@@ -377,31 +376,10 @@ fn call_selector(
             "diff",
             "content",
         ],
-        RenderToolKind::Search | RenderToolKind::Web => &[
-            "label",
-            "description",
-            "toolSummary",
-            "toolAction",
-            "query",
-            "pattern",
-            "search",
-            "url",
-        ],
-        RenderToolKind::Agent => &[
-            "label",
-            "description",
-            "toolSummary",
-            "task",
-            "prompt",
-            "message",
-            "agentPath",
-        ],
+        RenderToolKind::Search | RenderToolKind::Web => &["query", "pattern", "search", "url"],
+        RenderToolKind::Agent => &["task", "prompt", "message", "agentPath"],
         RenderToolKind::Task => &[
-            "label",
             "subject",
-            "description",
-            "toolSummary",
-            "toolAction",
             "Prompt",
             "prompt",
             "TaskId",
@@ -414,8 +392,6 @@ fn call_selector(
             "action",
         ],
         RenderToolKind::Image => &[
-            "label",
-            "description",
             "prompt",
             "revisedPrompt",
             "revised_prompt",
@@ -424,10 +400,6 @@ fn call_selector(
             "filePath",
         ],
         RenderToolKind::System | RenderToolKind::Generic => &[
-            "label",
-            "description",
-            "toolSummary",
-            "toolAction",
             "title",
             "subject",
             "cmd",
@@ -451,18 +423,20 @@ fn call_selector(
             "params",
         ],
     };
-    select_object_field(root, &prefix, input, keys, kind, false).or_else(|| {
-        (kind != RenderToolKind::Image && !input.is_empty()).then(|| RenderToolFieldSelector {
-            root,
-            path: prefix,
-            format: RenderToolFieldFormat::Json,
-            label: if input.len() == 1 {
-                RenderToolFieldLabel::Call
-            } else {
-                RenderToolFieldLabel::Parameters
-            },
+    select_object_field(root, &prefix, input, keys, kind, false)
+        .or_else(|| select_object_field(root, &prefix, input, CALL_SUMMARY_KEYS, kind, false))
+        .or_else(|| {
+            (kind != RenderToolKind::Image && !input.is_empty()).then(|| RenderToolFieldSelector {
+                root,
+                path: prefix,
+                format: RenderToolFieldFormat::Json,
+                label: if input.len() == 1 {
+                    RenderToolFieldLabel::Call
+                } else {
+                    RenderToolFieldLabel::Parameters
+                },
+            })
         })
-    })
 }
 
 fn result_selector(
@@ -822,14 +796,14 @@ mod tests {
     }
 
     #[test]
-    fn claude_bash_prefers_label_then_result_value() {
+    fn claude_bash_projects_command_as_call_detail() {
         let call = object(json!({
             "role": "tool_use",
             "tool_name": "Bash",
             "content": {
                 "tool": "Bash",
                 "input": {
-                    "label": "Check repository state",
+                    "description": "Read schema definition",
                     "command": "git status --short"
                 }
             }
@@ -842,7 +816,15 @@ mod tests {
         let mut projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
         projection.absorb_result(RenderToolFieldProjection::from_message(&result, true).unwrap());
 
-        assert_eq!(projection.call.as_ref().unwrap().path, ["input", "label"]);
+        assert_eq!(projection.call.as_ref().unwrap().path, ["input", "command"]);
+        assert_eq!(
+            projection.call.as_ref().unwrap().label,
+            RenderToolFieldLabel::Command
+        );
+        assert_eq!(
+            projection.summary.as_ref().unwrap().path,
+            ["input", "description"]
+        );
         assert_eq!(projection.result.as_ref().unwrap().path, ["result"]);
     }
 
@@ -875,6 +857,10 @@ mod tests {
         assert_eq!(projection.tool_name.as_deref(), Some("run_command"));
         assert_eq!(
             projection.call.as_ref().unwrap().path,
+            ["args", "CommandLine"]
+        );
+        assert_eq!(
+            projection.summary.as_ref().unwrap().path,
             ["args", "toolSummary"]
         );
         assert_eq!(projection.result.as_ref().unwrap().path, ["content"]);
@@ -904,6 +890,36 @@ mod tests {
         assert_eq!(projection.result, None);
         assert_eq!(projection.status.as_deref(), Some("completed"));
         assert_eq!(projection.exit_code, Some(0));
+    }
+
+    #[test]
+    fn web_search_with_empty_query_projects_parameters_without_a_summary() {
+        // Sanitized real Codex webSearch start shape: the provider commits the
+        // query later, so the initial call has only structured parameters.
+        let call = object(json!({
+            "role": "tool_use",
+            "tool_name": "webSearch",
+            "content": {
+                "action": null,
+                "id": "exec-00000000-0000-0000-0000-000000000001",
+                "query": "",
+                "type": "webSearch"
+            }
+        }));
+
+        let projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
+
+        assert_eq!(projection.kind, RenderToolKind::Web);
+        assert_eq!(projection.summary, None);
+        assert_eq!(projection.call.as_ref().unwrap().path, Vec::<String>::new());
+        assert_eq!(
+            projection.call.as_ref().unwrap().format,
+            RenderToolFieldFormat::Json
+        );
+        assert_eq!(
+            projection.call.as_ref().unwrap().label,
+            RenderToolFieldLabel::Parameters
+        );
     }
 
     #[test]

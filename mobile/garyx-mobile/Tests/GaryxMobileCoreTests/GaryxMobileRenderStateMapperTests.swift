@@ -594,6 +594,198 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(detail.sections[1].content, .codeCard(output))
     }
 
+    func testClaudeCommandKeepsDescriptionInRowAndCommandInDetail() throws {
+        let description = "Read schema definition"
+        let command = "sed -n '5,60p' src/schema.rs"
+        let entries = try mappedToolEntries(fromFrame: #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::command-detail",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::command-detail",
+              "seq": 1,
+              "message": {
+                "index": 0,
+                "role": "tool_use",
+                "tool_name": "Bash",
+                "tool_use_id": "call-command-detail",
+                "content": {
+                  "tool": "Bash",
+                  "input": {
+                    "description": "Read schema definition",
+                    "command": "sed -n '5,60p' src/schema.rs"
+                  }
+                }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 1,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "turn:command-detail",
+                "user": null,
+                "activity": [
+                  {
+                    "kind": "step",
+                    "id": "step:command-detail",
+                    "steps": [
+                      {
+                        "kind": "tool_group",
+                        "id": "group:command-detail",
+                        "status": "completed",
+                        "entries": [
+                          {
+                            "id": "entry:command-detail",
+                            "tool_use_id": "call-command-detail",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:1", "seq": 1, "role": "tool_use" },
+                            "tool_result": null,
+                            "projection": {
+                              "tool_name": "Bash",
+                              "kind": "command",
+                              "visibility": "normal",
+                              "summary": {
+                                "root": "content",
+                                "path": ["input", "description"],
+                                "format": "text",
+                                "label": "call"
+                              },
+                              "call": {
+                                "root": "content",
+                                "path": ["input", "command"],
+                                "format": "code",
+                                "label": "command"
+                              }
+                            }
+                          }
+                        ],
+                        "started_at": null,
+                        "finished_at": null
+                      }
+                    ],
+                    "final_message": null,
+                    "running": false,
+                    "started_at": null,
+                    "finished_at": null
+                  }
+                ],
+                "started_at": null,
+                "finished_at": null
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": []
+          }
+        }
+        """#)
+
+        let entry = try XCTUnwrap(entries.only)
+        XCTAssertEqual(entry.summaryText, description)
+        XCTAssertEqual(entry.inputText, command)
+
+        let detail = GaryxToolCallPresentation.detail(for: entry)
+        XCTAssertEqual(detail.sections.map(\.label), ["Command"])
+        XCTAssertEqual(detail.sections.only?.content, .codeCard(command))
+    }
+
+    func testStructuredWebParametersStayOutOfCollapsedRowSummary() throws {
+        let entries = try mappedToolEntries(fromFrame: #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::web-parameters",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::web-parameters",
+              "seq": 1,
+              "message": {
+                "index": 0,
+                "role": "tool_use",
+                "tool_name": "webSearch",
+                "tool_use_id": "exec-00000000-0000-0000-0000-000000000001",
+                "content": {
+                  "action": null,
+                  "id": "exec-00000000-0000-0000-0000-000000000001",
+                  "query": "",
+                  "type": "webSearch"
+                }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 1,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "turn:web-parameters",
+                "user": null,
+                "activity": [
+                  {
+                    "kind": "step",
+                    "id": "step:web-parameters",
+                    "steps": [
+                      {
+                        "kind": "tool_group",
+                        "id": "group:web-parameters",
+                        "status": "completed",
+                        "entries": [
+                          {
+                            "id": "entry:web-parameters",
+                            "tool_use_id": "exec-00000000-0000-0000-0000-000000000001",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:1", "seq": 1, "role": "tool_use" },
+                            "tool_result": null,
+                            "projection": {
+                              "tool_name": "webSearch",
+                              "kind": "web",
+                              "visibility": "normal",
+                              "call": {
+                                "root": "content",
+                                "format": "json",
+                                "label": "parameters"
+                              }
+                            }
+                          }
+                        ],
+                        "started_at": null,
+                        "finished_at": null
+                      }
+                    ],
+                    "final_message": null,
+                    "running": false,
+                    "started_at": null,
+                    "finished_at": null
+                  }
+                ],
+                "started_at": null,
+                "finished_at": null
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": []
+          }
+        }
+        """#)
+
+        let entry = try XCTUnwrap(entries.only)
+        XCTAssertNil(entry.summaryText)
+        XCTAssertNil(GaryxToolCallPresentation.listRows(from: [entry]).only?.detail)
+
+        let inputText = try XCTUnwrap(entry.inputText)
+        XCTAssertTrue(inputText.contains("webSearch"))
+        let detail = GaryxToolCallPresentation.detail(for: entry)
+        XCTAssertEqual(detail.sections.map(\.label), ["Parameters"])
+        XCTAssertEqual(detail.sections.only?.content, .codeCard(inputText))
+    }
+
     func testNativeImageGenerationResolvesResultOwnedPromptAndSavedPath() throws {
         let prompt = "A synthetic lighthouse beneath a violet evening sky."
         let imagePath = "/Users/test/.codex/generated_images/synthetic/exec-native.png"

@@ -416,7 +416,7 @@ enum GaryxToolCallPresentation {
 
     /// The concise per-call line: prefer the full file path for file-style
     /// tools (matching how reads are listed), then the model-provided
-    /// description/summary, then the short title.
+    /// description/summary. With no useful detail, render only the verb.
     private static func detail(for entry: GaryxMobileToolTraceEntry) -> String? {
         if isProviderNeutralFallback(entry) {
             return nil
@@ -429,6 +429,14 @@ enum GaryxToolCallPresentation {
         if let inputPreview = inputPreviewDetail(for: entry) {
             return inputPreview
         }
+        if let projectedSummary = entry.fieldProjection?.summary?.previewText
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !projectedSummary.isEmpty {
+            return GaryxMobileToolSummaryFormatter.singleLineTruncated(
+                projectedSummary,
+                limit: 112
+            )
+        }
         if entry.isCommand {
             return commandDetail(for: entry)
         }
@@ -440,8 +448,7 @@ enum GaryxToolCallPresentation {
            !badge.isEmpty {
             return badge
         }
-        if entry.isCommand { return nil }
-        return entry.title
+        return nil
     }
 
     private static func isProviderNeutralFallback(_ entry: GaryxMobileToolTraceEntry) -> Bool {

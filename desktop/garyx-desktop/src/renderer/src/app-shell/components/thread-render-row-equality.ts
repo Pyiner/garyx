@@ -59,6 +59,7 @@ export function renderToolProjectionEqual(
     left.status === right.status &&
     left.exit_code === right.exit_code &&
     left.duration_ms === right.duration_ms &&
+    selectorEqual(left.summary, right.summary) &&
     selectorEqual(left.call, right.call) &&
     selectorEqual(left.result, right.result)
   );

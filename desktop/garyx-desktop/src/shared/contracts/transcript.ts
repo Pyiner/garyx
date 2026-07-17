@@ -145,6 +145,7 @@ export interface RenderToolFieldProjection {
   tool_name?: string;
   kind: RenderToolKind;
   visibility: RenderToolVisibility;
+  summary?: RenderToolFieldSelector;
   call?: RenderToolFieldSelector;
   result?: RenderToolFieldSelector;
   status?: string;

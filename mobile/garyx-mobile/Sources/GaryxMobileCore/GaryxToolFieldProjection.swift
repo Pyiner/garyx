@@ -15,11 +15,24 @@ struct GaryxResolvedToolField: Equatable {
 struct GaryxResolvedToolFieldProjection: Equatable {
     var kind: GaryxRenderToolKind
     var toolName: String?
+    var summary: GaryxResolvedToolField?
     var call: GaryxResolvedToolField?
     var result: GaryxResolvedToolField?
     var status: String?
     var exitCode: Int?
     var durationMs: Int?
+
+    /// Collapsed rows may reuse a concise scalar call when no explicit
+    /// summary exists. Structured JSON belongs only in the expanded detail.
+    var collapsedSummaryText: String? {
+        if let summary {
+            return summary.previewText
+        }
+        guard let call, call.format != .json else {
+            return nil
+        }
+        return call.previewText
+    }
 
     var metadataText: String? {
         var parts: [String] = []
@@ -73,6 +86,8 @@ enum GaryxToolFieldProjectionResolver {
         return GaryxResolvedToolFieldProjection(
             kind: projection.kind,
             toolName: projection.toolName,
+            summary: resolve(projection.summary, from: toolUse)
+                ?? resolve(projection.summary, from: toolResult),
             call: resolve(projection.call, from: toolUse)
                 ?? resolve(projection.call, from: toolResult),
             result: resolve(projection.result, from: toolResult),
