@@ -80,6 +80,13 @@ const THREAD_META_SCHEMA_V2_COLUMNS: &[&str] = &[
     "projection_version",
     "projected_at",
 ];
+const THREAD_META_SCHEMA_V2_RETIRED_COLUMNS: &[&str] = &[
+    "excluded_from_recent",
+    "legacy_account_id",
+    "legacy_channel",
+    "legacy_has_account",
+    "legacy_thread_binding_key",
+];
 
 #[cfg(any(test, feature = "test-seams"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3999,7 +4006,9 @@ impl GaryxDbService {
     /// reusing the generation-aware v1 backfill marker. Depending on their
     /// upgrade path, legacy databases have the retained columns in an older
     /// order and may have one extra column. Rebuilding from the explicit v2
-    /// set canonicalizes both shapes while preserving every live value.
+    /// set canonicalizes every known legacy shape while preserving every live
+    /// value. Unknown columns still stop the migration instead of being
+    /// silently discarded.
     pub(crate) fn migrate_thread_meta_schema_v2(&self) -> GaryxDbResult<OneShotMigrationSummary> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -4042,7 +4051,10 @@ impl GaryxDbService {
                 .copied()
                 .cloned()
                 .collect::<Vec<_>>();
-            if !missing.is_empty() || extra.len() > 1 {
+            let has_unknown_extra = extra
+                .iter()
+                .any(|name| !THREAD_META_SCHEMA_V2_RETIRED_COLUMNS.contains(&name.as_str()));
+            if !missing.is_empty() || has_unknown_extra {
                 return Err(GaryxDbError::Configuration(format!(
                     "thread_meta schema v2 found an unsupported legacy shape; missing={missing:?}, extra={extra:?}"
                 )));
@@ -11627,24 +11639,30 @@ mod tests {
     }
 
     #[test]
-    fn thread_meta_schema_v2_rebuilds_legacy_shape_without_reusing_cutover_markers() {
+    fn thread_meta_schema_v2_rebuilds_real_legacy_shape_without_reusing_cutover_markers() {
         let db = GaryxDbService::memory().expect("db opens");
         {
             let conn = db.conn().expect("writer");
-            conn.execute(
-                "ALTER TABLE thread_meta
-                 ADD COLUMN legacy_summary_flag INTEGER NOT NULL DEFAULT 0",
-                [],
+            conn.execute_batch(
+                "ALTER TABLE thread_meta ADD COLUMN legacy_thread_binding_key TEXT;
+                 ALTER TABLE thread_meta ADD COLUMN legacy_channel TEXT;
+                 ALTER TABLE thread_meta ADD COLUMN legacy_account_id TEXT;
+                 ALTER TABLE thread_meta
+                    ADD COLUMN legacy_has_account INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE thread_meta
+                    ADD COLUMN excluded_from_recent INTEGER NOT NULL DEFAULT 0;",
             )
-            .expect("seed legacy-only column");
+            .expect("seed the retired production columns");
             conn.execute(
                 "INSERT INTO thread_meta (
                     thread_id, workspace_dir, thread_label, sort_updated_at_us,
                     search_text, projection_version, projected_at,
-                    legacy_summary_flag
+                    legacy_thread_binding_key, legacy_channel, legacy_account_id,
+                    legacy_has_account, excluded_from_recent
                  ) VALUES (
                     'thread::schema-v2', '/workspace/schema-v2', 'Schema v2',
-                    42, 'schema v2', 5, '2026-07-17T00:00:00Z', 1
+                    42, 'schema v2', 5, '2026-07-17T00:00:00Z',
+                    'binding', 'telegram', 'main', 1, 1
                  )",
                 [],
             )
@@ -11721,6 +11739,27 @@ mod tests {
             .expect("idempotent schema v2 migration");
         assert!(second.already_completed);
         assert_eq!(second.updated_row_count, 0);
+    }
+
+    #[test]
+    fn thread_meta_schema_v2_rejects_unknown_extra_columns() {
+        let db = GaryxDbService::memory().expect("db opens");
+        {
+            let conn = db.conn().expect("writer");
+            conn.execute(
+                "ALTER TABLE thread_meta ADD COLUMN unknown_projection_value TEXT",
+                [],
+            )
+            .expect("seed unknown projection column");
+        }
+
+        let error = db
+            .migrate_thread_meta_schema_v2()
+            .expect_err("unknown columns must not be discarded");
+        assert!(
+            error.to_string().contains("unknown_projection_value"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
