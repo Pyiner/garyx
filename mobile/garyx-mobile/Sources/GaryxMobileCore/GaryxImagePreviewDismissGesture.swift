@@ -11,17 +11,20 @@ public struct GaryxImagePreviewDismissMetrics: Equatable, Sendable {
     public let beginDominanceRatio: CGFloat
     public let dismissalDistance: CGFloat
     public let dismissalDominanceRatio: CGFloat
+    public let projectionPolicy: GaryxMotionPhysics.ProjectionPolicy
 
     public init(
         decisionDistance: CGFloat = 10,
         beginDominanceRatio: CGFloat = 1,
         dismissalDistance: CGFloat = 88,
-        dismissalDominanceRatio: CGFloat = 1.25
+        dismissalDominanceRatio: CGFloat = 1.25,
+        projectionPolicy: GaryxMotionPhysics.ProjectionPolicy = .shortTravelDismiss
     ) {
         self.decisionDistance = max(0, decisionDistance)
         self.beginDominanceRatio = max(1, beginDominanceRatio)
         self.dismissalDistance = max(0, dismissalDistance)
         self.dismissalDominanceRatio = max(1, dismissalDominanceRatio)
+        self.projectionPolicy = projectionPolicy
     }
 
     public static let `default` = GaryxImagePreviewDismissMetrics()
@@ -62,9 +65,22 @@ public enum GaryxImagePreviewDismissGesture {
     public static func shouldDismiss(
         phase: GaryxImagePreviewDragPhase,
         translation: CGSize,
+        velocity: CGSize,
         metrics: GaryxImagePreviewDismissMetrics = metrics
     ) -> Bool {
         guard phase == .downwardDismiss else { return false }
+        let projectedTranslation = metrics.projectionPolicy.projectedTranslation(
+            translation,
+            velocityPointsPerSecond: velocity
+        )
+        return meetsDismissalThreshold(translation, metrics: metrics)
+            || meetsDismissalThreshold(projectedTranslation, metrics: metrics)
+    }
+
+    private static func meetsDismissalThreshold(
+        _ translation: CGSize,
+        metrics: GaryxImagePreviewDismissMetrics
+    ) -> Bool {
         return translation.height > metrics.dismissalDistance
             && translation.height > abs(translation.width) * metrics.dismissalDominanceRatio
     }

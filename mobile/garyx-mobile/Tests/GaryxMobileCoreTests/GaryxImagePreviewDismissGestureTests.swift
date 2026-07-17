@@ -45,19 +45,38 @@ final class GaryxImagePreviewDismissGestureTests: XCTestCase {
         XCTAssertFalse(
             GaryxImagePreviewDismissGesture.shouldDismiss(
                 phase: .rejected,
-                translation: CGSize(width: 0, height: 200)
+                translation: CGSize(width: 0, height: 200),
+                velocity: .zero
             )
         )
+    }
+
+    func testFastShortFlickDismissesFromProjectedTranslation() {
+        XCTAssertTrue(shouldDismiss(dx: 4, dy: 40, velocityY: 300))
+    }
+
+    func testSlowLongDragDismissesFromActualTranslation() {
+        XCTAssertTrue(shouldDismiss(dx: 4, dy: 100, velocityY: 10))
+    }
+
+    func testSlowShortDragDoesNotDismiss() {
+        XCTAssertFalse(shouldDismiss(dx: 4, dy: 40, velocityY: 50))
     }
 
     private func classify(dx: CGFloat, dy: CGFloat) -> GaryxImagePreviewDragPhase {
         GaryxImagePreviewDismissGesture.classify(translation: CGSize(width: dx, height: dy))
     }
 
-    private func shouldDismiss(dx: CGFloat, dy: CGFloat) -> Bool {
+    private func shouldDismiss(
+        dx: CGFloat,
+        dy: CGFloat,
+        velocityX: CGFloat = 0,
+        velocityY: CGFloat = 0
+    ) -> Bool {
         GaryxImagePreviewDismissGesture.shouldDismiss(
             phase: .downwardDismiss,
-            translation: CGSize(width: dx, height: dy)
+            translation: CGSize(width: dx, height: dy),
+            velocity: CGSize(width: velocityX, height: velocityY)
         )
     }
 }

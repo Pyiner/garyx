@@ -89,10 +89,15 @@ struct GaryxImagePreviewDismissGestureBridge: UIViewRepresentable {
                 onChanged(max(0, translation.y))
             case .ended:
                 let dragTranslation = CGSize(width: translation.x, height: translation.y)
+                let releaseVelocity = recognizer.velocity(in: view)
                 let phase = GaryxImagePreviewDismissGesture.classify(translation: dragTranslation)
                 if GaryxImagePreviewDismissGesture.shouldDismiss(
                     phase: phase,
-                    translation: dragTranslation
+                    translation: dragTranslation,
+                    velocity: CGSize(
+                        width: releaseVelocity.x,
+                        height: releaseVelocity.y
+                    )
                 ) {
                     onDismiss()
                 } else {

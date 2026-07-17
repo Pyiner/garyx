@@ -533,6 +533,7 @@ enum GaryxImageDecoder {
 }
 
 private struct GaryxZoomableImageCanvas: View {
+    @Environment(\.scenePhase) private var scenePhase
     let image: UIImage
     /// True when this canvas is one page of a paged gallery. Inside a paged
     /// TabView, an attached drag gesture claims the touch stream before the
@@ -549,8 +550,11 @@ private struct GaryxZoomableImageCanvas: View {
     @State private var lastScale: CGFloat = 1
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    @State private var dismissSettleDriver = GaryxGestureSettleDriver.displayLinked()
     @State private var dismissDragOffset: CGFloat = 0
     @State private var dismissDragPhase: GaryxImagePreviewDragPhase = .pending
+    @State private var dismissGestureOrigin: CGFloat = 0
+    @State private var dismissGestureActive = false
 
     private var dragGestureMask: GestureMask {
         if isPagedGalleryPage, scale <= 1.02 {
@@ -571,6 +575,7 @@ private struct GaryxZoomableImageCanvas: View {
                 .gesture(magnificationGesture)
                 .simultaneousGesture(dragGesture, including: dragGestureMask)
                 .onTapGesture(count: 2) {
+                    resetDismissGesture()
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
                         if scale > 1 {
                             resetViewport()
@@ -586,6 +591,11 @@ private struct GaryxZoomableImageCanvas: View {
         .onChange(of: scale) { _, newScale in
             onZoomActiveChanged?(newScale > 1.02)
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase != .active {
+                resetDismissGesture()
+            }
+        }
         .onDisappear {
             // Pager pages stay alive off screen; coming back shows the image
             // fit-to-screen again instead of a stale zoom viewport.
@@ -597,6 +607,7 @@ private struct GaryxZoomableImageCanvas: View {
     private var magnificationGesture: some Gesture {
         MagnificationGesture()
             .onChanged { value in
+                resetDismissGesture()
                 scale = min(max(lastScale * value, 1), 5)
                 if scale <= 1 {
                     offset = .zero
@@ -616,16 +627,28 @@ private struct GaryxZoomableImageCanvas: View {
         DragGesture()
             .onChanged { value in
                 guard scale > 1 else {
+                    if !dismissGestureActive {
+                        dismissGestureActive = true
+                        if let interrupted = dismissSettleDriver.interrupt() {
+                            dismissDragOffset = max(0, interrupted.value)
+                        }
+                        dismissGestureOrigin = dismissDragOffset
+                    }
+                    let accumulatedTranslation = CGSize(
+                        width: value.translation.width,
+                        height: dismissGestureOrigin + value.translation.height
+                    )
                     dismissDragPhase = GaryxImagePreviewDismissGesture.classify(
                         currentPhase: dismissDragPhase,
-                        translation: value.translation
+                        translation: accumulatedTranslation
                     )
                     dismissDragOffset = GaryxImagePreviewDismissGesture.visibleOffset(
                         phase: dismissDragPhase,
-                        translation: value.translation
+                        translation: accumulatedTranslation
                     )
                     return
                 }
+                resetDismissGesture()
                 offset = CGSize(
                     width: lastOffset.width + value.translation.width,
                     height: lastOffset.height + value.translation.height
@@ -633,16 +656,22 @@ private struct GaryxZoomableImageCanvas: View {
             }
             .onEnded { value in
                 guard scale > 1 else {
+                    let accumulatedTranslation = CGSize(
+                        width: value.translation.width,
+                        height: dismissGestureOrigin + value.translation.height
+                    )
+                    dismissGestureActive = false
+                    dismissGestureOrigin = 0
                     if GaryxImagePreviewDismissGesture.shouldDismiss(
                         phase: dismissDragPhase,
-                        translation: value.translation
+                        translation: accumulatedTranslation,
+                        velocity: value.velocity
                     ) {
+                        dismissSettleDriver.invalidate()
                         onDismiss()
                         return
                     }
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
-                        resetViewport()
-                    }
+                    settleDismissDragBack(releaseVelocity: value.velocity.height)
                     return
                 }
                 lastOffset = offset
@@ -650,12 +679,39 @@ private struct GaryxZoomableImageCanvas: View {
     }
 
     private func resetViewport() {
+        resetDismissGesture()
         scale = 1
         lastScale = 1
         offset = .zero
         lastOffset = .zero
+    }
+
+    private func settleDismissDragBack(releaseVelocity: CGFloat) {
+        guard dismissDragPhase == .downwardDismiss, dismissDragOffset > 0 else {
+            resetDismissGesture()
+            return
+        }
+        dismissSettleDriver.settle(
+            from: dismissDragOffset,
+            to: 0,
+            initialVelocity: releaseVelocity,
+            curve: .init(response: 0.22, dampingRatio: 0.88),
+            onUpdate: { sample in
+                dismissDragOffset = max(0, sample.value)
+            },
+            onCompletion: {
+                dismissDragOffset = 0
+                dismissDragPhase = .pending
+            }
+        )
+    }
+
+    private func resetDismissGesture() {
+        dismissSettleDriver.invalidate()
         dismissDragOffset = 0
         dismissDragPhase = .pending
+        dismissGestureOrigin = 0
+        dismissGestureActive = false
     }
 }
 
