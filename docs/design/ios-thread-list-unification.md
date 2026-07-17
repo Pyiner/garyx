@@ -1,10 +1,11 @@
-# iOS 线程列表统一化 —— 设计 v8（待复审）
+# iOS 线程列表统一化 —— 设计 v10（§1-§9 已 PASS 定稿；§10 增补待复审）
 
 作者：Gary
 日期：2026-07-17
-基线：main `3dff1111a`
+基线：main `3dff1111a`（§10 基线：main `c050ea8b3`，S1/S2 已合入）
 
 修订记录：
+- **v10**（2026-07-17）：按 #TASK-2368 增补评审（FAIL，F-01..F-06）重写 §10：① cutover 改**双向精确重建**——补 `visible−recent` 之外还删 `recent−visible_live` 孤儿行（实测 5 条无 canonical 记录），parity 测试改双向 EXCEPT（F-01）；② 谓词表述修正：删除 `is_recent_thread_excluded` 整个 helper（hidden 判定本就独立存在），`excluded_from_recent` 派生恒 false（F-02）；③ 中间态闭合：S5 功能层面一次退役到位——canonical 存量 96 条 flag 同 cutover 清洗、创建/更新入口 strip 废弃 key（覆盖旧客户端）、router 镜像键删除、automation wire 停发 `excludeFromRecent`；S4 只删死代码（列/adapter 镜像/capability 门禁/last-open 门禁）（F-03）；④ side chat 归一走 **canonical 层**：按 canonical side-chat 选择器把 `body.hidden` 归一 true 再同事务派生投影，禁止只翻投影列/硬编码条数（F-04）；⑤ marker 采用 `import_generation_cutover_gate` 模式按代重跑（F-05）；⑥ `activity_seq` 重排算法合同钉死：fresh 连续块 `[H+1,H+N]`、H=max(meta 高水位,行 max)、完整全序定义、meta/索引/marker 同事务（F-06）；⑦ 确认不 rotate incarnation（评审专项核定）。
 - **v9**（2026-07-17）：新增 §10 成员集严格对齐增补（老板裁决：automation 生成线程=普通线程去特殊化；全部列表共享同一数据宇宙、查询期过滤）。新切片 S5：`is_recent_thread_excluded` 收窄 hidden-only、cron 停写 `exclude_from_recent`、side chat 改挂 hidden、一次性 cutover `recent_membership_v2`（补行 + activity_seq 插位重排 + side chat 双隐）；`exclude_from_recent` 概念残余面并入 S4 删除。§5.1/§2.4 的成员集论述由 §10 取代。
 - **v8**（2026-07-17）：按七轮评审（FAIL，R7-F01/F02）修订：① summaries 窗口 raw 段排序补齐现行确定性 tiebreak：`favorited_at DESC, thread_id ASC`（毫秒同值可达；补"499 recent + 2 同毫秒 raw 反向插入"的第 500 位合同测试）（R7-F01）；② canonical q **完全归服务端所有**（SQL 匹配 + cursor digest）；**客户端 provider identity 改用 trim 后原始 q + 单调 instanceID**，撤销"客户端 identity 用规范化 q"的自相矛盾表述——客户端永不复刻 `normalize_for_search`（R7-F02）。
 - **v7**（2026-07-17）：按六轮评审（FAIL，R6-F01..F04）修订：① favorites snapshot 的 acceptance predicate 纳入 **`requestFlavor` + `capabilityGeneration`**——能力位转 `supported` 时取消在途 legacy 请求并**拒绝其 completion**，增强 snapshot 作为 replacement barrier 落地（R6-F01）；② 增强信封定义**独立的 summaries 窗口合同**：服务端在同一事务按"最终组合顺序"（favorites∩recent 按 activity_seq DESC + 余下 raw favorites 按 favorited_at DESC，与 reducer 现语义同构）取前 500 个成员为窗口，`summaries` = 窗口内 `default_list_hidden=0` 行，新增 `summaries_truncated`（组合成员超窗即 true，**不依赖既有只算 join 半边的 `truncated`**）；窗口内无 summary=hidden、超窗=`summaries_truncated`，两义分离（R6-F02）；③ `q` 规范化合同：先 trim 再 normalize，规范化后空串等同省略；cursor/provider identity 用规范化后 q；长度上限 = **规范化后 100 个 Unicode scalar**，超限 400（R6-F03）；④ §4.4 标题"双 wire adapter"改"三 wire adapter"（R6-F04）。
@@ -254,41 +255,56 @@ struct GaryxThreadRowCapabilities {
 
 1. picker 已选 target 不在当前搜索结果页时的呈现（本版：经点查 + 独立 lease 显示在"已选"区）——是否符合 Mac app 语义，S3 实现时对照。
 
-## 10. v9 增补：成员集严格对齐（老板 2026-07-17 裁决，独立切片 S5）
+## 10. 成员集严格对齐（老板 2026-07-17 裁决，独立切片 S5）—— v10 按 #TASK-2368 评审修订
 
 ### 10.1 裁决
 
 1. **定时任务（automation）生成的线程是普通线程，不做任何特殊化**。
 2. **所有线程列表（首页 Recent / 文件夹 / bot `/threads` / widget / 桌面 Recent）共享同一份数据宇宙，差别只在查询期过滤方式**（workspace 过滤、tasks 过滤、favorites、渠道呈现），不在写入期成员排除。
 
-这推翻 §2.4 "两投影成员集有意不同"的前提：终态两投影成员集**严格相等** = `default_list_hidden=0` 的全部 live 线程。hidden 成为**唯一**的可见性概念。
+终态两投影成员集**严格相等** = visible live 线程（canonical `hidden` 为假）。hidden 成为**唯一**可见性概念；`exclude_from_recent` 概念整体退役。§2.4/§5.1 的成员集论述由本节取代。
 
-### 10.2 现状实测（2026-07-17 本机库）
+### 10.2 现状实测（2026-07-17 本机库，#TASK-2368 复核后）
 
-- 差集 81 条 = 77 条 automation 生成线程（`cron.rs:1315-1325` 建线程时写死 `automation_thread_mode=generated_thread` + `exclude_from_recent=true`）+ 4 条桌面 **Side chat**（显式 `exclude_from_recent=true`，无 automation 标记，附属于宿主线程的辅助会话）。
+- `visible thread_meta` 3107 vs `recent_threads` 3031。
+- `visible − recent` = 81：77 automation 生成（`cron.rs:1315-1325` 写死两标志）+ 4 条 legacy 桌面 Side chat（metadata.hidden=true 但顶层 hidden 缺失）。
+- **`recent − visible` = 5：孤儿行，无 `thread_meta`、无 canonical `thread_records`**（两表无外键约束）。
+- canonical 存量 exclusion flag 共 **96** 条（77 automation + 19 side chat，顶层与 metadata 两层）。
+- Side chat 创建路径（`side-chat-ops.ts:82`）**本就写 hidden:true**，额外多写了 exclusion flag；宿主面板打开 side chat 按 session binding 直验 thread/transcript，不受 hidden 阻断（评审已核）。
 
-### 10.3 变更
+### 10.3 S5 变更（功能层面一次退役到位，S4 只删死代码）
 
-1. **写点**：`cron.rs` 自动化建线程**停写 `exclude_from_recent`**（`automation_id`/`automation_thread_mode` 保留——那是 automation 域自身的归属标记，供 automation drilldown 投影使用，不再参与任何列表成员判定）。
-2. **Side chat 改挂 hidden**：side chat 创建路径改设 `default_list_hidden=true`，替代 `exclude_from_recent`（产品裁决：side chat 附属宿主线程，作为独立行进任何列表都是噪音；对齐方向取"双隐"而非"进 Recent"。此为有意行为变化：side chat 从文件夹列表也消失；可逆）。
-3. **成员集谓词**：`is_recent_thread_excluded` 收窄为 hidden-only（`exclude_from_recent`/`generated_thread` 分支删除）。`thread_meta.excluded_from_recent` 派生随之恒 false。
-4. **一次性版本化 cutover `recent_membership_v2`**（boot import 后运行、durable marker、幂等），同一事务内：
-   a. 为全部"visible 但缺 recent 行"的线程建 `recent_threads` 行；
-   b. **`activity_seq` 全表重排**：union 排序（现有行按现 `activity_seq` 相对序不变；新行按其最后活动时间戳插位，同刻 tiebreak `thread_id`）重编连续序——保证补入的 automation 线程按真实活动新旧落位，不堆顶不沉底；
-   c. 存量 4 条 side chat 翻 `default_list_hidden=true`（两投影同事务同步）；
-   d. 客户端重分页由既有 `store_incarnation_id`/`server_boot_id` 信封机制承担（recent feeds 已按身份变化整体重置；评审请裁决：重排是否需要转 store incarnation，还是 boot_id 变化即足够——`activity_seq` 仅作排序游标、无跨启动持久引用，倾向后者）。
-5. **概念退役排期**：本切片（S5）完成写点停产 + 谓词收窄 + cutover；`exclude_from_recent` 的残余面（`thread_meta.excluded_from_recent` 列、wire 字段、Swift 三 adapter 的 exclusion 镜像、`GaryxThreadRowCapabilities` 的 `.removeOnly/.none` excluded 门禁、router `threads.rs:441` 的 metadata 镜像键）**全部并入 S4 清理批次删除**——S5 后这些面恒为 false/失活，与在飞的 S3 无冲突。§3.3 `include_summaries` 机制保留（同事务摘要仍是正确的一般机制，excluded 特例消失后它自然只服务 hidden 过滤与原子性）。
+1. **写点停产（增量闭合）**：
+   a. `cron.rs` automation 建线程停写 `exclude_from_recent`（`automation_id`/`automation_thread_mode` 保留——automation 域自身归属标记，drilldown 投影独立读 `automation_thread_runs WHERE mode='generated_thread'`，与列表成员判定无关，评审已核不受影响）；
+   b. 桌面 side chat 创建停写 `exclude_from_recent`（hidden 已在写，无需改）；
+   c. **服务端创建/更新入口统一剥离废弃 key**：`exclude_from_recent`（两拼写、两层级）在 metadata 入库前 strip——chokepoint 覆盖旧桌面客户端与任意 API 写入面；router `threads.rs` 镜像键表删除该键。
+2. **成员集谓词**：删除 `is_recent_thread_excluded` 整个 helper（recent 投影的 hidden 判定本就独立存在，保留）；`thread_meta.excluded_from_recent` 派生改**恒 false**（列本体 S4 删）。
+3. **wire 停回放**：`automation.rs:1277` drilldown DTO 停发 `excludeFromRecent` 字段（S2 adapter 对缺失字段解析为非 excluded，中间态自洽；adapter/capability/last-open 门禁等客户端消费面在 S4 删除，清单见 10.5）。
+4. **一次性版本化 cutover `recent_membership_v2`**（`import_generation_cutover_gate` 模式：记录 `based_on_import_generation`，legacy 归档恢复重导入后**按代重跑**——评审 F-05），单事务内五步：
+   a. **canonical 归一**：按 canonical side-chat 语义选择器（实现时核实确切标记，禁止硬编码条数/用 exclusion flag 猜测）把 legacy side chat 的 `thread_records.body.hidden` 归一为 true；
+   b. **canonical 洗存量 flag**：全部 canonical record body 剥离 `exclude_from_recent`（顶层+metadata，96 条级）；
+   c. **精确重建目标集（双向）**：以 canonical live universe 为准——补 `visible − recent` 行，**删除 `recent − visible_live` 孤儿行**（评审 F-01：现库 5 条）；
+   d. **`activity_seq` 重排（评审 F-06 算法合同）**：取 fresh 连续块 `[H+1, H+N]`，`H = max(recent_threads_meta 高水位, 现行 max(activity_seq))`；全序定义 = 现有行按当前 `activity_seq ASC` 保持相对序，新行按 `(last_activity_ts, thread_id)` 与现有行的 `last_active_at` 归并插位（同刻现有行在前，再按 `thread_id`；时间戳缺失/不可解析按 epoch 0 沉底）；按该序赋 `H+1..H+N`（fresh block 天然规避 UNIQUE 冲突，实测 3501 行 ~0.01s）；同事务更新 meta 高水位与索引；
+   e. durable marker 与数据同事务提交（崩溃=整体回滚下次重跑，幂等）。
+5. **不 rotate store incarnation**（评审专项 (a) 已核：favorites CAS 只依赖 incarnation+revision，`activity_seq` 仅排序用、无跨启动持久引用；widget 不持久化 seq/cursor；客户端以 `server_boot_id` 变化整体重置分页即足够）。
 
 ### 10.4 影响面（有意的，全端生效）
 
-1. Recent（iOS 首页、桌面、widget）开始显示 automation 生成线程——按裁决即普通线程，走既有 All/Chats/Favorites 与 `tasks=` 过滤。
-2. bot `/threads` 同步获得这些线程（≡ Chats 过滤，既有对齐断言继续成立）。
-3. Side chat 从文件夹消失（双隐）。
-4. 文件夹 ≡ Recent 成员集严格相等（差异归零），§5.1 的成员集论述由本节取代。
+1. Recent（iOS/桌面/widget）开始显示 automation 生成线程；bot `/threads` 同步（≡ Chats 过滤）。
+2. Side chat 全部 hidden：从文件夹与 Recent 双隐；宿主面板直开路径不受影响。
+3. 既有"automation 线程不在 recent""excluded favorite 不可见"类行为断言**有意改写**（评审专项 (e)）；信封形状零变化。
+4. 成员集相等成为长期回归钉：**双向 `EXCEPT`** parity 测试（不只测 missing 一侧）。
 
-### 10.5 S5 验证
+### 10.5 概念残余面删除清单（S4 执行，S5 后全部失活）
 
-- membership parity 断言：`thread_meta` visible 成员 ≡ `recent_threads` 成员（结构性相等测试，作为长期回归钉）；
-- cutover：幂等、插位序正确（构造混合活动时间用例验证 automation 线程落位）、side chat 双隐、重排后 favorites snapshot 相对序守恒、既有 `tasks=` 三值过滤语义不变；
-- `cargo test -p garyx-gateway --lib` 全绿 + tier1 --changed；
-- 既有信封 characterization 全数保持（成员集变化是行为变化，信封形状零变化）。
+- `thread_meta.excluded_from_recent` 列 + `/api/thread-summaries`/favorites summaries wire 字段；
+- Swift 三 adapter 的 exclusion 解析镜像 + `GaryxThreadRowCapabilities` favorite 的 `.removeOnly/.none` excluded 门禁（收敛为 visible 即 `.addAndRemove`）+ `GaryxMobileModel+ThreadLifecycle.swift:70` last-open 门禁（评审 F-03 补列）；
+- 相关 fixture/测试矩阵中 exclusion 用例改写为"字段不存在"合同。
+
+### 10.6 S5 验证
+
+- **双向** membership parity：`visible_live EXCEPT recent` 与 `recent EXCEPT visible_live` 皆空（长期回归钉）；
+- cutover：幂等、按 import generation 重跑、插位序（构造混合活动时间 + 同刻 tiebreak 用例）、孤儿行删除、canonical flag 清洗（顶层+metadata 零残留 SQL 断言）、side chat canonical hidden 归一、重排后 favorites snapshot 相对序守恒、meta 高水位/UNIQUE/索引一致性；
+- 创建入口剥离废弃 key 的行为测试（老客户端 payload 注入 exclusion → 入库后 canonical 无该键）；
+- 既有 `tasks=` 三值过滤语义不变；信封 characterization 全数保持；
+- `cargo test -p garyx-gateway --lib` 全绿 + tier1 --changed。
