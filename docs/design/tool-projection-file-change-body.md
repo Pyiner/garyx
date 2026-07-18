@@ -1,6 +1,6 @@
 # Tool Projection: File Change Bodies (Write / Edit)
 
-Status: v8 for review (v7 FAIL findings addressed)
+Status: v9 for review (v8 FAIL findings addressed)
 Date: 2026-07-18
 
 ## Problem
@@ -207,7 +207,14 @@ structured keys `old_string`/`new_string`, `edits`, `content`/`new_source`.
   fields with at least one present; `edits` as an array whose meaningful
   members are objects in that form; `content`/`new_source` as a string.
 
-*Verdict (pass-atomic)*:
+*Verdict (pass-atomic)*: the analyzer returns `Option<Analysis>`. A pass
+with **zero candidates returns `None` (not applicable)** — this is a
+distinct state, not `ComposableEmpty`: path-only `FileEdit` tools
+(Delete/Rename/Move, or an ApplyPatch call carrying no special keys)
+analyze to `None` and keep today's slot behavior entirely. Every rule
+below keys on this single return value; no rule consults an auxiliary
+"candidate present" boolean. With at least one candidate, the analysis is
+one of:
 
 - **Unsupported** — any meaningful candidate value, or any meaningful
   member inside a candidate container, fails its grammar
@@ -329,8 +336,9 @@ none behind.
    output/text meaning.
 4. **Summary owns the path; `call` is forced empty — keyed on the
    verdict.** For a `FileWrite`/`FileEdit` call pass whose analyzer
-   verdict is `Composable` or `ComposableEmpty` (at least one candidate
-   present and every candidate parsed), the path (`file_path`, `filePath`,
+   returns `Some(Composable)` or `Some(ComposableEmpty)` — `None`
+   (no candidates) and `Some(Unsupported)` never trigger this rule, and
+   there is no separate key-presence check — the path (`file_path`, `filePath`,
    `AbsolutePath`, `TargetFile`, `notebook_path`, `path`, `file`) belongs
    exclusively to `summary` (`label: file`, `format: path`) and **`call`
    is `None`**; scalar call selection does not run. Keying on pruning
@@ -511,10 +519,22 @@ after the implementation**, at every layer that changes.
      Unsupported, today's scalar behavior, no forced `call=None`; the same
      keys with legal zero-contribution values (`diff: ""`) → exclusivity
      (`summary=path, call=None, diff=None`).
-   - Segment ordering: `{changes: "+a", diff: "+b"}` both composable →
-     segments in key order (`changes` then `diff`);
+   - Segment ordering (non-commutative, anti-short-circuit):
+     `{changes: "+a", diff: "+b"}` both composable → segments in key order
+     (`changes` then `diff`);
      `{diff: "", old_string: "a", new_string: "b"}` → pre-rendered group
-     prunes empty, structured group derives the Pair.
+     prunes empty, structured group derives the Pair;
+     `{diff: "+pre", old_string: "a", new_string: "b"}` → recipe contains
+     **only** the Unified segment, never the Pair (first surviving group
+     is exclusive);
+     `{diff: "+pre", old_string: 42, new_string: "b"}` → `Unsupported` for
+     the whole pass — no recipe, empty consumed set, no slot exclusivity —
+     even though the pre-rendered candidate alone is well-formed and
+     non-empty (grammar scanning must not stop at the first surviving
+     group).
+   - No-candidate passes: path-only `Delete`/`Rename`/`Move` inputs and an
+     `ApplyPatch` call without special keys analyze to `None` and keep
+     today's slots (path in `call`, no forced summary).
    - Enforcement: illegal raw JSON (empty `segments`, double-`None` pair)
      fails recipe decode in Rust; the checked constructors make illegal
      recipes unrepresentable, pinned by a compile-visible API (no public
