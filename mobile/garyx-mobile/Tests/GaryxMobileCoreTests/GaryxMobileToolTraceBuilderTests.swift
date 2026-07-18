@@ -203,6 +203,93 @@ final class GaryxMobileToolTraceBuilderTests: XCTestCase {
         XCTAssertEqual(group.summary, "Used TaskCreate, ToolSearch")
     }
 
+    func testMessageListSignatureChangesWhenProjectedDiffBodyArrivesLate() throws {
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 1,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:late-diff-body",
+                    user: nil,
+                    activity: [
+                        .step(GaryxRenderStepRow(
+                            id: "step:late-diff-body",
+                            steps: [
+                                .toolGroup(GaryxRenderToolGroup(
+                                    id: "group:late-diff-body",
+                                    status: .completed,
+                                    entries: [
+                                        GaryxRenderToolEntry(
+                                            id: "entry:late-diff-body",
+                                            status: .completed,
+                                            toolUse: GaryxRenderMessageRef(
+                                                id: "seq:1",
+                                                seq: 1,
+                                                role: "tool_use"
+                                            ),
+                                            projection: GaryxRenderToolFieldProjection(
+                                                toolName: "Write",
+                                                kind: .fileWrite,
+                                                summary: GaryxRenderToolFieldSelector(
+                                                    root: .content,
+                                                    path: ["input", "file_path"],
+                                                    format: .path,
+                                                    label: .file
+                                                ),
+                                                diff: GaryxRenderToolDiffRecipe(
+                                                    source: .toolUse,
+                                                    segments: [
+                                                        .pair(
+                                                            old: nil,
+                                                            new: GaryxRenderToolValueSelector(
+                                                                root: .content,
+                                                                path: ["input", "content"]
+                                                            )
+                                                        ),
+                                                    ]
+                                                )
+                                            )
+                                        ),
+                                    ]
+                                )),
+                            ]
+                        )),
+                    ]
+                )),
+            ]
+        )
+
+        let beforeBody = try toolGroupMessage(snapshot: snapshot, transcriptMessages: [])
+        let body = GaryxTranscriptMessage(
+            index: 0,
+            role: .toolUse,
+            content: json(#"{"tool":"Write","input":{"file_path":"/Users/test/repo/Late.txt","content":"arrived"}}"#)
+        )
+        let afterBody = try toolGroupMessage(snapshot: snapshot, transcriptMessages: [body])
+
+        XCTAssertEqual(beforeBody.toolTraceGroup?.entries.only?.fieldProjection?.diff, [])
+        XCTAssertEqual(afterBody.toolTraceGroup?.entries.only?.fieldProjection?.diff.map(\.text), ["arrived"])
+        XCTAssertNotEqual(
+            GaryxMessageListSignature.make(for: [beforeBody]),
+            GaryxMessageListSignature.make(for: [afterBody])
+        )
+    }
+
+    private func toolGroupMessage(
+        snapshot: GaryxRenderSnapshot,
+        transcriptMessages: [GaryxTranscriptMessage]
+    ) throws -> GaryxMobileMessage {
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: [],
+            transcriptMessages: transcriptMessages
+        )
+        guard case .turn(let turn) = try XCTUnwrap(rows.only?.activityRows.only),
+              case .toolGroup(let message) = try XCTUnwrap(turn.steps.only) else {
+            throw NSError(domain: "GaryxMobileToolTraceBuilderTests", code: 1)
+        }
+        return message
+    }
+
     private func json(_ raw: String) -> GaryxJSONValue {
         try! JSONDecoder().decode(GaryxJSONValue.self, from: Data(raw.utf8))
     }

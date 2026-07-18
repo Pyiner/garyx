@@ -566,6 +566,82 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
         }
     }
 
+    // MARK: - Projection vocabulary skew is display-only
+
+    func testEveryInvalidProjectionShapeIsLossyInAFullSnapshot() throws {
+        for (index, invalidCase) in invalidProjectionCases().enumerated() {
+            var processor = GatewayStreamFrameProcessor()
+            let result = processor.processPayload(
+                fullFramePayload(
+                    basedOnSeq: 1,
+                    rows: [toolTurnRowJSON(projection: invalidCase.projection)],
+                    rowsHash: "\(5_001 + index)"
+                ),
+                threadId: threadId
+            )
+
+            XCTAssertNil(result.reconnect, invalidCase.name)
+            let snapshot = try XCTUnwrap(appliedSnapshots(in: result.actions).only, invalidCase.name)
+            let entry = try XCTUnwrap(toolEntries(in: snapshot).only, invalidCase.name)
+            XCTAssertEqual(entry.id, "entry:projection", invalidCase.name)
+            XCTAssertNil(entry.projection, "\(invalidCase.name) must degrade only the projection")
+        }
+    }
+
+    func testEveryInvalidProjectionShapeIsLossyInDeltaAndNextValidDeltaApplies() throws {
+        for invalidCase in invalidProjectionCases() {
+            var processor = GatewayStreamFrameProcessor()
+            let seed = processor.processPayload(
+                fullFramePayload(
+                    basedOnSeq: 1,
+                    rows: [toolTurnRowJSON(projection: validProjectionJSON())],
+                    rowsHash: "6001"
+                ),
+                threadId: threadId
+            )
+            XCTAssertNil(seed.reconnect, invalidCase.name)
+
+            let lossy = processor.processPayload(
+                deltaFramePayload(
+                    fromSeq: 1,
+                    fromRowsHash: "6001",
+                    basedOnSeq: 2,
+                    rowsHash: "6002",
+                    rowOrder: ["turn:projection"],
+                    upsertRows: [toolTurnRowJSON(projection: invalidCase.projection)]
+                ),
+                threadId: threadId
+            )
+            XCTAssertNil(lossy.reconnect, invalidCase.name)
+            let lossySnapshot = try XCTUnwrap(appliedSnapshots(in: lossy.actions).only, invalidCase.name)
+            let lossyEntry = try XCTUnwrap(toolEntries(in: lossySnapshot).only, invalidCase.name)
+            XCTAssertNil(lossyEntry.projection, invalidCase.name)
+
+            let recovered = processor.processPayload(
+                deltaFramePayload(
+                    fromSeq: 2,
+                    fromRowsHash: "6002",
+                    basedOnSeq: 3,
+                    rowsHash: "6003",
+                    rowOrder: ["turn:projection"],
+                    upsertRows: [toolTurnRowJSON(projection: validProjectionJSON())]
+                ),
+                threadId: threadId
+            )
+            XCTAssertNil(recovered.reconnect, "\(invalidCase.name) must not enter gap/replay")
+            let recoveredSnapshot = try XCTUnwrap(
+                appliedSnapshots(in: recovered.actions).only,
+                invalidCase.name
+            )
+            let recoveredEntry = try XCTUnwrap(
+                toolEntries(in: recoveredSnapshot).only,
+                invalidCase.name
+            )
+            XCTAssertNotNil(recoveredEntry.projection, invalidCase.name)
+            XCTAssertEqual(recoveredSnapshot.rowsHash, "6003", invalidCase.name)
+        }
+    }
+
     // MARK: - Fixtures
 
     /// Processor holding the canonical seed: one `turn-1` row, seq 2,
@@ -616,6 +692,116 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
                 return "refetch"
             case .fallback:
                 return "fallback"
+            }
+        }
+    }
+
+    private func invalidProjectionCases() -> [(name: String, projection: [String: Any])] {
+        let selector: [String: Any] = [
+            "root": "content",
+            "path": ["input", "content"],
+        ]
+        let base: [String: Any] = [
+            "tool_name": "Write",
+            "kind": "file_write",
+            "visibility": "normal",
+        ]
+        func withDiff(_ diff: [String: Any]) -> [String: Any] {
+            var projection = base
+            projection["diff"] = diff
+            return projection
+        }
+
+        var legacyFormat = base
+        legacyFormat["call"] = [
+            "root": "content",
+            "path": ["input", "content"],
+            "format": "diff",
+            "label": "call",
+        ]
+        return [
+            ("legacy format diff", legacyFormat),
+            ("unknown segment discriminator", withDiff([
+                "source": "tool_use",
+                "segments": [["future": ["text": selector]]],
+            ])),
+            ("unknown source", withDiff([
+                "source": "future_source",
+                "segments": [["unified": ["text": selector]]],
+            ])),
+            ("missing source", withDiff([
+                "segments": [["unified": ["text": selector]]],
+            ])),
+            ("empty recipe", withDiff([
+                "source": "tool_use",
+                "segments": [] as [Any],
+            ])),
+            ("double-none pair", withDiff([
+                "source": "tool_use",
+                "segments": [["pair": ["old": NSNull(), "new": NSNull()]]],
+            ])),
+        ]
+    }
+
+    private func validProjectionJSON() -> [String: Any] {
+        [
+            "tool_name": "Write",
+            "kind": "file_write",
+            "visibility": "normal",
+            "summary": [
+                "root": "content",
+                "path": ["input", "file_path"],
+                "format": "path",
+                "label": "file",
+            ],
+            "diff": [
+                "source": "tool_use",
+                "segments": [[
+                    "pair": [
+                        "old": NSNull(),
+                        "new": [
+                            "root": "content",
+                            "path": ["input", "content"],
+                        ],
+                    ],
+                ]],
+            ],
+        ]
+    }
+
+    private func toolTurnRowJSON(projection: [String: Any]) -> [String: Any] {
+        [
+            "kind": "user_turn",
+            "id": "turn:projection",
+            "user": NSNull(),
+            "activity": [[
+                "kind": "step",
+                "id": "step:projection",
+                "steps": [[
+                    "kind": "tool_group",
+                    "id": "group:projection",
+                    "status": "completed",
+                    "entries": [[
+                        "id": "entry:projection",
+                        "status": "completed",
+                        "tool_use": NSNull(),
+                        "tool_result": NSNull(),
+                        "projection": projection,
+                    ]],
+                ]],
+            ]],
+        ]
+    }
+
+    private func toolEntries(in snapshot: GaryxRenderSnapshot) -> [GaryxRenderToolEntry] {
+        snapshot.rows.flatMap { row -> [GaryxRenderToolEntry] in
+            guard case .userTurn(let turn) = row else { return [] }
+            return turn.activity.flatMap { activity -> [GaryxRenderToolEntry] in
+                guard case .step(let step) = activity else { return [] }
+                return step.steps.flatMap { item -> [GaryxRenderToolEntry] in
+                    guard case .toolGroup(let group) = item else { return [] }
+                    return group.entries
+                }
             }
         }
     }
@@ -797,5 +983,11 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
     private func jsonString(_ object: [String: Any]) -> String {
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         return String(data: data, encoding: .utf8)!
+    }
+}
+
+private extension Array {
+    var only: Element? {
+        count == 1 ? self[0] : nil
     }
 }

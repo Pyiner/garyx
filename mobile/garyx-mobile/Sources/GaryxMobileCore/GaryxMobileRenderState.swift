@@ -772,7 +772,6 @@ public enum GaryxRenderToolFieldFormat: String, Codable, Equatable, Sendable {
     case code
     case path
     case json
-    case diff
     case image
 }
 
@@ -788,7 +787,6 @@ public enum GaryxRenderToolFieldLabel: String, Codable, Equatable, Sendable {
     case output
     case result
     case response
-    case diff
     case image
     case error
 }
@@ -800,22 +798,16 @@ public enum GaryxRenderToolVisibility: String, Codable, Equatable, Sendable {
     case hidden
 }
 
-public struct GaryxRenderToolFieldSelector: Codable, Equatable, Sendable {
+public struct GaryxRenderToolValueSelector: Codable, Equatable, Sendable {
     public var root: GaryxRenderToolFieldRoot
     public var path: [String]
-    public var format: GaryxRenderToolFieldFormat
-    public var label: GaryxRenderToolFieldLabel
 
     public init(
         root: GaryxRenderToolFieldRoot,
-        path: [String] = [],
-        format: GaryxRenderToolFieldFormat,
-        label: GaryxRenderToolFieldLabel
+        path: [String] = []
     ) {
         self.root = root
         self.path = path
-        self.format = format
-        self.label = label
     }
 
     enum CodingKeys: String, CodingKey {
@@ -829,8 +821,152 @@ public struct GaryxRenderToolFieldSelector: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         root = try container.decode(GaryxRenderToolFieldRoot.self, forKey: .root)
         path = try container.decodeIfPresent([String].self, forKey: .path) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(root, forKey: .root)
+        if !path.isEmpty {
+            try container.encode(path, forKey: .path)
+        }
+    }
+}
+
+public struct GaryxRenderToolFieldSelector: Codable, Equatable, Sendable {
+    public var value: GaryxRenderToolValueSelector
+    public var format: GaryxRenderToolFieldFormat
+    public var label: GaryxRenderToolFieldLabel
+
+    public var root: GaryxRenderToolFieldRoot { value.root }
+    public var path: [String] { value.path }
+
+    public init(
+        root: GaryxRenderToolFieldRoot,
+        path: [String] = [],
+        format: GaryxRenderToolFieldFormat,
+        label: GaryxRenderToolFieldLabel
+    ) {
+        value = GaryxRenderToolValueSelector(root: root, path: path)
+        self.format = format
+        self.label = label
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case root
+        case path
+        case format
+        case label
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let root = try container.decode(GaryxRenderToolFieldRoot.self, forKey: .root)
+        let path = try container.decodeIfPresent([String].self, forKey: .path) ?? []
+        value = GaryxRenderToolValueSelector(root: root, path: path)
         format = try container.decode(GaryxRenderToolFieldFormat.self, forKey: .format)
         label = try container.decode(GaryxRenderToolFieldLabel.self, forKey: .label)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(value.root, forKey: .root)
+        if !value.path.isEmpty {
+            try container.encode(value.path, forKey: .path)
+        }
+        try container.encode(format, forKey: .format)
+        try container.encode(label, forKey: .label)
+    }
+}
+
+public enum GaryxRenderToolDiffSource: String, Codable, Equatable, Sendable {
+    case toolUse = "tool_use"
+    case toolResult = "tool_result"
+}
+
+public enum GaryxRenderToolDiffSegment: Codable, Equatable, Sendable {
+    case unified(text: GaryxRenderToolValueSelector)
+    case pair(old: GaryxRenderToolValueSelector?, new: GaryxRenderToolValueSelector?)
+
+    private struct UnifiedPayload: Codable, Equatable, Sendable {
+        var text: GaryxRenderToolValueSelector
+    }
+
+    private struct PairPayload: Codable, Equatable, Sendable {
+        var old: GaryxRenderToolValueSelector?
+        var new: GaryxRenderToolValueSelector?
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case unified
+        case pair
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let hasUnified = container.contains(.unified)
+        let hasPair = container.contains(.pair)
+        guard hasUnified != hasPair else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "diff segment requires exactly one discriminator")
+            )
+        }
+        if hasUnified {
+            let payload = try container.decode(UnifiedPayload.self, forKey: .unified)
+            self = .unified(text: payload.text)
+            return
+        }
+        let payload = try container.decode(PairPayload.self, forKey: .pair)
+        guard payload.old != nil || payload.new != nil else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "diff pair requires at least one side")
+            )
+        }
+        self = .pair(old: payload.old, new: payload.new)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .unified(let text):
+            try container.encode(UnifiedPayload(text: text), forKey: .unified)
+        case let .pair(old, new):
+            guard old != nil || new != nil else {
+                throw EncodingError.invalidValue(
+                    self,
+                    .init(codingPath: encoder.codingPath, debugDescription: "diff pair requires at least one side")
+                )
+            }
+            try container.encode(PairPayload(old: old, new: new), forKey: .pair)
+        }
+    }
+}
+
+public struct GaryxRenderToolDiffRecipe: Codable, Equatable, Sendable {
+    public var source: GaryxRenderToolDiffSource
+    public var segments: [GaryxRenderToolDiffSegment]
+
+    public init(source: GaryxRenderToolDiffSource, segments: [GaryxRenderToolDiffSegment]) {
+        precondition(!segments.isEmpty, "diff recipe requires at least one segment")
+        self.source = source
+        self.segments = segments
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case segments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        source = try container.decode(GaryxRenderToolDiffSource.self, forKey: .source)
+        segments = try container.decode([GaryxRenderToolDiffSegment].self, forKey: .segments)
+        guard !segments.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .segments,
+                in: container,
+                debugDescription: "diff recipe requires at least one segment"
+            )
+        }
     }
 }
 
@@ -840,6 +976,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
     public var visibility: GaryxRenderToolVisibility
     public var summary: GaryxRenderToolFieldSelector?
     public var call: GaryxRenderToolFieldSelector?
+    public var diff: GaryxRenderToolDiffRecipe?
     public var result: GaryxRenderToolFieldSelector?
     public var status: String?
     public var exitCode: Int?
@@ -851,6 +988,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
         visibility: GaryxRenderToolVisibility = .normal,
         summary: GaryxRenderToolFieldSelector? = nil,
         call: GaryxRenderToolFieldSelector? = nil,
+        diff: GaryxRenderToolDiffRecipe? = nil,
         result: GaryxRenderToolFieldSelector? = nil,
         status: String? = nil,
         exitCode: Int? = nil,
@@ -861,6 +999,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
         self.visibility = visibility
         self.summary = summary
         self.call = call
+        self.diff = diff
         self.result = result
         self.status = status
         self.exitCode = exitCode
@@ -873,6 +1012,7 @@ public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
         case visibility
         case summary
         case call
+        case diff
         case result
         case status
         case exitCode = "exit_code"
@@ -911,6 +1051,31 @@ public struct GaryxRenderToolEntry: Codable, Equatable, Sendable {
         case toolUse = "tool_use"
         case toolResult = "tool_result"
         case projection
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
+        status = try container.decode(GaryxRenderToolEntryStatus.self, forKey: .status)
+        toolUse = try container.decodeIfPresent(GaryxRenderMessageRef.self, forKey: .toolUse)
+        toolResult = try container.decodeIfPresent(GaryxRenderMessageRef.self, forKey: .toolResult)
+        // Projection is a presentation hint. Vocabulary skew must degrade only
+        // this hint; entry identity and delta-chain structure remain valid.
+        projection = (try? container.decodeIfPresent(
+            GaryxRenderToolFieldProjection.self,
+            forKey: .projection
+        )) ?? nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(toolUseId, forKey: .toolUseId)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(toolUse, forKey: .toolUse)
+        try container.encodeIfPresent(toolResult, forKey: .toolResult)
+        try container.encodeIfPresent(projection, forKey: .projection)
     }
 }
 
@@ -1228,7 +1393,11 @@ private extension GaryxRenderToolEntry {
         )
         let toolName = resolvedProjection?.toolName.garyxRenderTrimmedNilIfEmpty
             ?? "tool"
-        let projectedPath = [resolvedProjection?.call, resolvedProjection?.result]
+        let projectedPath = [
+            resolvedProjection?.summary?.format == .path ? resolvedProjection?.summary : nil,
+            resolvedProjection?.call,
+            resolvedProjection?.result,
+        ]
             .compactMap { $0 }
             .first(where: { $0.format == .path || $0.format == .image })?.text
         return GaryxMobileToolTraceEntry(

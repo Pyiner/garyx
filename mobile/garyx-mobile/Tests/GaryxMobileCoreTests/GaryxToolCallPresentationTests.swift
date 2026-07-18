@@ -241,6 +241,106 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(lines.map(\.text), ["import Foundation", "struct New {}"])
     }
 
+    func testProjectedDiffResolverComposesSegmentsInOrderAndPreservesWhitespace() throws {
+        let toolUse = GaryxTranscriptMessage(
+            index: 0,
+            role: .toolUse,
+            content: json(#"{"unified":" context\n+added\n-removed\n+++\n---\n \n+","new_only":"  \n","old_only":"\nold","old":" old \n","new":"\nnew"}"#)
+        )
+        let value: ([String]) -> GaryxRenderToolValueSelector = {
+            GaryxRenderToolValueSelector(root: .content, path: $0)
+        }
+        let projection = GaryxRenderToolFieldProjection(
+            kind: .fileEdit,
+            diff: GaryxRenderToolDiffRecipe(
+                source: .toolUse,
+                segments: [
+                    .unified(text: value(["unified"])),
+                    .pair(old: nil, new: value(["new_only"])),
+                    .pair(old: value(["old_only"]), new: nil),
+                    .pair(old: value(["old"]), new: value(["new"])),
+                ]
+            )
+        )
+
+        let resolved = try XCTUnwrap(GaryxToolFieldProjectionResolver.resolve(
+            projection,
+            toolUse: toolUse,
+            toolResult: nil
+        ))
+        XCTAssertEqual(resolved.diff.map(\.kind), [
+            .context, .added, .removed, .context, .context, .context, .added,
+            .added, .added, .removed, .removed, .removed, .removed, .added, .added,
+        ])
+        XCTAssertEqual(resolved.diff.map(\.text), [
+            " context", "added", "removed", "+++", "---", " ", "",
+            "  ", "", "", "old", " old ", "", "", "new",
+        ])
+    }
+
+    func testProjectedDiffResolverUsesOnlyTheDeclaredSourceBody() throws {
+        let toolUse = GaryxTranscriptMessage(
+            index: 0,
+            role: .toolUse,
+            content: json(#"{"body":"+wrong source"}"#)
+        )
+        let toolResult = GaryxTranscriptMessage(
+            index: 1,
+            role: .toolResult,
+            content: json(#"{"body":"+right source"}"#)
+        )
+        let projection = GaryxRenderToolFieldProjection(
+            kind: .fileEdit,
+            diff: GaryxRenderToolDiffRecipe(
+                source: .toolResult,
+                segments: [
+                    .unified(text: GaryxRenderToolValueSelector(
+                        root: .content,
+                        path: ["body"]
+                    )),
+                ]
+            )
+        )
+
+        let resolved = try XCTUnwrap(GaryxToolFieldProjectionResolver.resolve(
+            projection,
+            toolUse: toolUse,
+            toolResult: toolResult
+        ))
+        XCTAssertEqual(resolved.diff.map(\.kind), [.added])
+        XCTAssertEqual(resolved.diff.map(\.text), ["right source"])
+    }
+
+    func testProjectedDetailOrdersFileCallDiffResultAndCollapsesToPathTail() {
+        let path = "/Users/test/repo/Sample.swift"
+        let projection = GaryxResolvedToolFieldProjection(
+            kind: .fileEdit,
+            toolName: "Edit",
+            summary: GaryxResolvedToolField(text: path, label: "File", format: .path),
+            call: GaryxResolvedToolField(text: "replace_all=false", label: "Call", format: .code),
+            diff: [GaryxToolCallDiffLine(id: 0, kind: .added, text: "let value = 2")],
+            result: GaryxResolvedToolField(text: "Updated", label: "Result", format: .text),
+            status: nil,
+            exitCode: nil,
+            durationMs: nil
+        )
+        let projectedEntry = entry(
+            toolName: "Edit",
+            primaryPath: path,
+            primaryPathBadge: "repo/Sample.swift",
+            fieldProjection: projection
+        )
+
+        XCTAssertEqual(
+            GaryxToolCallPresentation.detail(for: projectedEntry).sections.map(\.label),
+            ["File", "Call", "Diff", "Result"]
+        )
+        XCTAssertEqual(
+            GaryxToolCallPresentation.listRows(from: [projectedEntry]).first?.detail,
+            "repo/Sample.swift"
+        )
+    }
+
     func testPatchStyleInputParsesPlusMinusLines() {
         let lines = GaryxToolCallPresentation.diffLines(
             input: nil,
@@ -326,6 +426,10 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(rows[0].verb, "ToolSearch")
     }
 
+    private func json(_ raw: String) -> GaryxJSONValue {
+        try! JSONDecoder().decode(GaryxJSONValue.self, from: Data(raw.utf8))
+    }
+
     private func entry(
         id: String = UUID().uuidString,
         toolName: String,
@@ -335,7 +439,9 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         summaryText: String? = nil,
         status: GaryxMobileToolTraceStatus = .completed,
         isError: Bool = false,
-        primaryPath: String? = nil
+        primaryPath: String? = nil,
+        primaryPathBadge: String? = nil,
+        fieldProjection: GaryxResolvedToolFieldProjection? = nil
     ) -> GaryxMobileToolTraceEntry {
         GaryxMobileToolTraceEntry(
             id: id,
@@ -351,8 +457,9 @@ final class GaryxToolCallPresentationTests: XCTestCase {
             status: status,
             isError: isError,
             timestamp: nil,
-            primaryPathBadge: primaryPath.map { ($0 as NSString).lastPathComponent },
-            primaryPath: primaryPath
+            primaryPathBadge: primaryPathBadge ?? primaryPath.map { ($0 as NSString).lastPathComponent },
+            primaryPath: primaryPath,
+            fieldProjection: fieldProjection
         )
     }
 }

@@ -87,6 +87,8 @@ extension GaryxMobileModel {
 
     func setPreparedMessages(_ prepared: GaryxPreparedThreadMessages, for threadId: String) {
         activeAssistantMessageIdsByThread[threadId] = prepared.activeAssistantMessageId
+        // Core's bounded signature includes selector-resolved diff lines, so a
+        // late-arriving tool body cannot be mistaken for a no-op projection.
         if messageSignaturesByThread[threadId] == prepared.signature,
            !prepared.signature.sampled,
            (selectedThread?.id != threadId || selectedMessagesSignature == prepared.signature) {

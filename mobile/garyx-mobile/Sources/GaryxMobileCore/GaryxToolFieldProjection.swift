@@ -17,6 +17,7 @@ struct GaryxResolvedToolFieldProjection: Equatable {
     var toolName: String?
     var summary: GaryxResolvedToolField?
     var call: GaryxResolvedToolField?
+    var diff: [GaryxToolCallDiffLine]
     var result: GaryxResolvedToolField?
     var status: String?
     var exitCode: Int?
@@ -90,6 +91,11 @@ enum GaryxToolFieldProjectionResolver {
                 ?? resolve(projection.summary, from: toolResult),
             call: resolve(projection.call, from: toolUse)
                 ?? resolve(projection.call, from: toolResult),
+            diff: resolve(
+                projection.diff,
+                toolUse: toolUse,
+                toolResult: toolResult
+            ),
             result: resolve(projection.result, from: toolResult),
             status: projection.status,
             exitCode: projection.exitCode,
@@ -102,7 +108,7 @@ enum GaryxToolFieldProjectionResolver {
         from message: GaryxTranscriptMessage?
     ) -> GaryxResolvedToolField? {
         guard let selector,
-              let value = selectedValue(selector, from: message),
+              let value = selectedValue(selector.value, from: message),
               let text = displayText(value, format: selector.format),
               hasVisibleContent(text) else {
             return nil
@@ -115,7 +121,7 @@ enum GaryxToolFieldProjectionResolver {
     }
 
     private static func selectedValue(
-        _ selector: GaryxRenderToolFieldSelector,
+        _ selector: GaryxRenderToolValueSelector,
         from message: GaryxTranscriptMessage?
     ) -> GaryxJSONValue? {
         guard var value = rootValue(selector.root, from: message) else { return nil }
@@ -174,9 +180,6 @@ enum GaryxToolFieldProjectionResolver {
         _ value: GaryxJSONValue,
         format: GaryxRenderToolFieldFormat
     ) -> String? {
-        if format == .diff {
-            return diffText(value)
-        }
         if format == .image {
             // A string path can be rendered as an image preview. Structured
             // image blocks carry base64 and are deliberately omitted from text.
@@ -223,27 +226,64 @@ enum GaryxToolFieldProjectionResolver {
         return trimmed.first == "\"" && trimmed.last == "\"" ? trimmed : nil
     }
 
-    private static func diffText(_ value: GaryxJSONValue) -> String? {
-        switch value {
-        case .string(let value):
-            return value
-        case .object(let object):
-            if case .string(let diff)? = object["diff"] {
-                return diff
-            }
-            return displayText(value, format: .json)
-        case .array(let values):
-            let parts = values.compactMap { entry -> String? in
-                if case .object(let object) = entry,
-                   case .string(let diff)? = object["diff"] {
-                    return diff
-                }
-                return displayText(entry, format: .json)
-            }
-            return parts.isEmpty ? nil : parts.joined(separator: "\n")
-        case .number, .bool, .null:
-            return displayText(value, format: .json)
+    private static func resolve(
+        _ recipe: GaryxRenderToolDiffRecipe?,
+        toolUse: GaryxTranscriptMessage?,
+        toolResult: GaryxTranscriptMessage?
+    ) -> [GaryxToolCallDiffLine] {
+        guard let recipe else { return [] }
+        let source: GaryxTranscriptMessage?
+        switch recipe.source {
+        case .toolUse:
+            source = toolUse
+        case .toolResult:
+            source = toolResult
         }
+        guard let source else { return [] }
+
+        var lines: [GaryxToolCallDiffLine] = []
+        func append(_ kind: GaryxToolCallDiffLine.Kind, _ text: String) {
+            lines.append(.init(id: lines.count, kind: kind, text: text))
+        }
+        for segment in recipe.segments {
+            switch segment {
+            case .unified(let selector):
+                for line in rawLines(rawString(selector, from: source)) {
+                    if line.hasPrefix("+++") || line.hasPrefix("---") {
+                        append(.context, line)
+                    } else if line.hasPrefix("+") {
+                        append(.added, String(line.dropFirst()))
+                    } else if line.hasPrefix("-") {
+                        append(.removed, String(line.dropFirst()))
+                    } else {
+                        append(.context, line)
+                    }
+                }
+            case let .pair(old, new):
+                for line in rawLines(old.flatMap { rawString($0, from: source) }) {
+                    append(.removed, line)
+                }
+                for line in rawLines(new.flatMap { rawString($0, from: source) }) {
+                    append(.added, line)
+                }
+            }
+        }
+        return lines
+    }
+
+    private static func rawString(
+        _ selector: GaryxRenderToolValueSelector,
+        from message: GaryxTranscriptMessage
+    ) -> String? {
+        guard case .string(let value)? = selectedValue(selector, from: message) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func rawLines(_ value: String?) -> [String] {
+        guard let value, !value.isEmpty else { return [] }
+        return value.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     }
 
     private static func label(_ label: GaryxRenderToolFieldLabel) -> String {
@@ -259,7 +299,6 @@ enum GaryxToolFieldProjectionResolver {
         case .output: "Output"
         case .result: "Result"
         case .response: "Response"
-        case .diff: "Diff"
         case .image: "Image"
         case .error: "Error"
         }

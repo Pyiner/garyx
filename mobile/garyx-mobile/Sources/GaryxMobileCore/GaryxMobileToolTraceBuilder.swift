@@ -154,6 +154,19 @@ struct GaryxMessageListSignature: Equatable, Sendable {
                     hasher.combine(entry.fieldProjection?.status)
                     hasher.combine(entry.fieldProjection?.exitCode)
                     hasher.combine(entry.fieldProjection?.durationMs)
+                    let diff = entry.fieldProjection?.diff ?? []
+                    hasher.combine(diff.count)
+                    for line in diff {
+                        switch line.kind {
+                        case .added:
+                            hasher.combine("added")
+                        case .removed:
+                            hasher.combine("removed")
+                        case .context:
+                            hasher.combine("context")
+                        }
+                        sampled = combineTextSignature(line.text, into: &hasher) || sampled
+                    }
                     sampled = combineTextSignature(entry.inputText, into: &hasher) || sampled
                     sampled = combineTextSignature(entry.resultText, into: &hasher) || sampled
                 }

@@ -209,8 +209,14 @@ enum GaryxToolCallPresentation {
             return nil
         }
         var sections: [GaryxToolCallDetailSectionModel] = []
+        if let summary = projection.summary, summary.format == .path {
+            sections.append(projectedSection(summary))
+        }
         if let call = projection.call {
             sections.append(projectedSection(call))
+        }
+        if !projection.diff.isEmpty {
+            sections.append(.init(label: "Diff", content: .diff(projection.diff)))
         }
         if let result = projection.result {
             sections.append(projectedSection(result))
@@ -227,34 +233,12 @@ enum GaryxToolCallPresentation {
         switch field.format {
         case .path:
             content = .plainMonospace(field.text)
-        case .diff:
-            let lines = projectedDiffLines(field.text)
-            content = lines.isEmpty ? .codeCard(field.text) : .diff(lines)
         case .image:
             content = isImagePath(field.text) ? .imagePreview(field.text) : .codeCard(field.text)
         case .text, .code, .json:
             content = .codeCard(field.text)
         }
         return .init(label: field.label, content: content)
-    }
-
-    private static func projectedDiffLines(_ text: String) -> [GaryxToolCallDiffLine] {
-        let rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard rawLines.contains(where: {
-            ($0.hasPrefix("+") && !$0.hasPrefix("+++"))
-                || ($0.hasPrefix("-") && !$0.hasPrefix("---"))
-        }) else {
-            return []
-        }
-        return rawLines.enumerated().map { index, line in
-            if line.hasPrefix("+"), !line.hasPrefix("+++") {
-                return .init(id: index, kind: .added, text: String(line.dropFirst()))
-            }
-            if line.hasPrefix("-"), !line.hasPrefix("---") {
-                return .init(id: index, kind: .removed, text: String(line.dropFirst()))
-            }
-            return .init(id: index, kind: .context, text: line)
-        }
     }
 
     private static func outputSection(
@@ -420,6 +404,11 @@ enum GaryxToolCallPresentation {
     private static func detail(for entry: GaryxMobileToolTraceEntry) -> String? {
         if isProviderNeutralFallback(entry) {
             return nil
+        }
+        if entry.fieldProjection?.summary?.format == .path,
+           let badge = entry.primaryPathBadge?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !badge.isEmpty {
+            return badge
         }
         if entry.isFileRead || entry.isFileWrite || entry.isFileEdit,
            let path = entry.primaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),

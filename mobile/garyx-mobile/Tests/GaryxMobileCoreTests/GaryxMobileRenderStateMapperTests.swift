@@ -1969,6 +1969,198 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         try assertSentMessageVisibleExactlyOnce(step4, expectedRowId: localRowId, step: "step4")
     }
 
+    func testFileChangeBodySharedFixtureMapsWriteAndEditDiffsEndToEnd() throws {
+        let snapshot = try JSONDecoder().decode(
+            GaryxRenderSnapshot.self,
+            from: Data(contentsOf: fixtureURL(
+                directory: "render-layer",
+                name: "file-change-body-render-state.json"
+            ))
+        )
+        let transcriptMessages = try fixtureTranscriptMessages(
+            directory: "render-layer",
+            name: "file-change-body-transcript.jsonl"
+        )
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: GaryxMobileTranscriptMapper.mobileMessages(from: transcriptMessages),
+            transcriptMessages: transcriptMessages
+        )
+        let toolMessage = try XCTUnwrap(toolGroupMessages(in: rows).only)
+        let entries = try XCTUnwrap(toolMessage.toolTraceGroup).entries
+        XCTAssertEqual(entries.map(\.title), ["Write", "Edit"])
+        XCTAssertEqual(entries.map(\.primaryPath), [
+            "/Users/test/repo/Sample.txt",
+            "/Users/test/repo/Sample.txt",
+        ])
+        XCTAssertEqual(entries.map(\.primaryPathBadge), ["repo/Sample.txt", "repo/Sample.txt"])
+        XCTAssertEqual(toolMessage.toolTraceGroup?.summary, "Edited 1 file")
+
+        let writeDiff = try XCTUnwrap(entries[0].fieldProjection).diff
+        XCTAssertEqual(writeDiff.map(\.kind), [.added, .added, .added])
+        XCTAssertEqual(writeDiff.map(\.text), ["alpha", "beta", ""])
+        let editDiff = try XCTUnwrap(entries[1].fieldProjection).diff
+        XCTAssertEqual(editDiff.map(\.kind), [
+            .removed, .removed, .removed,
+            .added, .added, .added,
+        ])
+        XCTAssertEqual(editDiff.map(\.text), [
+            "alpha", "beta", "",
+            "alpha", "gamma", "",
+        ])
+        XCTAssertEqual(
+            entries.map { GaryxToolCallPresentation.detail(for: $0).sections.map(\.label) },
+            [["File", "Diff", "Result"], ["File", "Diff", "Result"]]
+        )
+    }
+
+    func testPathSummaryDrivesPrimaryPathFileCountingAndWrittenImageRefs() throws {
+        let transcriptMessages = [
+            GaryxTranscriptMessage(
+                index: 0,
+                role: .toolUse,
+                content: json(#"{"tool":"Write","input":{"file_path":"/Users/test/repo/generated.png","content":"pixels"}}"#)
+            ),
+            GaryxTranscriptMessage(
+                index: 1,
+                role: .toolUse,
+                content: json(#"{"tool":"Edit","input":{"file_path":"/Users/test/repo/Other.swift","old_string":"a","new_string":"b"}}"#)
+            ),
+        ]
+        let pathSelector: (String) -> GaryxRenderToolFieldSelector = { toolField in
+            GaryxRenderToolFieldSelector(
+                root: .content,
+                path: ["input", toolField],
+                format: .path,
+                label: .file
+            )
+        }
+        let valueSelector: (String) -> GaryxRenderToolValueSelector = { toolField in
+            GaryxRenderToolValueSelector(root: .content, path: ["input", toolField])
+        }
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 2,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:path-summary",
+                    user: nil,
+                    activity: [
+                        .step(GaryxRenderStepRow(
+                            id: "step:path-summary",
+                            steps: [
+                                .toolGroup(GaryxRenderToolGroup(
+                                    id: "group:path-summary",
+                                    status: .completed,
+                                    entries: [
+                                        GaryxRenderToolEntry(
+                                            id: "entry:write-image",
+                                            status: .completed,
+                                            toolUse: ref(seq: 1, role: "tool_use"),
+                                            projection: GaryxRenderToolFieldProjection(
+                                                toolName: "Write",
+                                                kind: .fileWrite,
+                                                summary: pathSelector("file_path"),
+                                                diff: GaryxRenderToolDiffRecipe(
+                                                    source: .toolUse,
+                                                    segments: [.pair(old: nil, new: valueSelector("content"))]
+                                                )
+                                            )
+                                        ),
+                                        GaryxRenderToolEntry(
+                                            id: "entry:edit-source",
+                                            status: .completed,
+                                            toolUse: ref(seq: 2, role: "tool_use"),
+                                            projection: GaryxRenderToolFieldProjection(
+                                                toolName: "Edit",
+                                                kind: .fileEdit,
+                                                summary: pathSelector("file_path"),
+                                                diff: GaryxRenderToolDiffRecipe(
+                                                    source: .toolUse,
+                                                    segments: [
+                                                        .pair(
+                                                            old: valueSelector("old_string"),
+                                                            new: valueSelector("new_string")
+                                                        ),
+                                                    ]
+                                                )
+                                            )
+                                        ),
+                                    ]
+                                )),
+                            ]
+                        )),
+                    ]
+                )),
+            ]
+        )
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: [],
+            transcriptMessages: transcriptMessages
+        )
+        let toolMessage = try XCTUnwrap(toolGroupMessages(in: rows).only)
+        let entries = try XCTUnwrap(toolMessage.toolTraceGroup).entries
+        XCTAssertEqual(entries.map(\.primaryPath), [
+            "/Users/test/repo/generated.png",
+            "/Users/test/repo/Other.swift",
+        ])
+        XCTAssertEqual(entries.map(\.primaryPathBadge), ["repo/generated.png", "repo/Other.swift"])
+        XCTAssertEqual(toolMessage.toolTraceGroup?.summary, "Edited 2 files")
+        XCTAssertEqual(
+            GaryxToolCallPresentation.imageRefs(from: entries).map(\.path),
+            ["/Users/test/repo/generated.png"]
+        )
+    }
+
+    func testFrozenPreChangeDecoderIgnoresNewDiffAndPinsStaleMobilePresentation() throws {
+        let rawState = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: fixtureURL(
+                directory: "render-layer",
+                name: "file-change-body-render-state.json"
+            ))
+        ) as? [String: Any]
+        let rows = try XCTUnwrap(rawState?["rows"] as? [[String: Any]])
+        let activity = try XCTUnwrap(rows.only?["activity"] as? [[String: Any]])
+        let steps = try XCTUnwrap(activity.only?["steps"] as? [[String: Any]])
+        let entries = try XCTUnwrap(steps.only?["entries"] as? [[String: Any]])
+        let frozenEntries = try entries.map { entry in
+            try JSONDecoder().decode(
+                FrozenPreChangeToolEntry.self,
+                from: JSONSerialization.data(withJSONObject: entry)
+            )
+        }
+        XCTAssertEqual(frozenEntries.map(\.projection.kind), [.fileWrite, .fileEdit])
+        XCTAssertEqual(frozenEntries.map(\.projection.summary?.format), [.path, .path])
+        XCTAssertTrue(frozenEntries.allSatisfy { $0.projection.call == nil })
+        XCTAssertEqual(frozenEntries.map(\.projection.result?.label), [.result, .result])
+
+        let fileChange = try JSONDecoder().decode(
+            FrozenPreChangeToolEntry.self,
+            from: Data(#"""
+            {
+              "id": "entry:file-change",
+              "status": "completed",
+              "projection": {
+                "tool_name": "fileChange",
+                "kind": "file_edit",
+                "visibility": "normal",
+                "diff": {
+                  "source": "tool_use",
+                  "segments": [
+                    { "unified": { "text": { "root": "content", "path": ["changes", "0", "diff"] } } }
+                  ]
+                }
+              }
+            }
+            """#.utf8)
+        )
+        XCTAssertEqual(fileChange.projection.kind, .fileEdit)
+        XCTAssertNil(fileChange.projection.summary)
+        XCTAssertNil(fileChange.projection.call)
+        XCTAssertNil(fileChange.projection.result)
+    }
+
     private func mobileMessage(
         index: Int,
         role: GaryxMobileMessage.Role,
@@ -2020,6 +2212,52 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         return entries
     }
 
+    private func fixtureURL(directory: String, name: String) -> URL {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            url.deleteLastPathComponent()
+        }
+        return url
+            .appendingPathComponent("test-fixtures")
+            .appendingPathComponent(directory)
+            .appendingPathComponent(name)
+    }
+
+    private func fixtureTranscriptMessages(
+        directory: String,
+        name: String
+    ) throws -> [GaryxTranscriptMessage] {
+        try String(contentsOf: fixtureURL(directory: directory, name: name))
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { line in
+                let record = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                )
+                let rawMessage = try XCTUnwrap(record["message"] as? [String: Any])
+                var message = try JSONDecoder().decode(
+                    GaryxTranscriptMessage.self,
+                    from: JSONSerialization.data(withJSONObject: rawMessage)
+                )
+                if let seq = record["seq"] as? Int {
+                    message.index = seq - 1
+                    message.id = "history:\(seq - 1)"
+                }
+                return message
+            }
+    }
+
+    private func toolGroupMessages(in rows: [GaryxMobileTurnRow]) -> [GaryxMobileMessage] {
+        rows.flatMap(\.activityRows).flatMap { activity -> [GaryxMobileMessage] in
+            guard case .turn(let turn) = activity else { return [] }
+            return turn.steps.compactMap { step in
+                guard case .toolGroup(let message) = step else { return nil }
+                return message
+            }
+        }
+    }
+
     private func toolUse(index: Int, toolUseId: String, command: String) -> GaryxTranscriptMessage {
         GaryxTranscriptMessage(
             index: index,
@@ -2041,6 +2279,55 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
     private func json(_ raw: String) -> GaryxJSONValue {
         try! JSONDecoder().decode(GaryxJSONValue.self, from: Data(raw.utf8))
     }
+}
+
+private struct FrozenPreChangeToolEntry: Decodable {
+    let id: String
+    let status: String
+    let projection: FrozenPreChangeProjection
+}
+
+private struct FrozenPreChangeProjection: Decodable {
+    enum Kind: String, Decodable {
+        case fileWrite = "file_write"
+        case fileEdit = "file_edit"
+    }
+
+    let toolName: String?
+    let kind: Kind
+    let summary: FrozenPreChangeSelector?
+    let call: FrozenPreChangeSelector?
+    let result: FrozenPreChangeSelector?
+
+    enum CodingKeys: String, CodingKey {
+        case toolName = "tool_name"
+        case kind
+        case summary
+        case call
+        case result
+    }
+}
+
+private struct FrozenPreChangeSelector: Decodable {
+    enum Format: String, Decodable {
+        case text
+        case code
+        case path
+        case json
+        case diff
+        case image
+    }
+
+    enum Label: String, Decodable {
+        case call
+        case file
+        case result
+    }
+
+    let root: String
+    let path: [String]?
+    let format: Format
+    let label: Label
 }
 
 private extension Array {
