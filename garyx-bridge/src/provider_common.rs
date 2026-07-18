@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use garyx_models::provider::ProviderRateLimit;
+use garyx_models::provider::{ProviderMessage, StreamEvent};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -374,5 +375,42 @@ mod tests {
     #[test]
     fn garyx_mcp_server_skips_blank_base_url() {
         assert!(garyx_mcp_server("  /// ", "thread", "run", &HashMap::new()).is_none());
+    }
+}
+
+/// Normalizes a provider-supplied thread title. Shared by the Claude and
+/// Codex providers.
+pub(crate) fn normalize_thread_title(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.chars().count() <= 80 {
+        return trimmed.to_owned();
+    }
+    let mut clipped = trimmed.chars().take(79).collect::<String>();
+    clipped.push('…');
+    clipped
+}
+
+/// Converts a unix-seconds timestamp into an RFC3339 string. Shared by the
+/// Claude and Codex providers.
+pub(crate) fn unix_to_rfc3339(secs: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
+}
+
+/// Forwards a tool_use / tool_result provider message to the stream callback.
+/// Shared by the Claude and Codex providers; generic over the callback shape
+/// so `&StreamCallback` (boxed) and `&dyn Fn` call sites both work unchanged.
+pub(crate) fn emit_tool_stream_event<F>(message: &ProviderMessage, on_chunk: &F)
+where
+    F: Fn(StreamEvent) + Send + Sync + ?Sized,
+{
+    match message.role_str() {
+        "tool_use" => on_chunk(StreamEvent::ToolUse {
+            message: message.clone(),
+        }),
+        "tool_result" => on_chunk(StreamEvent::ToolResult {
+            message: message.clone(),
+        }),
+        _ => {}
     }
 }

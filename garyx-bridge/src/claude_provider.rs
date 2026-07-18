@@ -26,8 +26,9 @@ use uuid::Uuid;
 use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_common::{
-    PendingAckQueue, PendingRateLimits, garyx_mcp_server, metadata_bool,
-    resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
+    PendingAckQueue, PendingRateLimits, emit_tool_stream_event, garyx_mcp_server, metadata_bool,
+    normalize_thread_title, resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
+    unix_to_rfc3339,
 };
 use crate::provider_trait::{
     BridgeError, ClearSessionOutcome, ProviderModelDefaults, ProviderRuntime,
@@ -202,10 +203,6 @@ struct StreamSignals {
     rate_limit_info: Option<Value>,
     /// Last assistant-level API error classification seen on the stream.
     last_assistant_error: Option<AssistantMessageError>,
-}
-
-fn unix_to_rfc3339(secs: i64) -> Option<String> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
 }
 
 /// Build a `ProviderRateLimit` from Claude's structured quota signals. Returns
@@ -508,18 +505,6 @@ fn custom_standalone_agent_id(metadata: &HashMap<String, Value>) -> Option<&str>
 // Content extraction helpers
 // ---------------------------------------------------------------------------
 
-fn emit_tool_stream_event(entry: &ProviderMessage, on_chunk: &StreamCallback) {
-    match entry.role_str() {
-        "tool_use" => on_chunk(StreamEvent::ToolUse {
-            message: entry.clone(),
-        }),
-        "tool_result" => on_chunk(StreamEvent::ToolResult {
-            message: entry.clone(),
-        }),
-        _ => {}
-    }
-}
-
 fn resolve_requested_model(
     config: &ClaudeCodeConfig,
     metadata: &HashMap<String, Value>,
@@ -549,17 +534,6 @@ fn resolve_requested_effort(
         .and_then(|v| v.as_str())
         .and_then(claude_effort_for_reasoning_effort)
         .or_else(|| claude_effort_for_reasoning_effort(&config.model_reasoning_effort))
-}
-
-fn normalize_thread_title(value: &str) -> String {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = normalized.trim();
-    if trimmed.chars().count() <= 80 {
-        return trimmed.to_owned();
-    }
-    let mut clipped = trimmed.chars().take(79).collect::<String>();
-    clipped.push('…');
-    clipped
 }
 
 fn extract_claude_thread_title(data: &Value) -> Option<String> {

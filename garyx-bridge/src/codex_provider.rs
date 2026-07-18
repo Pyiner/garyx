@@ -32,8 +32,9 @@ use tokio::sync::Mutex;
 use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_common::{
-    PendingAckQueue, PendingRateLimits, garyx_mcp_server, metadata_bool, metadata_string,
-    normalize_non_empty, resolve_run_id_with, runtime_env_overlay,
+    PendingAckQueue, PendingRateLimits, emit_tool_stream_event, garyx_mcp_server, metadata_bool,
+    metadata_string, normalize_non_empty, normalize_thread_title, resolve_run_id_with,
+    runtime_env_overlay, unix_to_rfc3339,
 };
 use crate::provider_trait::{
     BridgeError, ClearSessionOutcome, ProviderModelDefaults, ProviderRuntime,
@@ -59,17 +60,6 @@ fn configured_request_timeout(seconds: f64) -> Duration {
     } else {
         Duration::from_secs(300)
     }
-}
-
-fn normalize_thread_title(value: &str) -> String {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = normalized.trim();
-    if trimmed.chars().count() <= 80 {
-        return trimmed.to_owned();
-    }
-    let mut clipped = trimmed.chars().take(79).collect::<String>();
-    clipped.push('…');
-    clipped
 }
 
 fn extract_codex_thread_title(params: &Value) -> Option<String> {
@@ -196,10 +186,6 @@ fn choose_blocking_window(
         (None, Some(s)) => Some(("secondary", s)),
         (None, None) => None,
     }
-}
-
-fn unix_to_rfc3339(secs: i64) -> Option<String> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
 }
 
 /// Parse a concrete reset hint out of Codex's usage-limit message text.
@@ -1174,21 +1160,6 @@ fn maybe_emit_agent_message_separator(
     if current_item_id.as_deref() != Some(next_item_id) {
         *current_item_id = Some(next_item_id.to_owned());
         *current_item_has_text = false;
-    }
-}
-
-fn emit_tool_stream_event(
-    message: &ProviderMessage,
-    on_chunk: &(dyn Fn(StreamEvent) + Send + Sync),
-) {
-    match message.role_str() {
-        "tool_use" => on_chunk(StreamEvent::ToolUse {
-            message: message.clone(),
-        }),
-        "tool_result" => on_chunk(StreamEvent::ToolResult {
-            message: message.clone(),
-        }),
-        _ => {}
     }
 }
 
