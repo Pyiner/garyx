@@ -450,6 +450,12 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         values.isExcludedFromBackup = true
         var mutableDirectory = directory
         try mutableDirectory.setResourceValues(values)
+        #if os(iOS)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: directory.path
+        )
+        #endif
     }
 
     private static func protectDatabaseFiles(_ databaseURL: URL) throws {
@@ -461,11 +467,14 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             )
             var values = URLResourceValues()
             values.isExcludedFromBackup = true
-            #if os(iOS)
-            values.fileProtection = .completeUntilFirstUserAuthentication
-            #endif
             var mutablePath = path
             try mutablePath.setResourceValues(values)
+            #if os(iOS)
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: path.path
+            )
+            #endif
         }
     }
 }

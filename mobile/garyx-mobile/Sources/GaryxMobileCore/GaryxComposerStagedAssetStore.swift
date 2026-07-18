@@ -332,11 +332,14 @@ public actor GaryxComposerStagedAssetStore {
         )
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        #if os(iOS)
-        values.fileProtection = .completeUntilFirstUserAuthentication
-        #endif
         var mutableDirectory = directory
         try mutableDirectory.setResourceValues(values)
+        #if os(iOS)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: directory.path
+        )
+        #endif
     }
 
     private static func protectFile(_ fileURL: URL) throws {
@@ -346,11 +349,14 @@ public actor GaryxComposerStagedAssetStore {
         )
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        #if os(iOS)
-        values.fileProtection = .completeUntilFirstUserAuthentication
-        #endif
         var mutableURL = fileURL
         try mutableURL.setResourceValues(values)
+        #if os(iOS)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: fileURL.path
+        )
+        #endif
     }
 
     private static func synchronizeDirectory(_ directory: URL) throws {
