@@ -53,7 +53,7 @@ A4b and A4d-2 consume this layer later.
 
 ## Adversarial recovery remediation
 
-Three cross-model adversarial passes found compound-state shapes that the
+Four cross-model adversarial passes found compound-state shapes that the
 original single-operation fixtures did not exercise. They are now closed as
 independent acceptance surfaces:
 
@@ -75,18 +75,22 @@ independent acceptance surfaces:
   branch/operation identity with length-delimited components. Two Entries may
   use the same local operation ID without sharing a feedback record.
 - Discard releases only the captured forward alias paths from that Entry's
-  stable-token origins to its destination, including `D -> T1 -> T2`. Each
-  highest captured branch contributes its active/closing-session, pending-ack,
-  and promotion-in-flight reference counts to downstream edges; a shared edge
-  is removed only when all three counts reach zero. An exclusively owned
-  suffix still drains all heterogeneous counter classes, while a suffix with
-  a surviving external predecessor keeps that predecessor's conservative
-  occupancy floor. Direct fan-in
-  `D1 -> T <- D2` and shared-suffix `A -> X <- B, X -> D` fixtures prove that
-  discarding A/D1 does not break the live sibling path. The shared-suffix case
-  reopens the same SQLite/WAL database twice and remains idempotent; nested
-  captured origins are counted only once. Cross-promotion and 500-churn
-  fixtures retain multi-hop zero-residue coverage.
+  stable-token sessions to its destination, including `D -> T1 -> T2`.
+  Session tombstones reconstruct a per-session release list without collapsing
+  duplicate ComposerKeys: live/finalizing sessions contribute one
+  active-or-closing reference, while close-pending sessions additionally
+  contribute one pending-ack reference. Each contribution is subtracted from
+  every edge it actually traverses, and an edge is removed only when its own
+  three durable counters reach zero. No incoming-edge topology, force-zero
+  drain, or inferred conservative occupancy floor decides ownership. Direct
+  fan-in `D1 -> T <- D2`, shared suffix `A -> X <- B, X -> D`, occupancy-only
+  residuals `A -> X(1), X -> D(2)`, and same-source follow-up occupancy all
+  prove that discarding one Entry cannot break a live sibling route. SQLite
+  fixtures reopen the same database twice; a same-origin two-session case
+  proves multiplicity survives relaunch. A discriminating nested-origin case
+  leaves a residual count of one, so saturating subtraction cannot mask a
+  dropped or duplicate contribution. Cross-promotion and 500-churn fixtures
+  retain heterogeneous multi-hop zero-residue coverage.
 - Ownerless-manifest recovery removes the corresponding Entry operation
   membership in the same transaction. Concrete double-relaunch and real
   pre-/post-commit process-kill tests prove the recovery branch cannot reject
@@ -199,9 +203,9 @@ xcodebuild test -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,367 of 1,367 tests with zero failures in
-221.846 seconds; its 16 real-process durability suites passed in 214.442
-seconds. The generated Xcode project passed Debug and Release generic
-iOS Simulator builds, and the `GaryxMobile` app-hosted suite passed 91 of 91
-tests on iPhone 17 Pro / iOS 26.5. Build warnings were pre-existing app-source
-deprecations; the A4d-1 files emitted no warnings.
+The final clean SwiftPM run passed 1,368 of 1,368 tests with zero failures in
+232.964 seconds; its 16 real-process durability suites passed in 225.158
+seconds. The generated Xcode project had zero drift and passed Debug and
+Release generic iOS Simulator builds, and the `GaryxMobile` app-hosted suite
+passed 91 of 91 tests on iPhone 17 Pro / iOS 26.5. Build warnings were
+pre-existing app-source deprecations; the A4d-1 files emitted no warnings.
