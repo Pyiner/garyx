@@ -2130,38 +2130,34 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertNil(snapshot.ledgers[ledger.key])
     }
 
-    func testTerminalLedgerRemainsWhileOnlyDiscardConvergenceCapturesReservation() async throws {
-        let ledger = makeLedger(outcome: .revoked)
-        var convergence = makeDiscardConvergence()
-        convergence.settleReservation()
-        convergence.settleDeliveries()
-        convergence.settleSessions()
-        convergence.settleResources()
-        XCTAssertTrue(convergence.finishToken())
-        let fake = GaryxFakeComposerDurabilityStore()
-
-        var snapshot = try await fake.commit(
-            .init(
-                expectedRevision: 0,
-                label: "retain terminal ledger through convergence record GC window",
-                mutations: [
-                    .upsertLedger(ledger),
-                    .upsertDiscardConvergence(convergence),
-                ]
-            )
+    func testTerminalLedgerRemainsWhileOnlyConvergenceBarrierCapturesReservation() async throws {
+        try await assertTerminalLedgerRetainedUntilConvergenceRemoval(
+            makeDiscardedConvergence(barrier: makeSealedBarrier())
         )
-        XCTAssertEqual(snapshot.ledgers[ledger.key], ledger)
-        XCTAssertEqual(snapshot.discardConvergence[entryID], convergence)
+    }
 
-        snapshot = try await fake.commit(
-            .init(
-                expectedRevision: snapshot.revision,
-                label: "retire terminal ledger with final convergence descendant",
-                mutations: [.removeDiscardConvergence(entryID)]
-            )
+    func testTerminalLedgerRemainsWhileOnlyConvergenceDeliveryCapturesReservation() async throws {
+        let delivery = makeDelivery()
+        try await assertTerminalLedgerRetainedUntilConvergenceRemoval(
+            makeDiscardedConvergence(deliveries: [delivery.id: delivery])
         )
-        XCTAssertNil(snapshot.discardConvergence[entryID])
-        XCTAssertNil(snapshot.ledgers[ledger.key])
+    }
+
+    func testTerminalLedgerRemainsWhileOnlyConvergenceOperationCapturesReservation() async throws {
+        let operation = makeOperation(
+            state: .failedRetryable,
+            reservationID: reservation
+        )
+        try await assertTerminalLedgerRetainedUntilConvergenceRemoval(
+            makeDiscardedConvergence(operations: [operation.context.key: operation])
+        )
+    }
+
+    func testTerminalLedgerRemainsWhileOnlyConvergenceReplacementCapturesReservation() async throws {
+        let replacement = makeReplacement(reservationID: reservation)
+        try await assertTerminalLedgerRetainedUntilConvergenceRemoval(
+            makeDiscardedConvergence(replacements: [replacement.id: replacement])
+        )
     }
 
     func testUnsettledReservationLedgerBudgetsAreFailClosed() async throws {
@@ -2718,10 +2714,11 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         id: String = "operation",
         state: GaryxOperationCapabilityState,
         assetID: GaryxStagedAssetID? = nil,
-        reservedBytes: Int = 0
+        reservedBytes: Int = 0,
+        reservationID: GaryxSendReservationID? = nil
     ) -> GaryxOperationCapability {
         let entry = makeEntry()
-        let key = operationKey(id)
+        let key = operationKey(id, reservationID: reservationID)
         return GaryxOperationCapability(
             context: GaryxScopeBoundOperationContext(
                 key: key,
@@ -2821,24 +2818,91 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         )
     }
 
-    private func makeDiscardConvergence() -> GaryxPayloadDiscardConvergence {
-        var entry = makeEntry(text: "payload")
-        XCTAssertTrue(entry.beginDiscard(revision: 9))
+    private func makeSealedBarrier() -> GaryxSendCommitBarrier {
         var barrier = makeBarrier()
         let active = GaryxPayloadLifecycleSnapshot(
             token: barrier.payloadLifecycle.token,
             revision: barrier.payloadLifecycle.revision,
             phase: .active
         )
-        _ = barrier.seal(
-            reservationID: reservation,
-            envelope: makeEnvelope(text: "T"),
-            followupGeneration: 11,
-            readiness: .ready,
-            quota: .init(),
-            producerPhase: .live,
-            lifecycle: active
+        XCTAssertEqual(
+            barrier.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(text: "T"),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: active
+            ),
+            .sealed
         )
+        return barrier
+    }
+
+    private func makeDiscardedConvergence(
+        barrier: GaryxSendCommitBarrier? = nil,
+        deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord] = [:],
+        operations: [GaryxOperationCapabilityKey: GaryxOperationCapability] = [:],
+        replacements: [GaryxReplacementID: GaryxReplacementRecord] = [:]
+    ) -> GaryxPayloadDiscardConvergence {
+        var entry = makeEntry(text: "payload")
+        XCTAssertTrue(entry.beginDiscard(revision: 9))
+        var convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: barrier ?? makeBarrier(),
+            deliveries: deliveries,
+            operations: operations,
+            replacements: replacements
+        )
+        convergence.settleReservation()
+        convergence.settleDeliveries()
+        convergence.settleSessions()
+        convergence.settleResources()
+        XCTAssertTrue(convergence.finishToken())
+        return convergence
+    }
+
+    private func assertTerminalLedgerRetainedUntilConvergenceRemoval(
+        _ convergence: GaryxPayloadDiscardConvergence,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let ledger = makeLedger(outcome: .revoked)
+        let fake = GaryxFakeComposerDurabilityStore()
+        var snapshot = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "retain terminal ledger through convergence record GC window",
+                mutations: [
+                    .upsertLedger(ledger),
+                    .upsertDiscardConvergence(convergence),
+                ]
+            )
+        )
+        XCTAssertEqual(snapshot.ledgers[ledger.key], ledger, file: file, line: line)
+        XCTAssertEqual(
+            snapshot.discardConvergence[entryID],
+            convergence,
+            file: file,
+            line: line
+        )
+
+        snapshot = try await fake.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "retire terminal ledger with final convergence descendant",
+                mutations: [.removeDiscardConvergence(entryID)]
+            )
+        )
+        XCTAssertNil(snapshot.discardConvergence[entryID], file: file, line: line)
+        XCTAssertNil(snapshot.ledgers[ledger.key], file: file, line: line)
+    }
+
+    private func makeDiscardConvergence() -> GaryxPayloadDiscardConvergence {
+        var entry = makeEntry(text: "payload")
+        XCTAssertTrue(entry.beginDiscard(revision: 9))
+        let barrier = makeSealedBarrier()
         let sessionKey = GaryxSessionDescendantKey(
             token: entry.lifecycle.token,
             sessionID: GaryxComposerInputSessionID(rawValue: "session"),
