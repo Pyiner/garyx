@@ -227,6 +227,29 @@ final class GaryxRouteRendererStateTests: XCTestCase {
         XCTAssertEqual(session.coordinator.terminalState?.outcome, .committed)
     }
 
+    func testRecognizerCancellationAndVisibilityEventsUseA3DecisionTable() throws {
+        var cancelled = try XCTUnwrap(GaryxRouteTransitionSession(
+            kind: .pop,
+            source: node("source"),
+            destination: node("destination"),
+            preferences: .init(reduceMotion: false, prefersCrossFadeTransitions: false)
+        ))
+        XCTAssertEqual(cancelled.handle(.recognizerCancelled), .transitioned(.cancelSettle))
+        XCTAssertEqual(cancelled.settleTarget, 0)
+
+        var inactive = try XCTUnwrap(GaryxRouteTransitionSession(
+            kind: .pop,
+            source: node("source"),
+            destination: node("destination"),
+            preferences: .init(reduceMotion: false, prefersCrossFadeTransitions: false)
+        ))
+        XCTAssertEqual(
+            inactive.handle(.sceneInactive),
+            .reachedTerminal(.init(outcome: .cancelled, visibility: .inactive))
+        )
+        XCTAssertEqual(inactive.coordinator.phase, .terminal)
+    }
+
     func testSettleCalibrationStaysInsideMeasuredSystemWindow() {
         XCTAssertEqual(GaryxRouteTransitionCalibration.measuredRecognitionThreshold, 12.7)
         XCTAssertGreaterThanOrEqual(GaryxRouteTransitionCalibration.settleCurve.settlingDuration, 0.300)

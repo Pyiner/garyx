@@ -392,6 +392,22 @@ public struct GaryxRouteTransitionSession: Equatable, Sendable {
         return true
     }
 
+    @discardableResult
+    public mutating func handle(
+        _ event: GaryxPresentationCoordinatorEvent
+    ) -> GaryxPresentationEventEffect {
+        let effect = coordinator.handle(event)
+        switch effect {
+        case .transitioned(.cancelSettle):
+            settleTarget = 0
+        case .reachedTerminal(let terminal):
+            settleTarget = terminal.outcome == .committed ? 1 : 0
+        case .transitioned, .rederiveGeometry, .ignored:
+            break
+        }
+        return effect
+    }
+
     public mutating func finish(
         visibility: GaryxPresentationVisibility
     ) -> GaryxPresentationTerminalState? {
