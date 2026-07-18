@@ -179,6 +179,10 @@ export function highestReasoningEffort(options: DesktopProviderModelOption[]): s
   }, '');
 }
 
+/// Catalog hydration must not rewrite the configured service tier: the CLI
+/// accepts arbitrary tier strings, so a tier the catalog does not enumerate
+/// still round-trips through open-dialog → save. The tier is sanitized only
+/// on an explicit model change (`sanitizedServiceTier` in the model select).
 export function applyProviderCatalogDefaults(
   draft: ModelProviderConfigDraft,
   providerModels: DesktopProviderModels | null | undefined,
@@ -187,13 +191,11 @@ export function applyProviderCatalogDefaults(
     return draft;
   }
   const model = draft.model.trim();
-  const modelServiceTier = sanitizedServiceTier(providerModels, model, draft.modelServiceTier);
   if (!model) {
     return {
       ...draft,
       model: '',
       modelReasoningEffort: '',
-      modelServiceTier,
     };
   }
   const reasoningOptions = reasoningEffortOptionsForModel(
@@ -210,7 +212,6 @@ export function applyProviderCatalogDefaults(
     ...draft,
     model,
     modelReasoningEffort,
-    modelServiceTier,
   };
 }
 

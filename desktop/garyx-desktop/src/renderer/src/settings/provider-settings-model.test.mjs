@@ -146,12 +146,41 @@ test('catalog defaults keep a service tier the selected model supports', () => {
   assert.equal(draft.modelServiceTier, 'priority');
 });
 
-test('catalog defaults drop a service tier the catalog does not know', () => {
+test('catalog defaults preserve a service tier the catalog does not know', () => {
+  // The CLI accepts arbitrary --service-tier strings; opening the dialog
+  // (catalog hydrate) must not rewrite them.
   const draft = applyProviderCatalogDefaults(
-    codexDraft({ model: 'test-model-a', modelServiceTier: 'retired-tier' }),
+    codexDraft({ model: 'test-model-a', modelServiceTier: 'flex' }),
     codexCatalog(),
   );
-  assert.equal(draft.modelServiceTier, '');
+  assert.equal(draft.modelServiceTier, 'flex');
+});
+
+test('a catalog-unknown configured tier round-trips through open-dialog and save', () => {
+  // Regression (review #TASK-2410): catalog hydrate used to sanitize the
+  // tier, so opening the Configure dialog and saving silently cleared a
+  // CLI-configured tier the catalog does not enumerate.
+  const gatewayConfig = {
+    agents: {
+      codex: {
+        provider_type: 'codex_app_server',
+        default_model: 'test-model-a',
+        model_reasoning_effort: 'high',
+        model_service_tier: 'flex',
+      },
+    },
+  };
+  const opened = applyProviderCatalogDefaults(
+    modelProviderDraftFromState('codex_app_server', gatewayConfig),
+    codexCatalog(),
+  );
+  assert.equal(opened.modelServiceTier, 'flex');
+  applyProviderConfigDraftToGatewayConfig(
+    gatewayConfig,
+    fixedModelProviderRow('codex_app_server'),
+    opened,
+  );
+  assert.equal(gatewayConfig.agents.codex.model_service_tier, 'flex');
 });
 
 test('catalog defaults keep the draft untouched while the catalog is missing', () => {
