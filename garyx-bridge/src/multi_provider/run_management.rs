@@ -60,6 +60,16 @@ const LEGACY_DEFAULT_THREAD_LABEL: &str = "Fresh Thread";
 const PROMPT_THREAD_TITLE_SOURCE: &str = "garyx_prompt";
 const PROVIDER_THREAD_TITLE_SOURCE: &str = "provider";
 
+#[cfg(test)]
+pub(super) fn emit_committed_records_for_test(
+    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
+    thread_id: &str,
+    run_id: Option<&str>,
+    committed: Vec<(u64, Value)>,
+) {
+    persistence_worker::emit_committed_records(event_tx, thread_id, run_id, committed);
+}
+
 fn normalize_workspace_dir(workspace_dir: Option<String>) -> Option<String> {
     workspace_dir.and_then(|value| {
         let trimmed = value.trim();

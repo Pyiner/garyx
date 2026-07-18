@@ -24,6 +24,143 @@ mod topology;
 
 use state::{Inner, default_max_concurrent_runs};
 
+#[cfg(test)]
+pub(crate) struct ProviderPersistenceProbe {
+    pub ledger_messages: Vec<serde_json::Value>,
+    pub ledger_seqs: Vec<u64>,
+    pub committed_events: Vec<serde_json::Value>,
+}
+
+/// Test-only provider → persistence probe used by provider-specific adoption
+/// tests. It runs both the streaming append and terminal reconcile, then
+/// captures the real `committed_message` emitter output.
+#[cfg(test)]
+pub(crate) async fn probe_provider_persistence(
+    session_messages: &[garyx_models::provider::ProviderMessage],
+    assistant_response: &str,
+    stream_events: &[StreamEvent],
+) -> ProviderPersistenceProbe {
+    use persistence::{
+        PersistedRun, RunControlRecord, TerminalRunControl, save_streaming_partial,
+        save_thread_messages_with_terminal_control,
+    };
+
+    const THREAD_ID: &str = "thread::provider-persistence-probe";
+    const RUN_ID: &str = "run::provider-persistence-probe";
+    const STARTED_AT: &str = "2026-07-18T12:00:00Z";
+
+    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+    let history = Arc::new(ThreadHistoryRepository::new(
+        store.clone(),
+        Arc::new(garyx_router::ThreadTranscriptStore::memory()),
+    ));
+    store.set(THREAD_ID, serde_json::json!({})).await.unwrap();
+
+    let metadata = HashMap::from([(
+        "bridge_run_id".to_owned(),
+        serde_json::Value::String(RUN_ID.to_owned()),
+    )]);
+    let mut controls = vec![RunControlRecord::new(
+        "run_start",
+        THREAD_ID,
+        RUN_ID,
+        STARTED_AT.to_owned(),
+        serde_json::Map::new(),
+        0,
+    )];
+    for event in stream_events {
+        let kind = match event {
+            StreamEvent::Boundary {
+                kind: garyx_models::provider::StreamBoundaryKind::AssistantSegment,
+                ..
+            } => Some("assistant_boundary"),
+            StreamEvent::Boundary {
+                kind: garyx_models::provider::StreamBoundaryKind::UserAck,
+                ..
+            } => Some("user_ack"),
+            StreamEvent::Done => Some("done"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            controls.push(RunControlRecord::new(
+                kind,
+                THREAD_ID,
+                RUN_ID,
+                STARTED_AT.to_owned(),
+                serde_json::Map::new(),
+                1 + session_messages.len(),
+            ));
+        }
+    }
+
+    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(32);
+    let persisted_run = || PersistedRun {
+        thread_id: THREAD_ID,
+        user_message: "Run a synthetic delegated check",
+        user_timestamp: Some(STARTED_AT),
+        user_images: &[],
+        assistant_response,
+        sdk_session_id: Some("sdk-session-persistence-probe"),
+        provider_key: "provider::claude-probe",
+        provider_type: garyx_models::provider::ProviderType::ClaudeCode,
+        session_messages,
+        metadata: &metadata,
+    };
+    let (_, streaming_committed) = save_streaming_partial(
+        &store,
+        &history,
+        persisted_run(),
+        &[],
+        &controls,
+        session_messages.len(),
+        0,
+    )
+    .await;
+    run_management::emit_committed_records_for_test(
+        &Some(event_tx.clone()),
+        THREAD_ID,
+        Some(RUN_ID),
+        streaming_committed,
+    );
+
+    let terminal_committed = save_thread_messages_with_terminal_control(
+        &store,
+        &history,
+        persisted_run(),
+        &controls,
+        Some(TerminalRunControl {
+            duration_ms: Some(1),
+            success: Some(true),
+            ..Default::default()
+        }),
+    )
+    .await;
+    run_management::emit_committed_records_for_test(
+        &Some(event_tx),
+        THREAD_ID,
+        Some(RUN_ID),
+        terminal_committed,
+    );
+
+    let records = history
+        .transcript_store()
+        .records(THREAD_ID)
+        .await
+        .expect("probe ledger records");
+    let mut committed_events = Vec::new();
+    while let Ok(raw) = event_rx.try_recv() {
+        committed_events.push(serde_json::from_str(&raw).expect("committed event json"));
+    }
+    ProviderPersistenceProbe {
+        ledger_messages: records
+            .iter()
+            .map(|record| record.message.clone())
+            .collect(),
+        ledger_seqs: records.iter().map(|record| record.seq).collect(),
+        committed_events,
+    }
+}
+
 /// Routes agent-run requests to the appropriate provider based on
 /// channel/account/session affinity.
 ///

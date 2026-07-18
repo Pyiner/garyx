@@ -1190,13 +1190,7 @@ fn test_process_assistant_blocks_streaming_preserves_block_order() {
             .push(event);
     });
 
-    process_assistant_blocks_streaming(
-        &blocks,
-        &mut response_text,
-        &mut session_messages,
-        &cb,
-        None,
-    );
+    process_assistant_blocks_streaming(&blocks, &mut response_text, &mut session_messages, &cb);
 
     assert_eq!(response_text, "Hello world!");
     let roles: Vec<&str> = session_messages
@@ -1254,7 +1248,89 @@ fn test_has_tool_result_blocks_false() {
 }
 
 #[test]
-fn test_extract_tool_session_messages_preserves_parent_tool_use_id_metadata() {
+fn test_claude_envelope_scope_predicate_covers_nested_shapes() {
+    let cases = vec![
+        (
+            "top-level Agent use",
+            None,
+            vec![ContentBlock::ToolUse(ToolUseBlock {
+                id: "toolu_agent".to_owned(),
+                name: "Agent".to_owned(),
+                input: json!({}),
+            })],
+            false,
+        ),
+        (
+            "empty parent",
+            Some(""),
+            vec![ContentBlock::ToolUse(ToolUseBlock {
+                id: "toolu_agent".to_owned(),
+                name: "Agent".to_owned(),
+                input: json!({}),
+            })],
+            false,
+        ),
+        (
+            "whitespace parent",
+            Some(" \n\t "),
+            vec![ContentBlock::ToolUse(ToolUseBlock {
+                id: "toolu_agent".to_owned(),
+                name: "Agent".to_owned(),
+                input: json!({}),
+            })],
+            false,
+        ),
+        (
+            "nested use",
+            Some("toolu_agent"),
+            vec![ContentBlock::ToolUse(ToolUseBlock {
+                id: "toolu_child".to_owned(),
+                name: "Bash".to_owned(),
+                input: json!({}),
+            })],
+            true,
+        ),
+        (
+            "self-parent top-level result",
+            Some("toolu_agent"),
+            vec![ContentBlock::ToolResult(ToolResultBlock {
+                tool_use_id: "toolu_agent".to_owned(),
+                content: Some(json!("done")),
+                is_error: Some(false),
+            })],
+            false,
+        ),
+        (
+            "second-level nested result",
+            Some("toolu_child_agent"),
+            vec![ContentBlock::ToolResult(ToolResultBlock {
+                tool_use_id: "toolu_grandchild".to_owned(),
+                content: Some(json!("done")),
+                is_error: Some(false),
+            })],
+            true,
+        ),
+        (
+            "nested text envelope",
+            Some("toolu_agent"),
+            vec![ContentBlock::Text(TextBlock {
+                text: "internal".to_owned(),
+            })],
+            true,
+        ),
+    ];
+
+    for (name, parent, blocks, expected) in cases {
+        assert_eq!(
+            is_nested_claude_envelope(parent, &blocks),
+            expected,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn test_extract_tool_session_messages_writes_no_parent_scope_metadata() {
     let blocks = vec![
         ContentBlock::ToolUse(ToolUseBlock {
             id: "toolu_child".to_owned(),
@@ -1271,13 +1347,13 @@ fn test_extract_tool_session_messages_preserves_parent_tool_use_id_metadata() {
     ];
 
     let mut session_messages = Vec::new();
-    extract_tool_session_messages(&blocks, &mut session_messages, None, Some("toolu_parent"));
+    extract_tool_session_messages(&blocks, &mut session_messages, None);
 
     assert_eq!(session_messages.len(), 2);
     for message in &session_messages {
-        assert_eq!(
-            message.metadata.get("parent_tool_use_id"),
-            Some(&Value::String("toolu_parent".to_owned()))
+        assert!(
+            !message.metadata.contains_key("parent_tool_use_id"),
+            "accepted top-level messages do not persist scope metadata"
         );
     }
 }
@@ -2453,25 +2529,18 @@ async fn test_process_messages_streaming_emits_live_tool_events() {
 }
 
 #[tokio::test]
-async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool_trace() {
+async fn test_process_messages_streaming_nested_envelopes_have_zero_main_stream_side_effects() {
     let provider = make_provider();
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
     tx.send(Ok(Message::Assistant(AssistantMessage {
-        content: vec![
-            ContentBlock::Text(TextBlock {
-                text: "子 Agent 内部文本，不应外发".to_owned(),
-            }),
-            ContentBlock::ToolUse(ToolUseBlock {
-                id: "toolu_child".to_owned(),
-                name: "Bash".to_owned(),
-                input: serde_json::json!({
-                    "command": "pwd"
-                }),
-            }),
-        ],
-        model: "claude-test".to_owned(),
-        parent_tool_use_id: Some("toolu_parent".to_owned()),
+        content: vec![ContentBlock::ToolUse(ToolUseBlock {
+            id: "toolu_parent_agent".to_owned(),
+            name: "Agent".to_owned(),
+            input: json!({"description": "Synthetic delegated check"}),
+        })],
+        model: "claude-top-level".to_owned(),
+        parent_tool_use_id: None,
         error: None,
     })))
     .await
@@ -2479,12 +2548,13 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
 
     tx.send(Ok(Message::User(UserMessage {
         content: UserContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
-            tool_use_id: "toolu_child".to_owned(),
-            content: Some(Value::String("/tmp/workspace".to_owned())),
+            tool_use_id: "toolu_parent_agent".to_owned(),
+            content: Some(Value::String("Synthetic delegated result".to_owned())),
             is_error: Some(false),
         })]),
         uuid: None,
-        parent_tool_use_id: Some("toolu_parent".to_owned()),
+        // Claude uses this self-parent shape for a top-level tool result.
+        parent_tool_use_id: Some("toolu_parent_agent".to_owned()),
         tool_use_result: None,
         origin: None,
     })))
@@ -2493,11 +2563,47 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
 
     tx.send(Ok(Message::Assistant(AssistantMessage {
         content: vec![ContentBlock::Text(TextBlock {
-            text: "最终只保留顶层回复".to_owned(),
+            text: "Top-level answer remains in flight.".to_owned(),
         })],
-        model: "claude-test".to_owned(),
+        model: "claude-top-level".to_owned(),
         parent_tool_use_id: None,
         error: None,
+    })))
+    .await
+    .unwrap();
+
+    // Background subagent activity arrives after top-level text. Before this
+    // fix the assistant envelope inserted a segment boundary/separator and the
+    // user result cleared assistant_text_in_flight, so Result failed to close
+    // the real top-level tail.
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![
+            ContentBlock::Text(TextBlock {
+                text: "Nested narration must be invisible.".to_owned(),
+            }),
+            ContentBlock::ToolUse(ToolUseBlock {
+                id: "toolu_child_bash".to_owned(),
+                name: "Bash".to_owned(),
+                input: json!({"command": "printf synthetic"}),
+            }),
+        ],
+        model: "claude-nested".to_owned(),
+        parent_tool_use_id: Some("toolu_parent_agent".to_owned()),
+        error: Some(AssistantMessageError::Overloaded),
+    })))
+    .await
+    .unwrap();
+
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
+            tool_use_id: "toolu_child_bash".to_owned(),
+            content: Some(Value::String("synthetic".to_owned())),
+            is_error: Some(false),
+        })]),
+        uuid: None,
+        parent_tool_use_id: Some("toolu_parent_agent".to_owned()),
+        tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2525,25 +2631,28 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, result_data, _signals) = provider
+    let (response_text, result_data, signals) = provider
         .process_messages_streaming("run-subagent", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
 
-    assert_eq!(response_text, "最终只保留顶层回复");
+    assert_eq!(response_text, "Top-level answer remains in flight.");
+    assert!(
+        signals.last_assistant_error.is_none(),
+        "nested envelopes cannot alter main-run error state"
+    );
 
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
     assert_eq!(emitted.len(), 4);
-    assert!(
-        matches!(&emitted[0], StreamEvent::ToolUse { message } if message.role_str() == "tool_use")
-    );
-    assert!(
-        matches!(&emitted[1], StreamEvent::ToolResult { message } if message.role_str() == "tool_result")
-    );
+    assert!(matches!(&emitted[0], StreamEvent::ToolUse { message }
+            if message.tool_name.as_deref() == Some("Agent")
+                && message.tool_use_id.as_deref() == Some("toolu_parent_agent")));
+    assert!(matches!(&emitted[1], StreamEvent::ToolResult { message }
+            if message.tool_use_id.as_deref() == Some("toolu_parent_agent")));
     assert_eq!(
         emitted[2],
         StreamEvent::Delta {
-            text: "最终只保留顶层回复".to_owned()
+            text: "Top-level answer remains in flight.".to_owned()
         }
     );
     // Result-time finalize of the in-flight tail (#TASK-1715).
@@ -2566,8 +2675,122 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
         result
             .session_messages
             .iter()
-            .all(|entry| entry.text.as_deref() != Some("子 Agent 内部文本，不应外发"))
+            .all(|entry| entry.tool_use_id.as_deref() != Some("toolu_child_bash"))
     );
+    assert!(
+        result
+            .session_messages
+            .iter()
+            .all(|entry| !entry.metadata.contains_key("parent_tool_use_id"))
+    );
+
+    let persistence = crate::multi_provider::probe_provider_persistence(
+        &result.session_messages,
+        &response_text,
+        &emitted,
+    )
+    .await;
+    assert!(
+        persistence.ledger_messages.iter().all(|message| {
+            message.get("tool_use_id").and_then(Value::as_str) != Some("toolu_child_bash")
+                && message.pointer("/metadata/parent_tool_use_id").is_none()
+        }),
+        "terminal reconcile must not reintroduce nested provider messages"
+    );
+    let parent_agent_rows = persistence
+        .ledger_messages
+        .iter()
+        .filter(|message| {
+            message.get("tool_use_id").and_then(Value::as_str) == Some("toolu_parent_agent")
+        })
+        .count();
+    assert_eq!(parent_agent_rows, 2, "top-level Agent use/result persist");
+    assert_eq!(
+        persistence.ledger_seqs,
+        (1..=persistence.ledger_seqs.len() as u64).collect::<Vec<_>>()
+    );
+    let committed_seqs = persistence
+        .committed_events
+        .iter()
+        .map(|event| {
+            assert_eq!(
+                event.get("type").and_then(Value::as_str),
+                Some("committed_message")
+            );
+            event.get("seq").and_then(Value::as_u64).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        committed_seqs, persistence.ledger_seqs,
+        "write-then-emit committed_message seqs must match the gapless ledger"
+    );
+}
+
+#[tokio::test]
+async fn test_process_messages_streaming_suppresses_orphan_nested_result() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "Top-level tail".to_owned(),
+        })],
+        model: "claude-top-level".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    // No corresponding child use was observed: scope is decided entirely
+    // from this result envelope, with no cross-record suppressed-id set.
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
+            tool_use_id: "toolu_orphan_child".to_owned(),
+            content: Some(Value::String("internal".to_owned())),
+            is_error: Some(false),
+        })]),
+        uuid: None,
+        parent_tool_use_id: Some("toolu_parent_agent".to_owned()),
+        tool_use_result: None,
+        origin: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(result_message_with_error(
+        "sdk-session-orphan-nested",
+        false,
+    ))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+
+    let (response_text, result_data, _signals) = provider
+        .process_messages_streaming("run-orphan-nested", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(response_text, "Top-level tail");
+    assert_eq!(
+        chunks.lock().expect("chunks mutex poisoned").as_slice(),
+        &[
+            StreamEvent::Delta {
+                text: "Top-level tail".to_owned(),
+            },
+            StreamEvent::Boundary {
+                kind: StreamBoundaryKind::AssistantSegment,
+                pending_input_id: None,
+            },
+        ]
+    );
+    let result = result_data.expect("expected result message");
+    assert_eq!(result.session_messages.len(), 1);
+    assert_eq!(result.session_messages[0].role_str(), "assistant");
 }
 
 fn result_message_with_error(session_id: &str, is_error: bool) -> Box<ResultMessage> {

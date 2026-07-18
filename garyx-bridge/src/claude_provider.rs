@@ -702,10 +702,25 @@ fn push_assistant_text_message(
     });
 }
 
-fn has_parent_tool_use_id(parent_tool_use_id: Option<&str>) -> bool {
-    parent_tool_use_id
+fn claude_envelope_tool_call_id(blocks: &[ContentBlock]) -> Option<&str> {
+    blocks.iter().find_map(|block| match block {
+        ContentBlock::ToolUse(tool_use) => Some(tool_use.id.as_str()),
+        ContentBlock::ToolResult(tool_result) => Some(tool_result.tool_use_id.as_str()),
+        _ => None,
+    })
+}
+
+fn is_nested_claude_envelope(parent_tool_use_id: Option<&str>, blocks: &[ContentBlock]) -> bool {
+    let Some(parent_tool_use_id) = parent_tool_use_id
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    claude_envelope_tool_call_id(blocks)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        != Some(parent_tool_use_id)
 }
 
 fn assistant_blocks_have_visible_text(blocks: &[ContentBlock]) -> bool {
@@ -744,18 +759,13 @@ fn assistant_blocks_start_with_newline(blocks: &[ContentBlock]) -> bool {
 /// assistant tail stays in flight downstream), `Some(false)` when it ends with
 /// a tool event (the tail is finalized), `None` when nothing is emitted.
 /// Mirrors that function's flush rules: text accumulates and flushes before a
-/// tool block or at the end, and text is suppressed for subagent messages
-/// (`parent_tool_use_id`).
-fn assistant_blocks_trailing_text_emission(
-    blocks: &[ContentBlock],
-    parent_tool_use_id: Option<&str>,
-) -> Option<bool> {
-    let suppress_text = has_parent_tool_use_id(parent_tool_use_id);
+/// tool block or at the end. Nested envelopes never enter this state machine.
+fn assistant_blocks_trailing_text_emission(blocks: &[ContentBlock]) -> Option<bool> {
     let mut trailing = None;
     for block in blocks {
         match block {
             ContentBlock::Text(TextBlock { text }) => {
-                if !suppress_text && !text.is_empty() {
+                if !text.is_empty() {
                     trailing = Some(true);
                 }
             }
@@ -787,10 +797,8 @@ fn process_assistant_blocks_streaming(
     response_text: &mut String,
     session_messages: &mut Vec<ProviderMessage>,
     on_chunk: &StreamCallback,
-    parent_tool_use_id: Option<&str>,
 ) {
     let mut pending_text = String::new();
-    let suppress_text = has_parent_tool_use_id(parent_tool_use_id);
 
     let flush_text = |pending_text: &mut String,
                       response_text: &mut String,
@@ -799,9 +807,6 @@ fn process_assistant_blocks_streaming(
             return;
         }
         let text = std::mem::take(pending_text);
-        if suppress_text {
-            return;
-        }
         push_assistant_text_message(&text, response_text, session_messages, on_chunk);
     };
 
@@ -816,7 +821,6 @@ fn process_assistant_blocks_streaming(
                     std::slice::from_ref(block),
                     session_messages,
                     Some(on_chunk),
-                    parent_tool_use_id,
                 );
             }
             ContentBlock::Image(_)
@@ -834,17 +838,12 @@ fn extract_tool_session_messages(
     blocks: &[ContentBlock],
     session_messages: &mut Vec<ProviderMessage>,
     on_chunk: Option<&StreamCallback>,
-    parent_tool_use_id: Option<&str>,
 ) {
     let now = chrono::Utc::now().to_rfc3339();
-    let parent_tool_use_id = parent_tool_use_id.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    });
     for block in blocks {
         match block {
             ContentBlock::ToolUse(tu) => {
-                let mut entry = ProviderMessage::tool_use(
+                let entry = ProviderMessage::tool_use(
                     serde_json::json!({
                         "tool": tu.name,
                         "input": tu.input,
@@ -854,12 +853,6 @@ fn extract_tool_session_messages(
                 )
                 .with_timestamp(now.clone())
                 .with_metadata_value("source", serde_json::json!("claude_sdk"));
-                if let Some(parent_tool_use_id) = parent_tool_use_id {
-                    entry = entry.with_metadata_value(
-                        "parent_tool_use_id",
-                        serde_json::json!(parent_tool_use_id),
-                    );
-                }
                 if let Some(on_chunk) = on_chunk {
                     emit_tool_stream_event(&entry, on_chunk);
                 }
@@ -882,12 +875,6 @@ fn extract_tool_session_messages(
                 )
                 .with_timestamp(now.clone())
                 .with_metadata_value("source", serde_json::json!("claude_sdk"));
-                if let Some(parent_tool_use_id) = parent_tool_use_id {
-                    entry = entry.with_metadata_value(
-                        "parent_tool_use_id",
-                        serde_json::json!(parent_tool_use_id),
-                    );
-                }
                 entry.text = (!tool_text.is_empty()).then_some(tool_text);
                 if let Some(on_chunk) = on_chunk {
                     emit_tool_stream_event(&entry, on_chunk);
@@ -1707,6 +1694,16 @@ impl ClaudeCliProvider {
                 Ok(None) => break, // stream closed normally
                 Ok(Some(msg_result)) => match msg_result {
                     Ok(Message::User(user_msg)) => {
+                        let envelope_blocks = match &user_msg.content {
+                            claude_agent_sdk::UserContent::Blocks(blocks) => blocks.as_slice(),
+                            claude_agent_sdk::UserContent::Text(_) => &[],
+                        };
+                        if is_nested_claude_envelope(
+                            user_msg.parent_tool_use_id.as_deref(),
+                            envelope_blocks,
+                        ) {
+                            continue;
+                        }
                         // Both branches below finalize the assistant tail
                         // downstream (ToolResult events or the UserAck
                         // boundary).
@@ -1717,7 +1714,6 @@ impl ClaudeCliProvider {
                                 blocks,
                                 &mut session_messages,
                                 Some(on_chunk),
-                                user_msg.parent_tool_use_id.as_deref(),
                             );
                             if has_tool_result_blocks(blocks) || user_msg.tool_use_result.is_some()
                             {
@@ -1738,6 +1734,12 @@ impl ClaudeCliProvider {
                         });
                     }
                     Ok(Message::Assistant(assistant_msg)) => {
+                        if is_nested_claude_envelope(
+                            assistant_msg.parent_tool_use_id.as_deref(),
+                            &assistant_msg.content,
+                        ) {
+                            continue;
+                        }
                         if let Some(api_error) = assistant_msg.error.as_ref() {
                             tracing::warn!(
                                 run_id = %run_id,
@@ -1776,12 +1778,10 @@ impl ClaudeCliProvider {
                             &mut response_text,
                             &mut session_messages,
                             on_chunk,
-                            assistant_msg.parent_tool_use_id.as_deref(),
                         );
-                        if let Some(trailing_text) = assistant_blocks_trailing_text_emission(
-                            &assistant_msg.content,
-                            assistant_msg.parent_tool_use_id.as_deref(),
-                        ) {
+                        if let Some(trailing_text) =
+                            assistant_blocks_trailing_text_emission(&assistant_msg.content)
+                        {
                             assistant_text_in_flight = trailing_text;
                         }
                     }
