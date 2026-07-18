@@ -1,6 +1,6 @@
 # Tool Projection: File Change Bodies (Write / Edit)
 
-Status: v9 for review (v8 FAIL findings addressed)
+Status: v10 for review (v9 FAIL finding addressed)
 Date: 2026-07-18
 
 ## Problem
@@ -175,18 +175,31 @@ projection and takes the lossy boundary (below). Plain derive on public
 shapes would accept empty `Vec`s and double-`None` pairs; that is
 explicitly not sufficient.
 
-**Zero-contribution pruning (derive time).** The deriver holds the
-committed raw values, so visual emptiness is decided where the values are
-known, not at merge time. A segment side whose raw value is an empty
-string, missing, or not a string contributes nothing; whitespace-only
-values still contribute. Segments with no contributing side are dropped at
-derivation; a derivation whose segments all drop yields `None` (empty
-`edits`/`changes` fall out of this rule too). This closes the call-wins
-hole where a structurally valid but visually empty call recipe (`Write`
-with `content: ""`, `Edit` with both strings empty) would suppress a valid
-result-side recipe and render nothing. Render-time composition semantics
-below still cover values that later resolve empty on the client (e.g. the
-source body is not loaded).
+**Derivation pipeline (staged, in this order).** The deriver holds the
+committed raw values, so both validity and visual emptiness are decided
+where the values are known, not at merge time:
+
+1. **Grammar validation.** Every candidate is checked against its syntax
+   (see the analyzer below). A meaningful value of the wrong type —
+   `old_string: 42`, `diff: {note: …}` — makes the whole pass
+   `Some(Unsupported)` right here; wrong-typed values never reach pruning
+   and are never reinterpreted as "zero contribution".
+2. **Zero-contribution pruning.** Only for passes that parsed: an empty
+   string, an empty array, or an absent *optional* Pair side contributes
+   nothing; whitespace-only values still contribute. Segments with no
+   contributing side are dropped.
+3. **Verdict and recipe construction.** At least one surviving segment →
+   `Some(Composable{segments, consumed})` and a recipe. All segments
+   dropped (`Write` `content: ""`, `Edit` with both strings empty, empty
+   `edits`/`changes`) → `Some(ComposableEmpty)` and **`projection.diff =
+   None`** — the analysis and the recipe are distinct outcomes; the
+   analyzer returns `None` only for zero-candidate passes.
+
+`ComposableEmpty` closes the call-wins hole where a structurally valid but
+visually empty call recipe would suppress a valid result-side recipe and
+render nothing (the merge table sees recipe `None`). Render-time
+composition semantics below still cover values that later resolve empty on
+the client (e.g. the source body is not loaded).
 
 **Special-shape analyzer (one analysis per derivation pass).** All special
 candidates of a pass are analyzed together by one typed analyzer whose
@@ -264,15 +277,16 @@ names `old_string`, `new_string`, `edits`, `changes`, or `diff`.
 
 **Merge semantics.** `from_message` derives at most one recipe per
 derivation pass (`source: tool_use` for the call pass, `tool_result` for
-the result pass); a pass whose derivation is structurally empty yields
-`None` (per the invariants). `absorb_result` applies one rule — the call
-side wins:
+the result pass). The merge operates on **recipes**, not analyses: every
+non-`Composable` analysis (`None`, `Unsupported`, `ComposableEmpty`)
+contributes recipe `None` here. `absorb_result` applies one rule — the
+call side wins:
 
 | call-pass recipe | result-pass recipe | merged |
 | --- | --- | --- |
-| none (incl. empty derivation) | none | none |
+| none (analyzer `None` / `Unsupported` / `ComposableEmpty`) | none | none |
 | some | none | call recipe |
-| none (incl. empty derivation) | some | result recipe |
+| none (analyzer `None` / `Unsupported` / `ComposableEmpty`) | some | result recipe |
 | some | some (equal or not) | call recipe |
 
 There is no structural-equality comparison and no concatenation across
@@ -494,13 +508,15 @@ after the implementation**, at every layer that changes.
      into the inner key; non-composable `diff` values produce no recipe
      and stay available to scalar selection. No `Format::Diff`/
      `Label::Diff` production remains (grep-pinned).
-   - Invariants and pruning: empty `edits`/`changes` derive `None`;
-     `Write` `content: ""` and `Edit` with both strings empty derive
-     `None` (zero-contribution pruning), and the merge tests "empty call
-     derivation + valid result recipe → result adopted" and "empty-string
-     call body + valid result recipe → result adopted" pass;
-     whitespace-only values still derive segments. All four merge-table
-     cases.
+   - Invariants and pruning — asserting analysis and recipe separately:
+     empty `edits`/`changes`, `Write` `content: ""`, and `Edit` with both
+     strings empty each yield analysis `Some(ComposableEmpty)` **and**
+     `projection.diff == None`; the merge tests "ComposableEmpty call pass
+     + valid result recipe → result adopted" and "empty-string call body +
+     valid result recipe → result adopted" pass; whitespace-only values
+     still derive segments (`Some(Composable)`). All four merge-table
+     cases (the table operates on recipes, where `ComposableEmpty` yields
+     `None`).
    - Analyzer verdicts, per pass on **both** sides:
      `{foo, bar, diff: ""}` / `{foo, bar, changes: []}` → ComposableEmpty,
      whole-object fallback kept;
