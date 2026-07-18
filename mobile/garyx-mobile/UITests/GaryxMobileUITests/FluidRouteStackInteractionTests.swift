@@ -163,6 +163,69 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         waitForTitle("Fake home", in: app)
     }
 
+    func testProductionConversationCancelKeepsKeyboardAndMatchesSystemFrames() {
+        let app = launchProductionConversation()
+
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.3947,
+            velocity: XCUIGestureVelocity(rawValue: 40),
+            holdAtEnd: 0.35,
+            y: app.frame.height * 0.30
+        )
+
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
+        waitForProductionStatus("terminal=cancelled-visible", in: app)
+        waitForProductionStatus("curve=pass", in: app)
+        waitForProductionStatus("backwards=0", in: app)
+        waitForProductionStatus("focusAtStart=1", in: app)
+        waitForProductionStatus("liveAdapters=1", in: app)
+        waitForProductionStatus("focusedAdapters=1", in: app)
+    }
+
+    func testProductionConversationFinishDismissesKeyboardAndMatchesSystemFrames() {
+        let app = launchProductionConversation()
+
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.82,
+            y: app.frame.height * 0.30
+        )
+
+        waitForProductionStatus("depth=0", in: app, timeout: 8)
+        waitForProductionStatus("terminal=committed-visible", in: app)
+        waitForProductionStatus("curve=pass", in: app)
+        waitForProductionStatus("backwards=0", in: app)
+        waitForProductionStatus("focusAtStart=1", in: app)
+        waitForProductionStatus("liveAdapters=0", in: app)
+        waitForProductionStatus("focusedAdapters=0", in: app)
+        XCTAssertFalse(app.buttons["Back"].exists)
+    }
+
+    func testProductionConversationCancelSettleCanRegrabWithKeyboard() {
+        let app = launchProductionConversation(automaticallyRegrabs: true)
+
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.30,
+            velocity: .slow,
+            holdAtEnd: 0.12,
+            y: app.frame.height * 0.30
+        )
+
+        waitForProductionStatus("depth=0", in: app, timeout: 8)
+        waitForProductionStatus("regrabs=1", in: app)
+        waitForProductionStatus("terminal=committed-visible", in: app)
+        waitForProductionStatus("curve=pass", in: app)
+        waitForProductionStatus("backwards=0", in: app)
+        waitForProductionStatus("focusAtStart=1", in: app)
+        waitForProductionStatus("liveAdapters=0", in: app)
+        waitForProductionStatus("focusedAdapters=0", in: app)
+    }
+
     // MARK: Helpers
 
     private func launchFakeRoutes(
@@ -180,6 +243,38 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         app.launch()
         waitForTitle(depth == 0 ? "Fake home" : "Fake route depth \(depth)", in: app)
         XCTAssertTrue(app.staticTexts["fluid.fake.status"].waitForExistence(timeout: 10))
+        return app
+    }
+
+    private func launchProductionConversation(
+        automaticallyRegrabs: Bool = false
+    ) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "chat"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_AUTO_FOCUS"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_AUTO_REGRAB"] = automaticallyRegrabs
+            ? "1"
+            : "0"
+        app.launch()
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["production.route.status"].waitForExistence(timeout: 10))
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let live = NSPredicate(format: "label == %@", "composer-live")
+        let liveExpectation = XCTNSPredicateExpectation(predicate: live, object: composer)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [liveExpectation], timeout: 10),
+            .completed,
+            "production composer never received live adapter ownership"
+        )
+        composer.tap()
+        // The UI-test simulator uses a hardware keyboard, for which XCUI's
+        // keyboard-focus query is not reliable. The production frame probe
+        // asserts UITextView.isFirstResponder directly once the drag begins.
+        Thread.sleep(forTimeInterval: 0.5)
+        waitForProductionStatus("depth=1", in: app)
         return app
     }
 
@@ -208,6 +303,22 @@ final class FluidRouteStackInteractionTests: XCTestCase {
             XCTWaiter.wait(for: [expectation], timeout: timeout),
             .completed,
             "status never contained \(fragment); value=\(String(describing: status.value))"
+        )
+    }
+
+    private func waitForProductionStatus(
+        _ fragment: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) {
+        let status = app.staticTexts["production.route.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: timeout))
+        let predicate = NSPredicate(format: "value CONTAINS %@", fragment)
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: status)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: timeout),
+            .completed,
+            "production status never contained \(fragment); value=\(String(describing: status.value))"
         )
     }
 
