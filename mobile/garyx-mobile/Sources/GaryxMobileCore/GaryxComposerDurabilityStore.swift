@@ -228,6 +228,108 @@ public struct GaryxComposerDurabilityTransaction: Equatable, Sendable {
     }
 }
 
+public struct GaryxReplacementFeedbackSwapPlan: Equatable, Sendable {
+    public let oldOperation: GaryxOperationCapability
+    public let successorOperation: GaryxOperationCapability
+    public let replacement: GaryxReplacementRecord
+    public let feedback: GaryxOperationFeedback
+    public let successorManifest: GaryxOperationManifest
+    public let transaction: GaryxComposerDurabilityTransaction
+
+    public init(
+        oldOperation: GaryxOperationCapability,
+        successorOperation: GaryxOperationCapability,
+        replacement: GaryxReplacementRecord,
+        feedback: GaryxOperationFeedback,
+        successorManifest: GaryxOperationManifest,
+        transaction: GaryxComposerDurabilityTransaction
+    ) {
+        self.oldOperation = oldOperation
+        self.successorOperation = successorOperation
+        self.replacement = replacement
+        self.feedback = feedback
+        self.successorManifest = successorManifest
+        self.transaction = transaction
+    }
+}
+
+/// Plans the retry swap from the authoritative durable snapshot. This keeps
+/// the interactive conversation retry path from inventing an owner map: O1's
+/// live manifest, Entry membership, staged-file owner, and quota reservation
+/// must all agree before one transaction can transfer them to O2.
+public enum GaryxReplacementFeedbackSwapPlanner {
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        successor: GaryxOperationCapability,
+        replacementID: GaryxReplacementID,
+        feedbackID: GaryxFeedbackID,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> GaryxReplacementFeedbackSwapPlan? {
+        guard var replacement = snapshot.replacements[replacementID],
+              var old = snapshot.operations[replacement.oldKey],
+              var feedback = snapshot.feedback[feedbackID],
+              var entry = snapshot.payloadStore.entry(
+                  replacement.entryID,
+                  scope: replacement.scope
+              ),
+              entry.operationKeys.contains(replacement.oldKey),
+              let oldManifest = snapshot.manifests[replacement.oldKey],
+              old.stagedAssetID == replacement.stagedAssetID,
+              old.reservedBytes == replacement.reservedBytes,
+              snapshot.stagedAssetOwners[replacement.stagedAssetID] == replacement.oldKey,
+              snapshot.stagedAssetReservedBytes[replacement.stagedAssetID]
+                  == replacement.reservedBytes else {
+            return nil
+        }
+        var successor = successor
+        guard GaryxReplacementFeedbackSwapReducer.commit(
+            old: &old,
+            successor: &successor,
+            record: &replacement,
+            feedback: &feedback,
+            lifecycle: entry.lifecycle.snapshot,
+            scopes: scopes
+        ) == .committed else {
+            return nil
+        }
+
+        entry.addOperation(successor.context.key)
+        let successorManifest = GaryxOperationManifest(
+            key: successor.context.key,
+            stagedPath: oldManifest.stagedPath,
+            state: successor.state,
+            uploadAttempted: successor.uploadAttempted
+        )
+        let transaction = GaryxComposerDurabilityTransaction(
+            expectedRevision: snapshot.revision,
+            label: "transfer retryable staged payload to replacement operation",
+            mutations: [
+                .upsertEntry(entry),
+                .upsertOperation(old),
+                .removeManifest(replacement.oldKey),
+                .upsertOperation(successor),
+                .upsertManifest(successorManifest),
+                .upsertReplacement(replacement),
+                .upsertFeedback(feedback),
+                .releaseStagedAsset(replacement.stagedAssetID),
+                .reserveStagedAsset(
+                    assetID: replacement.stagedAssetID,
+                    owner: successor.context.key,
+                    bytes: replacement.reservedBytes
+                ),
+            ]
+        )
+        return GaryxReplacementFeedbackSwapPlan(
+            oldOperation: old,
+            successorOperation: successor,
+            replacement: replacement,
+            feedback: feedback,
+            successorManifest: successorManifest,
+            transaction: transaction
+        )
+    }
+}
+
 public struct GaryxSyntheticReservationRecoveryPlan: Equatable, Sendable {
     public let ledgerKey: GaryxReservationLedgerKey
     public let mergeGeneration: UInt64
@@ -1210,6 +1312,18 @@ enum GaryxComposerDurabilityTransactionEngine {
         for ledger in state.ledgers.values {
             guard (ledger.terminalOutcome == nil) == (ledger.targetMapping == nil) else {
                 throw invariant("reservation outcome and target mapping must publish together")
+            }
+        }
+        for barrier in state.barriers.values where barrier.phase == .durableCommitted {
+            guard let reservationID = barrier.reservationID,
+                  state.deliveries.values.contains(where: {
+                      $0.scope == barrier.scope
+                          && $0.entryID == barrier.entryID
+                          && $0.reservationID == reservationID
+                  }) else {
+                throw invariant(
+                    "durable-committed send barrier requires matching reservation delivery"
+                )
             }
         }
         let unsettledLedgers = state.ledgers.values.filter { $0.terminalOutcome == nil }

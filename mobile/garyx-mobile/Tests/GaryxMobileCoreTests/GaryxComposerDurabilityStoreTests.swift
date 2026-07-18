@@ -1259,6 +1259,54 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.deliveries[delivery.id], delivery)
     }
 
+    func testGenericTransactionRejectsCommittedBarrierWithoutReservationDelivery() async throws {
+        var ledger = makeLedger(outcome: nil)
+        ledger.settle(.committed, targetGeneration: 11)
+        let entry = makeEntry(text: "T")
+        var barrier = makeBarrier()
+        XCTAssertEqual(
+            barrier.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(text: "T"),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: entry.lifecycle.snapshot
+            ),
+            .sealed
+        )
+        XCTAssertNotNil(
+            barrier.durableCommit(
+                deliveryID: deliveryID,
+                correlationID: "missing-delivery",
+                clientIntentID: "intent",
+                lifecycle: entry.lifecycle.snapshot
+            )
+        )
+
+        let fake = GaryxFakeComposerDurabilityStore()
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject partial generic send commit",
+                    mutations: [.upsertLedger(ledger), .upsertBarrier(barrier)]
+                )
+            )
+            XCTFail("expected committed barrier without delivery to fail closed")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation(
+                    "durable-committed send barrier requires matching reservation delivery"
+                )
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, GaryxComposerDurabilitySnapshot())
+    }
+
     func testCommittedSendRelaunchKeepsEnvelopeAttachmentOutOfFollowupPayload() async throws {
         let envelopeAttachmentID = GaryxAttachmentID(rawValue: "committed-envelope-attachment")
         let followupAttachmentID = GaryxAttachmentID(rawValue: "committed-followup-attachment")
@@ -1744,15 +1792,15 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
     }
 
     func testReplacementSwapAndFileOwnershipCommitAtomically() async throws {
-        var old = makeOperation(
+        let old = makeOperation(
             id: "old",
             state: .failedRetryable,
-            assetID: GaryxStagedAssetID(rawValue: "old-asset"),
+            assetID: GaryxStagedAssetID(rawValue: "replacement-asset"),
             reservedBytes: 100
         )
-        var successor = makeOperation(id: "new", state: .requested)
-        var replacement = makeReplacement(oldKey: old.context.key, reservationID: nil)
-        var feedback = GaryxOperationFeedback(
+        let successor = makeOperation(id: "new", state: .requested)
+        let replacement = makeReplacement(oldKey: old.context.key, reservationID: nil)
+        let feedback = GaryxOperationFeedback(
             id: GaryxFeedbackID(rawValue: "retry-feedback"),
             scope: scope,
             entryID: entryID,
@@ -1760,55 +1808,75 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             kind: .uploadRetryable
         )
         var entry = makeEntry()
-        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope)
-        XCTAssertEqual(
-            GaryxReplacementFeedbackSwapReducer.commit(
-                old: &old,
-                successor: &successor,
-                record: &replacement,
-                feedback: &feedback,
-                lifecycle: entry.lifecycle.snapshot,
-                scopes: scopes
-            ),
-            .committed
-        )
         entry.addOperation(old.context.key)
-        entry.addOperation(successor.context.key)
-        let mutations: [GaryxComposerDurabilityMutation] = [
-            .upsertEntry(entry),
-            .upsertOperation(old),
-            .upsertOperation(successor),
-            .upsertReplacement(replacement),
-            .upsertFeedback(feedback),
-            .reserveStagedAsset(
-                assetID: replacement.stagedAssetID,
-                owner: successor.context.key,
-                bytes: replacement.reservedBytes
-            ),
-        ]
-        for index in mutations.indices {
-            let fake = GaryxFakeComposerDurabilityStore()
+        let oldManifest = GaryxOperationManifest(
+            key: old.context.key,
+            stagedPath: replacement.stagedAssetID.rawValue,
+            state: old.state,
+            uploadAttempted: old.uploadAttempted
+        )
+        let fixtureStore = GaryxFakeComposerDurabilityStore()
+        let durableOldOwner = try await fixtureStore.commit(
+            .init(
+                expectedRevision: 0,
+                label: "persist real retryable owner before interactive replacement",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertOperation(old),
+                    .upsertManifest(oldManifest),
+                    .upsertReplacement(replacement),
+                    .upsertFeedback(feedback),
+                    .reserveStagedAsset(
+                        assetID: replacement.stagedAssetID,
+                        owner: old.context.key,
+                        bytes: replacement.reservedBytes
+                    ),
+                ]
+            )
+        )
+        XCTAssertEqual(durableOldOwner.stagedAssetOwners[replacement.stagedAssetID], old.context.key)
+        XCTAssertEqual(durableOldOwner.manifests[old.context.key], oldManifest)
+
+        let plan = try XCTUnwrap(
+            GaryxReplacementFeedbackSwapPlanner.plan(
+                snapshot: durableOldOwner,
+                successor: successor,
+                replacementID: replacement.id,
+                feedbackID: feedback.id,
+                scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
+            )
+        )
+        for index in plan.transaction.mutations.indices {
+            let fake = GaryxFakeComposerDurabilityStore(initial: durableOldOwner)
             await fake.injectFailure(atMutationIndex: index)
             do {
-                _ = try await fake.commit(
-                    .init(expectedRevision: 0, label: "replacement swap", mutations: mutations)
-                )
+                _ = try await fake.commit(plan.transaction)
                 XCTFail("expected failure")
             } catch {}
             let unchanged = try await fake.load()
-            XCTAssertEqual(unchanged, GaryxComposerDurabilitySnapshot())
+            XCTAssertEqual(unchanged, durableOldOwner)
         }
 
-        let fake = GaryxFakeComposerDurabilityStore()
-        let snapshot = try await fake.commit(
-            .init(expectedRevision: 0, label: "replacement swap", mutations: mutations)
-        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: durableOldOwner)
+        let snapshot = try await fake.commit(plan.transaction)
         XCTAssertEqual(snapshot.stagedAssetOwners.count, 1)
-        XCTAssertEqual(snapshot.stagedAssetOwners[replacement.stagedAssetID], successor.context.key)
-        XCTAssertEqual(snapshot.reservedBytes, replacement.reservedBytes)
+        XCTAssertEqual(
+            snapshot.stagedAssetOwners[replacement.stagedAssetID],
+            plan.successorOperation.context.key
+        )
+        XCTAssertEqual(snapshot.reservedBytes, plan.replacement.reservedBytes)
         XCTAssertEqual(snapshot.feedback[feedback.id]?.phase, .acknowledged)
         XCTAssertNil(snapshot.operations[old.context.key]?.stagedAssetID)
         XCTAssertEqual(snapshot.operations[old.context.key]?.reservedBytes, 0)
+        XCTAssertNil(snapshot.manifests[old.context.key])
+        XCTAssertEqual(
+            snapshot.manifests[plan.successorOperation.context.key],
+            plan.successorManifest
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(entry.id, scope: scope)?.operationKeys,
+            [old.context.key, plan.successorOperation.context.key]
+        )
     }
 
     func testWatermarksAreMonotonicAndPersistAcrossFakeRelaunch() async throws {
