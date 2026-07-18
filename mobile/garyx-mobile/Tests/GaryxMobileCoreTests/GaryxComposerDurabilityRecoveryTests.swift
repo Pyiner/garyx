@@ -891,7 +891,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                 scope: scope,
                 source: intermediate,
                 target: destination,
-                activeOrClosingSessions: 1
+                pendingCloseAcknowledgements: 1
             ),
             .established
         )

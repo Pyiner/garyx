@@ -965,6 +965,16 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
             .resolved(destination)
         )
         XCTAssertTrue(aliases.invariantHolds)
+        XCTAssertEqual(
+            aliases.retireLineage(
+                startingAt: [liveSource],
+                endingAt: destination,
+                scope: scope
+            ),
+            2,
+            "the final predecessor must own full cleanup of the shared suffix"
+        )
+        XCTAssertEqual(aliases.aliasCount, 0)
     }
 
     func testAliasLineageReleaseCountsNestedCapturedOriginsOnlyOnce() {
@@ -996,7 +1006,7 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
                 scope: scope,
                 source: laterCapturedSource,
                 target: destination,
-                activeOrClosingSessions: 3
+                activeOrClosingSessions: 2
             ),
             .established
         )

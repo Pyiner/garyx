@@ -1039,9 +1039,35 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
             }
         }
 
+        let lineageSources = Set(releases.keys)
+        var incoming: [GaryxComposerKey: [GaryxComposerAliasRecord]] = [:]
+        for record in records.values {
+            incoming[record.target, default: []].append(record)
+        }
+        var sharedSources = Set(lineageSources.filter { source in
+            incoming[source]?.contains(where: { !lineageSources.contains($0.source) }) == true
+        })
+        var sharedFrontier = Array(sharedSources)
+        while let source = sharedFrontier.popLast() {
+            guard let target = records[source]?.target,
+                  lineageSources.contains(target) else {
+                continue
+            }
+            if sharedSources.insert(target).inserted {
+                sharedFrontier.append(target)
+            }
+        }
+
         var retired = 0
         for (source, contribution) in releases {
+            guard sharedSources.contains(source) else {
+                if markDrained(source: source, scope: scope) {
+                    retired += 1
+                }
+                continue
+            }
             guard var record = partitions[scope]?[source] else { continue }
+            let previous = record
             record.activeOrClosingSessions = Self.releasing(
                 contribution.activeOrClosingSessions,
                 from: record.activeOrClosingSessions
@@ -1054,6 +1080,40 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
                 contribution.promotionsInFlight,
                 from: record.promotionsInFlight
             )
+            let survivingPredecessors = incoming[source, default: []].filter {
+                !lineageSources.contains($0.source) || sharedSources.contains($0.source)
+            }
+            var occupancyFloor = AliasOccupancy.zero
+            for predecessor in survivingPredecessors {
+                occupancyFloor.formUnion(AliasOccupancy(predecessor))
+            }
+            record.activeOrClosingSessions = max(
+                record.activeOrClosingSessions,
+                min(previous.activeOrClosingSessions, occupancyFloor.activeOrClosingSessions)
+            )
+            record.pendingCloseAcknowledgements = max(
+                record.pendingCloseAcknowledgements,
+                min(
+                    previous.pendingCloseAcknowledgements,
+                    occupancyFloor.pendingCloseAcknowledgements
+                )
+            )
+            record.promotionsInFlight = max(
+                record.promotionsInFlight,
+                min(previous.promotionsInFlight, occupancyFloor.promotionsInFlight)
+            )
+            if record.canRetire, !survivingPredecessors.isEmpty {
+                // The aggregate counters may predate fan-in accounting. Keep
+                // one existing counter as a conservative routing reference;
+                // the final predecessor's discard will own the full drain.
+                if previous.activeOrClosingSessions > 0 {
+                    record.activeOrClosingSessions = 1
+                } else if previous.pendingCloseAcknowledgements > 0 {
+                    record.pendingCloseAcknowledgements = 1
+                } else if previous.promotionsInFlight > 0 {
+                    record.promotionsInFlight = 1
+                }
+            }
             partitions[scope]?[source] = record
             if retireIfDrained(source: source, scope: scope) {
                 retired += 1
