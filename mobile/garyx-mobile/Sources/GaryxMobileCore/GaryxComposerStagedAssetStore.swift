@@ -192,7 +192,38 @@ public actor GaryxComposerStagedAssetStore {
                 )
             )
         }
+        try removeInterruptedCopies()
         return snapshot
+    }
+
+    /// A SIGKILL bypasses the staging call's `defer`, so launch recovery must
+    /// remove copy-on-write temporaries independently of the domain tombstone.
+    /// Only files created by `copyAtomically` match this private name shape.
+    private func removeInterruptedCopies() throws {
+        let children: [URL]
+        do {
+            children = try FileManager.default.contentsOfDirectory(
+                at: rootURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsSubdirectoryDescendants]
+            )
+        } catch let error as NSError {
+            throw Self.filesystemError(error, operation: "enumerate staged payloads")
+        }
+        var removedAny = false
+        for child in children where
+            child.lastPathComponent.hasPrefix(".")
+                && child.lastPathComponent.contains(".partial-") {
+            do {
+                try FileManager.default.removeItem(at: child)
+                removedAny = true
+            } catch let error as NSError {
+                throw Self.filesystemError(error, operation: "delete interrupted staged payload")
+            }
+        }
+        if removedAny {
+            try Self.synchronizeDirectory(rootURL)
+        }
     }
 
     private func copyAtomically(

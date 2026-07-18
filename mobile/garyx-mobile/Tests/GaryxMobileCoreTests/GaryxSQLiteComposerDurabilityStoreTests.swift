@@ -217,6 +217,121 @@ final class GaryxSQLiteComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(restored, GaryxComposerDurabilitySnapshot())
     }
 
+    func testReplacementSwapClearsSupersededOwnerShapeInSameSQLiteTransaction() async throws {
+        let entry = makeEntry()
+        let capture = GaryxPayloadLifecycleCapture(
+            token: entry.lifecycle.token,
+            revision: entry.lifecycle.revision
+        )
+        let oldKey = operationKey("old-swap")
+        let successorKey = operationKey("new-swap")
+        let assetID = GaryxStagedAssetID(rawValue: "replacement.bin")
+        var old = GaryxOperationCapability(
+            context: .init(
+                key: oldKey,
+                clientIdentity: "sqlite-client",
+                configurationFingerprint: "sqlite-config",
+                payloadLifecycle: capture
+            ),
+            state: .failedRetryable,
+            stagedAssetID: assetID,
+            reservedBytes: 101,
+            uploadAttempted: true
+        )
+        var successor = GaryxOperationCapability(
+            context: .init(
+                key: successorKey,
+                clientIdentity: "sqlite-client",
+                configurationFingerprint: "sqlite-config",
+                payloadLifecycle: capture
+            ),
+            state: .requested
+        )
+        var replacement = GaryxReplacementRecord(
+            id: .init(rawValue: "sqlite-replacement"),
+            scope: scope,
+            entryID: entryID,
+            oldKey: oldKey,
+            reservationID: nil,
+            branch: .followup,
+            stagedAssetID: assetID,
+            reservedBytes: 101
+        )
+        XCTAssertEqual(
+            GaryxReplacementSwapReducer.commit(
+                old: &old,
+                successor: &successor,
+                record: &replacement,
+                lifecycle: entry.lifecycle.snapshot,
+                scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
+            ),
+            .committed
+        )
+        var committedEntry = entry
+        committedEntry.addOperation(oldKey)
+        committedEntry.addOperation(successorKey)
+        let transaction = GaryxComposerDurabilityTransaction(
+            expectedRevision: 0,
+            label: "concrete replacement swap",
+            mutations: [
+                .upsertEntry(committedEntry),
+                .upsertOperation(old),
+                .upsertOperation(successor),
+                .upsertManifest(
+                    .init(
+                        key: successorKey,
+                        stagedPath: assetID.rawValue,
+                        state: successor.state,
+                        uploadAttempted: false
+                    )
+                ),
+                .upsertReplacement(replacement),
+                .reserveStagedAsset(assetID: assetID, owner: successorKey, bytes: 101),
+            ]
+        )
+
+        let failedFixture = try makeDatabaseFixture()
+        let failedStore = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: failedFixture.databaseURL,
+            boundaryHook: { boundary in
+                if boundary == .beforeCommit {
+                    throw GaryxSQLiteComposerDurabilityError.injectedFsyncFailure(boundary)
+                }
+            }
+        )
+        do {
+            _ = try await failedStore.commit(transaction)
+            XCTFail("swap must roll back as one transaction")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxSQLiteComposerDurabilityError,
+                .injectedFsyncFailure(.beforeCommit)
+            )
+        }
+        let failedRelaunch = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: failedFixture.databaseURL
+        )
+        let failedRestored = try await failedRelaunch.load()
+        XCTAssertEqual(failedRestored, GaryxComposerDurabilitySnapshot())
+
+        let committedFixture = try makeDatabaseFixture()
+        let committedStore = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: committedFixture.databaseURL
+        )
+        _ = try await committedStore.commit(transaction)
+        let relaunched = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: committedFixture.databaseURL
+        )
+        let restored = try await relaunched.load()
+        XCTAssertEqual(restored.operations[oldKey]?.state, .superseded)
+        XCTAssertNil(restored.operations[oldKey]?.stagedAssetID)
+        XCTAssertEqual(restored.operations[oldKey]?.reservedBytes, 0)
+        XCTAssertEqual(restored.operations[successorKey]?.stagedAssetID, assetID)
+        XCTAssertEqual(restored.stagedAssetOwners[assetID], successorKey)
+        XCTAssertEqual(restored.reservedBytes, 101)
+        XCTAssertEqual(restored.replacements[replacement.id]?.phase, .committed)
+    }
+
     private func makeCommitSend() throws -> GaryxComposerCommitSend {
         var entry = makeEntry(text: "sealed")
         entry.setText("follow-up", generation: 11)
@@ -276,6 +391,17 @@ final class GaryxSQLiteComposerDurabilityStoreTests: XCTestCase {
             lifecycleToken: .init(entryID: entryID, nonce: "sqlite-token"),
             currentGeneration: 10,
             text: text
+        )
+    }
+
+    private func operationKey(_ rawValue: String) -> GaryxOperationCapabilityKey {
+        GaryxOperationCapabilityKey(
+            scope: scope,
+            entryID: entryID,
+            generation: 10,
+            reservationID: nil,
+            branch: .followup,
+            operationID: .init(rawValue: rawValue)
         )
     }
 

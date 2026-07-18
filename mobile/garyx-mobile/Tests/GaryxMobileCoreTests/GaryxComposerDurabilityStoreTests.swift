@@ -1784,7 +1784,13 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             )
         )
 
-        snapshot = try await admitted.commit(
+        let removalRoundTrip = try JSONDecoder().decode(
+            GaryxComposerDurabilitySnapshot.self,
+            from: JSONEncoder().encode(snapshot)
+        )
+        XCTAssertEqual(removalRoundTrip, snapshot)
+        let relaunchedForRemoval = GaryxFakeComposerDurabilityStore(initial: removalRoundTrip)
+        snapshot = try await relaunchedForRemoval.commit(
             .init(
                 expectedRevision: snapshot.revision,
                 label: "reclaim tombstone pool",

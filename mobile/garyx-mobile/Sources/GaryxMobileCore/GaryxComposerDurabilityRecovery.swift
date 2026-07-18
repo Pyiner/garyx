@@ -63,13 +63,13 @@ public actor GaryxComposerDurabilityLaunchRecovery {
     public func recover() async throws -> GaryxComposerDurabilityRecoveryReport {
         var report = GaryxComposerDurabilityRecoveryReport()
         for _ in 0..<10_000 {
-            if try await recoverOneSyntheticReservation() {
-                report.syntheticReservationRecoveries += 1
-                continue
-            }
             if try await recoverOneDiscardStep() {
                 report.discardSettlements += 1
                 if let staging { _ = try await staging.settleCondemnedFiles() }
+                continue
+            }
+            if try await recoverOneSyntheticReservation() {
+                report.syntheticReservationRecoveries += 1
                 continue
             }
             if try await recoverOneReplacement() {
@@ -151,6 +151,23 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                     )
                 )
                 return true
+            }
+            if let reservationID = key.reservationID {
+                let ledgerKey = GaryxReservationLedgerKey(
+                    scope: key.scope,
+                    entryID: key.entryID,
+                    reservationID: reservationID
+                )
+                if let targetGeneration = snapshot.ledgers[ledgerKey]?.targetMapping?.generation,
+                   targetGeneration != key.generation {
+                    try await remapOperation(
+                        operation,
+                        manifest: snapshot.manifests[key],
+                        targetGeneration: targetGeneration,
+                        snapshot: snapshot
+                    )
+                    return true
+                }
             }
             guard var entry = snapshot.payloadStore.entry(key.entryID, scope: key.scope) else {
                 throw GaryxComposerDurabilityRecoveryError.operationEntryMissing(key)
@@ -259,6 +276,53 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             }
         }
         return false
+    }
+
+    private func remapOperation(
+        _ operation: GaryxOperationCapability,
+        manifest: GaryxOperationManifest?,
+        targetGeneration: UInt64,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) async throws {
+        let oldKey = operation.context.key
+        let newKey = oldKey.remapped(toGeneration: targetGeneration)
+        guard var entry = snapshot.payloadStore.entry(oldKey.entryID, scope: oldKey.scope) else {
+            throw GaryxComposerDurabilityRecoveryError.operationEntryMissing(oldKey)
+        }
+        entry.remapOperationKey(from: oldKey, to: newKey)
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .removeManifest(oldKey),
+            .removeOperation(oldKey),
+            .upsertEntry(entry),
+            .upsertOperation(operation.remapped(toGeneration: targetGeneration)),
+        ]
+        if let manifest {
+            mutations.append(.upsertManifest(manifest.remapped(toGeneration: targetGeneration)))
+        }
+        if let assetID = operation.stagedAssetID,
+           snapshot.stagedAssetOwners[assetID] == oldKey {
+            mutations.append(.releaseStagedAsset(assetID))
+            mutations.append(
+                .reserveStagedAsset(
+                    assetID: assetID,
+                    owner: newKey,
+                    bytes: snapshot.stagedAssetReservedBytes[assetID] ?? operation.reservedBytes
+                )
+            )
+        }
+        for replacement in snapshot.replacements.values where
+            replacement.oldKey == oldKey || replacement.newKey == oldKey {
+            mutations.append(
+                .upsertReplacement(replacement.remapped(from: oldKey, to: newKey))
+            )
+        }
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "recover operation reservation target mapping",
+                mutations: mutations
+            )
+        )
     }
 
     private func cleanOperation(
@@ -432,6 +496,23 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             var mutations: [GaryxComposerDurabilityMutation] = [
                 .upsertDiscardConvergence(convergence),
             ]
+            if let destination = snapshot.payloadStore
+                .entry(entryID, scope: convergence.barrier.scope)?.destination {
+                var aliases = snapshot.aliases
+                let retiringSources = aliases.partitions[convergence.barrier.scope, default: [:]]
+                    .values
+                    .filter { $0.source == destination || $0.target == destination }
+                    .map(\.source)
+                for source in retiringSources {
+                    _ = aliases.markDrained(
+                        source: source,
+                        scope: convergence.barrier.scope
+                    )
+                }
+                if aliases != snapshot.aliases {
+                    mutations.append(.replaceAliases(aliases))
+                }
+            }
             for (key, operation) in snapshot.operations where
                 key.entryID == entryID && key.scope == convergence.barrier.scope {
                 if let assetID = operation.stagedAssetID {
