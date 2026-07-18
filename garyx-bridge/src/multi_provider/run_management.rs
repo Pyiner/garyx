@@ -395,6 +395,128 @@ async fn resolve_effective_workspace_dir(
     }
 }
 
+/// Thread-log labels used by the shared streaming response callback. The
+/// production dispatch path and the inline sub-agent path emit the same
+/// events with different label prefixes.
+struct StreamCallbackLogLabels {
+    first_token: &'static str,
+    tool_use: &'static str,
+    tool_result: &'static str,
+}
+
+const RUN_STREAM_LOG_LABELS: StreamCallbackLogLabels = StreamCallbackLogLabels {
+    first_token: "first token received",
+    tool_use: "tool use emitted",
+    tool_result: "tool result emitted",
+};
+
+#[cfg(test)]
+const SUBAGENT_STREAM_LOG_LABELS: StreamCallbackLogLabels = StreamCallbackLogLabels {
+    first_token: "sub-agent first token received",
+    tool_use: "sub-agent tool use emitted",
+    tool_result: "sub-agent tool result emitted",
+};
+
+/// Builds the streaming response callback shared by the production dispatch
+/// path (`start_admitted_run`) and the inline sub-agent path
+/// (`run_inline_streaming`): forwards events into the partial-persistence
+/// worker, records first-token/tool thread logs, and relays non-control
+/// events to the external callback once persistence has been handed off.
+fn build_streaming_response_callback(
+    sink: Option<Arc<dyn ThreadLogSink>>,
+    thread_log_id: Option<String>,
+    run_id: String,
+    external_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    partial_persistence_tx: Option<mpsc::UnboundedSender<ThreadPersistenceCommand>>,
+    labels: &'static StreamCallbackLogLabels,
+) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
+    let first_token_logged = Arc::new(AtomicBool::new(false));
+    Arc::new(move |event: StreamEvent| {
+        let sink = sink.clone();
+        let thread_log_id = thread_log_id.clone();
+        let run_id = run_id.clone();
+        let external_callback = external_callback.clone();
+        let first_token_logged = first_token_logged.clone();
+        let event_for_log = event.clone();
+        let persistent_control = is_persistent_control_stream_event(&event);
+        let callback_after_commit = if persistent_control {
+            if let Some(tx) = partial_persistence_tx.as_ref() {
+                let callback = external_callback.clone();
+                let sent = tx
+                    .send(ThreadPersistenceCommand::Stream {
+                        event: event.clone(),
+                        after_commit: callback.clone(),
+                    })
+                    .is_ok();
+                sent.then_some(callback).flatten()
+            } else {
+                None
+            }
+        } else {
+            if let Some(tx) = partial_persistence_tx.as_ref() {
+                let _ = tx.send(ThreadPersistenceCommand::Stream {
+                    event: event.clone(),
+                    after_commit: None,
+                });
+            }
+            None
+        };
+        tokio::spawn(async move {
+            match event_for_log {
+                StreamEvent::Delta { text } => {
+                    if !text.is_empty() && !first_token_logged.swap(true, Ordering::Relaxed) {
+                        record_thread_log(
+                            sink,
+                            thread_log_id.as_deref(),
+                            ThreadLogEvent::info("", "run", labels.first_token).with_run_id(run_id),
+                        )
+                        .await;
+                    }
+                }
+                StreamEvent::ToolUse { message } => {
+                    record_thread_log(
+                        sink,
+                        thread_log_id.as_deref(),
+                        ThreadLogEvent::info("", "tool", labels.tool_use)
+                            .with_run_id(run_id)
+                            .with_field("tool_name", json!(message.tool_name))
+                            .with_field("tool_use_id", json!(message.tool_use_id))
+                            .with_field("message", json!(summarize_provider_message(&message))),
+                    )
+                    .await;
+                }
+                StreamEvent::ToolResult { message } => {
+                    record_thread_log(
+                        sink,
+                        thread_log_id.as_deref(),
+                        ThreadLogEvent::info("", "tool", labels.tool_result)
+                            .with_run_id(run_id)
+                            .with_field("tool_name", json!(message.tool_name))
+                            .with_field("tool_use_id", json!(message.tool_use_id))
+                            .with_field("is_error", json!(message.is_error))
+                            .with_field("message", json!(summarize_provider_message(&message))),
+                    )
+                    .await;
+                }
+                StreamEvent::SessionBound { .. }
+                | StreamEvent::Boundary { .. }
+                | StreamEvent::ThreadTitleUpdated { .. }
+                | StreamEvent::Done => {}
+            }
+        });
+
+        if matches!(event, StreamEvent::ThreadTitleUpdated { .. }) {
+            return;
+        }
+
+        if callback_after_commit.is_none()
+            && let Some(callback) = external_callback
+        {
+            callback(event);
+        }
+    })
+}
+
 impl MultiProviderBridge {
     async fn resolve_thread_execution_target(
         &self,
@@ -734,107 +856,14 @@ impl MultiProviderBridge {
                 )
             })
             .unzip();
-        let response_callback = {
-            let external_callback = response_callback.clone();
-            let sink = thread_logs.clone();
-            let thread_log_id = thread_log_id.clone();
-            let run_id = run_id.to_owned();
-            let first_token_logged = Arc::new(AtomicBool::new(false));
-            let partial_persistence_tx = partial_persistence_tx.clone();
-            Some(Arc::new(move |event: StreamEvent| {
-                let sink = sink.clone();
-                let thread_log_id = thread_log_id.clone();
-                let run_id = run_id.clone();
-                let external_callback = external_callback.clone();
-                let first_token_logged = first_token_logged.clone();
-                let event_for_log = event.clone();
-                let event_for_emit = event.clone();
-                let persistent_control = is_persistent_control_stream_event(&event);
-                let callback_after_commit = if persistent_control {
-                    if let Some(tx) = partial_persistence_tx.as_ref() {
-                        let callback = external_callback.clone();
-                        let sent = tx
-                            .send(ThreadPersistenceCommand::Stream {
-                                event: event.clone(),
-                                after_commit: callback.clone(),
-                            })
-                            .is_ok();
-                        sent.then_some(callback).flatten()
-                    } else {
-                        None
-                    }
-                } else {
-                    if let Some(tx) = partial_persistence_tx.as_ref() {
-                        let _ = tx.send(ThreadPersistenceCommand::Stream {
-                            event: event.clone(),
-                            after_commit: None,
-                        });
-                    }
-                    None
-                };
-                tokio::spawn(async move {
-                    match event_for_log {
-                        StreamEvent::Delta { text } => {
-                            if !text.is_empty() && !first_token_logged.swap(true, Ordering::Relaxed)
-                            {
-                                record_thread_log(
-                                    sink,
-                                    thread_log_id.as_deref(),
-                                    ThreadLogEvent::info("", "run", "first token received")
-                                        .with_run_id(run_id),
-                                )
-                                .await;
-                            }
-                        }
-                        StreamEvent::ToolUse { message } => {
-                            record_thread_log(
-                                sink,
-                                thread_log_id.as_deref(),
-                                ThreadLogEvent::info("", "tool", "tool use emitted")
-                                    .with_run_id(run_id)
-                                    .with_field("tool_name", json!(message.tool_name))
-                                    .with_field("tool_use_id", json!(message.tool_use_id))
-                                    .with_field(
-                                        "message",
-                                        json!(summarize_provider_message(&message)),
-                                    ),
-                            )
-                            .await;
-                        }
-                        StreamEvent::ToolResult { message } => {
-                            record_thread_log(
-                                sink,
-                                thread_log_id.as_deref(),
-                                ThreadLogEvent::info("", "tool", "tool result emitted")
-                                    .with_run_id(run_id)
-                                    .with_field("tool_name", json!(message.tool_name))
-                                    .with_field("tool_use_id", json!(message.tool_use_id))
-                                    .with_field("is_error", json!(message.is_error))
-                                    .with_field(
-                                        "message",
-                                        json!(summarize_provider_message(&message)),
-                                    ),
-                            )
-                            .await;
-                        }
-                        StreamEvent::SessionBound { .. }
-                        | StreamEvent::Boundary { .. }
-                        | StreamEvent::ThreadTitleUpdated { .. }
-                        | StreamEvent::Done => {}
-                    }
-                });
-
-                if matches!(event_for_emit, StreamEvent::ThreadTitleUpdated { .. }) {
-                    return;
-                }
-
-                if callback_after_commit.is_none()
-                    && let Some(callback) = external_callback
-                {
-                    callback(event);
-                }
-            }) as Arc<dyn Fn(StreamEvent) + Send + Sync>)
-        };
+        let response_callback = Some(build_streaming_response_callback(
+            thread_logs.clone(),
+            thread_log_id.clone(),
+            run_id.to_owned(),
+            response_callback.clone(),
+            partial_persistence_tx.clone(),
+            &RUN_STREAM_LOG_LABELS,
+        ));
 
         run_index
             .active_runs
@@ -1414,107 +1443,14 @@ impl MultiProviderBridge {
 
         let external_callback = response_callback.clone();
         let final_external_callback = external_callback.clone();
-        let first_token_logged = Arc::new(AtomicBool::new(false));
-        let response_callback = {
-            let sink = thread_logs.clone();
-            let thread_log_id = thread_log_id.clone();
-            let run_id = run_id.clone();
-            let first_token_logged = first_token_logged.clone();
-            let partial_persistence_tx = partial_persistence_tx.clone();
-            Some(Arc::new(move |event: StreamEvent| {
-                let sink = sink.clone();
-                let thread_log_id = thread_log_id.clone();
-                let run_id = run_id.clone();
-                let first_token_logged = first_token_logged.clone();
-                let event_for_log = event.clone();
-                let persistent_control = is_persistent_control_stream_event(&event);
-                let callback_after_commit = if persistent_control {
-                    if let Some(tx) = partial_persistence_tx.as_ref() {
-                        let callback = external_callback.clone();
-                        let sent = tx
-                            .send(ThreadPersistenceCommand::Stream {
-                                event: event.clone(),
-                                after_commit: callback.clone(),
-                            })
-                            .is_ok();
-                        sent.then_some(callback).flatten()
-                    } else {
-                        None
-                    }
-                } else {
-                    if let Some(tx) = partial_persistence_tx.as_ref() {
-                        let _ = tx.send(ThreadPersistenceCommand::Stream {
-                            event: event.clone(),
-                            after_commit: None,
-                        });
-                    }
-                    None
-                };
-                tokio::spawn(async move {
-                    match event_for_log {
-                        StreamEvent::Delta { text } => {
-                            if !text.is_empty() && !first_token_logged.swap(true, Ordering::Relaxed)
-                            {
-                                record_thread_log(
-                                    sink,
-                                    thread_log_id.as_deref(),
-                                    ThreadLogEvent::info(
-                                        "",
-                                        "run",
-                                        "sub-agent first token received",
-                                    )
-                                    .with_run_id(run_id),
-                                )
-                                .await;
-                            }
-                        }
-                        StreamEvent::ToolUse { message } => {
-                            record_thread_log(
-                                sink,
-                                thread_log_id.as_deref(),
-                                ThreadLogEvent::info("", "tool", "sub-agent tool use emitted")
-                                    .with_run_id(run_id)
-                                    .with_field("tool_name", json!(message.tool_name))
-                                    .with_field("tool_use_id", json!(message.tool_use_id))
-                                    .with_field(
-                                        "message",
-                                        json!(summarize_provider_message(&message)),
-                                    ),
-                            )
-                            .await;
-                        }
-                        StreamEvent::ToolResult { message } => {
-                            record_thread_log(
-                                sink,
-                                thread_log_id.as_deref(),
-                                ThreadLogEvent::info("", "tool", "sub-agent tool result emitted")
-                                    .with_run_id(run_id)
-                                    .with_field("tool_name", json!(message.tool_name))
-                                    .with_field("tool_use_id", json!(message.tool_use_id))
-                                    .with_field("is_error", json!(message.is_error))
-                                    .with_field(
-                                        "message",
-                                        json!(summarize_provider_message(&message)),
-                                    ),
-                            )
-                            .await;
-                        }
-                        StreamEvent::SessionBound { .. }
-                        | StreamEvent::Boundary { .. }
-                        | StreamEvent::ThreadTitleUpdated { .. }
-                        | StreamEvent::Done => {}
-                    }
-                });
-                if matches!(event, StreamEvent::ThreadTitleUpdated { .. }) {
-                    return;
-                }
-                if callback_after_commit.is_none()
-                    && let Some(callback) = external_callback.as_ref()
-                {
-                    callback(event);
-                }
-            }) as Arc<dyn Fn(StreamEvent) + Send + Sync>)
-        };
+        let response_callback = Some(build_streaming_response_callback(
+            thread_logs.clone(),
+            thread_log_id.clone(),
+            run_id.clone(),
+            external_callback,
+            partial_persistence_tx.clone(),
+            &SUBAGENT_STREAM_LOG_LABELS,
+        ));
 
         let mut graph_state = RunGraphState::new(
             run_id.clone(),
