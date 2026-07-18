@@ -48,6 +48,37 @@ A4b and A4d-2 consume this layer later.
   performs GC; the process harness independently decodes committed tombstones
   from SQLite in a new process.
 
+## Adversarial recovery remediation
+
+The first cross-model adversarial pass found five compound-state shapes that
+the original single-operation fixtures did not exercise. They are now closed
+as independent acceptance surfaces:
+
+- Scope revoke settles every operation, manifest, staged owner, replacement,
+  feedback, and lineage for an Entry before removing that shared Entry in one
+  transaction. A two-operation concrete staging test and active/suspended/
+  revoked process-kill matrix prove that no sibling can be left referring to a
+  removed Entry. The v41 child-only rows remain distinct: cancelled and
+  failed-retryable children are removed while sibling text and attachments
+  survive.
+- Discard settlement treats the convergence copy as discovery metadata and
+  re-reads the authoritative delivery ledger for each record CAS. A late
+  server acknowledgement therefore advances to terminal evidence instead of
+  being overwritten by a captured attempted record. The shared transaction
+  engine independently rejects phase, evidence, envelope, or disposition
+  regression, and an acknowledged-only discard cannot skip the required
+  `acknowledged -> terminalEvidence` transition.
+- Launch feedback IDs encode the complete scope/Entry/generation/reservation/
+  branch/operation identity with length-delimited components. Two Entries may
+  use the same local operation ID without sharing a feedback record.
+- Discard retires the complete connected alias lineage, including
+  `D -> T1 -> T2`; cross-promotion and 500-churn fixtures now use this
+  multi-hop shape and finish with zero aliases.
+- Ownerless-manifest recovery removes the corresponding Entry operation
+  membership in the same transaction. Concrete double-relaunch and real
+  pre-/post-commit process-kill tests prove the recovery branch cannot reject
+  its own result on every subsequent launch.
+
 ## Fifth-layer process harness
 
 `GaryxComposerDurabilityCrashHarness` is a separate executable. Every crash
@@ -67,17 +98,24 @@ The retained matrix covers:
   relaunches that keep `T+U`, a revoked target mapping, and exactly one close;
 - nine operation-state/attempt combinations × four reservation outcomes
   (`nil`, unsettled, committed, revoked) × three scope lifecycles = 108 sealed
-  manifest recovery cases;
+  manifest recovery cases, including the revoked child-only payload rule;
+- one shared Entry with two durable operation/manifests under all three scope
+  lifecycles, killed both before and after recovery commit, then relaunched
+  twice with operation membership, owners, quota, and cleanup all settled;
 - every operation state × destination discard, each killed after durable
   admission and again during convergence, ending with zero owner, manifest,
   replacement, feedback, quota, cleanup, or payload residue;
 - cross-promotion S1 close-pending-ack + S2 live/finalizing discard under
-  active and revoked scope at every committed step, including new-process JSON
-  decoding of both finalization tombstones;
+  active and revoked scope at every committed step over `D -> T1 -> T2`,
+  including new-process JSON decoding of both finalization tombstones;
 - a mixed three-phase delivery fixture (not dispatched, attempted, acknowledged)
-  plus sealed reservation, two sessions, and alias, killed after each of eight
-  convergence commits; final records are respectively cancelled-by-discard,
-  evidence, and terminal-evidence;
+  plus sealed reservation, two sessions, and a multi-hop alias. After discard
+  admission, the attempted global record receives a late server ack while the
+  convergence copy remains stale; the process is killed after each of eight
+  convergence commits. Final records are respectively cancelled-by-discard,
+  terminal-evidence with server-acknowledged evidence, and terminal-evidence;
+- an ownerless operation manifest killed before and after recovery commit,
+  followed by two relaunches with both manifest and Entry membership absent;
 - seven protected-staging boundaries under SIGKILL, ENOSPC, and fsync, with
   relaunch proving no final file, partial file, owner, quota, manifest, or
   cleanup tombstone remains; and
@@ -107,10 +145,19 @@ xcodebuild build -project GaryxMobile.xcodeproj \
   -scheme GaryxMobile -configuration Debug \
   -destination 'generic/platform=iOS Simulator' \
   CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project GaryxMobile.xcodeproj \
+  -scheme GaryxMobile -configuration Release \
+  -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO
+xcodebuild test -project GaryxMobile.xcodeproj \
+  -scheme GaryxMobile \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,344 of 1,344 tests with zero failures in
-199.834 seconds. The generated Xcode project passed Debug and Release generic
+The final clean SwiftPM run passed 1,354 of 1,354 tests with zero failures in
+214.077 seconds; its 14 real-process durability suites passed in 206.893
+seconds. The generated Xcode project passed Debug and Release generic
 iOS Simulator builds, and the `GaryxMobile` app-hosted suite passed 89 of 89
 tests on iPhone 17 Pro / iOS 26.5. Build warnings were pre-existing app-source
 deprecations; the A4d-1 files emitted no warnings.
