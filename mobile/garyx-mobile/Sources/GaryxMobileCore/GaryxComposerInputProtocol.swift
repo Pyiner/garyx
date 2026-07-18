@@ -246,17 +246,23 @@ public struct GaryxInputReservationTerminalRecord: Equatable, Codable, Sendable 
     public let outcome: GaryxReservationTerminalOutcome
     public let sourceGeneration: UInt64
     public let targetGeneration: UInt64
+    /// A revoked reservation materializes its target as envelope + producer
+    /// snapshot. Preserve the immutable envelope while the producer is live so
+    /// a later full snapshot can replace only the mutable suffix.
+    public let revokedEnvelopePrefix: String?
 
     public init(
         reservationID: GaryxSendReservationID,
         outcome: GaryxReservationTerminalOutcome,
         sourceGeneration: UInt64,
-        targetGeneration: UInt64
+        targetGeneration: UInt64,
+        revokedEnvelopePrefix: String? = nil
     ) {
         self.reservationID = reservationID
         self.outcome = outcome
         self.sourceGeneration = sourceGeneration
         self.targetGeneration = targetGeneration
+        self.revokedEnvelopePrefix = revokedEnvelopePrefix
     }
 }
 
@@ -406,7 +412,11 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
                     let target: GaryxInputProductTarget = terminal.outcome == .committed
                         ? .committedNextGeneration
                         : .revokedMergeGeneration
-                    textByGeneration[terminal.targetGeneration] = text
+                    textByGeneration[terminal.targetGeneration] = materializedProducerText(
+                        text,
+                        for: target,
+                        revokedEnvelopePrefix: terminal.revokedEnvelopePrefix
+                    )
                     lastAppliedSequence = identity.inputSequence
                     return .applied(target: target, generation: terminal.targetGeneration)
                 }
@@ -430,7 +440,11 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
             return .auditedTerminalDuplicate
         }
         let generation = targetGeneration(for: target)
-        textByGeneration[generation] = text
+        textByGeneration[generation] = materializedProducerText(
+            text,
+            for: target,
+            revokedEnvelopePrefix: sealedEnvelope
+        )
         lastAppliedSequence = identity.inputSequence
         return .applied(target: target, generation: generation)
     }
@@ -605,7 +619,6 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         currentGeneration = mergeGeneration
         revokedMergeGeneration = mergeGeneration
         reservationPhase = .revoked
-        sealedEnvelope = nil
         if producerPhase == .terminal {
             performDualTerminalTransaction()
         }
@@ -644,7 +657,8 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
             reservationID: reservationID,
             outcome: outcome,
             sourceGeneration: reservedGeneration ?? targetGeneration,
-            targetGeneration: targetGeneration
+            targetGeneration: targetGeneration,
+            revokedEnvelopePrefix: outcome == .revoked ? sealedEnvelope : nil
         )
         reservationPhase = .none
         activeReservationID = nil
@@ -757,6 +771,15 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         case .terminalAudit:
             return currentGeneration
         }
+    }
+
+    private func materializedProducerText(
+        _ text: String,
+        for target: GaryxInputProductTarget,
+        revokedEnvelopePrefix: String?
+    ) -> String {
+        guard target == .revokedMergeGeneration else { return text }
+        return (revokedEnvelopePrefix ?? "") + text
     }
 }
 

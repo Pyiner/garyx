@@ -76,6 +76,90 @@ final class GaryxFluidA3ReviewRegressionTests: XCTestCase {
         XCTAssertEqual(state.currentText, "late dictation")
     }
 
+    func testOldRevokedReservationResultBeforeProducerTerminalPreservesEnvelope() {
+        var state = makeInputState(text: "T")
+        let lifecycle = activeLifecycle(for: state)
+        let scopes = activeScopes()
+        let reservation = GaryxSendReservationID(rawValue: 1)
+
+        XCTAssertEqual(
+            state.beginSend(
+                reservationID: reservation,
+                followupGeneration: 11,
+                lifecycle: lifecycle,
+                scopes: scopes
+            ),
+            .sealed(envelope: "T", followupGeneration: 11)
+        )
+        XCTAssertEqual(
+            state.applyText(
+                "U",
+                identity: GaryxComposerInputEventIdentity(
+                    composerKey: state.session.composerKey,
+                    sessionID: state.session.sessionID,
+                    inputSessionEpoch: state.session.epoch,
+                    payloadGeneration: 11,
+                    reservationID: reservation,
+                    inputSequence: 1
+                ),
+                lifecycle: lifecycle,
+                scopes: scopes
+            ),
+            .applied(target: .provisionalNextGeneration, generation: 11)
+        )
+        XCTAssertTrue(
+            state.revokeReservation(
+                mergeGeneration: 12,
+                lifecycle: lifecycle,
+                scopes: scopes
+            )
+        )
+        XCTAssertEqual(state.currentText, "TU")
+        XCTAssertTrue(state.returnReservationToIdle(lifecycle: lifecycle, scopes: scopes))
+        XCTAssertEqual(state.producerPhase, .live)
+
+        let lateDictation = GaryxComposerInputEventIdentity(
+            composerKey: state.session.composerKey,
+            sessionID: state.session.sessionID,
+            inputSessionEpoch: state.session.epoch,
+            payloadGeneration: 11,
+            reservationID: reservation,
+            inputSequence: 2
+        )
+        XCTAssertEqual(
+            state.applyText(
+                "Ufinal",
+                identity: lateDictation,
+                lifecycle: lifecycle,
+                scopes: scopes
+            ),
+            .applied(target: .revokedMergeGeneration, generation: 12)
+        )
+        XCTAssertEqual(state.currentText, "TUfinal")
+
+        XCTAssertEqual(
+            state.applyText(
+                "Usettled",
+                identity: GaryxComposerInputEventIdentity(
+                    composerKey: state.session.composerKey,
+                    sessionID: state.session.sessionID,
+                    inputSessionEpoch: state.session.epoch,
+                    payloadGeneration: 11,
+                    reservationID: reservation,
+                    inputSequence: 3
+                ),
+                lifecycle: lifecycle,
+                scopes: scopes
+            ),
+            .applied(target: .revokedMergeGeneration, generation: 12)
+        )
+        XCTAssertEqual(
+            state.currentText,
+            "TUsettled",
+            "each producer snapshot replaces the mutable suffix without duplicating the envelope"
+        )
+    }
+
     func testSendPromotionFollowupRoutesThroughRetiringAliasIntoStableEntry() {
         var input = makeInputState(text: "S1")
         let lifecycle = activeLifecycle(for: input)

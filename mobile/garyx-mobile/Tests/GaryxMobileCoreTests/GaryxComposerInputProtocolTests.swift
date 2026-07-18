@@ -170,7 +170,10 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
                     ),
                     .applied(target: expectedTarget, generation: expectedGeneration)
                 )
-                XCTAssertEqual(state.textByGeneration[expectedGeneration], "result-\(phase)-\(finalizing)")
+                let expectedText = phase == .revoked
+                    ? "Tresult-\(phase)-\(finalizing)"
+                    : "result-\(phase)-\(finalizing)"
+                XCTAssertEqual(state.textByGeneration[expectedGeneration], expectedText)
             }
         }
     }
