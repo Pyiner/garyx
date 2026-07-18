@@ -542,6 +542,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             )
         )
         XCTAssertEqual(plan.cancelledOperationKeys, [key])
+        XCTAssertEqual(plan.pendingFileCleanupAssetIDs, [assetID])
 
         for failpoint in plan.transaction.mutations.indices {
             let isolated = GaryxFakeComposerDurabilityStore(initial: initial)
@@ -569,6 +570,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertNil(reset.operations[key])
         XCTAssertNil(reset.manifests[key])
         XCTAssertNil(reset.stagedAssetOwners[assetID])
+        XCTAssertEqual(reset.pendingFileCleanup[assetID], key)
         XCTAssertEqual(reset.reservedBytes, 0)
         XCTAssertEqual(reset.claimedGenerations, [12])
 
@@ -618,6 +620,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
                 producerLive: true
             )
         )
+        XCTAssertTrue(plan.pendingFileCleanupAssetIDs.isEmpty)
         XCTAssertTrue(plan.cancelledOperationKeys.isEmpty)
 
         let fake = GaryxFakeComposerDurabilityStore(initial: initial)
@@ -743,7 +746,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(unchangedDanglingMembership, initial)
     }
 
-    func testGenerationResetSettlesCanonicalRegisteredFileCleanupWithoutOwner() async throws {
+    func testGenerationResetRetainsCanonicalFileCleanupUntilPhysicalDeletion() async throws {
         var entry = makeEntry(text: "draft")
         let key = GaryxOperationCapabilityKey(
             scope: scope,
@@ -804,6 +807,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
                 producerLive: true
             )
         )
+        XCTAssertEqual(plan.pendingFileCleanupAssetIDs, [assetID])
 
         for failpoint in plan.transaction.mutations.indices {
             let isolated = GaryxFakeComposerDurabilityStore(initial: initial)
@@ -823,7 +827,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
 
         let fake = GaryxFakeComposerDurabilityStore(initial: initial)
         let reset = try await fake.commit(plan.transaction)
-        XCTAssertTrue(reset.pendingFileCleanup.isEmpty)
+        XCTAssertEqual(reset.pendingFileCleanup[assetID], key)
         XCTAssertNil(reset.operations[key])
         XCTAssertNil(reset.manifests[key])
         XCTAssertEqual(reset.feedback[feedbackID]?.phase, .archived)
@@ -831,6 +835,77 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             try XCTUnwrap(reset.payloadStore.entry(entry.id, scope: scope))
                 .feedbackReferences.contains(feedbackID)
         )
+
+        let encoded = try JSONEncoder().encode(reset)
+        let relaunchedSnapshot = try JSONDecoder().decode(
+            GaryxComposerDurabilitySnapshot.self,
+            from: encoded
+        )
+        XCTAssertEqual(relaunchedSnapshot.pendingFileCleanup[assetID], key)
+
+        let relaunched = GaryxFakeComposerDurabilityStore(initial: relaunchedSnapshot)
+        let physicallyDeleted = try await relaunched.commit(
+            .init(
+                expectedRevision: relaunchedSnapshot.revision,
+                label: "physical deletion acknowledged after reset",
+                mutations: [.completeFileCleanup(assetID)]
+            )
+        )
+        XCTAssertNil(physicallyDeleted.pendingFileCleanup[assetID])
+    }
+
+    func testDiscardTombstoneRejectsReinsertingStaleEntryAndOperation() async throws {
+        var staleEntry = makeEntry(text: "stale payload")
+        let staleOperation = makeOperation(state: .uploading)
+        staleEntry.addOperation(staleOperation.context.key)
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(staleEntry))
+        let initial = GaryxComposerDurabilitySnapshot(
+            payloadStore: payloadStore,
+            operations: [staleOperation.context.key: staleOperation]
+        )
+
+        var convergence = makeDiscardConvergence()
+        convergence.settleDeliveries()
+        convergence.settleReservation()
+        convergence.settleSessions()
+        convergence.settleResources()
+        XCTAssertTrue(convergence.finishToken())
+
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let discarded = try await fake.commit(
+            .init(
+                expectedRevision: initial.revision,
+                label: "finish discard and remove authoritative payload",
+                mutations: [
+                    .upsertDiscardConvergence(convergence),
+                    .removeOperation(staleOperation.context.key),
+                    .removeEntry(scope: scope, entryID: staleEntry.id),
+                ]
+            )
+        )
+        XCTAssertEqual(discarded.discardConvergence[staleEntry.id]?.lifecycle.phase, .discarded)
+        XCTAssertNil(discarded.payloadStore.entry(staleEntry.id, scope: scope))
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: discarded.revision,
+                    label: "reject stale callback resurrection",
+                    mutations: [
+                        .upsertEntry(staleEntry),
+                        .upsertOperation(staleOperation),
+                    ]
+                )
+            )
+            XCTFail("discard tombstone must reject reinserting its retired payload identity")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, discarded)
     }
 
     func testGenerationResetRetainsAbortedReplacementUntilProvisionalCleanupSettles() async throws {
@@ -1001,6 +1076,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
                 scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
             )
         )
+        XCTAssertEqual(plan.pendingFileCleanupAssetID, assetID)
 
         for failpoint in plan.transaction.mutations.indices {
             let isolated = GaryxFakeComposerDurabilityStore(initial: initial)
@@ -1027,10 +1103,19 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertNil(removed.operations[key])
         XCTAssertNil(removed.manifests[key])
         XCTAssertNil(removed.stagedAssetOwners[assetID])
-        XCTAssertNil(removed.pendingFileCleanup[assetID])
+        XCTAssertEqual(removed.pendingFileCleanup[assetID], key)
         XCTAssertEqual(removed.reservedBytes, 0)
         XCTAssertEqual(removed.feedback[feedbackID]?.phase, .acknowledged)
         XCTAssertEqual(removed.attachmentLineages[lineageID]?.phase, .released)
+
+        let physicallyDeleted = try await fake.commit(
+            .init(
+                expectedRevision: removed.revision,
+                label: "physical deletion acknowledged after remove action",
+                mutations: [.completeFileCleanup(assetID)]
+            )
+        )
+        XCTAssertNil(physicallyDeleted.pendingFileCleanup[assetID])
     }
 
     func testSealedBarrierRequiresMatchingReservationLedgerFirst() async throws {
@@ -1146,6 +1231,91 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.payloadStore.entry(entry.id, scope: scope)?.currentText, "U")
         XCTAssertEqual(snapshot.barriers[entry.id]?.phase, .durableCommitted)
         XCTAssertEqual(snapshot.deliveries[delivery.id], delivery)
+    }
+
+    func testCommittedSendRelaunchKeepsEnvelopeAttachmentOutOfFollowupPayload() async throws {
+        let envelopeAttachmentID = GaryxAttachmentID(rawValue: "committed-envelope-attachment")
+        let followupAttachmentID = GaryxAttachmentID(rawValue: "committed-followup-attachment")
+        var entry = makeEntry(text: "T")
+        entry.addAttachment(
+            GaryxComposerAttachment(
+                id: envelopeAttachmentID,
+                stagedAssetID: GaryxStagedAssetID(rawValue: "committed-envelope-asset"),
+                generation: 10,
+                byteCount: 40
+            )
+        )
+        var barrier = makeBarrier()
+        XCTAssertEqual(
+            barrier.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(text: "T", attachments: [envelopeAttachmentID]),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: entry.lifecycle.snapshot
+            ),
+            .sealed
+        )
+        XCTAssertTrue(barrier.replaceProvisionalText("U", lifecycle: entry.lifecycle.snapshot))
+        XCTAssertTrue(
+            barrier.addProvisionalAttachment(
+                followupAttachmentID,
+                lifecycle: entry.lifecycle.snapshot
+            )
+        )
+        let settlement = try XCTUnwrap(
+            barrier.durableCommit(
+                deliveryID: deliveryID,
+                correlationID: "committed-attachment-correlation",
+                clientIntentID: "intent",
+                lifecycle: entry.lifecycle.snapshot
+            )
+        )
+        let delivery = try XCTUnwrap(settlement.deliveryRecord)
+        var ledger = makeLedger(outcome: nil)
+        ledger.settle(.committed, targetGeneration: settlement.followupGeneration)
+
+        entry.removeAttachment(envelopeAttachmentID)
+        entry.addAttachment(
+            GaryxComposerAttachment(
+                id: followupAttachmentID,
+                stagedAssetID: GaryxStagedAssetID(rawValue: "committed-followup-asset"),
+                generation: settlement.followupGeneration,
+                byteCount: 20
+            )
+        )
+        entry.setText(settlement.followupText, generation: settlement.followupGeneration)
+
+        let fake = GaryxFakeComposerDurabilityStore()
+        let committed = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "commit send before simulated process death",
+                mutations: [
+                    .upsertLedger(ledger),
+                    .upsertEntry(entry),
+                    .upsertBarrier(barrier),
+                    .upsertDelivery(delivery),
+                ]
+            )
+        )
+        let relaunched = try JSONDecoder().decode(
+            GaryxComposerDurabilitySnapshot.self,
+            from: JSONEncoder().encode(committed)
+        )
+        let restoredEntry = try XCTUnwrap(
+            relaunched.payloadStore.entry(entry.id, scope: scope)
+        )
+        let restoredEnvelope = try XCTUnwrap(relaunched.deliveries[delivery.id]?.envelope)
+
+        XCTAssertEqual(relaunched.ledgers[ledger.key]?.terminalOutcome, .committed)
+        XCTAssertEqual(restoredEnvelope.attachmentIDs, [envelopeAttachmentID])
+        XCTAssertFalse(restoredEnvelope.attachmentIDs.contains(followupAttachmentID))
+        XCTAssertNil(restoredEntry.attachments[envelopeAttachmentID])
+        XCTAssertEqual(restoredEntry.attachments[followupAttachmentID]?.generation, 11)
+        XCTAssertEqual(restoredEntry.currentText, "U")
     }
 
     func testAmbiguousRestoreAndConflictMembershipCommitAtomically() async throws {
@@ -1688,10 +1858,13 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         )
     }
 
-    private func makeEnvelope(text: String) -> GaryxDeliveryEnvelope {
+    private func makeEnvelope(
+        text: String,
+        attachments: [GaryxAttachmentID] = []
+    ) -> GaryxDeliveryEnvelope {
         GaryxDeliveryEnvelope(
             text: text,
-            attachmentIDs: [],
+            attachmentIDs: attachments,
             generation: 10,
             clientIntentID: "intent"
         )

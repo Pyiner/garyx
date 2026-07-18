@@ -76,6 +76,8 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
     public fileprivate(set) var createDeliveries: [GaryxCreateDeliveryKey: GaryxCreateDeliveryState]
     public fileprivate(set) var stagedAssetOwners: [GaryxStagedAssetID: GaryxOperationCapabilityKey]
     public fileprivate(set) var stagedAssetReservedBytes: [GaryxStagedAssetID: Int]
+    /// Durable condemned-file tombstones. An entry may outlive its former
+    /// operation owner and is removed only after physical deletion succeeds.
     public fileprivate(set) var pendingFileCleanup: [
         GaryxStagedAssetID: GaryxOperationCapabilityKey
     ]
@@ -394,6 +396,10 @@ public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
     /// Replacement journals retained in `.aborted` until the caller has
     /// deleted their provisional file and released its physical quota.
     public let pendingReplacementCleanupIDs: [GaryxReplacementID]
+    /// Condemned staged files whose durable cleanup tombstones survive this
+    /// transaction. The caller may remove each tombstone only after its
+    /// physical file deletion has completed idempotently.
+    public let pendingFileCleanupAssetIDs: [GaryxStagedAssetID]
     public let transaction: GaryxComposerDurabilityTransaction
 
     public init(
@@ -402,6 +408,7 @@ public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
         allocatedGeneration: UInt64,
         cancelledOperationKeys: [GaryxOperationCapabilityKey],
         pendingReplacementCleanupIDs: [GaryxReplacementID],
+        pendingFileCleanupAssetIDs: [GaryxStagedAssetID],
         transaction: GaryxComposerDurabilityTransaction
     ) {
         self.entryID = entryID
@@ -409,6 +416,7 @@ public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
         self.allocatedGeneration = allocatedGeneration
         self.cancelledOperationKeys = cancelledOperationKeys
         self.pendingReplacementCleanupIDs = pendingReplacementCleanupIDs
+        self.pendingFileCleanupAssetIDs = pendingFileCleanupAssetIDs
         self.transaction = transaction
     }
 }
@@ -416,8 +424,9 @@ public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
 /// Plans PayloadGenerationReset as one durability transaction. The lightweight
 /// identity reducer rejects entries with operation descendants; this planner is
 /// the only reset path that may clear them because it cancels capability state,
-/// manifest ownership, staged files/quota, feedback references, and the Entry
-/// generation before publishing any part of the result.
+/// manifest ownership, staged-file quota ownership, feedback references, and
+/// the Entry generation before publishing any part of the result. Physical
+/// deletion remains represented by a condemned-file tombstone until confirmed.
 public enum GaryxPayloadGenerationResetPlanner {
     public static func plan(
         snapshot: GaryxComposerDurabilitySnapshot,
@@ -489,12 +498,17 @@ public enum GaryxPayloadGenerationResetPlanner {
                 affectedAssets.insert(replacement.stagedAssetID)
             }
         }
+        var pendingFileCleanupAssetIDs: [GaryxStagedAssetID] = []
         for assetID in affectedAssets.sorted(by: { $0.rawValue < $1.rawValue }) {
-            if snapshot.pendingFileCleanup[assetID] != nil {
-                mutations.append(.completeFileCleanup(assetID))
-            }
-            if snapshot.stagedAssetOwners[assetID] != nil {
+            if let owner = snapshot.stagedAssetOwners[assetID] {
+                if snapshot.pendingFileCleanup[assetID] == nil {
+                    mutations.append(.registerFileCleanup(assetID: assetID, owner: owner))
+                }
                 mutations.append(.releaseStagedAsset(assetID))
+            }
+            if snapshot.pendingFileCleanup[assetID] != nil
+                || snapshot.stagedAssetOwners[assetID] != nil {
+                pendingFileCleanupAssetIDs.append(assetID)
             }
         }
 
@@ -559,6 +573,7 @@ public enum GaryxPayloadGenerationResetPlanner {
             allocatedGeneration: allocatedGeneration,
             cancelledOperationKeys: affectedKeys,
             pendingReplacementCleanupIDs: pendingReplacementCleanupIDs,
+            pendingFileCleanupAssetIDs: pendingFileCleanupAssetIDs,
             transaction: GaryxComposerDurabilityTransaction(
                 expectedRevision: snapshot.revision,
                 label: "payload generation reset",
@@ -571,23 +586,29 @@ public enum GaryxPayloadGenerationResetPlanner {
 public struct GaryxOperationRemovalFeedbackPlan: Equatable, Sendable {
     public let operationKey: GaryxOperationCapabilityKey
     public let feedbackID: GaryxFeedbackID
+    /// Condemned staged file retained as a durable cleanup tombstone until
+    /// physical deletion is acknowledged in a later transaction.
+    public let pendingFileCleanupAssetID: GaryxStagedAssetID?
     public let transaction: GaryxComposerDurabilityTransaction
 
     public init(
         operationKey: GaryxOperationCapabilityKey,
         feedbackID: GaryxFeedbackID,
+        pendingFileCleanupAssetID: GaryxStagedAssetID?,
         transaction: GaryxComposerDurabilityTransaction
     ) {
         self.operationKey = operationKey
         self.feedbackID = feedbackID
+        self.pendingFileCleanupAssetID = pendingFileCleanupAssetID
         self.transaction = transaction
     }
 }
 
 /// Plans the explicit remove action as one durability transaction. The failure
 /// chip is acknowledged only in the same publication that cancels and removes
-/// its operation child, releases staged-file quota, clears the Entry reference,
-/// and releases any failed-terminal attachment lineage.
+/// its operation child, records the staged-file deletion obligation, releases
+/// staged-file quota ownership, clears the Entry reference, and releases any
+/// failed-terminal attachment lineage.
 public enum GaryxOperationRemovalFeedbackPlanner {
     public static func plan(
         snapshot: GaryxComposerDurabilitySnapshot,
@@ -619,12 +640,17 @@ public enum GaryxOperationRemovalFeedbackPlanner {
         var mutations: [GaryxComposerDurabilityMutation] = [
             .upsertOperation(operation),
         ]
+        var pendingFileCleanupAssetID: GaryxStagedAssetID?
         if let assetID = snapshot.operations[operationKey]?.stagedAssetID {
-            if snapshot.pendingFileCleanup[assetID] == operationKey {
-                mutations.append(.completeFileCleanup(assetID))
-            }
             if snapshot.stagedAssetOwners[assetID] == operationKey {
+                if snapshot.pendingFileCleanup[assetID] == nil {
+                    mutations.append(.registerFileCleanup(assetID: assetID, owner: operationKey))
+                }
                 mutations.append(.releaseStagedAsset(assetID))
+            }
+            if snapshot.pendingFileCleanup[assetID] == operationKey
+                || snapshot.stagedAssetOwners[assetID] == operationKey {
+                pendingFileCleanupAssetID = assetID
             }
         }
         mutations.append(.removeManifest(operationKey))
@@ -640,6 +666,7 @@ public enum GaryxOperationRemovalFeedbackPlanner {
         return GaryxOperationRemovalFeedbackPlan(
             operationKey: operationKey,
             feedbackID: feedbackID,
+            pendingFileCleanupAssetID: pendingFileCleanupAssetID,
             transaction: GaryxComposerDurabilityTransaction(
                 expectedRevision: snapshot.revision,
                 label: "remove failed operation and acknowledge feedback",
@@ -723,6 +750,9 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
                 }
                 state.payloadStore.update(entry)
             } else {
+                guard state.discardConvergence[entry.id] == nil else {
+                    throw invariant("discarded payload identity cannot be reinserted")
+                }
                 guard state.payloadStore.insert(entry) else {
                     throw invariant("entry insert failed")
                 }
@@ -932,6 +962,15 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
                 }
             }
         }
+        for (entryID, convergence) in state.discardConvergence {
+            guard convergence.lifecycle.token.entryID == entryID else {
+                throw invariant("discard convergence is stored under the wrong Entry identity")
+            }
+            if convergence.lifecycle.phase == .discarded,
+               state.payloadStore.entry(entryID, scope: convergence.barrier.scope) != nil {
+                throw invariant("discarded payload identity cannot coexist with an Entry")
+            }
+        }
         for ledger in state.ledgers.values {
             guard (ledger.terminalOutcome == nil) == (ledger.targetMapping == nil) else {
                 throw invariant("reservation outcome and target mapping must publish together")
@@ -962,10 +1001,20 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
             }
         }
         for (assetID, owner) in state.pendingFileCleanup {
-            guard let operation = state.operations[owner],
-                  operation.state == .failedTerminal,
-                  operation.stagedAssetID == assetID else {
-                throw invariant("pending file cleanup does not match failed-terminal operation")
+            if let operation = state.operations[owner] {
+                guard operation.state == .failedTerminal,
+                      operation.stagedAssetID == assetID else {
+                    throw invariant("pending file cleanup does not match failed-terminal operation")
+                }
+            } else {
+                // Removing/resetting the operation must not erase the only
+                // durable proof that its physical staged file still needs
+                // deletion. This condemned tombstone is retired solely by a
+                // later `.completeFileCleanup` acknowledgement.
+                guard state.stagedAssetOwners[assetID] == nil,
+                      !state.operations.values.contains(where: { $0.stagedAssetID == assetID }) else {
+                    throw invariant("condemned file cleanup still has a live operation owner")
+                }
             }
         }
         for lineage in state.attachmentLineages.values {
