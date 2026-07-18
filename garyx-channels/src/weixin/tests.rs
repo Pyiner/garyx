@@ -984,3 +984,89 @@ async fn test_pending_queue_merge_produces_single_text() {
     assert!(merged.contains("Third message"));
     assert_eq!(merged.matches("\n\n").count(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Inbound orchestration pin: drives the full handle_message path (text
+// message -> route_and_dispatch -> provider) so the shared-pipeline
+// migration has a behavioral baseline. Added before the migration.
+// ---------------------------------------------------------------------------
+
+struct NoopInboundDispatcher;
+
+#[async_trait::async_trait]
+impl crate::dispatcher::ChannelDispatcher for NoopInboundDispatcher {
+    async fn send_message(
+        &self,
+        _request: crate::dispatcher::OutboundMessage,
+    ) -> Result<crate::dispatcher::SendMessageResult, crate::channel_trait::ChannelError> {
+        unreachable!("inbound pin test sends nothing outbound")
+    }
+
+    fn available_channels(&self) -> Vec<crate::dispatcher::ChannelInfo> {
+        Vec::new()
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        _target: crate::dispatcher::StreamingDispatchTarget,
+    ) -> Option<crate::dispatcher::StreamDispatchCallback> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn handle_message_routes_text_through_inbound_dispatch() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ret": 0, "errcode": 0 })),
+        )
+        .mount(&server)
+        .await;
+
+    let router = crate::test_helpers::make_router();
+    let provider = Arc::new(crate::test_helpers::ConfigurableTestProvider::echo());
+    let bridge = crate::test_helpers::make_bridge_with(provider.clone()).await;
+    let dispatcher: Arc<dyn crate::dispatcher::ChannelDispatcher> = Arc::new(NoopInboundDispatcher);
+    let runtime = WeixinInboundRuntime {
+        http: reqwest::Client::new(),
+        account_id: "acct".to_owned(),
+        account: weixin_test_account(&server, "test-token"),
+        router: router.clone(),
+        bridge,
+        dispatcher,
+        notify_started: Arc::new(AtomicBool::new(true)),
+        running: Arc::new(AtomicBool::new(true)),
+    };
+    let message = WeixinMessage {
+        message_type: 1,
+        from_user_id: "user-wx".to_owned(),
+        context_token: String::new(),
+        item_list: vec![WeixinMessageItem {
+            r#type: 1,
+            text_item: Some(WeixinTextItem {
+                text: "hello weixin".to_owned(),
+            }),
+            ..Default::default()
+        }],
+    };
+
+    WeixinChannel::handle_message(&runtime, message).await;
+
+    crate::test_helpers::wait_for_provider_calls(&provider, 1).await;
+    {
+        let calls = provider.calls.lock().expect("provider calls");
+        assert_eq!(calls.len(), 1, "text inbound dispatches exactly one run");
+        assert_eq!(calls[0].message, "hello weixin");
+    }
+    let thread_id = {
+        let mut router = router.lock().await;
+        router
+            .resolve_endpoint_thread_id("weixin", "acct", "user-wx")
+            .await
+    };
+    assert!(
+        thread_id.is_some(),
+        "inbound dispatch must bind a thread for the sender"
+    );
+}
