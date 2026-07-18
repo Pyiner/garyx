@@ -249,6 +249,28 @@ final class GaryxPresentationTransactionTests: XCTestCase {
         tree.dismissalCompleted(sheet) // programmatic completion
         tree.dismissalCompleted(sheet) // presentationControllerDidDismiss
         XCTAssertEqual(tree.records[sheet]?.releaseCount, 1)
+        XCTAssertEqual(tree.garbageCollectReleased(), 1)
+        XCTAssertTrue(tree.records.isEmpty)
+        tree.dismissalCompleted(sheet)
+        XCTAssertTrue(tree.records.isEmpty, "late callbacks cannot recreate a reclaimed lease")
+    }
+
+    func testReleasedLeaseForestChurnGarbageCollectsToZero() {
+        var tree = GaryxPresentationLeaseTree()
+        for index in 0..<500 {
+            let parent = token("parent-\(index)")
+            let child = token("child-\(index)")
+            XCTAssertTrue(tree.acquire(parent))
+            XCTAssertTrue(tree.acquire(child, parent: parent, resultBearing: true))
+            tree.forceDismissSubtree(parent)
+            XCTAssertFalse(tree.hasBarrier)
+            XCTAssertEqual(tree.records[parent]?.releaseCount, 1)
+            XCTAssertEqual(tree.records[child]?.releaseCount, 1)
+            XCTAssertEqual(tree.garbageCollectReleased(), 2)
+            XCTAssertTrue(tree.records.isEmpty)
+            tree.dismissalCompleted(child)
+            XCTAssertTrue(tree.records.isEmpty)
+        }
     }
 
     func testHardSnapRemainsBlockedUntilForcedDismissCompletion() {
@@ -276,6 +298,11 @@ final class GaryxPresentationTransactionTests: XCTestCase {
         XCTAssertEqual(GaryxPathDiffPlanner.decide(from: [a, b, c], to: [a]), .popMultiple(2))
         XCTAssertEqual(GaryxPathDiffPlanner.decide(from: [a, b], to: [a, c]), .replaceTop)
         XCTAssertEqual(GaryxPathDiffPlanner.decide(from: [draft], to: [promoted]), .promoteInPlace)
+        XCTAssertEqual(
+            GaryxPathDiffPlanner.decide(from: [a, draft, c], to: [a, promoted, c]),
+            .promoteInPlace,
+            "mid-stack promotion changes payload identity without changing topology"
+        )
         XCTAssertEqual(GaryxPathDiffPlanner.decide(from: [a], to: []), .popToHome)
         XCTAssertEqual(
             GaryxPathDiffPlanner.decide(

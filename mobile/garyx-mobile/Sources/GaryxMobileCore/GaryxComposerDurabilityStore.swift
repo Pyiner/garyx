@@ -19,6 +19,38 @@ public struct GaryxDurableProducerDrainedRecord: Equatable, Codable, Sendable {
     }
 }
 
+public struct GaryxRecoveredInputCloseRecord: Equatable, Codable, Sendable {
+    public let key: GaryxSessionDescendantKey
+    public let scope: GaryxGatewayScope
+    public let entryID: GaryxComposerPayloadEntryID
+    public let reservationID: GaryxSendReservationID
+    public let targetGeneration: UInt64
+    public let finalSequence: UInt64
+    public let finalText: String
+    public let nextEpoch: UInt64
+    public let closePublicationCount: Int
+
+    public init(
+        key: GaryxSessionDescendantKey,
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        reservationID: GaryxSendReservationID,
+        targetGeneration: UInt64,
+        finalSequence: UInt64,
+        finalText: String
+    ) {
+        self.key = key
+        self.scope = scope
+        self.entryID = entryID
+        self.reservationID = reservationID
+        self.targetGeneration = targetGeneration
+        self.finalSequence = finalSequence
+        self.finalText = finalText
+        nextEpoch = key.epoch + 1
+        closePublicationCount = 1
+    }
+}
+
 /// Complete A3 model snapshot. A4d-1 will map these records to concrete DB
 /// rows; A3 deliberately provides no filesystem or database implementation.
 public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
@@ -36,14 +68,22 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
     public fileprivate(set) var barriers: [GaryxComposerPayloadEntryID: GaryxSendCommitBarrier]
     public fileprivate(set) var ledgers: [GaryxReservationLedgerKey: GaryxProvisionalReservationLedger]
     public fileprivate(set) var producerDrained: [GaryxSessionDescendantKey: GaryxDurableProducerDrainedRecord]
+    public fileprivate(set) var recoveredInputClosures: [
+        GaryxSessionDescendantKey: GaryxRecoveredInputCloseRecord
+    ]
     public fileprivate(set) var deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord]
     public fileprivate(set) var discardConvergence: [GaryxComposerPayloadEntryID: GaryxPayloadDiscardConvergence]
     public fileprivate(set) var createDeliveries: [GaryxCreateDeliveryKey: GaryxCreateDeliveryState]
     public fileprivate(set) var stagedAssetOwners: [GaryxStagedAssetID: GaryxOperationCapabilityKey]
     public fileprivate(set) var stagedAssetReservedBytes: [GaryxStagedAssetID: Int]
+    public fileprivate(set) var pendingFileCleanup: [
+        GaryxStagedAssetID: GaryxOperationCapabilityKey
+    ]
     public fileprivate(set) var reservedBytes: Int
     public fileprivate(set) var generationHighWatermark: UInt64
     public fileprivate(set) var reservationHighWatermark: UInt64
+    public fileprivate(set) var claimedGenerations: Set<UInt64>
+    public fileprivate(set) var tombstoneBudget: GaryxPersistentTombstoneBudget
 
     public init(
         revision: UInt64 = 0,
@@ -60,14 +100,20 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
         barriers: [GaryxComposerPayloadEntryID: GaryxSendCommitBarrier] = [:],
         ledgers: [GaryxReservationLedgerKey: GaryxProvisionalReservationLedger] = [:],
         producerDrained: [GaryxSessionDescendantKey: GaryxDurableProducerDrainedRecord] = [:],
+        recoveredInputClosures: [
+            GaryxSessionDescendantKey: GaryxRecoveredInputCloseRecord
+        ] = [:],
         deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord] = [:],
         discardConvergence: [GaryxComposerPayloadEntryID: GaryxPayloadDiscardConvergence] = [:],
         createDeliveries: [GaryxCreateDeliveryKey: GaryxCreateDeliveryState] = [:],
         stagedAssetOwners: [GaryxStagedAssetID: GaryxOperationCapabilityKey] = [:],
         stagedAssetReservedBytes: [GaryxStagedAssetID: Int] = [:],
+        pendingFileCleanup: [GaryxStagedAssetID: GaryxOperationCapabilityKey] = [:],
         reservedBytes: Int = 0,
         generationHighWatermark: UInt64 = 0,
-        reservationHighWatermark: UInt64 = 0
+        reservationHighWatermark: UInt64 = 0,
+        claimedGenerations: Set<UInt64> = [],
+        tombstoneBudget: GaryxPersistentTombstoneBudget = .init()
     ) {
         precondition(reservedBytes >= 0)
         self.revision = revision
@@ -82,14 +128,30 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
         self.barriers = barriers
         self.ledgers = ledgers
         self.producerDrained = producerDrained
+        self.recoveredInputClosures = recoveredInputClosures
         self.deliveries = deliveries
         self.discardConvergence = discardConvergence
         self.createDeliveries = createDeliveries
         self.stagedAssetOwners = stagedAssetOwners
         self.stagedAssetReservedBytes = stagedAssetReservedBytes
+        self.pendingFileCleanup = pendingFileCleanup
         self.reservedBytes = reservedBytes
         self.generationHighWatermark = generationHighWatermark
         self.reservationHighWatermark = reservationHighWatermark
+        self.claimedGenerations = claimedGenerations
+        self.tombstoneBudget = tombstoneBudget
+    }
+
+    public var persistentTombstoneUsage: GaryxPersistentTombstoneUsage {
+        let correlationBytes = deliveries.values.compactMap(\.persistentTombstoneEstimatedBytes)
+        let discardCounts = discardConvergence.values.map(\.persistentTombstoneCount)
+        let discardBytes = discardConvergence.values.map(\.persistentTombstoneBytes)
+        return GaryxPersistentTombstoneUsage(
+            correlationCount: correlationBytes.count,
+            correlationBytes: correlationBytes.reduce(0, +),
+            discardFinalizationCount: discardCounts.reduce(0, +),
+            discardFinalizationBytes: discardBytes.reduce(0, +)
+        )
     }
 }
 
@@ -111,7 +173,12 @@ public enum GaryxComposerDurabilityMutation: Equatable, Sendable {
     case removeAttachmentLineage(GaryxAttachmentLineageID)
     case upsertBarrier(GaryxSendCommitBarrier)
     case upsertLedger(GaryxProvisionalReservationLedger)
+    case synthesizeReservationRevocation(GaryxReservationLedgerKey)
+    case persistReservationTargetMapping(GaryxReservationLedgerKey, generation: UInt64)
     case upsertProducerDrained(GaryxSessionDescendantKey, GaryxDurableProducerDrainedRecord)
+    case removeProducerDrained(GaryxSessionDescendantKey)
+    case upsertRecoveredInputClose(GaryxRecoveredInputCloseRecord)
+    case removeRecoveredInputClose(GaryxSessionDescendantKey)
     case upsertDelivery(GaryxDeliveryRecord)
     case removeDelivery(GaryxDeliveryRecordID)
     case upsertDiscardConvergence(GaryxPayloadDiscardConvergence)
@@ -123,7 +190,10 @@ public enum GaryxComposerDurabilityMutation: Equatable, Sendable {
         bytes: Int
     )
     case releaseStagedAsset(GaryxStagedAssetID)
+    case registerFileCleanup(assetID: GaryxStagedAssetID, owner: GaryxOperationCapabilityKey)
+    case completeFileCleanup(GaryxStagedAssetID)
     case setGenerationHighWatermark(UInt64)
+    case claimGeneration(UInt64)
     case setReservationHighWatermark(UInt64)
 }
 
@@ -140,6 +210,179 @@ public struct GaryxComposerDurabilityTransaction: Equatable, Sendable {
         self.expectedRevision = expectedRevision
         self.label = label
         self.mutations = mutations
+    }
+}
+
+public struct GaryxSyntheticReservationRecoveryPlan: Equatable, Sendable {
+    public let ledgerKey: GaryxReservationLedgerKey
+    public let mergeGeneration: UInt64
+    public let performedSteps: [GaryxSyntheticRecoveryStep]
+    public let transaction: GaryxComposerDurabilityTransaction
+
+    public init(
+        ledgerKey: GaryxReservationLedgerKey,
+        mergeGeneration: UInt64,
+        performedSteps: [GaryxSyntheticRecoveryStep],
+        transaction: GaryxComposerDurabilityTransaction
+    ) {
+        self.ledgerKey = ledgerKey
+        self.mergeGeneration = mergeGeneration
+        self.performedSteps = performedSteps
+        self.transaction = transaction
+    }
+}
+
+/// Builds the five-step startup revocation as one durability transaction.
+/// Every reported step contributes concrete mutations; the fake store can kill
+/// at any mutation boundary without publishing a partial outcome.
+public enum GaryxSyntheticReservationRecoveryPlanner {
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        ledgerKey: GaryxReservationLedgerKey,
+        mergeGeneration: UInt64,
+        conflictSetID: GaryxPayloadConflictSetID? = nil
+    ) -> GaryxSyntheticReservationRecoveryPlan? {
+        guard let ledger = snapshot.ledgers[ledgerKey],
+              ledger.terminalOutcome == nil,
+              ledger.targetMapping == nil,
+              mergeGeneration > ledger.followupGeneration,
+              mergeGeneration <= snapshot.generationHighWatermark,
+              !snapshot.claimedGenerations.contains(mergeGeneration),
+              var entry = snapshot.payloadStore.entry(ledgerKey.entryID, scope: ledgerKey.scope),
+              var barrier = snapshot.barriers[ledgerKey.entryID],
+              barrier.scope == ledgerKey.scope,
+              barrier.reservationID == ledgerKey.reservationID,
+              barrier.phase == .sealed,
+              barrier.envelopeGeneration == ledger.envelopeGeneration,
+              barrier.followupGeneration == ledger.followupGeneration else {
+            return nil
+        }
+
+        let drained = snapshot.producerDrained
+            .filter { _, value in
+                value.scope == ledgerKey.scope
+                    && value.entryID == ledgerKey.entryID
+                    && value.reservationID == ledgerKey.reservationID
+            }
+            .sorted { lhs, rhs in
+                if lhs.key.epoch != rhs.key.epoch { return lhs.key.epoch < rhs.key.epoch }
+                return lhs.key.sessionID.rawValue < rhs.key.sessionID.rawValue
+            }
+        let followupText = drained.last?.value.record.bufferedText
+            ?? barrier.provisionalFollowupText
+        let mergedText = (barrier.envelopeText ?? "") + followupText
+        guard barrier.revoke(
+            mergeGeneration: mergeGeneration,
+            lifecycle: entry.lifecycle.snapshot
+        ) != nil else {
+            return nil
+        }
+        entry.recoverSyntheticRevocation(
+            envelopeGeneration: ledger.envelopeGeneration,
+            followupGeneration: ledger.followupGeneration,
+            mergeGeneration: mergeGeneration,
+            mergedText: mergedText
+        )
+
+        var stepThreeMutations: [GaryxComposerDurabilityMutation] = []
+        let collisions = snapshot.payloadStore.entriesByScope[ledgerKey.scope]?.values
+            .filter { $0.id != entry.id && $0.destination == entry.destination }
+            .map(\.id)
+            .sorted { $0.rawValue < $1.rawValue } ?? []
+        if !collisions.isEmpty {
+            guard let conflictSetID else { return nil }
+            var conflict = snapshot.conflicts[conflictSetID]
+                ?? GaryxPayloadConflictSet(id: conflictSetID, scope: ledgerKey.scope)
+            guard conflict.scope == ledgerKey.scope else { return nil }
+            for candidateID in ([entry.id] + collisions).sorted(by: { $0.rawValue < $1.rawValue }) {
+                guard conflict.admitCandidate(
+                    .init(entryID: candidateID, label: "synthetic-recovery-\(candidateID.rawValue)"),
+                    membershipDurabilityAvailable: true
+                ) else {
+                    return nil
+                }
+            }
+            stepThreeMutations.append(.upsertConflict(conflict))
+        }
+
+        var stepFourMutations: [GaryxComposerDurabilityMutation] = []
+        let operationKeys = Set(snapshot.operations.keys).union(snapshot.manifests.keys)
+            .filter {
+                $0.scope == ledgerKey.scope
+                    && $0.entryID == ledgerKey.entryID
+                    && $0.reservationID == ledgerKey.reservationID
+                    && $0.generation == ledger.followupGeneration
+            }
+            .sorted { $0.operationID.rawValue < $1.operationID.rawValue }
+        for oldKey in operationKeys {
+            let newKey = oldKey.remapped(toGeneration: mergeGeneration)
+            entry.remapOperationKey(from: oldKey, to: newKey)
+            if let operation = snapshot.operations[oldKey] {
+                let remapped = operation.remapped(toGeneration: mergeGeneration)
+                stepFourMutations.append(.removeOperation(oldKey))
+                stepFourMutations.append(.upsertOperation(remapped))
+                if let assetID = operation.stagedAssetID,
+                   snapshot.stagedAssetOwners[assetID] == oldKey {
+                    stepFourMutations.append(.releaseStagedAsset(assetID))
+                    stepFourMutations.append(
+                        .reserveStagedAsset(
+                            assetID: assetID,
+                            owner: newKey,
+                            bytes: snapshot.stagedAssetReservedBytes[assetID]
+                                ?? operation.reservedBytes
+                        )
+                    )
+                }
+            }
+            if let manifest = snapshot.manifests[oldKey] {
+                stepFourMutations.append(.removeManifest(oldKey))
+                stepFourMutations.append(
+                    .upsertManifest(manifest.remapped(toGeneration: mergeGeneration))
+                )
+            }
+            for replacement in snapshot.replacements.values where
+                replacement.oldKey == oldKey || replacement.newKey == oldKey {
+                stepFourMutations.append(
+                    .upsertReplacement(replacement.remapped(from: oldKey, to: newKey))
+                )
+            }
+        }
+
+        stepThreeMutations.insert(.upsertEntry(entry), at: 0)
+        for (key, durable) in drained {
+            stepThreeMutations.append(
+                .upsertRecoveredInputClose(
+                    GaryxRecoveredInputCloseRecord(
+                        key: key,
+                        scope: ledgerKey.scope,
+                        entryID: ledgerKey.entryID,
+                        reservationID: ledgerKey.reservationID,
+                        targetGeneration: mergeGeneration,
+                        finalSequence: durable.record.finalSequence,
+                        finalText: mergedText
+                    )
+                )
+            )
+            stepThreeMutations.append(.removeProducerDrained(key))
+        }
+        stepFourMutations.append(.upsertBarrier(barrier))
+
+        let mutations: [GaryxComposerDurabilityMutation] = [
+            .synthesizeReservationRevocation(ledgerKey),
+            .claimGeneration(mergeGeneration),
+        ] + stepThreeMutations + stepFourMutations + [
+            .persistReservationTargetMapping(ledgerKey, generation: mergeGeneration),
+        ]
+        return GaryxSyntheticReservationRecoveryPlan(
+            ledgerKey: ledgerKey,
+            mergeGeneration: mergeGeneration,
+            performedSteps: GaryxSyntheticRecoveryStep.allCases,
+            transaction: GaryxComposerDurabilityTransaction(
+                expectedRevision: snapshot.revision,
+                label: "synthetic reservation revocation",
+                mutations: mutations
+            )
+        )
     }
 }
 
@@ -261,6 +504,18 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
             state.barriers[barrier.entryID] = barrier
         case .upsertLedger(let ledger):
             state.ledgers[ledger.key] = ledger
+        case .synthesizeReservationRevocation(let key):
+            guard var ledger = state.ledgers[key],
+                  ledger.synthesizeTerminalOutcome(.revoked) else {
+                throw invariant("synthetic revocation requires an unsettled reservation ledger")
+            }
+            state.ledgers[key] = ledger
+        case .persistReservationTargetMapping(let key, let generation):
+            guard var ledger = state.ledgers[key],
+                  ledger.persistTargetMapping(generation) else {
+                throw invariant("reservation target mapping does not match its terminal outcome")
+            }
+            state.ledgers[key] = ledger
         case .upsertProducerDrained(let key, let drained):
             try requireLedgerIfNeeded(
                 scope: drained.scope,
@@ -270,6 +525,16 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
                 descendant: "producerDrained"
             )
             state.producerDrained[key] = drained
+        case .removeProducerDrained(let key):
+            state.producerDrained.removeValue(forKey: key)
+        case .upsertRecoveredInputClose(let close):
+            guard close.key.token.entryID == close.entryID,
+                  close.closePublicationCount == 1 else {
+                throw invariant("recovered input close identity is inconsistent")
+            }
+            state.recoveredInputClosures[close.key] = close
+        case .removeRecoveredInputClose(let key):
+            state.recoveredInputClosures.removeValue(forKey: key)
         case .upsertDelivery(let delivery):
             let ledgerKey = GaryxReservationLedgerKey(
                 scope: delivery.scope,
@@ -300,11 +565,25 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         case .releaseStagedAsset(let assetID):
             state.stagedAssetOwners.removeValue(forKey: assetID)
             state.reservedBytes -= state.stagedAssetReservedBytes.removeValue(forKey: assetID) ?? 0
+        case .registerFileCleanup(let assetID, let owner):
+            guard state.pendingFileCleanup[assetID] == nil
+                    || state.pendingFileCleanup[assetID] == owner else {
+                throw invariant("staged file cleanup has multiple owners")
+            }
+            state.pendingFileCleanup[assetID] = owner
+        case .completeFileCleanup(let assetID):
+            state.pendingFileCleanup.removeValue(forKey: assetID)
         case .setGenerationHighWatermark(let watermark):
             guard watermark >= state.generationHighWatermark else {
                 throw invariant("generation watermark regressed")
             }
             state.generationHighWatermark = watermark
+        case .claimGeneration(let generation):
+            guard generation > 0,
+                  generation <= state.generationHighWatermark,
+                  state.claimedGenerations.insert(generation).inserted else {
+                throw invariant("generation was not durably allocated or was already claimed")
+            }
         case .setReservationHighWatermark(let watermark):
             guard watermark >= state.reservationHighWatermark else {
                 throw invariant("reservation watermark regressed")
@@ -332,6 +611,35 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
     }
 
     private func validate(_ state: GaryxComposerDurabilitySnapshot) throws {
+        let tombstoneUsage = state.persistentTombstoneUsage
+        guard state.tombstoneBudget.admits(
+            count: tombstoneUsage.count,
+            bytes: tombstoneUsage.bytes
+        ) else {
+            throw invariant("persistent tombstone budget exceeded")
+        }
+        guard state.claimedGenerations.allSatisfy({
+            $0 > 0 && $0 <= state.generationHighWatermark
+        }) else {
+            throw invariant("claimed generation is outside the durable hi-lo watermark")
+        }
+        for ledger in state.ledgers.values {
+            guard (ledger.terminalOutcome == nil) == (ledger.targetMapping == nil) else {
+                throw invariant("reservation outcome and target mapping must publish together")
+            }
+        }
+        for close in state.recoveredInputClosures.values {
+            let ledgerKey = GaryxReservationLedgerKey(
+                scope: close.scope,
+                entryID: close.entryID,
+                reservationID: close.reservationID
+            )
+            guard state.ledgers[ledgerKey]?.terminalOutcome == .revoked,
+                  state.ledgers[ledgerKey]?.targetMapping?.generation == close.targetGeneration,
+                  state.producerDrained[close.key] == nil else {
+                throw invariant("recovered close requires a consumed drained record and revoked mapping")
+            }
+        }
         guard state.reservedBytes >= 0,
               Set(state.stagedAssetOwners.keys) == Set(state.stagedAssetReservedBytes.keys),
               state.stagedAssetReservedBytes.values.reduce(0, +) == state.reservedBytes else {
@@ -342,6 +650,13 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
                   operation.stagedAssetID == assetID,
                   operation.reservedBytes == state.stagedAssetReservedBytes[assetID] else {
                 throw invariant("staged asset owner does not match operation")
+            }
+        }
+        for (assetID, owner) in state.pendingFileCleanup {
+            guard let operation = state.operations[owner],
+                  operation.state == .failedTerminal,
+                  operation.stagedAssetID == assetID else {
+                throw invariant("pending file cleanup does not match failed-terminal operation")
             }
         }
         for lineage in state.attachmentLineages.values {

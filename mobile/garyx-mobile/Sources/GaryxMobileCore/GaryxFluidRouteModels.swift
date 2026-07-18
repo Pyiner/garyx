@@ -204,6 +204,9 @@ public enum GaryxDraftPromotionNavigationDisposition: Equatable, Sendable {
     case domainOnlyLate
     /// The event belongs to a non-current origin scope and cannot touch the path.
     case originScopePartitionOnly
+    /// The origin epoch is at or below the revocation watermark. No partition
+    /// or outbox mutation may be created from the late event.
+    case originScopeRevoked
     /// Outbox durability failed, so the visible draft remains authoritative.
     case draftRestored
 }
@@ -213,6 +216,7 @@ public enum GaryxDraftPromotionSendDisposition: Equatable, Sendable {
     case typedFailure(code: String)
     case reconcileAmbiguous
     case acknowledged
+    case rejectedRevokedScope
 }
 
 public struct GaryxDraftPromotionResult: Equatable, Sendable {
@@ -248,7 +252,7 @@ public struct GaryxDraftPromotionResult: Equatable, Sendable {
 public protocol GaryxDraftPromoting {
     mutating func promoteDraft(
         _ request: GaryxDraftPromotionRequest,
-        currentScope: GaryxGatewayScope?,
+        scopes: GaryxGatewayScopeRegistry,
         outboxAdmission: GaryxDraftPromotionOutboxAdmission
     ) -> GaryxDraftPromotionResult
 }
@@ -256,9 +260,19 @@ public protocol GaryxDraftPromoting {
 extension GaryxCanonicalRouteState: GaryxDraftPromoting {
     public mutating func promoteDraft(
         _ request: GaryxDraftPromotionRequest,
-        currentScope: GaryxGatewayScope?,
+        scopes: GaryxGatewayScopeRegistry,
         outboxAdmission: GaryxDraftPromotionOutboxAdmission = .succeeded
     ) -> GaryxDraftPromotionResult {
+        guard scopes.lifecycle(of: request.originScope) != .revoked else {
+            return GaryxDraftPromotionResult(
+                navigation: .originScopeRevoked,
+                send: .rejectedRevokedScope,
+                migratedDomainInOriginScope: false,
+                keptOptimisticThread: false,
+                outboxInsertCount: 0
+            )
+        }
+
         let sendDisposition: GaryxDraftPromotionSendDisposition
         let outboxInsertCount: Int
         let shouldCommitPromotion: Bool
@@ -295,7 +309,7 @@ extension GaryxCanonicalRouteState: GaryxDraftPromoting {
             )
         }
 
-        guard currentScope == request.originScope else {
+        guard scopes.activeScope == request.originScope else {
             return GaryxDraftPromotionResult(
                 navigation: .originScopePartitionOnly,
                 send: sendDisposition,

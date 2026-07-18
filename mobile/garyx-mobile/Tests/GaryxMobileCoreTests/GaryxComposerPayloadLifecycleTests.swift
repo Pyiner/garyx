@@ -37,7 +37,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertFalse(entry.isReclaimable)
 
         // Generation reset never erases historical delivery/feedback exits.
-        XCTAssertTrue(entry.resetGeneration(1, barrierIdle: true, producerLive: true))
+        XCTAssertTrue(entry.resetGeneration(1, to: 2, barrierIdle: true, producerLive: true))
         XCTAssertEqual(entry.deliveryReferences, [delivery])
         XCTAssertEqual(entry.feedbackReferences, [feedback])
         XCTAssertFalse(entry.isReclaimable)
@@ -283,7 +283,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             (false, .revoked, .cancelAndCleanStaging(erasePayload: true)),
             (true, .active, .failedRetryableWithFeedback),
             (true, .suspended, .failedRetryableWithFeedback),
-            (true, .revoked, .scopeRevokedEvidence),
+            (true, .revoked, .archiveAttemptedUploadEvidence),
         ]
         for (attempted, scopeState, expected) in uploading {
             XCTAssertEqual(
@@ -302,12 +302,12 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             .completed: [
                 .active: .placeCompletedAndCleanStaging,
                 .suspended: .placeCompletedAndCleanStaging,
-                .revoked: .scopeRevokedEvidence,
+                .revoked: .archiveCompletedPayloadEvidence,
             ],
             .failedRetryable: [
                 .active: .preserveFailedRetryable,
                 .suspended: .preserveFailedRetryable,
-                .revoked: .cancelAndCleanStaging(erasePayload: true),
+                .revoked: .cleanOperationChild,
             ],
             .failedTerminal: [
                 .active: .persistFailedTerminalFeedback,
@@ -434,6 +434,224 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertEqual(invalidOld, beforeOld)
         XCTAssertEqual(untouchedSuccessor, beforeSuccessor)
         XCTAssertEqual(untouchedRecord, beforeRecord)
+    }
+
+    func testRetryableReattachAcknowledgesFeedbackOnlyWithSuccessfulSwap() {
+        let entry = makeEntry()
+        let context = activeContext(entry: entry)
+        var old = makeOperation(
+            "retry-old",
+            state: .failedRetryable,
+            stagedAssetID: GaryxStagedAssetID(rawValue: "retry-asset"),
+            reservedBytes: 100
+        )
+        var successor = makeOperation("retry-new")
+        var record = replacement(old: old.context.key, reservation: nil)
+        var feedback = GaryxOperationFeedback(
+            id: GaryxFeedbackID(rawValue: "retry-feedback"),
+            scope: scope,
+            entryID: entryID,
+            operationID: old.context.key.operationID,
+            kind: .uploadRetryable
+        )
+        XCTAssertEqual(
+            GaryxReplacementFeedbackSwapReducer.commit(
+                old: &old,
+                successor: &successor,
+                record: &record,
+                feedback: &feedback,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .committed
+        )
+        XCTAssertEqual(old.state, .superseded)
+        XCTAssertEqual(successor.state, .preparing)
+        XCTAssertEqual(feedback.phase, .acknowledged)
+        XCTAssertEqual(
+            old.transition(
+                expectedKey: old.context.key,
+                to: .cancelled,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedState,
+            "events carrying the superseded operationID must stay rejected"
+        )
+
+        var invalidOld = makeOperation("invalid-old", state: .completed)
+        var untouchedSuccessor = makeOperation("invalid-new")
+        var untouchedRecord = replacement(old: invalidOld.context.key, reservation: nil)
+        var untouchedFeedback = GaryxOperationFeedback(
+            id: GaryxFeedbackID(rawValue: "invalid-feedback"),
+            scope: scope,
+            entryID: entryID,
+            operationID: invalidOld.context.key.operationID,
+            kind: .uploadRetryable
+        )
+        let before = (invalidOld, untouchedSuccessor, untouchedRecord, untouchedFeedback)
+        XCTAssertEqual(
+            GaryxReplacementFeedbackSwapReducer.commit(
+                old: &invalidOld,
+                successor: &untouchedSuccessor,
+                record: &untouchedRecord,
+                feedback: &untouchedFeedback,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedSwap(.rejectedOldOperation)
+        )
+        XCTAssertEqual(invalidOld, before.0)
+        XCTAssertEqual(untouchedSuccessor, before.1)
+        XCTAssertEqual(untouchedRecord, before.2)
+        XCTAssertEqual(untouchedFeedback, before.3)
+    }
+
+    func testFailedTerminalReattachAdmitsOperationAckAndLineageAsOneValueTransaction() {
+        let entry = makeEntry()
+        let context = activeContext(entry: entry)
+        let lineageID = GaryxAttachmentLineageID(rawValue: "terminal-lineage")
+        let feedbackID = GaryxFeedbackID(rawValue: "terminal-feedback")
+        var feedback = GaryxOperationFeedback(
+            id: feedbackID,
+            scope: scope,
+            entryID: entryID,
+            operationID: GaryxOperationID(rawValue: "failed-terminal"),
+            lineageID: lineageID,
+            kind: .uploadTerminal
+        )
+        var lineage = GaryxAttachmentLineageTombstone(
+            id: lineageID,
+            scope: scope,
+            entryID: entryID,
+            attachmentSlotID: GaryxAttachmentID(rawValue: "terminal-slot"),
+            failedOperationID: GaryxOperationID(rawValue: "failed-terminal"),
+            feedbackID: feedbackID,
+            payloadLifecycle: GaryxPayloadLifecycleCapture(
+                token: entry.lifecycle.token,
+                revision: entry.lifecycle.revision
+            )
+        )
+        var fresh = makeOperation("fresh-terminal")
+        XCTAssertEqual(
+            GaryxFailedTerminalReattachReducer.commit(
+                freshOperation: &fresh,
+                feedback: &feedback,
+                lineage: &lineage,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .committed
+        )
+        XCTAssertEqual(fresh.state, .preparing)
+        XCTAssertEqual(feedback.phase, .acknowledged)
+        XCTAssertEqual(lineage.phase, .released)
+
+        var rejectedFeedback = GaryxOperationFeedback(
+            id: feedbackID,
+            scope: scope,
+            entryID: entryID,
+            operationID: GaryxOperationID(rawValue: "failed-terminal"),
+            lineageID: lineageID,
+            kind: .uploadTerminal
+        )
+        var rejectedLineage = GaryxAttachmentLineageTombstone(
+            id: lineageID,
+            scope: scope,
+            entryID: entryID,
+            attachmentSlotID: GaryxAttachmentID(rawValue: "terminal-slot"),
+            failedOperationID: GaryxOperationID(rawValue: "failed-terminal"),
+            feedbackID: feedbackID,
+            payloadLifecycle: GaryxPayloadLifecycleCapture(
+                token: entry.lifecycle.token,
+                revision: entry.lifecycle.revision
+            )
+        )
+        var invalidFresh = makeOperation("invalid-fresh", state: .completed)
+        let before = (invalidFresh, rejectedFeedback, rejectedLineage)
+        XCTAssertEqual(
+            GaryxFailedTerminalReattachReducer.commit(
+                freshOperation: &invalidFresh,
+                feedback: &rejectedFeedback,
+                lineage: &rejectedLineage,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedLineage
+        )
+        XCTAssertEqual(invalidFresh, before.0)
+        XCTAssertEqual(rejectedFeedback, before.1)
+        XCTAssertEqual(rejectedLineage, before.2)
+    }
+
+    func testContinuousReplacementChainReclaimsEachPriorJournalRing() {
+        let entry = makeEntry()
+        let context = activeContext(entry: entry)
+        var old = makeOperation(
+            "chain-0",
+            state: .failedRetryable,
+            stagedAssetID: GaryxStagedAssetID(rawValue: "chain-asset"),
+            reservedBytes: 200
+        )
+        var activeRecords: [GaryxReplacementID: GaryxReplacementRecord] = [:]
+        var previousRecordID: GaryxReplacementID?
+
+        for index in 1...500 {
+            var successor = makeOperation("chain-\(index)")
+            var record = GaryxReplacementRecord(
+                id: GaryxReplacementID(rawValue: "chain-record-\(index)"),
+                scope: scope,
+                entryID: entryID,
+                oldKey: old.context.key,
+                reservationID: nil,
+                branch: .followup,
+                stagedAssetID: GaryxStagedAssetID(rawValue: "chain-asset"),
+                reservedBytes: 200
+            )
+            XCTAssertEqual(
+                GaryxReplacementSwapReducer.commit(
+                    old: &old,
+                    successor: &successor,
+                    record: &record,
+                    lifecycle: context.lifecycle,
+                    scopes: context.scopes
+                ),
+                .committed
+            )
+            activeRecords[record.id] = record
+            if let previousRecordID {
+                activeRecords[previousRecordID]?.settle()
+                activeRecords.removeValue(forKey: previousRecordID)
+            }
+            XCTAssertEqual(activeRecords.count, 1)
+            previousRecordID = record.id
+
+            XCTAssertEqual(
+                successor.transition(
+                    expectedKey: successor.context.key,
+                    to: .uploading,
+                    lifecycle: context.lifecycle,
+                    scopes: context.scopes
+                ),
+                .applied
+            )
+            XCTAssertEqual(
+                successor.transition(
+                    expectedKey: successor.context.key,
+                    to: .failedRetryable,
+                    lifecycle: context.lifecycle,
+                    scopes: context.scopes
+                ),
+                .applied
+            )
+            old = successor
+        }
+
+        if let previousRecordID {
+            activeRecords[previousRecordID]?.settle()
+            activeRecords.removeValue(forKey: previousRecordID)
+        }
+        XCTAssertTrue(activeRecords.isEmpty)
     }
 
     func testReplacementRecoveryAndSixReclamationRows() {
@@ -626,6 +844,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
                 .payloadGenerationReset(
                     entryID: entry.id,
                     generation: 1,
+                    allocatedGeneration: 2,
                     barrierIdle: false,
                     producerLive: true
                 ),
@@ -640,6 +859,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
                 .payloadGenerationReset(
                     entryID: entry.id,
                     generation: 1,
+                    allocatedGeneration: 2,
                     barrierIdle: true,
                     producerLive: true
                 ),

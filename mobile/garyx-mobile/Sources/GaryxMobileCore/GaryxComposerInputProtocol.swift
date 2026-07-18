@@ -244,15 +244,18 @@ public struct GaryxComposerEpochSnapshot: Equatable, Codable, Sendable {
 public struct GaryxInputReservationTerminalRecord: Equatable, Codable, Sendable {
     public let reservationID: GaryxSendReservationID
     public let outcome: GaryxReservationTerminalOutcome
+    public let sourceGeneration: UInt64
     public let targetGeneration: UInt64
 
     public init(
         reservationID: GaryxSendReservationID,
         outcome: GaryxReservationTerminalOutcome,
+        sourceGeneration: UInt64,
         targetGeneration: UInt64
     ) {
         self.reservationID = reservationID
         self.outcome = outcome
+        self.sourceGeneration = sourceGeneration
         self.targetGeneration = targetGeneration
     }
 }
@@ -265,6 +268,7 @@ public enum GaryxComposerInputEventDisposition: Equatable, Sendable {
     case rejectedToken
     case rejectedScope
     case rejectedUnknownSession
+    case rejectedRetiredSession
     case rejectedOldGeneration
     case rejectedFutureGeneration
     case rejectedReservation
@@ -277,6 +281,7 @@ public enum GaryxBeginSendInputDisposition: Equatable, Sendable {
     case rejectedScope
     case rejectedFinalizing
     case rejectedBusy
+    case rejectedRetiredSession
 }
 
 public enum GaryxInputReleaseDisposition: Equatable, Sendable {
@@ -284,6 +289,7 @@ public enum GaryxInputReleaseDisposition: Equatable, Sendable {
     case rejectedToken
     case rejectedScope
     case rejectedPhase
+    case rejectedRetiredSession
 }
 
 public enum GaryxProducerTerminalDisposition: Equatable, Sendable {
@@ -293,6 +299,7 @@ public enum GaryxProducerTerminalDisposition: Equatable, Sendable {
     case alreadyTerminal
     case rejectedToken
     case rejectedScope
+    case rejectedRetiredSession
 }
 
 public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
@@ -350,7 +357,9 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
     }
 
     public var currentText: String { textByGeneration[currentGeneration] ?? "" }
-    public var inputReady: Bool { nextEpochSnapshot != nil && closePublicationCount == 1 }
+    public var inputReady: Bool {
+        nextEpochSnapshot != nil && closePublicationCount == 1 && reservationPhase == .none
+    }
     public var isRetired: Bool { closeAcknowledged }
 
     @discardableResult
@@ -370,6 +379,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
             faultCount += 1
             return .rejectedUnknownSession
         }
+        guard !isRetired else { return .rejectedRetiredSession }
         if let finalSequence {
             if identity.inputSequence <= finalSequence {
                 return .auditedTerminalDuplicate
@@ -382,7 +392,24 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         }
         guard validateReservation(identity) else {
             if let reservationID = identity.reservationID,
-               terminalReservations[reservationID] != nil {
+               let terminal = terminalReservations[reservationID] {
+                // A settled reservation may release its short-lived barrier
+                // while this producer remains live. Its tagged result still
+                // belongs to that reservation's durable target. Once a newer
+                // reservation seals, mutating the older envelope is unsafe and
+                // the event remains audit-only.
+                if producerPhase != .terminal,
+                   reservationPhase == .none,
+                   activeReservationID == nil,
+                   identity.payloadGeneration == terminal.sourceGeneration,
+                   terminal.targetGeneration == currentGeneration {
+                    let target: GaryxInputProductTarget = terminal.outcome == .committed
+                        ? .committedNextGeneration
+                        : .revokedMergeGeneration
+                    textByGeneration[terminal.targetGeneration] = text
+                    lastAppliedSequence = identity.inputSequence
+                    return .applied(target: target, generation: terminal.targetGeneration)
+                }
                 return .auditedTerminalReservation
             }
             return .rejectedReservation
@@ -408,6 +435,45 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         return .applied(target: target, generation: generation)
     }
 
+    /// Alias-aware entry point used across draft promotion. Both the event key
+    /// and the activation-bound source key must resolve to the same canonical
+    /// composer identity in the session's immutable scope. The reducer itself
+    /// remains keyed by its original activation identity.
+    @discardableResult
+    public mutating func applyText(
+        _ text: String,
+        identity: GaryxComposerInputEventIdentity,
+        aliases: GaryxComposerAliasTable,
+        lifecycle: GaryxPayloadLifecycleSnapshot,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> GaryxComposerInputEventDisposition {
+        guard case .resolved(let eventKey) = aliases.resolve(
+            identity.composerKey,
+            scope: session.scope,
+            scopes: scopes
+        ), case .resolved(let sessionKey) = aliases.resolve(
+            session.composerKey,
+            scope: session.scope,
+            scopes: scopes
+        ) else {
+            return .rejectedScope
+        }
+        guard eventKey == sessionKey else { return .rejectedUnknownSession }
+        return applyText(
+            text,
+            identity: GaryxComposerInputEventIdentity(
+                composerKey: session.composerKey,
+                sessionID: identity.sessionID,
+                inputSessionEpoch: identity.inputSessionEpoch,
+                payloadGeneration: identity.payloadGeneration,
+                reservationID: identity.reservationID,
+                inputSequence: identity.inputSequence
+            ),
+            lifecycle: lifecycle,
+            scopes: scopes
+        )
+    }
+
     @discardableResult
     public mutating func beginSend(
         reservationID: GaryxSendReservationID,
@@ -419,6 +485,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         guard scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked else {
             return .rejectedScope
         }
+        guard !isRetired else { return .rejectedRetiredSession }
         guard producerPhase == .live else { return .rejectedFinalizing }
         guard reservationPhase == .none else { return .rejectedBusy }
         precondition(followupGeneration > currentGeneration, "generation must advance")
@@ -445,6 +512,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         guard scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked else {
             return .rejectedScope
         }
+        guard !isRetired else { return .rejectedRetiredSession }
         guard producerPhase == .live else { return .rejectedPhase }
         producerPhase = .finalizing
         focusClearedAtRelease = true
@@ -469,6 +537,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         guard scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked else {
             return .rejectedScope
         }
+        guard !isRetired else { return .rejectedRetiredSession }
         guard producerPhase == .finalizing else { return .alreadyTerminal }
         finalizationLease?.producerReachedTerminal(producer)
         guard finalizationLease?.isTerminal == true else { return .stillWaiting }
@@ -486,6 +555,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         guard scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked else {
             return .rejectedScope
         }
+        guard !isRetired else { return .rejectedRetiredSession }
         // Cancelled+visible never entered finalizing and must stay live.
         guard producerPhase == .finalizing, committedPath else { return .alreadyTerminal }
         finalizationLease?.cancelAll(reason)
@@ -498,7 +568,8 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         scopes: GaryxGatewayScopeRegistry
     ) -> Bool {
         guard session.payloadLifecycle.isAdmitted(by: lifecycle),
-              scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked else {
+              scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked,
+              !isRetired else {
             return false
         }
         guard reservationPhase == .sealed, let reservedGeneration else { return false }
@@ -518,7 +589,8 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         scopes: GaryxGatewayScopeRegistry
     ) -> Bool {
         guard session.payloadLifecycle.isAdmitted(by: lifecycle),
-              scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked else {
+              scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked,
+              !isRetired else {
             return false
         }
         guard reservationPhase == .sealed,
@@ -551,7 +623,8 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
     ) -> Bool {
         guard session.payloadLifecycle.isAdmitted(by: lifecycle),
               scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked,
-              producerPhase == .live,
+              !isRetired,
+              (producerPhase == .live || (producerPhase == .terminal && nextEpochSnapshot != nil)),
               let reservationID = activeReservationID else {
             return false
         }
@@ -570,6 +643,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         terminalReservations[reservationID] = GaryxInputReservationTerminalRecord(
             reservationID: reservationID,
             outcome: outcome,
+            sourceGeneration: reservedGeneration ?? targetGeneration,
             targetGeneration: targetGeneration
         )
         reservationPhase = .none
@@ -806,7 +880,15 @@ public enum GaryxComposerAliasResolution: Equatable, Sendable {
     case rejectedRevokedScope
 }
 
+public enum GaryxComposerAliasAdmission: Equatable, Sendable {
+    case established
+    case notNeeded
+    case rejectedCapacity
+}
+
 public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
+    public static let byteLimit = 64 * 1024
+
     public private(set) var partitions: [GaryxGatewayScope: [GaryxComposerKey: GaryxComposerAliasRecord]]
 
     public init() {
@@ -814,14 +896,15 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
     }
 
     public var aliasCount: Int { partitions.values.reduce(0) { $0 + $1.count } }
-    public var activeRetiringSourceCount: Int { aliasCount }
+    public var activeRetiringSourceCount: Int {
+        partitions.values.flatMap(\.values).filter { !$0.canRetire }.count
+    }
+    public var invariantHolds: Bool { aliasCount == activeRetiringSourceCount }
     public var estimatedBytes: Int {
-        partitions.values.flatMap(\.values).reduce(0) { partial, record in
-            partial + String(describing: record.source).utf8.count
-                + String(describing: record.target).utf8.count + 24
-        }
+        partitions.values.flatMap(\.values).reduce(0) { $0 + Self.estimatedBytes(for: $1) }
     }
 
+    @discardableResult
     public mutating func establishPromotion(
         scope: GaryxGatewayScope,
         source: GaryxComposerKey,
@@ -829,14 +912,22 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
         activeOrClosingSessions: Int = 0,
         pendingCloseAcknowledgements: Int = 0,
         promotionsInFlight: Int = 0
-    ) {
-        partitions[scope, default: [:]][source] = GaryxComposerAliasRecord(
+    ) -> GaryxComposerAliasAdmission {
+        let candidate = GaryxComposerAliasRecord(
             source: source,
             target: target,
             activeOrClosingSessions: activeOrClosingSessions,
             pendingCloseAcknowledgements: pendingCloseAcknowledgements,
             promotionsInFlight: promotionsInFlight
         )
+        guard !candidate.canRetire else { return .notNeeded }
+        let previousBytes = partitions[scope]?[source].map(Self.estimatedBytes(for:)) ?? 0
+        guard estimatedBytes - previousBytes + Self.estimatedBytes(for: candidate) <= Self.byteLimit else {
+            return .rejectedCapacity
+        }
+        partitions[scope, default: [:]][source] = candidate
+        precondition(invariantHolds, "alias and retiring-source indexes diverged")
+        return .established
     }
 
     public func resolve(
@@ -855,12 +946,16 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
         return .resolved(current)
     }
 
-    public mutating func markDrained(source: GaryxComposerKey, scope: GaryxGatewayScope) {
-        guard var record = partitions[scope]?[source] else { return }
+    @discardableResult
+    public mutating func markDrained(source: GaryxComposerKey, scope: GaryxGatewayScope) -> Bool {
+        guard var record = partitions[scope]?[source] else { return false }
         record.activeOrClosingSessions = 0
         record.pendingCloseAcknowledgements = 0
         record.promotionsInFlight = 0
         partitions[scope]?[source] = record
+        let retired = retireIfDrained(source: source, scope: scope)
+        precondition(invariantHolds, "drain must retire an eligible alias atomically")
+        return retired
     }
 
     @discardableResult
@@ -873,6 +968,12 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
         if partitions[scope]?.isEmpty == true {
             partitions.removeValue(forKey: scope)
         }
+        precondition(invariantHolds, "alias and retiring-source indexes diverged")
         return true
+    }
+
+    private static func estimatedBytes(for record: GaryxComposerAliasRecord) -> Int {
+        String(describing: record.source).utf8.count
+            + String(describing: record.target).utf8.count + 24
     }
 }

@@ -59,9 +59,13 @@ final class GaryxFluidA3ProtocolMatrixTests: XCTestCase {
                 if scenario.pathPoppedBeforePromotion { _ = routes.pop() }
                 let stackRevisionAtPromotion = routes.stackRevision
 
+                var promotionScopes = GaryxGatewayScopeRegistry(initialActiveScope: scope)
+                if !scopeMatches {
+                    XCTAssertTrue(promotionScopes.switchActive(to: otherScope))
+                }
                 let result = routes.promoteDraft(
                     promotionRequest(),
-                    currentScope: scopeMatches ? scope : otherScope,
+                    scopes: promotionScopes,
                     outboxAdmission: .succeeded
                 )
 
@@ -143,7 +147,7 @@ final class GaryxFluidA3ProtocolMatrixTests: XCTestCase {
                                 setup.barrier.durableCommit(
                                     deliveryID: deliveryID("race"),
                                     correlationID: "race",
-                                    clientIntentID: "race",
+                                    clientIntentID: "intent",
                                     lifecycle: entry.lifecycle.snapshot
                                 )
                             )
@@ -369,6 +373,7 @@ final class GaryxFluidA3ProtocolMatrixTests: XCTestCase {
         XCTAssertFalse(
             entryForReset.resetGeneration(
                 entryForReset.currentGeneration,
+                to: entryForReset.currentGeneration + 1,
                 barrierIdle: false,
                 producerLive: true
             )
@@ -376,6 +381,7 @@ final class GaryxFluidA3ProtocolMatrixTests: XCTestCase {
         XCTAssertFalse(
             entryForReset.resetGeneration(
                 entryForReset.currentGeneration,
+                to: entryForReset.currentGeneration + 1,
                 barrierIdle: true,
                 producerLive: false
             )
@@ -384,6 +390,7 @@ final class GaryxFluidA3ProtocolMatrixTests: XCTestCase {
         XCTAssertFalse(
             entryForReset.resetGeneration(
                 entryForReset.currentGeneration,
+                to: entryForReset.currentGeneration + 1,
                 barrierIdle: true,
                 producerLive: true
             )
@@ -563,7 +570,7 @@ final class GaryxFluidA3ProtocolMatrixTests: XCTestCase {
                 barrier.durableCommit(
                     deliveryID: deliveryID("existing"),
                     correlationID: "existing",
-                    clientIntentID: "existing",
+                    clientIntentID: "intent",
                     lifecycle: entry.lifecycle.snapshot
                 )
             )

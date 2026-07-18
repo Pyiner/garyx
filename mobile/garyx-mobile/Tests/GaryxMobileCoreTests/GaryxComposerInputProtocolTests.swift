@@ -605,6 +605,136 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         XCTAssertEqual(state.closePublicationCount, 1)
     }
 
+    func testRetiredSessionRejectsEveryNewDurableInputAdmission() {
+        var state = makeState(text: "old")
+        let context = activeContext(for: state)
+        XCTAssertEqual(
+            state.releaseForCommittedNavigation(
+                pendingProducers: [],
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .released
+        )
+        state.acknowledgeClose(lifecycle: context.lifecycle, scopes: context.scopes)
+        XCTAssertTrue(state.isRetired)
+        XCTAssertEqual(
+            state.applyText(
+                "late",
+                identity: event(state, sequence: 1),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedRetiredSession
+        )
+        XCTAssertEqual(
+            state.beginSend(
+                reservationID: GaryxSendReservationID(rawValue: 99),
+                followupGeneration: 11,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedRetiredSession
+        )
+        XCTAssertEqual(
+            state.releaseForCommittedNavigation(
+                pendingProducers: [],
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedRetiredSession
+        )
+    }
+
+    func testTwoConsecutiveEpochHandoffsKeepOldSessionsRetiredAndNewestLive() throws {
+        var first = makeState(text: "N", session: "session-1", epoch: 7)
+        let context = activeContext(for: first)
+        XCTAssertEqual(
+            first.releaseForCommittedNavigation(
+                pendingProducers: [],
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .released
+        )
+        let secondSnapshot = try XCTUnwrap(first.nextEpochSnapshot)
+        var second = makeState(
+            text: secondSnapshot.text,
+            session: "session-2",
+            epoch: secondSnapshot.sessionEpoch,
+            generation: secondSnapshot.payloadGeneration
+        )
+        XCTAssertEqual(
+            second.applyText(
+                "N+1",
+                identity: event(
+                    second,
+                    sequence: 1,
+                    generation: secondSnapshot.payloadGeneration
+                ),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .applied(target: .currentGeneration, generation: secondSnapshot.payloadGeneration)
+        )
+        first.acknowledgeClose(lifecycle: context.lifecycle, scopes: context.scopes)
+
+        XCTAssertEqual(
+            second.releaseForCommittedNavigation(
+                pendingProducers: [],
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .released
+        )
+        let thirdSnapshot = try XCTUnwrap(second.nextEpochSnapshot)
+        var third = makeState(
+            text: thirdSnapshot.text,
+            session: "session-3",
+            epoch: thirdSnapshot.sessionEpoch,
+            generation: thirdSnapshot.payloadGeneration
+        )
+        second.acknowledgeClose(lifecycle: context.lifecycle, scopes: context.scopes)
+        XCTAssertEqual(third.session.epoch, 9)
+        XCTAssertEqual(
+            third.applyText(
+                "N+2",
+                identity: event(
+                    third,
+                    sequence: 1,
+                    generation: thirdSnapshot.payloadGeneration
+                ),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .applied(target: .currentGeneration, generation: thirdSnapshot.payloadGeneration)
+        )
+        XCTAssertEqual(third.currentText, "N+2")
+        XCTAssertEqual(
+            first.applyText(
+                "stale-1",
+                identity: event(first, sequence: 1),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedRetiredSession
+        )
+        XCTAssertEqual(
+            second.applyText(
+                "stale-2",
+                identity: event(
+                    second,
+                    sequence: 2,
+                    generation: thirdSnapshot.payloadGeneration
+                ),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedRetiredSession
+        )
+        XCTAssertEqual(third.currentText, "N+2")
+    }
+
     func testComposerHostActivationUsesLiveFinalizingClosingTransferredPhases() {
         var activation = GaryxComposerHostActivation(
             sourceKey: .thread("A"),
@@ -700,7 +830,8 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         aliases.establishPromotion(
             scope: other,
             source: .draft("D"),
-            target: .thread("OTHER")
+            target: .thread("OTHER"),
+            activeOrClosingSessions: 1
         )
 
         XCTAssertEqual(
@@ -713,8 +844,7 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
             "unknown scopes default to revoked"
         )
         XCTAssertFalse(aliases.retireIfDrained(source: .draft("D"), scope: scope))
-        aliases.markDrained(source: .draft("D"), scope: scope)
-        XCTAssertTrue(aliases.retireIfDrained(source: .draft("D"), scope: scope))
+        XCTAssertTrue(aliases.markDrained(source: .draft("D"), scope: scope))
         XCTAssertEqual(aliases.aliasCount, aliases.activeRetiringSourceCount)
 
         XCTAssertTrue(registry.switchActive(to: other))
@@ -734,26 +864,30 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
                 target: .thread("thread-\(index)"),
                 activeOrClosingSessions: 1
             )
-            aliases.markDrained(source: source, scope: scope)
-            XCTAssertTrue(aliases.retireIfDrained(source: source, scope: scope))
+            XCTAssertTrue(aliases.markDrained(source: source, scope: scope))
         }
         XCTAssertEqual(aliases.aliasCount, 0)
         XCTAssertEqual(aliases.activeRetiringSourceCount, 0)
         XCTAssertLessThanOrEqual(aliases.estimatedBytes, 64 * 1024)
     }
 
-    private func makeState(text: String) -> GaryxComposerInputReducerState {
+    private func makeState(
+        text: String,
+        session: String = "session",
+        epoch: UInt64 = 1,
+        generation: UInt64 = 10
+    ) -> GaryxComposerInputReducerState {
         let entryID = GaryxComposerPayloadEntryID(rawValue: "entry")
         let token = GaryxPayloadLifecycleToken(entryID: entryID, nonce: "token")
         return GaryxComposerInputReducerState(
             session: GaryxComposerInputSession(
                 composerKey: .draft("draft"),
-                sessionID: GaryxComposerInputSessionID(rawValue: "session"),
-                epoch: 1,
+                sessionID: GaryxComposerInputSessionID(rawValue: session),
+                epoch: epoch,
                 scope: scope,
                 payloadLifecycle: GaryxPayloadLifecycleCapture(token: token, revision: 1)
             ),
-            payloadGeneration: 10,
+            payloadGeneration: generation,
             initialText: text
         )
     }

@@ -520,6 +520,17 @@ public struct GaryxPresentationLeaseTree: Equatable, Sendable {
         }
     }
 
+    /// Released records are bounded audit state, not barriers. Once callers no
+    /// longer need the exactly-once counters they can reclaim the entire
+    /// released forest; late callbacks then follow the existing unknown-token
+    /// idempotent path.
+    @discardableResult
+    public mutating func garbageCollectReleased() -> Int {
+        let released = records.values.filter(\.released).map(\.token)
+        for token in released { records.removeValue(forKey: token) }
+        return released.count
+    }
+
     private mutating func releaseIfJoined(_ token: GaryxPresentationLeaseToken) {
         guard var record = records[token], !record.released else { return }
         let resultTerminal = !record.resultBearing || record.result == .recorded

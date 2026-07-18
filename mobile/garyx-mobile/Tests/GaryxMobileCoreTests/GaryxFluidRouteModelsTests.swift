@@ -57,7 +57,7 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
 
         let result = state.promoteDraft(
             promotion(stage: .serverAcknowledged),
-            currentScope: scope1,
+            scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope1),
             outboxAdmission: .succeeded
         )
 
@@ -79,7 +79,7 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
 
         let result = state.promoteDraft(
             promotion(stage: .serverAcknowledged),
-            currentScope: scope1,
+            scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope1),
             outboxAdmission: .succeeded
         )
 
@@ -95,9 +95,11 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
         _ = state.open(original)
         let revision = state.stackRevision
 
+        var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+        XCTAssertTrue(scopes.switchActive(to: scope2))
         let result = state.promoteDraft(
             promotion(stage: .serverAcknowledged),
-            currentScope: scope2,
+            scopes: scopes,
             outboxAdmission: .succeeded
         )
 
@@ -120,7 +122,7 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
             _ = state.open(entry("draft-occurrence", .conversationDraft(draftID: "draft-1")))
             let result = state.promoteDraft(
                 promotion(stage: stage),
-                currentScope: scope1,
+                scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope1),
                 outboxAdmission: .succeeded
             )
             XCTAssertEqual(result.send, expectedSend, "stage=\(stage)")
@@ -137,7 +139,7 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
 
         let result = state.promoteDraft(
             promotion(stage: .threadCreatedButNotDispatched),
-            currentScope: scope1,
+            scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope1),
             outboxAdmission: .failed(code: "fsync_failed")
         )
 
@@ -147,6 +149,103 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
         XCTAssertFalse(result.keptOptimisticThread)
         XCTAssertEqual(result.outboxInsertCount, 0)
         XCTAssertEqual(state.path, [draft])
+    }
+
+    func testPromotionStagesAcrossActiveAndSuspendedOriginScopes() {
+        let cases: [
+            (GaryxDraftPromotionSendStage, GaryxDraftPromotionSendDisposition, Int)
+        ] = [
+            (.threadCreatedButNotDispatched, .failedRetryableOutbox, 1),
+            (.dispatchInFlight, .reconcileAmbiguous, 0),
+            (.serverAcknowledged, .acknowledged, 0),
+        ]
+        for (stage, send, outboxCount) in cases {
+            for originIsActive in [false, true] {
+                var state = GaryxCanonicalRouteState(path: [
+                    entry("draft-occurrence", .conversationDraft(draftID: "draft-1")),
+                ])
+                var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+                if !originIsActive { XCTAssertTrue(scopes.switchActive(to: scope2)) }
+
+                let result = state.promoteDraft(
+                    promotion(stage: stage),
+                    scopes: scopes,
+                    outboxAdmission: .succeeded
+                )
+                XCTAssertEqual(result.send, send, "stage=\(stage), active=\(originIsActive)")
+                XCTAssertEqual(result.outboxInsertCount, outboxCount)
+                XCTAssertEqual(
+                    result.navigation,
+                    originIsActive ? .updatedInPlace : .originScopePartitionOnly
+                )
+                XCTAssertEqual(
+                    state.path[0].destination,
+                    originIsActive
+                        ? .conversation(threadID: "thread-1")
+                        : .conversationDraft(draftID: "draft-1")
+                )
+            }
+        }
+    }
+
+    func testEveryPromotionStageRejectsRevokedOriginWithoutMigrationOrDispatch() {
+        for stage in [
+            GaryxDraftPromotionSendStage.threadCreatedButNotDispatched,
+            .dispatchInFlight,
+            .serverAcknowledged,
+        ] {
+            var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+            XCTAssertTrue(scopes.revoke(scope1))
+            var state = GaryxCanonicalRouteState(path: [
+                entry("draft-occurrence", .conversationDraft(draftID: "draft-1")),
+            ])
+            let result = state.promoteDraft(
+                promotion(stage: stage),
+                scopes: scopes,
+                outboxAdmission: .succeeded
+            )
+            XCTAssertEqual(result.navigation, .originScopeRevoked, "stage=\(stage)")
+            XCTAssertEqual(result.send, .rejectedRevokedScope, "stage=\(stage)")
+            XCTAssertFalse(result.migratedDomainInOriginScope)
+            XCTAssertFalse(result.keptOptimisticThread)
+            XCTAssertEqual(result.outboxInsertCount, 0)
+            XCTAssertEqual(result.dispatchCountDelta, 0)
+            XCTAssertEqual(
+                state.path.map(\.destination),
+                [.conversationDraft(draftID: "draft-1")]
+            )
+        }
+    }
+
+    func testLogoutAndLatePromotionBothOrdersEndWithoutRouteResurrection() {
+        for promoteBeforeLogout in [false, true] {
+            var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+            var state = GaryxCanonicalRouteState(path: [
+                entry("draft-occurrence", .conversationDraft(draftID: "draft-1")),
+            ])
+            if promoteBeforeLogout {
+                XCTAssertEqual(
+                    state.promoteDraft(
+                        promotion(stage: .serverAcknowledged),
+                        scopes: scopes
+                    ).navigation,
+                    .updatedInPlace
+                )
+            }
+            XCTAssertTrue(scopes.revoke(scope1))
+            _ = state.pop()
+
+            let late = state.promoteDraft(
+                promotion(stage: .serverAcknowledged),
+                scopes: scopes
+            )
+            XCTAssertEqual(late.navigation, .originScopeRevoked)
+            XCTAssertEqual(late.send, .rejectedRevokedScope)
+            XCTAssertFalse(late.migratedDomainInOriginScope)
+            XCTAssertFalse(late.keptOptimisticThread)
+            XCTAssertEqual(late.outboxInsertCount, 0)
+            XCTAssertTrue(state.path.isEmpty)
+        }
     }
 
     private func entry(

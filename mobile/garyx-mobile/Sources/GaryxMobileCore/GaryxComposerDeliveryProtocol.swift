@@ -94,14 +94,35 @@ public struct GaryxProvisionalReservationLedger: Equatable, Codable, Sendable {
         _ outcome: GaryxReservationTerminalOutcome,
         targetGeneration: UInt64
     ) -> Bool {
-        guard terminalOutcome == nil else { return false }
+        var next = self
         switch outcome {
+        case .committed:
+            guard next.synthesizeTerminalOutcome(.committed),
+                  next.persistTargetMapping(targetGeneration) else { return false }
+        case .revoked:
+            guard next.synthesizeTerminalOutcome(.revoked),
+                  next.persistTargetMapping(targetGeneration) else { return false }
+        }
+        self = next
+        return true
+    }
+
+    mutating func synthesizeTerminalOutcome(
+        _ outcome: GaryxReservationTerminalOutcome
+    ) -> Bool {
+        guard terminalOutcome == nil, targetMapping == nil else { return false }
+        terminalOutcome = outcome
+        return true
+    }
+
+    mutating func persistTargetMapping(_ targetGeneration: UInt64) -> Bool {
+        guard targetMapping == nil, let terminalOutcome else { return false }
+        switch terminalOutcome {
         case .committed:
             guard targetGeneration == followupGeneration else { return false }
         case .revoked:
             guard targetGeneration > followupGeneration else { return false }
         }
-        terminalOutcome = outcome
         targetMapping = GaryxReservationTargetMapping(
             entryID: key.entryID,
             generation: targetGeneration
@@ -116,29 +137,6 @@ public enum GaryxSyntheticRecoveryStep: String, CaseIterable, Codable, Sendable 
     case migratePayloadAndConflictSet
     case updateOperationManifests
     case persistTargetMapping
-}
-
-public struct GaryxSyntheticReservationRecovery: Equatable, Sendable {
-    public let ledger: GaryxProvisionalReservationLedger
-    public let performedSteps: [GaryxSyntheticRecoveryStep]
-
-    public init(
-        ledger: GaryxProvisionalReservationLedger,
-        allocateMergeGeneration: () -> UInt64
-    ) {
-        var recovered = ledger
-        if recovered.terminalOutcome == nil {
-            let mergeGeneration = allocateMergeGeneration()
-            precondition(
-                recovered.settle(.revoked, targetGeneration: mergeGeneration),
-                "synthetic revocation must consume a generation above G+1"
-            )
-            performedSteps = GaryxSyntheticRecoveryStep.allCases
-        } else {
-            performedSteps = []
-        }
-        self.ledger = recovered
-    }
 }
 
 /// Tracks the required ordering ledger -> durable descendants -> network.
@@ -351,6 +349,15 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
             userDisposition = .scopeRevoked
         }
     }
+
+    public var persistentTombstoneEstimatedBytes: Int? {
+        guard phase.isTerminalOrEvidence, envelope == nil else { return nil }
+        return id.rawValue.utf8.count
+            + scope.identity.utf8.count
+            + entryID.rawValue.utf8.count
+            + correlationID.utf8.count
+            + 64
+    }
 }
 
 public enum GaryxDeliveryDraftRecoveryDisposition: Equatable, Sendable {
@@ -394,6 +401,8 @@ public enum GaryxDeliveryDraftRecoveryReducer {
 public enum GaryxDeliveryEvidenceIngressDisposition: Equatable, Sendable {
     case updated(GaryxDeliveryRecordID)
     case rejectedAuthenticationSource
+    case rejectedPhase
+    case ambiguousCorrelation
     case unknownCorrelation
 }
 
@@ -405,13 +414,25 @@ public enum GaryxDeliveryEvidenceIngress {
         authenticatedScope: GaryxGatewayScope,
         records: inout [GaryxDeliveryRecordID: GaryxDeliveryRecord]
     ) -> GaryxDeliveryEvidenceIngressDisposition {
-        guard let id = records.first(where: {
+        let matching = records.filter {
             $0.value.correlationID == correlationID && $0.value.scope == authenticatedScope
-        })?.key else {
+        }
+        guard !matching.isEmpty else {
             if records.values.contains(where: { $0.correlationID == correlationID }) {
                 return .rejectedAuthenticationSource
             }
             return .unknownCorrelation
+        }
+        guard matching.count == 1, let (id, record) = matching.first else {
+            return .ambiguousCorrelation
+        }
+        switch record.phase {
+        case .transportAttempted, .ambiguous, .evidence:
+            break
+        case .acknowledged, .terminalEvidence:
+            return .updated(id)
+        case .notDispatched, .cancelledByDiscard, .abandoned, .supersededByDuplicate:
+            return .rejectedPhase
         }
         records[id]?.recordServerAcknowledgement()
         return .updated(id)
@@ -443,6 +464,101 @@ public struct GaryxDeliveryQuota: Equatable, Codable, Sendable {
         (nonTerminalByScope[scope] ?? 0) < Self.perScopeRecordLimit
             && nonTerminalGlobal < Self.globalRecordLimit
             && payloadBytesUsed + envelopeBytes <= payloadByteLimit
+    }
+}
+
+public struct GaryxPersistentTombstoneBudget: Equatable, Codable, Sendable {
+    public let countLimit: Int
+    public let byteLimit: Int
+
+    public init(countLimit: Int = 4_096, byteLimit: Int = 4 * 1024 * 1024) {
+        precondition(countLimit >= 0 && byteLimit >= 0)
+        self.countLimit = countLimit
+        self.byteLimit = byteLimit
+    }
+
+    public func admits(count: Int, bytes: Int) -> Bool {
+        count >= 0 && bytes >= 0 && count <= countLimit && bytes <= byteLimit
+    }
+}
+
+public struct GaryxPersistentTombstoneUsage: Equatable, Codable, Sendable {
+    public let correlationCount: Int
+    public let correlationBytes: Int
+    public let discardFinalizationCount: Int
+    public let discardFinalizationBytes: Int
+
+    public init(
+        correlationCount: Int = 0,
+        correlationBytes: Int = 0,
+        discardFinalizationCount: Int = 0,
+        discardFinalizationBytes: Int = 0
+    ) {
+        precondition(
+            correlationCount >= 0
+                && correlationBytes >= 0
+                && discardFinalizationCount >= 0
+                && discardFinalizationBytes >= 0
+        )
+        self.correlationCount = correlationCount
+        self.correlationBytes = correlationBytes
+        self.discardFinalizationCount = discardFinalizationCount
+        self.discardFinalizationBytes = discardFinalizationBytes
+    }
+
+    public var count: Int { correlationCount + discardFinalizationCount }
+    public var bytes: Int { correlationBytes + discardFinalizationBytes }
+}
+
+public enum GaryxGatewayScopeSettlementKind: Equatable, Sendable {
+    case suspend
+    case revoke
+}
+
+public enum GaryxSealedBarrierSettlementDecision: Equatable, Sendable {
+    case durableCommit
+    case revoke
+}
+
+public enum GaryxScopeBarrierSettlementAction: Equatable, Sendable {
+    case durableCommitBarrier
+    case revokeBarrier
+    case returnBarrierToIdle
+    case suspendScope
+    case revokeScope
+}
+
+public enum GaryxScopeBarrierSettlementPlan: Equatable, Sendable {
+    case ready([GaryxScopeBarrierSettlementAction])
+    case awaitingSealedBarrierDecision
+}
+
+/// Decision table for a scope event racing a send barrier. Scope mutation is
+/// always the final action; a sealed barrier must publish its terminal outcome
+/// and return idle before the scope is suspended or revoked.
+public enum GaryxScopeBarrierSettlementPlanner {
+    public static func plan(
+        barrierPhase: GaryxSendCommitBarrierPhase,
+        scopeSettlement: GaryxGatewayScopeSettlementKind,
+        sealedDecision: GaryxSealedBarrierSettlementDecision? = nil
+    ) -> GaryxScopeBarrierSettlementPlan {
+        let scopeAction: GaryxScopeBarrierSettlementAction = switch scopeSettlement {
+        case .suspend: .suspendScope
+        case .revoke: .revokeScope
+        }
+        switch barrierPhase {
+        case .idle:
+            return .ready([scopeAction])
+        case .sealed:
+            guard let sealedDecision else { return .awaitingSealedBarrierDecision }
+            let terminalAction: GaryxScopeBarrierSettlementAction = switch sealedDecision {
+            case .durableCommit: .durableCommitBarrier
+            case .revoke: .revokeBarrier
+            }
+            return .ready([terminalAction, .returnBarrierToIdle, scopeAction])
+        case .durableCommitted, .revoked:
+            return .ready([.returnBarrierToIdle, scopeAction])
+        }
     }
 }
 
@@ -482,6 +598,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
     public private(set) var followupGeneration: UInt64?
     public private(set) var envelopeText: String?
     public private(set) var envelopeAttachmentIDs: [GaryxAttachmentID]
+    public private(set) var envelopeClientIntentID: String?
     public private(set) var provisionalFollowupText: String
     public private(set) var provisionalFollowupAttachmentIDs: [GaryxAttachmentID]
 
@@ -499,6 +616,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         followupGeneration = nil
         envelopeText = nil
         envelopeAttachmentIDs = []
+        envelopeClientIntentID = nil
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
     }
@@ -527,6 +645,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         self.followupGeneration = followupGeneration
         envelopeText = envelope.text
         envelopeAttachmentIDs = envelope.attachmentIDs
+        envelopeClientIntentID = envelope.clientIntentID
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
         return .sealed
@@ -563,7 +682,9 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
               let reservationID,
               let envelopeGeneration,
               let followupGeneration,
-              let envelopeText else {
+              let envelopeText,
+              let envelopeClientIntentID,
+              clientIntentID == envelopeClientIntentID else {
             return nil
         }
         phase = .durableCommitted
@@ -571,7 +692,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
             text: envelopeText,
             attachmentIDs: envelopeAttachmentIDs,
             generation: envelopeGeneration,
-            clientIntentID: clientIntentID
+            clientIntentID: envelopeClientIntentID
         )
         let delivery = GaryxDeliveryRecord(
             id: deliveryID,
@@ -617,6 +738,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         phase = .revoked
         envelopeText = nil
         envelopeAttachmentIDs = []
+        envelopeClientIntentID = nil
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
     }
@@ -629,6 +751,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         followupGeneration = nil
         envelopeText = nil
         envelopeAttachmentIDs = []
+        envelopeClientIntentID = nil
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
     }
@@ -816,6 +939,13 @@ public struct GaryxDiscardFinalizationTombstone: Equatable, Codable, Sendable {
         self.finalSequence = finalSequence
         self.disposition = disposition
     }
+
+    public var estimatedBytes: Int {
+        key.token.entryID.rawValue.utf8.count
+            + key.token.nonce.utf8.count
+            + key.sessionID.rawValue.utf8.count
+            + 64
+    }
 }
 
 public enum GaryxLateCloseAcknowledgementDisposition: Equatable, Sendable {
@@ -881,6 +1011,10 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
             .filter { $0.entryID == lifecycle.token.entryID }
             .allSatisfy { $0.phase.isTerminalOrEvidence }
     }
+    public var persistentTombstoneCount: Int { tombstones.count }
+    public var persistentTombstoneBytes: Int {
+        tombstones.values.reduce(0) { $0 + $1.estimatedBytes }
+    }
 
     /// Orthogonal component 1: every record uses its own phase CAS.
     public mutating func settleDeliveries() {
@@ -925,10 +1059,34 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
     /// Identity-discard overrides terminal resource holders as well as active
     /// capabilities. Physical file deletion is represented by clearing owner IDs.
     public mutating func settleResources() {
-        for key in Array(operations.keys) {
+        let entryID = lifecycle.token.entryID
+        let scope = barrier.scope
+        let operationKeys = operations.keys.filter {
+            $0.entryID == entryID && $0.scope == scope
+        }
+        let replacementIDs = replacements.compactMap { id, record in
+            record.entryID == entryID && record.scope == scope ? id : nil
+        }
+        let feedbackIDs = feedback.compactMap { id, record in
+            record.entryID == entryID && record.scope == scope ? id : nil
+        }
+        let lineageIDs = attachmentLineages.compactMap { id, record in
+            record.entryID == entryID && record.scope == scope ? id : nil
+        }
+        var settledAssetBytes: [GaryxStagedAssetID: Int] = [:]
+        for key in operationKeys {
+            if let operation = operations[key], let assetID = operation.stagedAssetID {
+                settledAssetBytes[assetID] = max(settledAssetBytes[assetID] ?? 0, operation.reservedBytes)
+            }
             operations[key]?.settleIdentityDiscard()
         }
-        for id in Array(replacements.keys) {
+        for id in replacementIDs {
+            if let replacement = replacements[id] {
+                settledAssetBytes[replacement.stagedAssetID] = max(
+                    settledAssetBytes[replacement.stagedAssetID] ?? 0,
+                    replacement.reservedBytes
+                )
+            }
             switch replacements[id]?.phase {
             case .pendingReplacement:
                 replacements[id]?.abort()
@@ -941,19 +1099,22 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
                 break
             }
         }
-        for id in Array(feedback.keys) {
+        for id in feedbackIDs {
             feedback[id]?.archive()
         }
-        for id in Array(attachmentLineages.keys) {
+        for id in lineageIDs {
             guard let feedbackID = attachmentLineages[id]?.feedbackID,
                   let terminalFeedback = feedback[feedbackID] else {
                 continue
             }
             _ = attachmentLineages[id]?.release(after: terminalFeedback)
         }
-        stagedAssetIDs.removeAll()
-        reservedBytes = 0
-        resourcesSettled = attachmentLineages.values.allSatisfy { $0.phase == .released }
+        for (assetID, bytes) in settledAssetBytes where stagedAssetIDs.remove(assetID) != nil {
+            reservedBytes = max(0, reservedBytes - bytes)
+        }
+        resourcesSettled = lineageIDs.allSatisfy {
+            attachmentLineages[$0]?.phase == .released
+        }
     }
 
     @discardableResult

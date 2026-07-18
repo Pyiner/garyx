@@ -315,6 +315,54 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
         )
     }
 
+    func testRelativeIntentUsesCanonicalPathAfterPopCancelAndFinish() {
+        let base = GaryxRouteEntry(
+            id: GaryxRouteInstanceID(rawValue: "base"),
+            destination: .panel("agents")
+        )
+        let top = GaryxRouteEntry(
+            id: GaryxRouteInstanceID(rawValue: "top"),
+            destination: .conversation(threadID: "thread")
+        )
+        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+
+        for commitPop in [false, true] {
+            var route = GaryxCanonicalRouteState(path: [base, top], stackRevision: 2)
+            let intent = GaryxPreparedNavigationIntent(
+                id: GaryxNavigationIntentID(rawValue: commitPop ? "finish" : "cancel"),
+                effect: .ordinaryNavigation(.settingsDetail("gateway")),
+                dependency: .relative(
+                    base: top.id,
+                    payloadRevision: top.payloadRevision,
+                    stackRevision: route.stackRevision,
+                    mismatch: .reprepare
+                )
+            )
+            var intents = GaryxNavigationIntentCoordinator()
+            let ticket = intents.beginPreparation(
+                intentID: intent.id,
+                key: intent.coalescingKey,
+                scope: scope1
+            )
+            var presentation = GaryxPresentationTransactionCoordinator()
+            XCTAssertTrue(presentation.begin())
+            XCTAssertTrue(presentation.release(commit: commitPop))
+            if commitPop { _ = route.pop() }
+            XCTAssertTrue(presentation.finish(visibility: .visible))
+
+            XCTAssertEqual(route.path, commitPop ? [base] : [base, top])
+            XCTAssertEqual(
+                intents.completePreparation(
+                    ticket,
+                    outcome: .ready(intent),
+                    scopes: scopes,
+                    routeState: route
+                ),
+                commitPop ? .reprepareRequired : .admittedImmediately
+            )
+        }
+    }
+
     func testScopeLifecyclePreservesSuspendedPartitionsAndRevocationWatermark() {
         var registry = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
         XCTAssertTrue(registry.switchActive(to: scope2))

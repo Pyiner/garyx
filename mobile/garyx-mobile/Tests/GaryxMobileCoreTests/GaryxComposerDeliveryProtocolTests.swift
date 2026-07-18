@@ -33,28 +33,18 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         XCTAssertTrue(tracker.networkAttempted)
     }
 
-    func testUnsettledLedgerRecoveryPerformsAtomicFiveStepRevocation() {
+    func testReservationLedgerPublishesOutcomeAndTargetMappingTogether() {
         var ledger = makeLedger()
         XCTAssertFalse(ledger.settle(.committed, targetGeneration: 12))
         XCTAssertFalse(ledger.settle(.revoked, targetGeneration: 11))
         XCTAssertNil(ledger.terminalOutcome)
-        let recovered = GaryxSyntheticReservationRecovery(
-            ledger: ledger,
-            allocateMergeGeneration: { 12 }
-        )
-        XCTAssertEqual(recovered.performedSteps, GaryxSyntheticRecoveryStep.allCases)
-        XCTAssertEqual(recovered.ledger.terminalOutcome, .revoked)
+        XCTAssertTrue(ledger.settle(.revoked, targetGeneration: 12))
+        XCTAssertEqual(ledger.terminalOutcome, .revoked)
         XCTAssertEqual(
-            recovered.ledger.targetMapping,
+            ledger.targetMapping,
             GaryxReservationTargetMapping(entryID: entryID, generation: 12)
         )
-
-        let second = GaryxSyntheticReservationRecovery(
-            ledger: recovered.ledger,
-            allocateMergeGeneration: { XCTFail("terminal ledger must not allocate"); return 13 }
-        )
-        XCTAssertTrue(second.performedSteps.isEmpty)
-        XCTAssertEqual(second.ledger, recovered.ledger)
+        XCTAssertFalse(ledger.settle(.revoked, targetGeneration: 13))
     }
 
     func testBarrierSealGatesLifecycleProducerReadinessAndQuotaWithoutAdvancing() {
@@ -122,6 +112,55 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
             ),
             .rejectedLifecycle
         )
+    }
+
+    func testScopeSettlementAlwaysFollowsBarrierSettlementAcrossEveryPhase() {
+        for scopeSettlement in [
+            GaryxGatewayScopeSettlementKind.suspend,
+            .revoke,
+        ] {
+            let scopeAction: GaryxScopeBarrierSettlementAction = scopeSettlement == .suspend
+                ? .suspendScope
+                : .revokeScope
+            for phase in GaryxSendCommitBarrierPhase.allCases {
+                if phase == .sealed {
+                    XCTAssertEqual(
+                        GaryxScopeBarrierSettlementPlanner.plan(
+                            barrierPhase: phase,
+                            scopeSettlement: scopeSettlement
+                        ),
+                        .awaitingSealedBarrierDecision
+                    )
+                    for decision in [
+                        GaryxSealedBarrierSettlementDecision.durableCommit,
+                        .revoke,
+                    ] {
+                        let terminal: GaryxScopeBarrierSettlementAction = decision == .durableCommit
+                            ? .durableCommitBarrier
+                            : .revokeBarrier
+                        XCTAssertEqual(
+                            GaryxScopeBarrierSettlementPlanner.plan(
+                                barrierPhase: phase,
+                                scopeSettlement: scopeSettlement,
+                                sealedDecision: decision
+                            ),
+                            .ready([terminal, .returnBarrierToIdle, scopeAction])
+                        )
+                    }
+                } else {
+                    let expected: [GaryxScopeBarrierSettlementAction] = phase == .idle
+                        ? [scopeAction]
+                        : [.returnBarrierToIdle, scopeAction]
+                    XCTAssertEqual(
+                        GaryxScopeBarrierSettlementPlanner.plan(
+                            barrierPhase: phase,
+                            scopeSettlement: scopeSettlement
+                        ),
+                        .ready(expected)
+                    )
+                }
+            }
+        }
     }
 
     func testDurableCommitIsLinearizationAndPostSealPayloadStaysFollowup() throws {
@@ -210,7 +249,7 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
             firstBarrier.durableCommit(
                 deliveryID: deliveryID("s1"),
                 correlationID: "c1",
-                clientIntentID: "i1",
+                clientIntentID: "intent",
                 lifecycle: lifecycle
             )?.deliveryRecord
         )
@@ -338,6 +377,7 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
     func testEvidenceIngressAuthenticatesSourceAndCannotCarryDomainContent() {
         let id = deliveryID("record")
         var records = [id: makeDelivery("record", correlationID: "correlation")]
+        XCTAssertTrue(records[id]?.markTransportAttempted() == true)
         let wrongScope = GaryxGatewayScope(identity: "other", epoch: 1)
         XCTAssertEqual(
             GaryxDeliveryEvidenceIngress.acknowledge(
@@ -543,29 +583,82 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         }
     }
 
-    func testV41SessionMembershipSurvivesDraftPromotionAliasChange() throws {
+    func testV41PendingAckThenActualPromotionThenLiveSessionDiscardSettlesBoth() throws {
+        var entry = makeEntry()
+        let stableToken = entry.lifecycle.token
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(entry))
         let first = makeSession(
             "s1",
             epoch: 1,
             key: .draft("D"),
             phase: .closePendingAck
         )
+        XCTAssertEqual(first.key.token, stableToken)
+        XCTAssertTrue(
+            payloadStore.promote(
+                entryID: entry.id,
+                scope: scope,
+                to: .thread("T")
+            )
+        )
+        XCTAssertEqual(
+            payloadStore.entry(entry.id, scope: scope)?.destination,
+            .thread("T")
+        )
+        XCTAssertEqual(
+            payloadStore.entry(entry.id, scope: scope)?.lifecycle.token,
+            stableToken
+        )
+        var aliases = GaryxComposerAliasTable()
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: .draft("D"),
+                target: .thread("T"),
+                activeOrClosingSessions: 2,
+                pendingCloseAcknowledgements: 1
+            ),
+            .established
+        )
         let second = makeSession(
             "s2",
             epoch: 2,
             key: .thread("T"),
-            phase: .finalizing
+            phase: .live
         )
-        var convergence = makeConvergence(
+        XCTAssertEqual(second.key.token, stableToken)
+
+        entry = try XCTUnwrap(payloadStore.entry(entry.id, scope: scope))
+        XCTAssertTrue(entry.beginDiscard(revision: 101))
+        payloadStore.update(entry)
+        var convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: makeBarrier(),
             sessions: [first.key: first, second.key: second]
         )
+        convergence.settleDeliveries()
+        convergence.settleReservation()
         convergence.settleSessions()
+        convergence.settleResources()
         XCTAssertEqual(convergence.tombstones.count, 2)
         XCTAssertEqual(
             Set(convergence.tombstones.keys.map(\.sessionID)),
             [first.key.sessionID, second.key.sessionID]
         )
         XCTAssertTrue(convergence.descendantsEmpty)
+        XCTAssertTrue(convergence.finishToken())
+        XCTAssertEqual(convergence.lifecycle.phase, .discarded)
+        XCTAssertEqual(
+            convergence.receiveLateCloseAcknowledgement(
+                sessionID: first.key.sessionID,
+                epoch: first.key.epoch
+            ),
+            .rejectedTombstoned
+        )
+        XCTAssertTrue(aliases.markDrained(source: .draft("D"), scope: scope))
+        XCTAssertEqual(aliases.aliasCount, 0)
+        XCTAssertEqual(aliases.activeRetiringSourceCount, 0)
 
         let encoded = try JSONEncoder().encode(convergence.tombstones)
         let text = String(decoding: encoded, as: UTF8.self)
