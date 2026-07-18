@@ -241,10 +241,27 @@ public struct GaryxComposerEpochSnapshot: Equatable, Codable, Sendable {
     }
 }
 
+public struct GaryxInputReservationTerminalRecord: Equatable, Codable, Sendable {
+    public let reservationID: GaryxSendReservationID
+    public let outcome: GaryxReservationTerminalOutcome
+    public let targetGeneration: UInt64
+
+    public init(
+        reservationID: GaryxSendReservationID,
+        outcome: GaryxReservationTerminalOutcome,
+        targetGeneration: UInt64
+    ) {
+        self.reservationID = reservationID
+        self.outcome = outcome
+        self.targetGeneration = targetGeneration
+    }
+}
+
 public enum GaryxComposerInputEventDisposition: Equatable, Sendable {
     case applied(target: GaryxInputProductTarget, generation: UInt64)
     case duplicateOrOutOfOrder
     case auditedTerminalDuplicate
+    case auditedTerminalReservation
     case rejectedToken
     case rejectedScope
     case rejectedUnknownSession
@@ -293,6 +310,9 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
     public private(set) var finalText: String?
     public private(set) var nextEpochSnapshot: GaryxComposerEpochSnapshot?
     public private(set) var producerDrained: GaryxProducerDrainedRecord?
+    public private(set) var terminalReservations: [
+        GaryxSendReservationID: GaryxInputReservationTerminalRecord
+    ]
     public private(set) var closePublicationCount: Int
     public private(set) var closeAcknowledged: Bool
     public private(set) var focusClearedAtRelease: Bool
@@ -320,6 +340,7 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         finalText = nil
         nextEpochSnapshot = nil
         producerDrained = nil
+        terminalReservations = [:]
         closePublicationCount = 0
         closeAcknowledged = false
         focusClearedAtRelease = false
@@ -359,7 +380,13 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         guard identity.inputSequence > lastAppliedSequence else {
             return .duplicateOrOutOfOrder
         }
-        guard validateReservation(identity) else { return .rejectedReservation }
+        guard validateReservation(identity) else {
+            if let reservationID = identity.reservationID,
+               terminalReservations[reservationID] != nil {
+                return .auditedTerminalReservation
+            }
+            return .rejectedReservation
+        }
         guard validateGeneration(identity.payloadGeneration) else {
             if identity.payloadGeneration < expectedEventGeneration {
                 return .rejectedOldGeneration
@@ -513,6 +540,46 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         return true
     }
 
+    /// Once a settled barrier has durably published its follow-up snapshot, a
+    /// still-live producer can release the short-lived reservation and seal S2.
+    /// The terminal record keeps S1 callbacks auditable without letting them
+    /// mutate the current generation.
+    @discardableResult
+    public mutating func returnReservationToIdle(
+        lifecycle: GaryxPayloadLifecycleSnapshot,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> Bool {
+        guard session.payloadLifecycle.isAdmitted(by: lifecycle),
+              scopes.admitDomainEvent(from: session.scope) != .rejectedRevoked,
+              producerPhase == .live,
+              let reservationID = activeReservationID else {
+            return false
+        }
+        let outcome: GaryxReservationTerminalOutcome
+        let targetGeneration: UInt64
+        switch reservationPhase {
+        case .committed:
+            outcome = .committed
+            targetGeneration = reservedGeneration ?? currentGeneration
+        case .revoked:
+            outcome = .revoked
+            targetGeneration = revokedMergeGeneration ?? currentGeneration
+        case .none, .sealed:
+            return false
+        }
+        terminalReservations[reservationID] = GaryxInputReservationTerminalRecord(
+            reservationID: reservationID,
+            outcome: outcome,
+            targetGeneration: targetGeneration
+        )
+        reservationPhase = .none
+        activeReservationID = nil
+        reservedGeneration = nil
+        revokedMergeGeneration = nil
+        sealedEnvelope = nil
+        return true
+    }
+
     public mutating func acknowledgeClose(
         lifecycle: GaryxPayloadLifecycleSnapshot,
         scopes: GaryxGatewayScopeRegistry
@@ -629,6 +696,47 @@ public enum GaryxComposerHostActivationPhase: String, Codable, Sendable {
     case retained
 }
 
+public enum GaryxComposerAdapterTerminalDisposition: Equatable, Sendable {
+    case none
+    case sourceRemainsLive
+    case destinationContinuesSameKeyAtNextEpoch
+    case destinationStartsOwnKeySession
+    case deferSourceUntilActive
+    case deferSameKeyDestinationUntilActive
+    case deferOwnKeyDestinationUntilActive
+    case nextTransaction
+}
+
+/// Total policy for the activation outcome x visibility table. The state
+/// machine below owns close/drain; this policy grants the next live adapter
+/// only after presentation reaches terminal.
+public enum GaryxComposerAdapterTerminalPolicy {
+    public static func resolve(
+        sourceKey: GaryxComposerKey?,
+        destinationKey: GaryxComposerKey?,
+        terminal: GaryxPresentationTerminalState
+    ) -> GaryxComposerAdapterTerminalDisposition {
+        switch (terminal.outcome, terminal.visibility) {
+        case (.committed, .visible):
+            guard let destinationKey else { return .none }
+            return sourceKey == destinationKey
+                ? .destinationContinuesSameKeyAtNextEpoch
+                : .destinationStartsOwnKeySession
+        case (.committed, .inactive):
+            guard let destinationKey else { return .none }
+            return sourceKey == destinationKey
+                ? .deferSameKeyDestinationUntilActive
+                : .deferOwnKeyDestinationUntilActive
+        case (.committed, .superseded), (.cancelled, .superseded):
+            return .nextTransaction
+        case (.cancelled, .visible):
+            return sourceKey == nil ? .none : .sourceRemainsLive
+        case (.cancelled, .inactive):
+            return sourceKey == nil ? .none : .deferSourceUntilActive
+        }
+    }
+}
+
 public struct GaryxComposerHostActivation: Equatable, Sendable {
     public let sourceKey: GaryxComposerKey?
     public let destinationKey: GaryxComposerKey?
@@ -665,7 +773,7 @@ public struct GaryxComposerHostActivation: Equatable, Sendable {
 
 // MARK: - Scope-partitioned alias routing
 
-public struct GaryxComposerAliasRecord: Equatable, Sendable {
+public struct GaryxComposerAliasRecord: Equatable, Codable, Sendable {
     public let source: GaryxComposerKey
     public let target: GaryxComposerKey
     public fileprivate(set) var activeOrClosingSessions: Int
@@ -698,7 +806,7 @@ public enum GaryxComposerAliasResolution: Equatable, Sendable {
     case rejectedRevokedScope
 }
 
-public struct GaryxComposerAliasTable: Equatable, Sendable {
+public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
     public private(set) var partitions: [GaryxGatewayScope: [GaryxComposerKey: GaryxComposerAliasRecord]]
 
     public init() {

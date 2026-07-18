@@ -1,0 +1,992 @@
+import Foundation
+
+// MARK: - Hi-lo durable identity allocation
+
+/// Pure model of a durable hi-lo allocator. Reserving a block advances the
+/// persisted high watermark before any value in that block is returned. A
+/// relaunched allocator starts after the persisted watermark and intentionally
+/// skips unused values from the previous process.
+public struct GaryxDurableHiLoAllocator: Equatable, Codable, Sendable {
+    public let blockSize: UInt64
+    public private(set) var persistedHighWatermark: UInt64
+    public private(set) var nextValue: UInt64
+    public private(set) var blockUpperBound: UInt64
+    public private(set) var durableReservationCount: UInt64
+
+    public init(persistedHighWatermark: UInt64 = 0, blockSize: UInt64 = 32) {
+        precondition(blockSize > 0)
+        self.blockSize = blockSize
+        self.persistedHighWatermark = persistedHighWatermark
+        nextValue = persistedHighWatermark + 1
+        blockUpperBound = persistedHighWatermark
+        durableReservationCount = 0
+    }
+
+    public mutating func allocate() -> UInt64 {
+        if nextValue > blockUpperBound {
+            let previousHigh = persistedHighWatermark
+            persistedHighWatermark &+= blockSize
+            nextValue = previousHigh + 1
+            blockUpperBound = persistedHighWatermark
+            durableReservationCount &+= 1
+        }
+        let allocated = nextValue
+        nextValue &+= 1
+        return allocated
+    }
+}
+
+// MARK: - Provisional reservation ledger
+
+public struct GaryxReservationLedgerKey: Hashable, Codable, Sendable {
+    public let scope: GaryxGatewayScope
+    public let entryID: GaryxComposerPayloadEntryID
+    public let reservationID: GaryxSendReservationID
+
+    public init(
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        reservationID: GaryxSendReservationID
+    ) {
+        self.scope = scope
+        self.entryID = entryID
+        self.reservationID = reservationID
+    }
+}
+
+public enum GaryxReservationTerminalOutcome: String, Codable, Sendable {
+    case committed
+    case revoked
+}
+
+public struct GaryxReservationTargetMapping: Equatable, Codable, Sendable {
+    public let entryID: GaryxComposerPayloadEntryID
+    public let generation: UInt64
+
+    public init(entryID: GaryxComposerPayloadEntryID, generation: UInt64) {
+        self.entryID = entryID
+        self.generation = generation
+    }
+}
+
+public struct GaryxProvisionalReservationLedger: Equatable, Codable, Sendable {
+    public let key: GaryxReservationLedgerKey
+    public let envelopeGeneration: UInt64
+    public let followupGeneration: UInt64
+    public private(set) var terminalOutcome: GaryxReservationTerminalOutcome?
+    public private(set) var targetMapping: GaryxReservationTargetMapping?
+
+    public init(
+        key: GaryxReservationLedgerKey,
+        envelopeGeneration: UInt64,
+        followupGeneration: UInt64
+    ) {
+        precondition(followupGeneration > envelopeGeneration)
+        self.key = key
+        self.envelopeGeneration = envelopeGeneration
+        self.followupGeneration = followupGeneration
+        terminalOutcome = nil
+        targetMapping = nil
+    }
+
+    @discardableResult
+    public mutating func settle(
+        _ outcome: GaryxReservationTerminalOutcome,
+        targetGeneration: UInt64
+    ) -> Bool {
+        guard terminalOutcome == nil else { return false }
+        switch outcome {
+        case .committed:
+            guard targetGeneration == followupGeneration else { return false }
+        case .revoked:
+            guard targetGeneration > followupGeneration else { return false }
+        }
+        terminalOutcome = outcome
+        targetMapping = GaryxReservationTargetMapping(
+            entryID: key.entryID,
+            generation: targetGeneration
+        )
+        return true
+    }
+}
+
+public enum GaryxSyntheticRecoveryStep: String, CaseIterable, Codable, Sendable {
+    case synthesizeRevokedOutcome
+    case allocateMergeGeneration
+    case migratePayloadAndConflictSet
+    case updateOperationManifests
+    case persistTargetMapping
+}
+
+public struct GaryxSyntheticReservationRecovery: Equatable, Sendable {
+    public let ledger: GaryxProvisionalReservationLedger
+    public let performedSteps: [GaryxSyntheticRecoveryStep]
+
+    public init(
+        ledger: GaryxProvisionalReservationLedger,
+        allocateMergeGeneration: () -> UInt64
+    ) {
+        var recovered = ledger
+        if recovered.terminalOutcome == nil {
+            let mergeGeneration = allocateMergeGeneration()
+            precondition(
+                recovered.settle(.revoked, targetGeneration: mergeGeneration),
+                "synthetic revocation must consume a generation above G+1"
+            )
+            performedSteps = GaryxSyntheticRecoveryStep.allCases
+        } else {
+            performedSteps = []
+        }
+        self.ledger = recovered
+    }
+}
+
+/// Tracks the required ordering ledger -> durable descendants -> network.
+public struct GaryxReservationAdmissionTracker: Equatable, Sendable {
+    public private(set) var ledgerDurable: Bool
+    public private(set) var durableDescendantCount: Int
+    public private(set) var networkAttempted: Bool
+
+    public init() {
+        ledgerDurable = false
+        durableDescendantCount = 0
+        networkAttempted = false
+    }
+
+    public mutating func persistLedger() { ledgerDurable = true }
+
+    @discardableResult
+    public mutating func persistDescendant() -> Bool {
+        guard ledgerDurable else { return false }
+        durableDescendantCount += 1
+        return true
+    }
+
+    @discardableResult
+    public mutating func crossNetworkBoundary() -> Bool {
+        guard ledgerDurable else { return false }
+        networkAttempted = true
+        return true
+    }
+}
+
+// MARK: - Delivery record and evidence
+
+public struct GaryxDeliveryEnvelope: Equatable, Codable, Sendable {
+    public let text: String
+    public let attachmentIDs: [GaryxAttachmentID]
+    public let generation: UInt64
+    public let clientIntentID: String
+
+    public init(
+        text: String,
+        attachmentIDs: [GaryxAttachmentID],
+        generation: UInt64,
+        clientIntentID: String
+    ) {
+        precondition(!clientIntentID.isEmpty)
+        self.text = text
+        self.attachmentIDs = attachmentIDs
+        self.generation = generation
+        self.clientIntentID = clientIntentID
+    }
+
+    public var estimatedBytes: Int {
+        text.utf8.count + attachmentIDs.reduce(0) { $0 + $1.rawValue.utf8.count }
+    }
+}
+
+public enum GaryxDeliveryRecordPhase: String, CaseIterable, Codable, Sendable {
+    case notDispatched
+    case transportAttempted
+    case ambiguous
+    case acknowledged
+    case cancelledByDiscard
+    case evidence
+    case terminalEvidence
+    case abandoned
+    case supersededByDuplicate
+
+    public var isTerminalOrEvidence: Bool {
+        switch self {
+        case .acknowledged, .cancelledByDiscard, .evidence, .terminalEvidence,
+             .abandoned, .supersededByDuplicate:
+            true
+        case .notDispatched, .transportAttempted, .ambiguous:
+            false
+        }
+    }
+}
+
+public enum GaryxDeliveryEvidence: String, Codable, Sendable {
+    case none
+    case transportAttempted
+    case serverAcknowledged
+}
+
+public enum GaryxDeliveryUserDisposition: String, Codable, Sendable {
+    case none
+    case restoredToDraft
+    case resentAsDuplicate
+    case scopeRevoked
+    case payloadDiscarded
+}
+
+public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
+    public let id: GaryxDeliveryRecordID
+    public let scope: GaryxGatewayScope
+    public let entryID: GaryxComposerPayloadEntryID
+    public let reservationID: GaryxSendReservationID
+    public let correlationID: String
+    public private(set) var envelope: GaryxDeliveryEnvelope?
+    public private(set) var phase: GaryxDeliveryRecordPhase
+    public private(set) var evidence: GaryxDeliveryEvidence
+    public private(set) var userDisposition: GaryxDeliveryUserDisposition
+    public private(set) var duplicateRecordID: GaryxDeliveryRecordID?
+
+    public init(
+        id: GaryxDeliveryRecordID,
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        reservationID: GaryxSendReservationID,
+        correlationID: String,
+        envelope: GaryxDeliveryEnvelope
+    ) {
+        precondition(!correlationID.isEmpty)
+        self.id = id
+        self.scope = scope
+        self.entryID = entryID
+        self.reservationID = reservationID
+        self.correlationID = correlationID
+        self.envelope = envelope
+        phase = .notDispatched
+        evidence = .none
+        userDisposition = .none
+        duplicateRecordID = nil
+    }
+
+    @discardableResult
+    public mutating func markTransportAttempted() -> Bool {
+        guard phase == .notDispatched else { return false }
+        phase = .transportAttempted
+        evidence = .transportAttempted
+        return true
+    }
+
+    @discardableResult
+    public mutating func markAmbiguous() -> Bool {
+        guard phase == .transportAttempted else { return false }
+        phase = .ambiguous
+        return true
+    }
+
+    public mutating func recordServerAcknowledgement() {
+        evidence = .serverAcknowledged
+        if userDisposition == .none {
+            phase = .acknowledged
+        }
+        envelope = nil
+    }
+
+    @discardableResult
+    fileprivate mutating func restoreToDraftAfterConflictAdmission() -> GaryxDeliveryEnvelope? {
+        guard phase == .ambiguous, userDisposition == .none else { return nil }
+        let restored = envelope
+        userDisposition = .restoredToDraft
+        phase = .abandoned
+        envelope = nil
+        return restored
+    }
+
+    @discardableResult
+    public mutating func resendAsDuplicate(
+        newRecordID: GaryxDeliveryRecordID,
+        newClientIntentID: String
+    ) -> GaryxDeliveryEnvelope? {
+        guard phase == .ambiguous,
+              userDisposition == .none,
+              let envelope,
+              newRecordID != id,
+              !newClientIntentID.isEmpty,
+              newClientIntentID != envelope.clientIntentID else {
+            return nil
+        }
+        let duplicate = GaryxDeliveryEnvelope(
+            text: envelope.text,
+            attachmentIDs: envelope.attachmentIDs,
+            generation: envelope.generation,
+            clientIntentID: newClientIntentID
+        )
+        userDisposition = .resentAsDuplicate
+        duplicateRecordID = newRecordID
+        phase = .supersededByDuplicate
+        self.envelope = nil
+        return duplicate
+    }
+
+    /// Discard settlement is a per-record CAS independent of the current send
+    /// barrier phase.
+    public mutating func settleForDiscard() {
+        switch phase {
+        case .notDispatched:
+            phase = .cancelledByDiscard
+            userDisposition = .payloadDiscarded
+            envelope = nil
+        case .transportAttempted, .ambiguous:
+            phase = .evidence
+            userDisposition = .payloadDiscarded
+            envelope = nil
+        case .acknowledged:
+            phase = .terminalEvidence
+            envelope = nil
+        case .cancelledByDiscard, .evidence, .terminalEvidence,
+             .abandoned, .supersededByDuplicate:
+            envelope = nil
+        }
+    }
+
+    public mutating func settleForScopeRevoke() {
+        settleForDiscard()
+        if userDisposition == .none || userDisposition == .payloadDiscarded {
+            userDisposition = .scopeRevoked
+        }
+    }
+}
+
+public enum GaryxDeliveryDraftRecoveryDisposition: Equatable, Sendable {
+    case restored(GaryxDeliveryEnvelope)
+    case rejectedNotAmbiguous
+    case rejectedConflictScope
+    case rejectedConflictDurability
+}
+
+public enum GaryxDeliveryDraftRecoveryReducer {
+    /// Atomic value reducer for the ambiguous "restore to draft" exit. The
+    /// original record is not terminalized unless durable conflict membership
+    /// can be admitted in the same transaction.
+    public static func restore(
+        record: inout GaryxDeliveryRecord,
+        conflictSet: inout GaryxPayloadConflictSet,
+        candidate: GaryxPayloadConflictCandidate,
+        membershipDurabilityAvailable: Bool
+    ) -> GaryxDeliveryDraftRecoveryDisposition {
+        guard record.phase == .ambiguous, record.userDisposition == .none else {
+            return .rejectedNotAmbiguous
+        }
+        guard conflictSet.scope == record.scope else { return .rejectedConflictScope }
+        var nextRecord = record
+        var nextConflictSet = conflictSet
+        guard nextConflictSet.admitCandidate(
+            candidate,
+            membershipDurabilityAvailable: membershipDurabilityAvailable
+        ) else {
+            return .rejectedConflictDurability
+        }
+        guard let envelope = nextRecord.restoreToDraftAfterConflictAdmission() else {
+            return .rejectedNotAmbiguous
+        }
+        record = nextRecord
+        conflictSet = nextConflictSet
+        return .restored(envelope)
+    }
+}
+
+public enum GaryxDeliveryEvidenceIngressDisposition: Equatable, Sendable {
+    case updated(GaryxDeliveryRecordID)
+    case rejectedAuthenticationSource
+    case unknownCorrelation
+}
+
+public enum GaryxDeliveryEvidenceIngress {
+    /// The API intentionally accepts no message body. It can update correlation
+    /// evidence but cannot inject content into composer/domain state.
+    public static func acknowledge(
+        correlationID: String,
+        authenticatedScope: GaryxGatewayScope,
+        records: inout [GaryxDeliveryRecordID: GaryxDeliveryRecord]
+    ) -> GaryxDeliveryEvidenceIngressDisposition {
+        guard let id = records.first(where: {
+            $0.value.correlationID == correlationID && $0.value.scope == authenticatedScope
+        })?.key else {
+            if records.values.contains(where: { $0.correlationID == correlationID }) {
+                return .rejectedAuthenticationSource
+            }
+            return .unknownCorrelation
+        }
+        records[id]?.recordServerAcknowledgement()
+        return .updated(id)
+    }
+}
+
+public struct GaryxDeliveryQuota: Equatable, Codable, Sendable {
+    public static let perScopeRecordLimit = 64
+    public static let globalRecordLimit = 256
+
+    public var nonTerminalByScope: [GaryxGatewayScope: Int]
+    public var nonTerminalGlobal: Int
+    public var payloadBytesUsed: Int
+    public var payloadByteLimit: Int
+
+    public init(
+        nonTerminalByScope: [GaryxGatewayScope: Int] = [:],
+        nonTerminalGlobal: Int = 0,
+        payloadBytesUsed: Int = 0,
+        payloadByteLimit: Int = 64 * 1024 * 1024
+    ) {
+        self.nonTerminalByScope = nonTerminalByScope
+        self.nonTerminalGlobal = nonTerminalGlobal
+        self.payloadBytesUsed = payloadBytesUsed
+        self.payloadByteLimit = payloadByteLimit
+    }
+
+    public func canSeal(scope: GaryxGatewayScope, envelopeBytes: Int) -> Bool {
+        (nonTerminalByScope[scope] ?? 0) < Self.perScopeRecordLimit
+            && nonTerminalGlobal < Self.globalRecordLimit
+            && payloadBytesUsed + envelopeBytes <= payloadByteLimit
+    }
+}
+
+// MARK: - Send commit barrier
+
+public enum GaryxSendCommitBarrierPhase: String, CaseIterable, Codable, Sendable {
+    case idle
+    case sealed
+    case durableCommitted
+    case revoked
+}
+
+public enum GaryxSendBarrierSealDisposition: Equatable, Sendable {
+    case sealed
+    case payloadPreparing
+    case deliveryBackpressure
+    case rejectedLifecycle
+    case rejectedProducerPhase
+    case busy
+}
+
+public struct GaryxSendBarrierSettlement: Equatable, Sendable {
+    public let terminalOutcome: GaryxReservationTerminalOutcome
+    public let followupGeneration: UInt64
+    public let followupText: String
+    public let followupAttachmentIDs: [GaryxAttachmentID]
+    public let deliveryRecord: GaryxDeliveryRecord?
+}
+
+public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
+    public let entryID: GaryxComposerPayloadEntryID
+    public let scope: GaryxGatewayScope
+    public let payloadLifecycle: GaryxPayloadLifecycleCapture
+    public private(set) var phase: GaryxSendCommitBarrierPhase
+    public private(set) var reservationID: GaryxSendReservationID?
+    public private(set) var envelopeGeneration: UInt64?
+    public private(set) var followupGeneration: UInt64?
+    public private(set) var envelopeText: String?
+    public private(set) var envelopeAttachmentIDs: [GaryxAttachmentID]
+    public private(set) var provisionalFollowupText: String
+    public private(set) var provisionalFollowupAttachmentIDs: [GaryxAttachmentID]
+
+    public init(
+        entryID: GaryxComposerPayloadEntryID,
+        scope: GaryxGatewayScope,
+        payloadLifecycle: GaryxPayloadLifecycleCapture
+    ) {
+        self.entryID = entryID
+        self.scope = scope
+        self.payloadLifecycle = payloadLifecycle
+        phase = .idle
+        reservationID = nil
+        envelopeGeneration = nil
+        followupGeneration = nil
+        envelopeText = nil
+        envelopeAttachmentIDs = []
+        provisionalFollowupText = ""
+        provisionalFollowupAttachmentIDs = []
+    }
+
+    @discardableResult
+    public mutating func seal(
+        reservationID: GaryxSendReservationID,
+        envelope: GaryxDeliveryEnvelope,
+        followupGeneration: UInt64,
+        readiness: GaryxComposerSendReadiness,
+        quota: GaryxDeliveryQuota,
+        producerPhase: GaryxProducerFinalizationPhase,
+        lifecycle: GaryxPayloadLifecycleSnapshot
+    ) -> GaryxSendBarrierSealDisposition {
+        guard payloadLifecycle.isAdmitted(by: lifecycle) else { return .rejectedLifecycle }
+        guard producerPhase == .live else { return .rejectedProducerPhase }
+        guard phase == .idle else { return .busy }
+        guard readiness == .ready else { return .payloadPreparing }
+        guard quota.canSeal(scope: scope, envelopeBytes: envelope.estimatedBytes) else {
+            return .deliveryBackpressure
+        }
+        precondition(followupGeneration > envelope.generation)
+        phase = .sealed
+        self.reservationID = reservationID
+        envelopeGeneration = envelope.generation
+        self.followupGeneration = followupGeneration
+        envelopeText = envelope.text
+        envelopeAttachmentIDs = envelope.attachmentIDs
+        provisionalFollowupText = ""
+        provisionalFollowupAttachmentIDs = []
+        return .sealed
+    }
+
+    @discardableResult
+    public mutating func replaceProvisionalText(
+        _ text: String,
+        lifecycle: GaryxPayloadLifecycleSnapshot
+    ) -> Bool {
+        guard phase == .sealed, payloadLifecycle.isAdmitted(by: lifecycle) else { return false }
+        provisionalFollowupText = text
+        return true
+    }
+
+    @discardableResult
+    public mutating func addProvisionalAttachment(
+        _ id: GaryxAttachmentID,
+        lifecycle: GaryxPayloadLifecycleSnapshot
+    ) -> Bool {
+        guard phase == .sealed, payloadLifecycle.isAdmitted(by: lifecycle) else { return false }
+        provisionalFollowupAttachmentIDs.append(id)
+        return true
+    }
+
+    public mutating func durableCommit(
+        deliveryID: GaryxDeliveryRecordID,
+        correlationID: String,
+        clientIntentID: String,
+        lifecycle: GaryxPayloadLifecycleSnapshot
+    ) -> GaryxSendBarrierSettlement? {
+        guard payloadLifecycle.isAdmitted(by: lifecycle),
+              phase == .sealed,
+              let reservationID,
+              let envelopeGeneration,
+              let followupGeneration,
+              let envelopeText else {
+            return nil
+        }
+        phase = .durableCommitted
+        let envelope = GaryxDeliveryEnvelope(
+            text: envelopeText,
+            attachmentIDs: envelopeAttachmentIDs,
+            generation: envelopeGeneration,
+            clientIntentID: clientIntentID
+        )
+        let delivery = GaryxDeliveryRecord(
+            id: deliveryID,
+            scope: scope,
+            entryID: entryID,
+            reservationID: reservationID,
+            correlationID: correlationID,
+            envelope: envelope
+        )
+        return GaryxSendBarrierSettlement(
+            terminalOutcome: .committed,
+            followupGeneration: followupGeneration,
+            followupText: provisionalFollowupText,
+            followupAttachmentIDs: provisionalFollowupAttachmentIDs,
+            deliveryRecord: delivery
+        )
+    }
+
+    public mutating func revoke(
+        mergeGeneration: UInt64,
+        lifecycle: GaryxPayloadLifecycleSnapshot
+    ) -> GaryxSendBarrierSettlement? {
+        guard payloadLifecycle.isAdmitted(by: lifecycle),
+              phase == .sealed,
+              let followupGeneration,
+              mergeGeneration > followupGeneration else {
+            return nil
+        }
+        phase = .revoked
+        return GaryxSendBarrierSettlement(
+            terminalOutcome: .revoked,
+            followupGeneration: mergeGeneration,
+            followupText: (envelopeText ?? "") + provisionalFollowupText,
+            followupAttachmentIDs: envelopeAttachmentIDs + provisionalFollowupAttachmentIDs,
+            deliveryRecord: nil
+        )
+    }
+
+    /// Dedicated discard settlement path; ordinary callers cannot use it to
+    /// bypass lifecycle admission.
+    fileprivate mutating func forceRevokeForDiscard() {
+        guard phase == .sealed else { return }
+        phase = .revoked
+        envelopeText = nil
+        envelopeAttachmentIDs = []
+        provisionalFollowupText = ""
+        provisionalFollowupAttachmentIDs = []
+    }
+
+    public mutating func returnToIdle() {
+        guard phase == .durableCommitted || phase == .revoked else { return }
+        phase = .idle
+        reservationID = nil
+        envelopeGeneration = nil
+        followupGeneration = nil
+        envelopeText = nil
+        envelopeAttachmentIDs = []
+        provisionalFollowupText = ""
+        provisionalFollowupAttachmentIDs = []
+    }
+}
+
+// MARK: - Multi-stage create delivery
+
+public enum GaryxCreateDeliveryPhase: String, Codable, Sendable {
+    case createPending
+    case threadCreated
+    case bindingCompleted
+    case chatStartAttempted
+    case acknowledged
+    case ambiguous
+}
+
+public struct GaryxCreateDeliveryKey: Hashable, Codable, Sendable {
+    public let scope: GaryxGatewayScope
+    public let createIntentID: String
+
+    public init(scope: GaryxGatewayScope, createIntentID: String) {
+        precondition(!createIntentID.isEmpty)
+        self.scope = scope
+        self.createIntentID = createIntentID
+    }
+}
+
+public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
+    public let key: GaryxCreateDeliveryKey
+    public private(set) var threadID: String?
+    public private(set) var phase: GaryxCreateDeliveryPhase
+    public private(set) var ambiguousAfter: GaryxCreateDeliveryPhase?
+    public private(set) var userDisposition: GaryxCreateAmbiguousDisposition
+
+    public init(scope: GaryxGatewayScope, createIntentID: String) {
+        key = GaryxCreateDeliveryKey(scope: scope, createIntentID: createIntentID)
+        threadID = nil
+        phase = .createPending
+        ambiguousAfter = nil
+        userDisposition = .none
+    }
+
+    public var scope: GaryxGatewayScope { key.scope }
+    public var createIntentID: String { key.createIntentID }
+
+    public mutating func created(threadID: String) {
+        guard phase == .createPending, !threadID.isEmpty else { return }
+        self.threadID = threadID
+        phase = .threadCreated
+    }
+
+    public mutating func bound() {
+        guard phase == .threadCreated else { return }
+        phase = .bindingCompleted
+    }
+
+    public mutating func chatStartAttempted() {
+        guard phase == .threadCreated || phase == .bindingCompleted else { return }
+        phase = .chatStartAttempted
+    }
+
+    public mutating func responseLost() {
+        guard phase != .acknowledged, phase != .ambiguous else { return }
+        ambiguousAfter = phase
+        phase = .ambiguous
+    }
+
+    public mutating func acknowledged() {
+        guard phase == .chatStartAttempted
+                || (phase == .ambiguous && ambiguousAfter == .chatStartAttempted) else {
+            return
+        }
+        phase = .acknowledged
+        ambiguousAfter = nil
+    }
+
+    @discardableResult
+    public mutating func restoreToDraft() -> Bool {
+        guard phase == .ambiguous, userDisposition == .none else { return false }
+        userDisposition = .restoredToDraft
+        return true
+    }
+
+    public mutating func rebuildWithDuplicateRisk(
+        newCreateIntentID: String
+    ) -> GaryxCreateDeliveryState? {
+        guard phase == .ambiguous,
+              userDisposition == .none,
+              !newCreateIntentID.isEmpty,
+              newCreateIntentID != createIntentID else {
+            return nil
+        }
+        userDisposition = .rebuildMayCreateDuplicateThread
+        return GaryxCreateDeliveryState(scope: scope, createIntentID: newCreateIntentID)
+    }
+}
+
+public enum GaryxCreateAmbiguousDisposition: String, Codable, Sendable {
+    case none
+    case restoredToDraft
+    case rebuildMayCreateDuplicateThread
+}
+
+// MARK: - Discard convergence
+
+public enum GaryxSessionDescendantPhase: String, Codable, Sendable {
+    case live
+    case finalizing
+    case closePendingAck
+    case retired
+}
+
+public struct GaryxSessionDescendantKey: Hashable, Codable, Sendable {
+    public let token: GaryxPayloadLifecycleToken
+    public let sessionID: GaryxComposerInputSessionID
+    public let epoch: UInt64
+
+    public init(
+        token: GaryxPayloadLifecycleToken,
+        sessionID: GaryxComposerInputSessionID,
+        epoch: UInt64
+    ) {
+        self.token = token
+        self.sessionID = sessionID
+        self.epoch = epoch
+    }
+}
+
+public struct GaryxSessionDescendant: Equatable, Codable, Sendable {
+    public let key: GaryxSessionDescendantKey
+    /// Alias is retained only for event routing; settlement membership uses key.token.
+    public let composerKey: GaryxComposerKey
+    public let phase: GaryxSessionDescendantPhase
+    public let finalSequence: UInt64?
+
+    public init(
+        key: GaryxSessionDescendantKey,
+        composerKey: GaryxComposerKey,
+        phase: GaryxSessionDescendantPhase,
+        finalSequence: UInt64?
+    ) {
+        self.key = key
+        self.composerKey = composerKey
+        self.phase = phase
+        self.finalSequence = finalSequence
+    }
+}
+
+public struct GaryxDiscardFinalizationTombstoneKey: Hashable, Codable, Sendable {
+    public let token: GaryxPayloadLifecycleToken
+    public let discardRevision: UInt64
+    public let sessionID: GaryxComposerInputSessionID
+    public let epoch: UInt64
+
+    public init(
+        token: GaryxPayloadLifecycleToken,
+        discardRevision: UInt64,
+        sessionID: GaryxComposerInputSessionID,
+        epoch: UInt64
+    ) {
+        self.token = token
+        self.discardRevision = discardRevision
+        self.sessionID = sessionID
+        self.epoch = epoch
+    }
+}
+
+public enum GaryxDiscardFinalizationDisposition: String, Codable, Sendable {
+    case finalizerTerminated
+    case closePendingAckConverted
+}
+
+/// Terminal metadata intentionally contains no text, attachment, or file path.
+public struct GaryxDiscardFinalizationTombstone: Equatable, Codable, Sendable {
+    public let key: GaryxDiscardFinalizationTombstoneKey
+    public let finalSequence: UInt64?
+    public let disposition: GaryxDiscardFinalizationDisposition
+
+    public init(
+        key: GaryxDiscardFinalizationTombstoneKey,
+        finalSequence: UInt64?,
+        disposition: GaryxDiscardFinalizationDisposition
+    ) {
+        self.key = key
+        self.finalSequence = finalSequence
+        self.disposition = disposition
+    }
+}
+
+public enum GaryxLateCloseAcknowledgementDisposition: Equatable, Sendable {
+    case rejectedTombstoned
+    case rejectedUnknownToken
+}
+
+public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
+    public private(set) var lifecycle: GaryxPayloadLifecycleRecord
+    public private(set) var barrier: GaryxSendCommitBarrier
+    public private(set) var sessions: [GaryxSessionDescendantKey: GaryxSessionDescendant]
+    public private(set) var deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord]
+    public private(set) var operations: [GaryxOperationCapabilityKey: GaryxOperationCapability]
+    public private(set) var replacements: [GaryxReplacementID: GaryxReplacementRecord]
+    public private(set) var feedback: [GaryxFeedbackID: GaryxOperationFeedback]
+    public private(set) var attachmentLineages: [
+        GaryxAttachmentLineageID: GaryxAttachmentLineageTombstone
+    ]
+    public private(set) var stagedAssetIDs: Set<GaryxStagedAssetID>
+    public private(set) var reservedBytes: Int
+    public private(set) var tombstones: [
+        GaryxDiscardFinalizationTombstoneKey: GaryxDiscardFinalizationTombstone
+    ]
+    public private(set) var resourcesSettled: Bool
+
+    public init(
+        lifecycle: GaryxPayloadLifecycleRecord,
+        barrier: GaryxSendCommitBarrier,
+        sessions: [GaryxSessionDescendantKey: GaryxSessionDescendant] = [:],
+        deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord] = [:],
+        operations: [GaryxOperationCapabilityKey: GaryxOperationCapability] = [:],
+        replacements: [GaryxReplacementID: GaryxReplacementRecord] = [:],
+        feedback: [GaryxFeedbackID: GaryxOperationFeedback] = [:],
+        attachmentLineages: [
+            GaryxAttachmentLineageID: GaryxAttachmentLineageTombstone
+        ] = [:],
+        stagedAssetIDs: Set<GaryxStagedAssetID> = [],
+        reservedBytes: Int = 0
+    ) {
+        precondition(lifecycle.phase == .discarding)
+        self.lifecycle = lifecycle
+        self.barrier = barrier
+        self.sessions = sessions
+        self.deliveries = deliveries
+        self.operations = operations
+        self.replacements = replacements
+        self.feedback = feedback
+        self.attachmentLineages = attachmentLineages
+        self.stagedAssetIDs = stagedAssetIDs
+        self.reservedBytes = reservedBytes
+        tombstones = [:]
+        resourcesSettled = false
+    }
+
+    public var reservationSettled: Bool { barrier.phase != .sealed }
+    public var descendantsEmpty: Bool {
+        !sessions.values.contains(where: {
+            $0.key.token == lifecycle.token && $0.phase != .retired
+        })
+    }
+    public var deliveriesSettled: Bool {
+        deliveries.values
+            .filter { $0.entryID == lifecycle.token.entryID }
+            .allSatisfy { $0.phase.isTerminalOrEvidence }
+    }
+
+    /// Orthogonal component 1: every record uses its own phase CAS.
+    public mutating func settleDeliveries() {
+        for id in Array(deliveries.keys) where deliveries[id]?.entryID == lifecycle.token.entryID {
+            deliveries[id]?.settleForDiscard()
+        }
+    }
+
+    /// Orthogonal component 2: active reservation becomes revoked and all
+    /// envelope/follow-up payload is cleared rather than merged into G+2.
+    public mutating func settleReservation() {
+        barrier.forceRevokeForDiscard()
+    }
+
+    /// Orthogonal component 3: enumerate by stable token, never ComposerKey.
+    public mutating func settleSessions() {
+        guard let discardRevision = lifecycle.discardRevision else { return }
+        let members = sessions.values.filter { $0.key.token == lifecycle.token }
+        for session in members {
+            switch session.phase {
+            case .live, .finalizing, .closePendingAck:
+                let tombstoneKey = GaryxDiscardFinalizationTombstoneKey(
+                    token: lifecycle.token,
+                    discardRevision: discardRevision,
+                    sessionID: session.key.sessionID,
+                    epoch: session.key.epoch
+                )
+                tombstones[tombstoneKey] = GaryxDiscardFinalizationTombstone(
+                    key: tombstoneKey,
+                    finalSequence: session.finalSequence,
+                    disposition: session.phase == .closePendingAck
+                        ? .closePendingAckConverted
+                        : .finalizerTerminated
+                )
+                sessions.removeValue(forKey: session.key)
+            case .retired:
+                sessions.removeValue(forKey: session.key)
+            }
+        }
+    }
+
+    /// Identity-discard overrides terminal resource holders as well as active
+    /// capabilities. Physical file deletion is represented by clearing owner IDs.
+    public mutating func settleResources() {
+        for key in Array(operations.keys) {
+            operations[key]?.settleIdentityDiscard()
+        }
+        for id in Array(replacements.keys) {
+            switch replacements[id]?.phase {
+            case .pendingReplacement:
+                replacements[id]?.abort()
+                replacements[id]?.settle()
+            case .committed:
+                replacements[id]?.settle()
+            case .aborted:
+                replacements[id]?.settle()
+            case .settled, .none:
+                break
+            }
+        }
+        for id in Array(feedback.keys) {
+            feedback[id]?.archive()
+        }
+        for id in Array(attachmentLineages.keys) {
+            guard let feedbackID = attachmentLineages[id]?.feedbackID,
+                  let terminalFeedback = feedback[feedbackID] else {
+                continue
+            }
+            _ = attachmentLineages[id]?.release(after: terminalFeedback)
+        }
+        stagedAssetIDs.removeAll()
+        reservedBytes = 0
+        resourcesSettled = attachmentLineages.values.allSatisfy { $0.phase == .released }
+    }
+
+    @discardableResult
+    public mutating func finishToken() -> Bool {
+        guard resourcesSettled else { return false }
+        return lifecycle.finishDiscard(
+            reservationSettled: reservationSettled,
+            descendantsEmpty: descendantsEmpty,
+            deliveriesSettled: deliveriesSettled
+        )
+    }
+
+    public func receiveLateCloseAcknowledgement(
+        sessionID: GaryxComposerInputSessionID,
+        epoch: UInt64
+    ) -> GaryxLateCloseAcknowledgementDisposition {
+        if tombstones.keys.contains(where: {
+            $0.token == lifecycle.token && $0.sessionID == sessionID && $0.epoch == epoch
+        }) {
+            return .rejectedTombstoned
+        }
+        return .rejectedUnknownToken
+    }
+
+    @discardableResult
+    public mutating func garbageCollectTombstonesIfEligible() -> Bool {
+        guard lifecycle.phase == .discarded,
+              descendantsEmpty,
+              deliveriesSettled,
+              resourcesSettled else {
+            return false
+        }
+        tombstones.removeAll()
+        return true
+    }
+}

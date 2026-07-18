@@ -289,6 +289,13 @@ final class GaryxPresentationTransactionTests: XCTestCase {
             GaryxPathDiffPlanner.decide(from: [a, b, c], to: [a, a2, c]),
             .normalizeIllegalMutationAndLogFault
         )
+        var mutatedMiddle = b
+        mutatedMiddle.replacePayload(with: .panel("skills"))
+        XCTAssertEqual(
+            GaryxPathDiffPlanner.decide(from: [a, b, c], to: [a, mutatedMiddle, c]),
+            .normalizeIllegalMutationAndLogFault,
+            "same-instance middle mutations are still illegal path diffs"
+        )
         XCTAssertEqual(
             GaryxPathDiffPlanner.decide(from: [a, b], to: [a, b, a2]),
             .push,

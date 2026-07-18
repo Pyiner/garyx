@@ -355,6 +355,74 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         }
     }
 
+    func testTwoConsecutiveSealsRejectFirstReservationLateCallback() {
+        var state = makeState(text: "S1")
+        let context = activeContext(for: state)
+        let firstReservation = GaryxSendReservationID(rawValue: 1)
+        XCTAssertEqual(
+            state.beginSend(
+                reservationID: firstReservation,
+                followupGeneration: 11,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .sealed(envelope: "S1", followupGeneration: 11)
+        )
+        XCTAssertEqual(
+            state.applyText(
+                "U1",
+                identity: event(
+                    state,
+                    sequence: 1,
+                    generation: 11,
+                    reservation: firstReservation
+                ),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .applied(target: .provisionalNextGeneration, generation: 11)
+        )
+        XCTAssertTrue(
+            state.commitReservation(lifecycle: context.lifecycle, scopes: context.scopes)
+        )
+        XCTAssertTrue(
+            state.returnReservationToIdle(
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            )
+        )
+        XCTAssertEqual(state.currentGeneration, 11)
+        XCTAssertEqual(state.terminalReservations[firstReservation]?.outcome, .committed)
+
+        let secondReservation = GaryxSendReservationID(rawValue: 2)
+        XCTAssertEqual(
+            state.beginSend(
+                reservationID: secondReservation,
+                followupGeneration: 12,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .sealed(envelope: "U1", followupGeneration: 12)
+        )
+        let before = state.textByGeneration
+        XCTAssertEqual(
+            state.applyText(
+                "late S1",
+                identity: event(
+                    state,
+                    sequence: 2,
+                    generation: 11,
+                    reservation: firstReservation
+                ),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .auditedTerminalReservation
+        )
+        XCTAssertEqual(state.textByGeneration, before)
+        XCTAssertEqual(state.activeReservationID, secondReservation)
+    }
+
     func testReleaseBeforeBeginSendRejectsSendAndFinalizesCurrentGeneration() {
         var state = makeState(text: "final")
         let context = activeContext(for: state)
@@ -556,6 +624,66 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         )
         cancelled.cancelled()
         XCTAssertEqual(cancelled.phase, .retained)
+    }
+
+    func testComposerAdapterTerminalPolicyCoversOutcomeVisibilityAndKeyPreconditions() {
+        let key = GaryxComposerKey.thread("same")
+        let sameKeyCases: [(
+            GaryxPresentationTerminalOutcome,
+            GaryxPresentationVisibility,
+            GaryxComposerAdapterTerminalDisposition
+        )] = [
+            (.committed, .visible, .destinationContinuesSameKeyAtNextEpoch),
+            (.committed, .inactive, .deferSameKeyDestinationUntilActive),
+            (.committed, .superseded, .nextTransaction),
+            (.cancelled, .visible, .sourceRemainsLive),
+            (.cancelled, .inactive, .deferSourceUntilActive),
+            (.cancelled, .superseded, .nextTransaction),
+        ]
+        for (outcome, visibility, expected) in sameKeyCases {
+            XCTAssertEqual(
+                GaryxComposerAdapterTerminalPolicy.resolve(
+                    sourceKey: key,
+                    destinationKey: key,
+                    terminal: .init(outcome: outcome, visibility: visibility)
+                ),
+                expected,
+                "outcome=\(outcome), visibility=\(visibility)"
+            )
+        }
+
+        XCTAssertEqual(
+            GaryxComposerAdapterTerminalPolicy.resolve(
+                sourceKey: .thread("source"),
+                destinationKey: .thread("destination"),
+                terminal: .init(outcome: .committed, visibility: .visible)
+            ),
+            .destinationStartsOwnKeySession
+        )
+        XCTAssertEqual(
+            GaryxComposerAdapterTerminalPolicy.resolve(
+                sourceKey: nil,
+                destinationKey: .thread("destination"),
+                terminal: .init(outcome: .committed, visibility: .inactive)
+            ),
+            .deferOwnKeyDestinationUntilActive
+        )
+        XCTAssertEqual(
+            GaryxComposerAdapterTerminalPolicy.resolve(
+                sourceKey: .thread("source"),
+                destinationKey: nil,
+                terminal: .init(outcome: .committed, visibility: .visible)
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            GaryxComposerAdapterTerminalPolicy.resolve(
+                sourceKey: nil,
+                destinationKey: nil,
+                terminal: .init(outcome: .cancelled, visibility: .visible)
+            ),
+            .none
+        )
     }
 
     func testAliasResolutionIsScopePartitionedAndIndependentFromEmptyText() {

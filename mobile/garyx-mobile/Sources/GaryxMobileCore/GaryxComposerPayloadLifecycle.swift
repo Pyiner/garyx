@@ -50,6 +50,14 @@ public struct GaryxPayloadConflictSetID: RawRepresentable, Hashable, Codable, Se
     }
 }
 
+public struct GaryxAttachmentLineageID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+    public init(rawValue: String) {
+        precondition(!rawValue.isEmpty)
+        self.rawValue = rawValue
+    }
+}
+
 public struct GaryxDeliveryRecordID: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: String
     public init(rawValue: String) {
@@ -304,6 +312,16 @@ public struct GaryxComposerPayloadStore: Equatable, Codable, Sendable {
     }
 
     @discardableResult
+    public mutating func remove(
+        _ entryID: GaryxComposerPayloadEntryID,
+        scope: GaryxGatewayScope
+    ) -> GaryxComposerPayloadEntry? {
+        let removed = entriesByScope[scope]?.removeValue(forKey: entryID)
+        if entriesByScope[scope]?.isEmpty == true { entriesByScope.removeValue(forKey: scope) }
+        return removed
+    }
+
+    @discardableResult
     public mutating func promote(
         entryID: GaryxComposerPayloadEntryID,
         scope: GaryxGatewayScope,
@@ -432,12 +450,24 @@ public struct GaryxOperationCapability: Equatable, Codable, Sendable {
         identityValid = true
     }
 
-    public mutating func markUploadAttempted() {
-        guard state == .uploading else { return }
+    @discardableResult
+    public mutating func markUploadAttempted(
+        expectedKey: GaryxOperationCapabilityKey,
+        lifecycle: GaryxPayloadLifecycleSnapshot,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> GaryxOperationTransitionDisposition {
+        guard expectedKey == context.key else { return .rejectedKey }
+        guard context.payloadLifecycle.isAdmitted(by: lifecycle) else { return .rejectedLifecycle }
+        guard scopes.admitDomainEvent(from: context.key.scope) != .rejectedRevoked else {
+            return .rejectedScope
+        }
+        guard identityValid else { return .archivedIdentityInvalid }
+        guard state == .uploading, !uploadAttempted else { return .rejectedState }
         uploadAttempted = true
+        return .applied
     }
 
-    public mutating func adoptReplacementAsset(
+    fileprivate mutating func adoptReplacementAsset(
         _ stagedAssetID: GaryxStagedAssetID,
         reservedBytes: Int
     ) {
@@ -499,11 +529,14 @@ public struct GaryxOperationCapability: Equatable, Codable, Sendable {
         switch state {
         case .requested, .preparing, .uploading, .failedRetryable:
             state = .cancelled
-            stagedAssetID = nil
-            reservedBytes = 0
         case .completed, .failedTerminal, .cancelled, .superseded:
             break
         }
+        // Identity settlement owns resource cleanup even when the operation
+        // reached a terminal state first. Superseded records only describe
+        // lineage; their successor is settled independently.
+        stagedAssetID = nil
+        reservedBytes = 0
     }
 
     private static func allows(
@@ -656,7 +689,16 @@ public struct GaryxReplacementRecord: Equatable, Codable, Sendable {
     }
 
     public mutating func commit(newKey: GaryxOperationCapabilityKey) {
-        guard phase == .pendingReplacement else { return }
+        guard phase == .pendingReplacement,
+              hasValidOldKey,
+              newKey.scope == scope,
+              newKey.entryID == entryID,
+              newKey.generation == oldKey.generation,
+              newKey.reservationID == reservationID,
+              newKey.branch == branch,
+              newKey.operationID != oldKey.operationID else {
+            return
+        }
         self.newKey = newKey
         phase = .committed
     }
@@ -669,6 +711,24 @@ public struct GaryxReplacementRecord: Equatable, Codable, Sendable {
     public mutating func settle() {
         guard phase == .committed || phase == .aborted else { return }
         phase = .settled
+    }
+
+    public var hasValidOldKey: Bool {
+        oldKey.scope == scope
+            && oldKey.entryID == entryID
+            && oldKey.reservationID == reservationID
+            && oldKey.branch == branch
+    }
+
+    public var hasValidCommittedKey: Bool {
+        guard let newKey else { return false }
+        return hasValidOldKey
+            && newKey.scope == scope
+            && newKey.entryID == entryID
+            && newKey.generation == oldKey.generation
+            && newKey.reservationID == reservationID
+            && newKey.branch == branch
+            && newKey.operationID != oldKey.operationID
     }
 }
 
@@ -690,8 +750,9 @@ public enum GaryxReplacementPlanner {
         case .pendingReplacement:
             .abortReleaseQuotaAndDeleteProvisional
         case .committed:
-            record.newKey.map(GaryxReplacementRecoveryDecision.restoreSuccessor)
-                ?? .abortReleaseQuotaAndDeleteProvisional
+            record.hasValidCommittedKey
+                ? .restoreSuccessor(record.newKey!)
+                : .abortReleaseQuotaAndDeleteProvisional
         case .aborted, .settled:
             .garbageCollect
         }
@@ -742,11 +803,17 @@ public enum GaryxReplacementSwapReducer {
             return .rejectedScope
         }
         guard old.state == .failedRetryable,
-              old.context.key == record.oldKey else {
+              old.context.key == record.oldKey,
+              record.hasValidOldKey else {
             return .rejectedOldOperation
         }
         guard successor.state == .requested,
-              successor.context.key.entryID == old.context.key.entryID,
+              successor.context.key.scope == record.scope,
+              successor.context.key.entryID == record.entryID,
+              successor.context.key.generation == record.oldKey.generation,
+              successor.context.key.reservationID == record.reservationID,
+              successor.context.key.branch == record.branch,
+              successor.context.key.operationID != record.oldKey.operationID,
               record.phase == .pendingReplacement else {
             return .rejectedNewOperation
         }
@@ -804,6 +871,7 @@ public struct GaryxOperationFeedback: Equatable, Codable, Sendable {
     public let scope: GaryxGatewayScope
     public let entryID: GaryxComposerPayloadEntryID
     public let operationID: GaryxOperationID?
+    public let lineageID: GaryxAttachmentLineageID?
     public let kind: GaryxOperationFeedbackKind
     public private(set) var phase: GaryxOperationFeedbackPhase
 
@@ -812,6 +880,7 @@ public struct GaryxOperationFeedback: Equatable, Codable, Sendable {
         scope: GaryxGatewayScope,
         entryID: GaryxComposerPayloadEntryID,
         operationID: GaryxOperationID?,
+        lineageID: GaryxAttachmentLineageID? = nil,
         kind: GaryxOperationFeedbackKind,
         phase: GaryxOperationFeedbackPhase = .pending
     ) {
@@ -819,6 +888,7 @@ public struct GaryxOperationFeedback: Equatable, Codable, Sendable {
         self.scope = scope
         self.entryID = entryID
         self.operationID = operationID
+        self.lineageID = lineageID
         self.kind = kind
         self.phase = phase
     }
@@ -846,6 +916,74 @@ public struct GaryxOperationFeedback: Equatable, Codable, Sendable {
     }
 }
 
+public enum GaryxAttachmentLineagePhase: String, Codable, Sendable {
+    case retainedForFeedback
+    case released
+}
+
+/// Stable attachment-slot metadata retained after a failed-terminal operation.
+/// It carries no staged path or payload bytes. A fresh operation may reuse the
+/// slot only while both lifecycle and feedback CAS still match.
+public struct GaryxAttachmentLineageTombstone: Equatable, Codable, Sendable {
+    public let id: GaryxAttachmentLineageID
+    public let scope: GaryxGatewayScope
+    public let entryID: GaryxComposerPayloadEntryID
+    public let attachmentSlotID: GaryxAttachmentID
+    public let failedOperationID: GaryxOperationID
+    public let feedbackID: GaryxFeedbackID
+    public let payloadLifecycle: GaryxPayloadLifecycleCapture
+    public private(set) var phase: GaryxAttachmentLineagePhase
+
+    public init(
+        id: GaryxAttachmentLineageID,
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        attachmentSlotID: GaryxAttachmentID,
+        failedOperationID: GaryxOperationID,
+        feedbackID: GaryxFeedbackID,
+        payloadLifecycle: GaryxPayloadLifecycleCapture
+    ) {
+        self.id = id
+        self.scope = scope
+        self.entryID = entryID
+        self.attachmentSlotID = attachmentSlotID
+        self.failedOperationID = failedOperationID
+        self.feedbackID = feedbackID
+        self.payloadLifecycle = payloadLifecycle
+        phase = .retainedForFeedback
+    }
+
+    public func admitsFreshOperation(
+        _ operation: GaryxOperationCapability,
+        feedback: GaryxOperationFeedback,
+        lifecycle: GaryxPayloadLifecycleSnapshot
+    ) -> Bool {
+        phase == .retainedForFeedback
+            && payloadLifecycle.isAdmitted(by: lifecycle)
+            && operation.context.key.scope == scope
+            && operation.context.key.entryID == entryID
+            && operation.context.payloadLifecycle == payloadLifecycle
+            && operation.state == .requested
+            && feedback.id == feedbackID
+            && feedback.lineageID == id
+            && feedback.scope == scope
+            && feedback.entryID == entryID
+            && !feedback.isTerminal
+    }
+
+    @discardableResult
+    public mutating func release(after feedback: GaryxOperationFeedback) -> Bool {
+        guard phase == .retainedForFeedback,
+              feedback.id == feedbackID,
+              feedback.lineageID == id,
+              feedback.isTerminal else {
+            return false
+        }
+        phase = .released
+        return true
+    }
+}
+
 // MARK: - Durable conflict candidates
 
 public struct GaryxPayloadConflictCandidate: Equatable, Codable, Sendable {
@@ -860,11 +998,17 @@ public struct GaryxPayloadConflictCandidate: Equatable, Codable, Sendable {
 
 public struct GaryxPayloadConflictSet: Equatable, Codable, Sendable {
     public let id: GaryxPayloadConflictSetID
+    public let scope: GaryxGatewayScope
     public private(set) var candidates: [GaryxPayloadConflictCandidate]
     public private(set) var pendingDecision: Bool
 
-    public init(id: GaryxPayloadConflictSetID, candidates: [GaryxPayloadConflictCandidate] = []) {
+    public init(
+        id: GaryxPayloadConflictSetID,
+        scope: GaryxGatewayScope,
+        candidates: [GaryxPayloadConflictCandidate] = []
+    ) {
         self.id = id
+        self.scope = scope
         self.candidates = candidates
         pendingDecision = !candidates.isEmpty
     }
@@ -913,6 +1057,7 @@ public enum GaryxPayloadIdentityEventDisposition: Equatable, Sendable {
 public enum GaryxPayloadIdentityReducer {
     public static func apply(
         _ event: GaryxPayloadIdentityEvent,
+        scope: GaryxGatewayScope,
         store: inout GaryxComposerPayloadStore
     ) -> GaryxPayloadIdentityEventDisposition {
         switch event {
@@ -922,41 +1067,31 @@ public enum GaryxPayloadIdentityReducer {
             return .occurrenceOnly
         case .destinationDiscarded(let destination, let revision):
             var discarded: [GaryxComposerPayloadEntryID] = []
-            for scope in Array(store.entriesByScope.keys) {
-                let entryIDs = store.entriesByScope[scope].map { Array($0.keys) } ?? []
-                for id in entryIDs {
-                    guard var entry = store.entriesByScope[scope]?[id],
-                          entry.destination == destination,
-                          entry.beginDiscard(revision: revision) else {
-                        continue
-                    }
-                    store.entriesByScope[scope]?[id] = entry
-                    discarded.append(id)
-                }
-            }
-            return discarded.isEmpty ? .rejected : .beganDiscard(discarded)
-        case .payloadGenerationReset(let entryID, let generation, let barrierIdle, let producerLive):
-            for scope in Array(store.entriesByScope.keys) {
-                guard var entry = store.entriesByScope[scope]?[entryID] else { continue }
-                guard entry.resetGeneration(
-                    generation,
-                    barrierIdle: barrierIdle,
-                    producerLive: producerLive
-                ) else { return .rejected }
-                store.entriesByScope[scope]?[entryID] = entry
-                return .generationReset
-            }
-            return .rejected
-        case .payloadEntryDiscarded(let entryID, let revision):
-            for scope in Array(store.entriesByScope.keys) {
-                guard var entry = store.entriesByScope[scope]?[entryID],
+            let entryIDs = store.entriesByScope[scope].map { Array($0.keys) } ?? []
+            for id in entryIDs {
+                guard var entry = store.entriesByScope[scope]?[id],
+                      entry.destination == destination,
                       entry.beginDiscard(revision: revision) else {
                     continue
                 }
-                store.entriesByScope[scope]?[entryID] = entry
-                return .beganDiscard([entryID])
+                store.entriesByScope[scope]?[id] = entry
+                discarded.append(id)
             }
-            return .rejected
+            return discarded.isEmpty ? .rejected : .beganDiscard(discarded)
+        case .payloadGenerationReset(let entryID, let generation, let barrierIdle, let producerLive):
+            guard var entry = store.entriesByScope[scope]?[entryID],
+                  entry.resetGeneration(
+                      generation,
+                      barrierIdle: barrierIdle,
+                      producerLive: producerLive
+                  ) else { return .rejected }
+            store.entriesByScope[scope]?[entryID] = entry
+            return .generationReset
+        case .payloadEntryDiscarded(let entryID, let revision):
+            guard var entry = store.entriesByScope[scope]?[entryID],
+                  entry.beginDiscard(revision: revision) else { return .rejected }
+            store.entriesByScope[scope]?[entryID] = entry
+            return .beganDiscard([entryID])
         }
     }
 }

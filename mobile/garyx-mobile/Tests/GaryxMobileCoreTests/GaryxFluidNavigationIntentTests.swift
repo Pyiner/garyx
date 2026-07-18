@@ -168,12 +168,26 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
     }
 
     func testSafetyEffectDropsLowerPriorityAndCannotBeSuperseded() {
-        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+        var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
         var coordinator = GaryxNavigationIntentCoordinator(transactionStatus: .nonTerminal)
         enqueue(ordinary("ordinary", thread: "thread-a"), into: &coordinator, scopes: scopes)
         enqueue(scopeChange("switch", to: scope2), into: &coordinator, scopes: scopes)
         enqueue(logout("logout"), into: &coordinator, scopes: scopes)
-        enqueue(ordinary("late", thread: "thread-b"), into: &coordinator, scopes: scopes)
+        let late = ordinary("late", thread: "thread-b")
+        let lateTicket = coordinator.beginPreparation(
+            intentID: late.id,
+            key: late.coalescingKey,
+            scope: scope1
+        )
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                lateTicket,
+                outcome: .ready(late),
+                scopes: scopes,
+                routeState: .init()
+            ),
+            .cancelledOrStale
+        )
         XCTAssertEqual(coordinator.queued.map(\.coalescingKey), [.logout])
 
         coordinator.setTransactionStatus(.terminal)
@@ -195,7 +209,11 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
             ),
             .authenticationRequired
         )
-        coordinator.authenticated(in: scope1)
+        XCTAssertFalse(coordinator.authenticated(in: scope1, scopes: scopes))
+        XCTAssertTrue(scopes.revoke(scope1))
+        let reauthenticated = GaryxGatewayScope(identity: scope1.identity, epoch: 2)
+        XCTAssertTrue(scopes.switchActive(to: reauthenticated))
+        XCTAssertTrue(coordinator.authenticated(in: reauthenticated, scopes: scopes))
         XCTAssertFalse(coordinator.authenticationBarrier)
         XCTAssertTrue(coordinator.queued.isEmpty, "blocked navigation is never auto-reprepared")
     }
@@ -314,6 +332,17 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
         XCTAssertTrue(registry.switchActive(to: reauthenticated))
         XCTAssertEqual(registry.activeScope, reauthenticated)
         XCTAssertEqual(registry.admitDomainEvent(from: scope1), .rejectedRevoked)
+
+        let unknown = GaryxGatewayScope(identity: scope1.identity, epoch: 99)
+        XCTAssertFalse(registry.revoke(unknown))
+        XCTAssertEqual(registry.revokedThroughEpoch[scope1.identity], 1)
+
+        let invalidInitial = GaryxGatewayScopeRegistry(
+            initialActiveScope: scope1,
+            revokedThroughEpoch: [scope1.identity: 1]
+        )
+        XCTAssertNil(invalidInitial.activeScope)
+        XCTAssertTrue(invalidInitial.authenticationRequired)
     }
 
     func testRevokedThroughEpochStaysBoundedAcrossChurn() {

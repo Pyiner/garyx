@@ -588,14 +588,17 @@ public enum GaryxPathDiffPlanner {
             return .replaceTop
         }
         if old.count == new.count, old.map(\.id) == new.map(\.id) {
-            let changed = zip(old, new).filter { $0 != $1 }
-            if changed.count == 1,
-               let pair = changed.first,
-               case .conversationDraft = pair.0.destination,
-               case .conversation = pair.1.destination {
+            let changedIndices = old.indices.filter { old[$0] != new[$0] }
+            if changedIndices.count == 1,
+               let changedIndex = changedIndices.first,
+               case .conversationDraft = old[changedIndex].destination,
+               case .conversation = new[changedIndex].destination {
                 return .promoteInPlace
             }
-            return .inPlacePayloadUpdate
+            if changedIndices == [old.index(before: old.endIndex)] {
+                return .inPlacePayloadUpdate
+            }
+            return .normalizeIllegalMutationAndLogFault
         }
         return .normalizeIllegalMutationAndLogFault
     }

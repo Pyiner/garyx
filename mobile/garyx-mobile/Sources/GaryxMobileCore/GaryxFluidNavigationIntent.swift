@@ -36,11 +36,13 @@ public struct GaryxGatewayScopeRegistry: Equatable, Sendable {
         initialActiveScope: GaryxGatewayScope? = nil,
         revokedThroughEpoch: [String: UInt64] = [:]
     ) {
-        self.activeScope = initialActiveScope
         self.revokedThroughEpoch = revokedThroughEpoch
-        if let initialActiveScope {
+        if let initialActiveScope,
+           initialActiveScope.epoch > (revokedThroughEpoch[initialActiveScope.identity] ?? 0) {
+            activeScope = initialActiveScope
             lifecycles = [initialActiveScope: .active]
         } else {
+            activeScope = nil
             lifecycles = [:]
         }
     }
@@ -71,6 +73,7 @@ public struct GaryxGatewayScopeRegistry: Equatable, Sendable {
 
     @discardableResult
     public mutating func revoke(_ scope: GaryxGatewayScope) -> Bool {
+        guard lifecycles[scope] != nil else { return false }
         let watermark = revokedThroughEpoch[scope.identity] ?? 0
         revokedThroughEpoch[scope.identity] = max(watermark, scope.epoch)
         // The watermark is the complete rejection proof; retaining one
@@ -248,6 +251,7 @@ public enum GaryxNavigationTransactionStatus: Equatable, Sendable {
 public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
     public private(set) var transactionStatus: GaryxNavigationTransactionStatus
     public private(set) var authenticationBarrier: Bool
+    public private(set) var authenticationBarrierOriginScope: GaryxGatewayScope?
     public private(set) var queued: [GaryxPreparedNavigationIntent]
 
     private var nextIntentEpoch: UInt64
@@ -260,6 +264,7 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
     ) {
         self.transactionStatus = transactionStatus
         self.authenticationBarrier = authenticationBarrier
+        authenticationBarrierOriginScope = nil
         queued = []
         nextIntentEpoch = 0
         latestIntentEpoch = [:]
@@ -334,7 +339,7 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
             }
             switch validateDependency(intent.dependency, routeState: routeState) {
             case .valid:
-                enqueue(intent)
+                guard enqueue(intent) else { return .cancelledOrStale }
             case .reprepare:
                 return .reprepareRequired
             case .discard:
@@ -359,14 +364,34 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
             return false
         }) {
             authenticationBarrier = true
+            authenticationBarrierOriginScope = ordered.compactMap { intent in
+                if case .logout(let scope) = intent.effect { return scope }
+                return nil
+            }.last
         }
         return ordered
     }
 
-    public mutating func authenticated(in scope: GaryxGatewayScope) {
+    @discardableResult
+    public mutating func authenticated(
+        in scope: GaryxGatewayScope,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> Bool {
+        guard authenticationBarrier,
+              scopes.activeScope == scope,
+              scopes.lifecycle(of: scope) == .active else {
+            return false
+        }
+        if let origin = authenticationBarrierOriginScope {
+            guard scope.identity != origin.identity || scope.epoch > origin.epoch else {
+                return false
+            }
+        }
         authenticationBarrier = false
+        authenticationBarrierOriginScope = nil
         // Ordinary intents rejected behind the barrier are intentionally not
         // retained or automatically reprepared.
+        return true
     }
 
     private enum DependencyValidation {
@@ -391,18 +416,23 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
         }
     }
 
-    private mutating func enqueue(_ intent: GaryxPreparedNavigationIntent) {
+    private mutating func enqueue(_ intent: GaryxPreparedNavigationIntent) -> Bool {
         switch intent.priority {
         case .safetyForced:
             queued.removeAll(where: { $0.priority < .safetyForced })
             replaceSameKey(with: intent)
+            return true
         case .gatewayScopeChange:
-            guard !queued.contains(where: { $0.priority == .safetyForced }) else { return }
+            guard !queued.contains(where: { $0.priority == .safetyForced }) else { return false }
             queued.removeAll(where: { $0.priority == .ordinaryNavigation })
             replaceSameKey(with: intent)
+            return true
         case .ordinaryNavigation:
-            guard !queued.contains(where: { $0.priority > .ordinaryNavigation }) else { return }
+            guard !queued.contains(where: { $0.priority > .ordinaryNavigation }) else {
+                return false
+            }
             replaceSameKey(with: intent)
+            return true
         }
     }
 
