@@ -62,7 +62,17 @@ fn raw_destructive_database_methods_are_crate_private_and_call_site_guarded() {
     assert!(!db.contains("pub fn delete_thread_record_with_projections("));
 
     assert!(production_calls(&source, ".archive_thread_record(").is_empty());
-    let routes = fs::read_to_string(source.join("routes.rs")).expect("read routes source");
+    let routes = {
+        let mut files = vec![source.join("routes.rs")];
+        production_rust_files(&source.join("routes"), &mut files);
+        files.sort();
+        let mut combined = String::new();
+        for path in files {
+            combined.push_str(&fs::read_to_string(&path).expect("read routes source"));
+            combined.push('\n');
+        }
+        combined
+    };
     assert!(!routes.contains(".start_archive("));
     assert!(routes.contains("db.execute_lifecycle_mutation(input)"));
     assert!(routes.contains("db.execute_lifecycle_decision(input)"));
