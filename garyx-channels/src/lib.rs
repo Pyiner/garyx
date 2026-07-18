@@ -1,6 +1,5 @@
 pub mod auth_flow;
 pub mod bound_fanout;
-pub mod inbound;
 pub mod builtin_catalog;
 pub mod channel_trait;
 pub mod committed_replay;
@@ -8,6 +7,7 @@ pub mod discord;
 pub mod dispatcher;
 pub mod feishu;
 pub mod generated_images;
+pub mod inbound;
 pub mod meeting_sink;
 pub mod plugin;
 pub mod plugin_host;

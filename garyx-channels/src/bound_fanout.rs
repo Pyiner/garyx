@@ -293,14 +293,11 @@ mod tests {
         ) -> Option<crate::dispatcher::StreamDispatchCallback> {
             let events = self.events.clone();
             Some(Arc::new(move |envelope| {
-                events
-                    .lock()
-                    .expect("events lock")
-                    .push((
-                        envelope.endpoint_identity.clone(),
-                        envelope.delivery_thread_id.clone(),
-                        envelope.event,
-                    ));
+                events.lock().expect("events lock").push((
+                    envelope.endpoint_identity.clone(),
+                    envelope.delivery_thread_id.clone(),
+                    envelope.event,
+                ));
             }))
         }
     }
