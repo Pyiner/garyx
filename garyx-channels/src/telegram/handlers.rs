@@ -15,8 +15,7 @@ use garyx_models::provider::{
 };
 use garyx_models::{MessageLedgerEvent, MessageLifecycleStatus, MessageTerminalReason};
 use garyx_router::{
-    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, endpoint_key,
-    is_native_command_text,
+    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, is_native_command_text,
 };
 
 use super::api::send_chat_action;
@@ -793,86 +792,47 @@ impl TelegramChannel {
             file_paths,
         };
 
-        let origin_endpoint_identity =
-            endpoint_key("telegram", &context.account_id, &request.thread_binding_key);
-        let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
-            context.router.clone(),
-            context.dispatcher.clone(),
-            request.run_id.clone(),
-            origin_endpoint_identity,
-        );
-        let fanout_consumer = deferred_fanout.consumer(response_callback);
-
-        // Read this run's stream from the durable committed transcript:
-        // subscribe before dispatch and let the replay adapter drive the
-        // Telegram sender. Bound non-origin endpoints attach after
-        // route_and_dispatch resolves the canonical thread id.
-        let replay_subscription = match crate::committed_replay::committed_callback(
-            &context.bridge,
-            &request.run_id,
-            fanout_consumer,
-        )
-        .await
-        {
-            Ok(subscription) => subscription,
-            Err(error) => {
-                tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Telegram dispatch");
-                return;
-            }
+        let ledger_event = MessageLedgerEvent {
+            ledger_id: format!(
+                "telegram:{}:{chat_id}:{}",
+                context.account_id, msg.message_id
+            ),
+            bot_id: format!("telegram:{}", context.account_id),
+            status: MessageLifecycleStatus::Received,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            thread_id: Some(request.thread_binding_key.clone()),
+            run_id: Some(request.run_id.clone()),
+            channel: Some(request.channel.clone()),
+            account_id: Some(request.account_id.clone()),
+            chat_id: Some(chat_id.to_string()),
+            from_id: Some(request.from_id.clone()),
+            native_message_id: Some(msg.message_id.to_string()),
+            text_excerpt: Some(request.message.chars().take(200).collect()),
+            terminal_reason: None,
+            reply_message_id: None,
+            metadata: serde_json::json!({
+                "source": "telegram_inbound",
+                "is_group": is_group,
+            }),
         };
-
-        let thread_store = {
-            let router_guard = context.router.lock().await;
-            router_guard.thread_store()
+        let run_id_for_log = request.run_id.clone();
+        let pipeline = crate::inbound::InboundPipeline {
+            router: &context.router,
+            bridge: &context.bridge,
+            dispatcher: &context.dispatcher,
         };
-        let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
-            context.bridge.as_ref(),
-            deferred_fanout.clone(),
-            thread_store,
-        );
-        let dispatch_callback = replay_subscription.callback();
-
-        let dispatch_result = {
-            let mut router_guard = context.router.lock().await;
-            router_guard
-                .record_message_ledger_event(MessageLedgerEvent {
-                    ledger_id: format!(
-                        "telegram:{}:{chat_id}:{}",
-                        context.account_id, msg.message_id
-                    ),
-                    bot_id: format!("telegram:{}", context.account_id),
-                    status: MessageLifecycleStatus::Received,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    thread_id: Some(request.thread_binding_key.clone()),
-                    run_id: Some(request.run_id.clone()),
-                    channel: Some(request.channel.clone()),
-                    account_id: Some(request.account_id.clone()),
-                    chat_id: Some(chat_id.to_string()),
-                    from_id: Some(request.from_id.clone()),
-                    native_message_id: Some(msg.message_id.to_string()),
-                    text_excerpt: Some(request.message.chars().take(200).collect()),
-                    terminal_reason: None,
-                    reply_message_id: None,
-                    metadata: serde_json::json!({
-                        "source": "telegram_inbound",
-                        "is_group": is_group,
-                    }),
-                })
-                .await;
-            router_guard
-                .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
-                .await
-        };
+        let dispatch_result = pipeline
+            .dispatch(
+                request,
+                response_callback,
+                Some(ledger_event),
+                |_thread_id| {},
+            )
+            .await;
 
         match dispatch_result {
             Ok(result) => {
-                deferred_fanout.attach_thread(&result.thread_id).await;
                 let local_reply = result.local_reply;
-                if local_reply.is_some() {
-                    replay_subscription.abort();
-                } else {
-                    replay_subscription.detach();
-                }
                 if let Some(local_reply) = local_reply {
                     if let Err(e) = send_response(
                         TelegramSendTarget::new(
@@ -904,7 +864,10 @@ impl TelegramChannel {
                     );
                 }
             }
-            Err(e) => {
+            Err(crate::inbound::InboundDispatchFailure::CommittedReplay(error)) => {
+                tracing::error!(run_id = %run_id_for_log, error = %error, "committed replay bus missing for Telegram dispatch");
+            }
+            Err(crate::inbound::InboundDispatchFailure::Dispatch(e)) => {
                 error!(
                     context.account_id,
                     chat_id,
