@@ -13,6 +13,22 @@ public struct GaryxGatewayScope: Hashable, Codable, Sendable {
     }
 }
 
+/// UI/network work captures both its durable gateway partition and the exact
+/// activation that launched it. A suspended partition may later become active
+/// again so scope equality alone cannot reject a completion from before the
+/// switch-away. The activation sequence supplies that ephemeral CAS while the
+/// scope keeps durable composer data recoverable when the user switches back.
+public struct GaryxGatewayRequestToken: Hashable, Codable, Sendable {
+    public let scope: GaryxGatewayScope
+    public let activationSequence: UInt64
+
+    public init(scope: GaryxGatewayScope, activationSequence: UInt64) {
+        precondition(activationSequence > 0, "gateway activation sequence must be positive")
+        self.scope = scope
+        self.activationSequence = activationSequence
+    }
+}
+
 public enum GaryxGatewayScopeLifecycle: String, Codable, Sendable {
     case active
     case suspended

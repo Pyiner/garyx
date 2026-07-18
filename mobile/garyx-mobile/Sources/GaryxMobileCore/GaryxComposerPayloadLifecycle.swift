@@ -76,18 +76,52 @@ public struct GaryxComposerAttachment: Equatable, Codable, Sendable {
     public let stagedAssetID: GaryxStagedAssetID
     public let generation: UInt64
     public let byteCount: Int
+    public let kind: String?
+    public let name: String?
+    public let mediaType: String?
+    public let uploadedPath: String?
+    public let previewDataURL: String?
 
     public init(
         id: GaryxAttachmentID,
         stagedAssetID: GaryxStagedAssetID,
         generation: UInt64,
-        byteCount: Int
+        byteCount: Int,
+        kind: String? = nil,
+        name: String? = nil,
+        mediaType: String? = nil,
+        uploadedPath: String? = nil,
+        previewDataURL: String? = nil
     ) {
         precondition(byteCount >= 0)
         self.id = id
         self.stagedAssetID = stagedAssetID
         self.generation = generation
         self.byteCount = byteCount
+        self.kind = kind
+        self.name = name
+        self.mediaType = mediaType
+        self.uploadedPath = uploadedPath
+        self.previewDataURL = previewDataURL
+    }
+
+    public func recordingUpload(
+        kind: String,
+        name: String,
+        mediaType: String,
+        path: String
+    ) -> Self {
+        Self(
+            id: id,
+            stagedAssetID: stagedAssetID,
+            generation: generation,
+            byteCount: byteCount,
+            kind: kind,
+            name: name,
+            mediaType: mediaType,
+            uploadedPath: path,
+            previewDataURL: previewDataURL
+        )
     }
 }
 
@@ -203,6 +237,22 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
         attachments.removeValue(forKey: id)
     }
 
+    /// Starts the next editable generation after the previous payload has been
+    /// handed to the delivery transaction. The Entry identity remains stable;
+    /// empty text therefore never deletes the key or loses its per-key slot.
+    @discardableResult
+    public mutating func beginFreshGeneration(_ generation: UInt64) -> Bool {
+        guard lifecycle.phase == .active,
+              generation > currentGeneration,
+              operationKeys.isEmpty else {
+            return false
+        }
+        textByGeneration.removeAll()
+        attachments.removeAll()
+        currentGeneration = generation
+        return true
+    }
+
     public mutating func addOperation(_ key: GaryxOperationCapabilityKey) {
         operationKeys.insert(key)
     }
@@ -313,7 +363,12 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
                 id: attachment.id,
                 stagedAssetID: attachment.stagedAssetID,
                 generation: mergeGeneration,
-                byteCount: attachment.byteCount
+                byteCount: attachment.byteCount,
+                kind: attachment.kind,
+                name: attachment.name,
+                mediaType: attachment.mediaType,
+                uploadedPath: attachment.uploadedPath,
+                previewDataURL: attachment.previewDataURL
             )
             return (remapped.id, remapped)
         })
