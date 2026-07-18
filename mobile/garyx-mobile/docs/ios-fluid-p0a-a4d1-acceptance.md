@@ -53,7 +53,7 @@ A4b and A4d-2 consume this layer later.
 
 ## Adversarial recovery remediation
 
-Four cross-model adversarial passes found compound-state shapes that the
+Five cross-model adversarial passes found compound-state shapes that the
 original single-operation fixtures did not exercise. They are now closed as
 independent acceptance surfaces:
 
@@ -114,6 +114,24 @@ independent acceptance surfaces:
   the one allowed `payloadDiscarded -> scopeRevoked` transition remains
   covered. A server acknowledgement received after terminal evidence is an
   idempotent no-op rather than a phase regression.
+- Terminal delivery correlation rows now have deterministic write-time GC in
+  the same durability transaction. When the shared count or byte budget is
+  exceeded, the engine evicts the lowest `(ReservationID, DeliveryRecordID)`
+  terminal rows until both limits fit; it never selects a non-terminal
+  delivery or discard-finalization tombstone, and remains fail-closed when the
+  unprunable set alone exceeds the budget. A full 4,096-row SQLite fixture
+  proves discard recovery can make room without a permanent launch failure.
+- Discard resource settlement removes `producerDrained` and recovered-close
+  payload records for the stable lifecycle token, returns any persisted send
+  barrier to idle with all envelope/follow-up fields cleared, and removes the
+  Entry in the same transaction. The fixture uses a real `commitSend` drained
+  descendant plus a revoked-ledger recovered close, then reopens SQLite twice
+  and proves that buffered/final/barrier text cannot survive identity discard.
+  The process harness counts all three surfaces in every zero-resource
+  assertion.
+- A pre-admission retired session without a discard tombstone contributes no
+  alias release. Its discriminating same-source fixture would consume a live
+  sibling reference if the tombstone-presence guard were removed.
 - An app-hosted iOS 26.5 suite observes the required protection class after
   Foundation accepts it at the temporary copied boundary and final staged
   path. It also tampers and reopens the SQLite sidecars, then proves that the
@@ -168,7 +186,12 @@ The retained matrix covers:
   relaunch proving no final file, partial file, owner, quota, manifest, or
   cleanup tombstone remains; and
 - 500 multi-session cross-promotion discards followed by relaunch, with a
-  bounded tombstone pool and zero durable resource residue.
+  bounded tombstone pool and zero durable resource residue; and
+- a process that atomically seeds all 4,096 correlation tombstone slots plus
+  an attempted discard delivery, then dies by `SIGKILL` after commit. Two new
+  processes reopen the same SQLite/WAL files, deterministically evict the
+  oldest correlation row, preserve the 4,096 cap, and finish the discard with
+  no Entry or convergence residue.
 
 ## Deletion and wiring checklist
 
@@ -203,8 +226,8 @@ xcodebuild test -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,368 of 1,368 tests with zero failures in
-232.964 seconds; its 16 real-process durability suites passed in 225.158
+The final clean SwiftPM run passed 1,372 of 1,372 tests with zero failures in
+215.420 seconds; its 17 real-process durability suites passed in 207.257
 seconds. The generated Xcode project had zero drift and passed Debug and
 Release generic iOS Simulator builds, and the `GaryxMobile` app-hosted suite
 passed 91 of 91 tests on iPhone 17 Pro / iOS 26.5. Build warnings were
