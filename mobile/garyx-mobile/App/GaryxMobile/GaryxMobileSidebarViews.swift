@@ -6,16 +6,16 @@ enum GaryxSidebarDragAxis {
     case vertical
 }
 
-/// Root content column: the home thread list with conversation and panel
-/// pages pushed above it. Pushes originate from model navigation state; the
-/// path binding only ever receives pops (system back swipe or back buttons).
+/// Root content column owned by the UIKit route stack. Conversation and home
+/// are production route hosts; panels keep one local NavigationStack until
+/// their route-value migration in A4c.
 struct GaryxRootNavigationView: View, Equatable {
-    @ObservedObject var navigationStore: GaryxRootNavigationPathStore
+    @ObservedObject var routeStore: GaryxProductionRouteStore
     @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
+    let model: GaryxMobileModel
     let isSidebarDragActive: Bool
     let onOpenDrawer: () -> Void
-    let applyRootNavigationPath: ([GaryxMobileRootRoute]) -> Void
     let onRefreshAll: () async -> Void
     let onRefreshSidebarThreads: () async -> Void
     let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
@@ -33,7 +33,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onArchiveThread: (GaryxThreadSummary) async -> Void
 
     static func == (lhs: GaryxRootNavigationView, rhs: GaryxRootNavigationView) -> Bool {
-        lhs.navigationStore === rhs.navigationStore
+        lhs.routeStore === rhs.routeStore
             && lhs.routeNotFoundStore === rhs.routeNotFoundStore
             && lhs.homeListStore === rhs.homeListStore
             && lhs.isSidebarDragActive == rhs.isSidebarDragActive
@@ -43,34 +43,18 @@ struct GaryxRootNavigationView: View, Equatable {
         #if DEBUG
         let _ = GaryxHomeScrollPerformanceProbe.shared.markRootBody()
         #endif
-        NavigationStack(path: rootPathBinding) {
-            GaryxHomeThreadListView(
-                homeListStore: homeListStore,
-                isSidebarDragActive: isSidebarDragActive,
-                onOpenDrawer: onOpenDrawer,
-                onRefreshAll: onRefreshAll,
-                onRefreshSidebarThreads: onRefreshSidebarThreads,
-                onLoadMoreThreads: onLoadMoreThreads,
-                onRetryLoadMoreThreads: onRetryLoadMoreThreads,
-                onSelectRecentFilter: onSelectRecentFilter,
-                onStartNewChat: onStartNewChat,
-                onOpenThread: onOpenThread,
-                onTogglePinnedThread: onTogglePinnedThread,
-                onToggleFavoriteThread: onToggleFavoriteThread,
-                onUnpinThread: onUnpinThread,
-                onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
-                onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
-                onAcceptPinnedOrderDrop: onAcceptPinnedOrderDrop,
-                onCancelPinnedOrderDrag: onCancelPinnedOrderDrag,
-                onArchiveThread: onArchiveThread
-            )
-                .equatable()
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: GaryxMobileRootRoute.self) { route in
-                    GaryxRootRouteContentView(route: route)
-                        .toolbar(.hidden, for: .navigationBar)
+        GaryxProductionRouteStack(
+            store: routeStore,
+            model: model,
+            homeContent: AnyView(homeContent),
+            routeContent: { node in
+                guard case .entry(let entry) = node else {
+                    return AnyView(EmptyView())
                 }
-        }
+                return AnyView(GaryxRootRouteContentView(destination: entry.destination))
+            },
+            onOpenDrawer: onOpenDrawer
+        )
         .garyxPageBackground()
         .fullScreenCover(item: $routeNotFoundStore.selection) { state in
             GaryxFormSheet(title: state.title) {
@@ -79,24 +63,54 @@ struct GaryxRootNavigationView: View, Equatable {
         }
     }
 
-    private var rootPathBinding: Binding<[GaryxMobileRootRoute]> {
-        Binding(
-            get: { navigationStore.path },
-            set: { applyRootNavigationPath($0) }
+    private var homeContent: some View {
+        GaryxHomeThreadListView(
+            homeListStore: homeListStore,
+            isSidebarDragActive: isSidebarDragActive,
+            onOpenDrawer: onOpenDrawer,
+            onRefreshAll: onRefreshAll,
+            onRefreshSidebarThreads: onRefreshSidebarThreads,
+            onLoadMoreThreads: onLoadMoreThreads,
+            onRetryLoadMoreThreads: onRetryLoadMoreThreads,
+            onSelectRecentFilter: onSelectRecentFilter,
+            onStartNewChat: onStartNewChat,
+            onOpenThread: onOpenThread,
+            onTogglePinnedThread: onTogglePinnedThread,
+            onToggleFavoriteThread: onToggleFavoriteThread,
+            onUnpinThread: onUnpinThread,
+            onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
+            onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
+            onAcceptPinnedOrderDrop: onAcceptPinnedOrderDrop,
+            onCancelPinnedOrderDrag: onCancelPinnedOrderDrag,
+            onArchiveThread: onArchiveThread
         )
+        .equatable()
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
 private struct GaryxRootRouteContentView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let route: GaryxMobileRootRoute
+    let destination: GaryxRouteDestination
 
     var body: some View {
-        switch route {
-        case .conversation:
-            GaryxConversationView()
-        case .panel(let panel):
+        switch destination {
+        case .conversation, .conversationDraft:
+            GaryxConversationView(destination: destination)
+        case .panel(let rawPanel):
+            compatibilityPanelHost(
+                GaryxMobilePanel(rawValue: rawPanel) ?? .chat
+            )
+        case .settingsDetail:
+            compatibilityPanelHost(.settings)
+        case .workspaceDrilldown:
+            compatibilityPanelHost(.workspaceBots)
+        }
+    }
+
+    private func compatibilityPanelHost(_ panel: GaryxMobilePanel) -> some View {
+        NavigationStack {
             panelContent(for: panel)
+                .toolbar(.hidden, for: .navigationBar)
         }
     }
 
@@ -104,7 +118,9 @@ private struct GaryxRootRouteContentView: View {
     private func panelContent(for panel: GaryxMobilePanel) -> some View {
         switch panel {
         case .chat:
-            GaryxConversationView()
+            GaryxConversationView(
+                destination: .conversationDraft(draftID: "compatibility-chat")
+            )
         case .workspaces:
             GaryxWorkspacesView()
         case .automations:

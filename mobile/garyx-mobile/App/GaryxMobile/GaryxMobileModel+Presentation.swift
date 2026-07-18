@@ -258,7 +258,8 @@ extension GaryxMobileModel {
     }
 
     var canSend: Bool {
-        canSendComposerPayload(text: activeComposerDraft, attachments: composerAttachments)
+        composerPayloadCoordinator.canSend
+            && canSendComposerPayload(text: activeComposerDraft, attachments: activeComposerPayloadItems)
     }
 
     var isSelectedThreadAwaitingInitialHistory: Bool {
@@ -285,7 +286,8 @@ extension GaryxMobileModel {
     }
 
     var hasComposerPayload: Bool {
-        !activeComposerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerAttachments.isEmpty
+        !activeComposerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !activeComposerPayloadItems.isEmpty
     }
 
     func canSendComposerPayload(text: String, attachments: [GaryxMobileComposerAttachment]) -> Bool {

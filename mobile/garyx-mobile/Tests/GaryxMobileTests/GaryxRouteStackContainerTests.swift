@@ -82,6 +82,39 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         )
     }
 
+    func testHighVelocityRegrabSettleRemainsEndpointBoundedAndMonotonic() throws {
+        let harness = Harness(path: [entry(1)])
+        var commitProgress: [CGFloat] = []
+        harness.container.transitionFrameObserver = { phase, progress, _ in
+            if phase == .commitSettle {
+                commitProgress.append(progress)
+            }
+        }
+        XCTAssertTrue(harness.container.beginInteractivePop())
+        harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.30)
+        XCTAssertEqual(harness.container.endInteractivePop(logicalVelocity: 0), .cancelled)
+        harness.advance(by: 0.08)
+        _ = try XCTUnwrap(harness.container.regrabCancelSettle())
+        harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.70)
+        XCTAssertEqual(
+            harness.container.endInteractivePop(logicalVelocity: harness.width * 5),
+            .committed
+        )
+
+        let frameInterval = 1.0 / 120.0
+        for _ in 0...Int(GaryxRouteTransitionCalibration.settleCurve.settlingDuration / frameInterval) {
+            harness.advance(by: frameInterval)
+        }
+        harness.completeDisplayLinkedSettle()
+
+        XCTAssertGreaterThan(commitProgress.count, 2)
+        XCTAssertTrue(commitProgress.allSatisfy { (0...1).contains($0) })
+        XCTAssertTrue(zip(commitProgress, commitProgress.dropFirst()).allSatisfy { pair in
+            pair.1 + 0.000_1 >= pair.0
+        })
+        XCTAssertEqual(commitProgress.last, 1)
+    }
+
     func testCancelledInactiveRestoresWithoutAnnouncementAndSupersededHasNoEffects() {
         let inactive = Harness(path: [entry(1)])
         XCTAssertTrue(inactive.container.beginInteractivePop())

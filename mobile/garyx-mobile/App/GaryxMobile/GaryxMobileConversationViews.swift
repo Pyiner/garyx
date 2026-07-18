@@ -150,10 +150,13 @@ extension EnvironmentValues {
 
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxRouteContext) private var routeContext
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var isComposerFocused: Bool
+    @StateObject private var liveStore: GaryxConversationLiveStore
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
     /// the scroll-to-bottom control reads its projections.
@@ -180,6 +183,12 @@ struct GaryxConversationView: View {
     /// `Expanded` back first, then unmounts on completion.
     @State private var runtimePanelPresented = false
     @State private var runtimePanelExpanded = false
+
+    init(destination: GaryxRouteDestination) {
+        _liveStore = StateObject(
+            wrappedValue: GaryxConversationLiveStore(destination: destination)
+        )
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -252,7 +261,10 @@ struct GaryxConversationView: View {
                             .accessibilityIdentifier("new-thread-agent-unavailable")
                     }
 
-                    GaryxComposer(isFocused: $isComposerFocused)
+                    GaryxComposer(
+                        payload: model.composerPayloadCoordinator,
+                        isFocused: $isComposerFocused
+                    )
                         .disabled(model.isNewThreadAgentBindingUnavailable)
                 }
                 .frame(maxWidth: .infinity)
@@ -263,20 +275,20 @@ struct GaryxConversationView: View {
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
                 }
-                .onChange(of: model.selectedThread?.id) { _, _ in
+                .onChange(of: liveStore.routeIdentity) { _, _ in
                     setRuntimePanelVisible(false)
-                    scrollPreservationThreadId = model.selectedThread?.id
-                    rowScrollPreservationThreadId = model.selectedThread?.id
+                    scrollPreservationThreadId = liveStore.threadID
+                    rowScrollPreservationThreadId = liveStore.threadID
                     pendingHistoryPrefetchThreadId = nil
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
                 }
-                .onChange(of: model.messages) { oldValue, newValue in
+                .onChange(of: liveStore.messages(in: model)) { oldValue, newValue in
                     defer {
                         prefetchOlderHistoryIfNeeded()
                     }
-                    let threadUnchanged = model.selectedThread?.id == scrollPreservationThreadId
-                    scrollPreservationThreadId = model.selectedThread?.id
+                    let threadUnchanged = liveStore.threadID == scrollPreservationThreadId
+                    scrollPreservationThreadId = liveStore.threadID
                     let isHistoryPrepend = GaryxConversationScrollState.preservesScrollForPrependedHistory(
                         previousIds: oldValue.map(\.id),
                         currentIds: newValue.map(\.id),
@@ -290,9 +302,9 @@ struct GaryxConversationView: View {
                         )
                     }
                 }
-                .onChange(of: model.selectedThreadTurnRows().map(\.id)) { oldValue, newValue in
-                    let threadUnchanged = model.selectedThread?.id == rowScrollPreservationThreadId
-                    rowScrollPreservationThreadId = model.selectedThread?.id
+                .onChange(of: routeTurnRows.map(\.id)) { oldValue, newValue in
+                    let threadUnchanged = liveStore.threadID == rowScrollPreservationThreadId
+                    rowScrollPreservationThreadId = liveStore.threadID
                     let restore = scrollStateBox.state.renderRowsChanged(
                         previousIds: oldValue,
                         currentIds: newValue,
@@ -311,7 +323,7 @@ struct GaryxConversationView: View {
                     }
                     rowGeometryBox.retain(only: Set(newValue))
                 }
-                .onChange(of: model.showsTailThinkingIndicator) { _, _ in
+                .onChange(of: liveStore.isThinking(in: model)) { _, _ in
                     syncTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: isComposerFocused) { _, isFocused in
@@ -325,6 +337,7 @@ struct GaryxConversationView: View {
         .garyxPageBackground()
         .garyxAdaptiveTopBar {
             GaryxConversationHeader(
+                liveStore: liveStore,
                 isRuntimePanelPresented: runtimePanelPresented,
                 onToggleRuntimePanel: {
                     setRuntimePanelVisible(!runtimePanelPresented)
@@ -353,8 +366,8 @@ struct GaryxConversationView: View {
         // Refreshing the capsules list prunes a remotely-deleted capsule's cached
         // preview HTML and bumps the cache epoch, so mounted chat thumbnails
         // re-validate to "deleted".
-        .task(id: "\(model.selectedThread?.id ?? ""):\(model.selectedThreadHasCapsuleCards)") {
-            guard model.selectedThreadHasCapsuleCards else { return }
+        .task(id: "\(liveStore.routeIdentity):\(liveStore.hasCapsuleCards(in: model))") {
+            guard liveStore.hasCapsuleCards(in: model) else { return }
             await model.refreshCapsules()
         }
     }
@@ -459,24 +472,30 @@ struct GaryxConversationView: View {
                         }
                     }
 
-                let turnRows = model.selectedThreadTurnRows()
+                let turnRows = routeTurnRows
                 if turnRows.isEmpty,
-                   model.isSelectedThreadLoadingInitialHistory {
+                   liveStore.isLoadingInitialHistory(
+                       in: model,
+                       isCanonicalTop: routeContext.isCanonicalTop
+                   ) {
                     GaryxThreadHistoryLoadingView()
                         .padding(.top, 12)
                 } else if turnRows.isEmpty {
-                    if model.showsTailThinkingIndicator {
+                    if liveStore.isThinking(in: model) {
                         if showsDebouncedTailThinking {
                             GaryxThinkingLabel()
                                 .padding(.top, 96)
                                 .transition(.opacity)
                         }
-                    } else if model.selectedThread != nil {
+                    } else if liveStore.threadID != nil {
                         GaryxSelectedThreadEmptyConversationView()
                             .padding(.top, 96)
                     }
                 } else {
-                    if model.selectedThreadHasMoreRenderableHistory {
+                    if liveStore.hasMoreRenderableHistory(
+                        in: model,
+                        isCanonicalTop: routeContext.isCanonicalTop
+                    ) {
                         // Older history loads automatically as the reader nears
                         // the top (two-stage: reveal window-hidden in-memory rows
                         // first, then page the network — TASK-1751 P3). This row
@@ -507,7 +526,7 @@ struct GaryxConversationView: View {
                             .id(tailThinkingAnchorId)
                             .transition(.opacity)
                     }
-                    if let rateLimit = model.selectedThreadRateLimit {
+                    if let rateLimit = liveStore.rateLimit(in: model) {
                         GaryxRateLimitBanner(rateLimit: rateLimit) {
                             await model.send("continue")
                         }
@@ -592,27 +611,37 @@ struct GaryxConversationView: View {
         // same gesture.
         .overlay {
             if isComposerFocused {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        dismissComposerKeyboard()
-                    }
-                    .gesture(
-                        DragGesture(minimumDistance: 6, coordinateSpace: .local)
-                            .onChanged { _ in
-                                dismissComposerKeyboard()
-                            }
-                    )
+                GeometryReader { geometry in
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            dismissComposerKeyboard()
+                        }
+                        .gesture(
+                            DragGesture(minimumDistance: 6, coordinateSpace: .local)
+                                .onChanged { value in
+                                    guard !startsInLeadingNavigationEdge(
+                                        x: value.startLocation.x,
+                                        width: geometry.size.width
+                                    ) else { return }
+                                    dismissComposerKeyboard()
+                                }
+                        )
+                }
             }
         }
     }
 
     private var showsNewThreadEmptyState: Bool {
-        model.selectedThread == nil
-            && model.messages.isEmpty
-            && !model.showsTailThinkingIndicator
+        liveStore.threadID == nil
+            && liveStore.messages(in: model).isEmpty
+            && !liveStore.isThinking(in: model)
             && !model.isLoadingSelectedThreadHistory
             && !model.isSelectedThreadAwaitingInitialHistory
+    }
+
+    private var routeTurnRows: [GaryxMobileTurnRow] {
+        liveStore.turnRows(in: model, isCanonicalTop: routeContext.isCanonicalTop)
     }
 
     private var conversationBottomChromeClearance: CGFloat {
@@ -629,7 +658,7 @@ struct GaryxConversationView: View {
         updateScrollState(proxy: proxy) {
             $0.metricsChanged(
                 metrics,
-                hasTailContent: !model.messages.isEmpty || showsDebouncedTailThinking
+                hasTailContent: !liveStore.messages(in: model).isEmpty || showsDebouncedTailThinking
             )
         }
         prefetchOlderHistoryIfNeeded()
@@ -750,7 +779,7 @@ struct GaryxConversationView: View {
     private func refreshTailThinkingPresentation(proxy: ScrollViewProxy, generation: Int) {
         let now = Date().timeIntervalSinceReferenceDate
         let visible = tailThinkingPresentationState.update(
-            isThinking: model.showsTailThinkingIndicator,
+            isThinking: liveStore.isThinking(in: model),
             now: now
         )
         setDebouncedTailThinking(visible, proxy: proxy)
@@ -849,10 +878,9 @@ struct GaryxConversationView: View {
     }
 
     private var conversationScrollIdentity: String {
-        // Session token, not thread id: draft -> promoted-thread keeps one
-        // token so the transcript view survives the first send instead of
-        // being torn down and rebuilt (whole-list flash).
-        model.conversationSessionToken
+        // Occurrence identity survives draft promotion because promotion only
+        // changes the route payload revision, never the host identity.
+        routeContext.occurrenceID?.rawValue ?? liveStore.routeIdentity
     }
 
     private var conversationBottomAnchorId: String {
@@ -874,13 +902,18 @@ struct GaryxConversationView: View {
     }
 
     private func prefetchOlderHistoryIfNeeded() {
-        guard let threadId = model.selectedThread?.id,
+        guard routeContext.isCanonicalTop,
+              let threadId = liveStore.threadID,
+              model.selectedThread?.id == threadId,
               scrollStateBox.state.shouldPrefetchOlderHistory(
                 // Reaching the top of the *rendered* content (the window floor)
                 // reveals window-hidden rows first, then pages the network — so
                 // the gate fires whenever more renderable history remains
                 // (TASK-1751 P3).
-                hasMoreHistoryBefore: model.selectedThreadHasMoreRenderableHistory,
+                hasMoreHistoryBefore: liveStore.hasMoreRenderableHistory(
+                    in: model,
+                    isCanonicalTop: true
+                ),
                 isLoadingOlderHistory: model.isLoadingOlderThreadHistory,
                 hasPendingPrefetch: pendingHistoryPrefetchThreadId == threadId
               ) else {
@@ -902,10 +935,16 @@ struct GaryxConversationView: View {
         isComposerFocused = false
         garyxDismissKeyboard()
     }
+
+    private func startsInLeadingNavigationEdge(x: CGFloat, width: CGFloat) -> Bool {
+        let leadingInset = layoutDirection == .rightToLeft ? width - x : x
+        return leadingInset <= GaryxRouteTransitionCalibration.edgeZoneWidth
+    }
 }
 
 struct GaryxConversationHeader: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @ObservedObject var liveStore: GaryxConversationLiveStore
     let isRuntimePanelPresented: Bool
     let onToggleRuntimePanel: () -> Void
     let onDismissRuntimePanel: () -> Void
@@ -924,11 +963,12 @@ struct GaryxConversationHeader: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back")
 
-                if model.selectedThread == nil {
+                if liveStore.threadID == nil {
                     GaryxHeaderAgentControl()
                         .layoutPriority(1)
                 } else {
                     GaryxThreadRuntimeHeaderControl(
+                        routeSummary: liveStore.summary(in: model),
                         isHidden: isRuntimePanelPresented,
                         onToggle: onToggleRuntimePanel
                     )
@@ -937,7 +977,7 @@ struct GaryxConversationHeader: View {
 
                 Spacer(minLength: 0)
 
-                if let selectedThread = model.selectedThread {
+                if let selectedThread = liveStore.summary(in: model) {
                     Menu {
                         Section("Bot") {
                             Button {
@@ -972,7 +1012,7 @@ struct GaryxConversationHeader: View {
                             Task { await model.deleteSelectedThread() }
                         }
                     } label: {
-                        if model.isSelectedThreadLoadingInitialHistory {
+                        if liveStore.isLoadingInitialHistory(in: model, isCanonicalTop: true) {
                             GaryxToolbarIcon {
                                 GaryxInkSpinner()
                             }
@@ -982,7 +1022,9 @@ struct GaryxConversationHeader: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(
-                        model.isSelectedThreadLoadingInitialHistory ? "Loading thread" : "Thread actions"
+                        liveStore.isLoadingInitialHistory(in: model, isCanonicalTop: true)
+                            ? "Loading thread"
+                            : "Thread actions"
                     )
                 }
             }
@@ -1006,7 +1048,7 @@ struct GaryxConversationHeader: View {
                 GaryxThreadBotBindingSheet(threadId: botBindingThreadId)
             }
         }
-        .onChange(of: model.selectedThread?.id) { _, _ in
+        .onChange(of: liveStore.routeIdentity) { _, _ in
             dismissThreadPresentations()
         }
         .onChange(of: model.sidebarVisible) { _, visible in
@@ -1036,7 +1078,7 @@ struct GaryxConversationHeader: View {
     }
 
     private func openRenamePrompt() {
-        renameDraftTitle = model.selectedThread?.title ?? model.draftThreadTitle
+        renameDraftTitle = liveStore.summary(in: model)?.title ?? model.draftThreadTitle
         showsRenamePrompt = true
     }
 
@@ -1056,13 +1098,14 @@ struct GaryxConversationHeader: View {
 
 private struct GaryxThreadRuntimeHeaderControl: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    let routeSummary: GaryxThreadSummary?
     /// While the morph surface is presented it renders this control's twin
     /// at the same anchor rect, so the in-bar original hides without
     /// leaving layout (keeping the anchor alive for the collapse morph).
     let isHidden: Bool
     let onToggle: () -> Void
 
-    private var selectedThread: GaryxThreadSummary? { model.selectedThread }
+    private var selectedThread: GaryxThreadSummary? { routeSummary }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
     private var title: String { selectedThread?.title ?? model.draftThreadTitle }
 

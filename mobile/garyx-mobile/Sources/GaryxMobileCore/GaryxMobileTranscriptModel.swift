@@ -424,7 +424,7 @@ struct GaryxChatImageUploadBatch: Equatable, Sendable {
     /// The gateway writes and returns the batch in request order. Reject a
     /// partial response so the composer never silently drops one selected
     /// photo while presenting the rest as a successful upload.
-    func composerAttachments(
+    func composerPayloadItems(
         from uploadedFiles: [GaryxUploadedChatAttachment],
         makeID: (Int, GaryxUploadedChatAttachment) -> String = { _, file in
             "\(file.path)-\(UUID().uuidString)"

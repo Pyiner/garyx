@@ -331,13 +331,27 @@ extension GaryxMobileModel {
     }
 
     func setNewThreadAgentTarget(_ id: String) {
+        let previousKey = selectedThread == nil ? newThreadComposerPayloadKey : nil
         setPendingNewThreadAgentTarget(id)
         // A model/thinking override only makes sense for the agent it was picked for.
         clearNewThreadModelOverride()
         // The composer's target changed; bind to that target's own draft buffer so
         // one new-thread target's text is never shown or sent under another.
         if selectedThread == nil {
-            switchComposerDraft(to: newThreadComposerDraftKey)
+            let nextKey = newThreadComposerPayloadKey
+            if case .some(.draft(let oldDraftID)) = previousKey,
+               case .draft(let newDraftID) = nextKey,
+               productionRouteStore.replaceVisibleDraftKey(
+                   oldDraftID: oldDraftID,
+                   newDraftID: newDraftID
+               ) {
+                if !productionRouteStore.isAttached {
+                    applyCanonicalRouteProjection(productionRouteStore.path)
+                    activateComposerPayload(for: nextKey)
+                }
+            } else if !productionRouteStore.isAttached {
+                activateComposerPayload(for: nextKey)
+            }
         }
     }
 
@@ -432,7 +446,7 @@ extension GaryxMobileModel {
     func refreshWorkspaces() async {
         guard hasGatewaySettings else { return }
         guard workspaceRefreshRequestId == nil else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let requestId = UUID()
         workspaceRefreshRequestId = requestId
         beginWorkspaceCatalogRefresh()
@@ -450,21 +464,21 @@ extension GaryxMobileModel {
         }
     }
 
-    func isCurrentWorkspaceRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
-        runtimeGeneration == gatewayRuntimeGeneration && workspaceRefreshRequestId == requestId
+    func isCurrentWorkspaceRefresh(_ requestId: UUID, runtimeGeneration: GaryxGatewayRequestToken) -> Bool {
+        runtimeGeneration == gatewayRequestToken && workspaceRefreshRequestId == requestId
     }
 
     @discardableResult
     func addUserWorkspacePath(_ path: String) async -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let workspaces = try await client().addWorkspace(path: trimmed, name: trimmed.garyxLastPathComponent)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            guard runtimeGeneration == gatewayRequestToken else { return nil }
             applyWorkspaceSummaries(workspaces, persist: true)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            guard runtimeGeneration == gatewayRequestToken else { return nil }
             lastError = error.localizedDescription
             return nil
         }
@@ -539,12 +553,12 @@ extension GaryxMobileModel {
             identifier: trimmedId,
             stylePrompt: stylePrompt
         )
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             try Task.checkCancellation()
             let generated = try await client().generateAvatar(prompt: prompt)
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             let avatarDataUrl = generated.avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !avatarDataUrl.isEmpty else {
                 return .failure(GaryxAvatarGenerationFailure(category: .unusable))
@@ -558,7 +572,7 @@ extension GaryxMobileModel {
                 return .failure(GaryxAvatarGenerationFailure(category: .unusable))
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return GaryxAvatarGenerationOutcome.from(error: error)
         }
     }
@@ -568,28 +582,28 @@ extension GaryxMobileModel {
         guard !id.isEmpty else {
             return .failed(message: "Agent ID is required.")
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let agent = try await client().getAgent(agentId: id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return .loaded(agent)
         } catch let error as GaryxGatewayError {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             if case .httpStatus(404, _, _) = error {
                 return .deleted
             }
             return .failed(message: displayMessage(for: error))
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return .failed(message: displayMessage(for: error))
         }
     }
 
     func createAgent(_ request: GaryxCustomAgentRequest) async -> GaryxCustomAgentMutationResult {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let agent = try await client().createAgent(request)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             await storeAvatarIfPresent(
                 id: agent.id,
                 dataUrl: agent.avatarDataUrl.isEmpty ? request.avatarDataUrl ?? "" : agent.avatarDataUrl,
@@ -599,12 +613,12 @@ extension GaryxMobileModel {
             await refreshAgentTargets()
             return .saved(agent)
         } catch let error as GaryxGatewayError {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return .failed(
                 GaryxCustomAgentDraftRules.mutationFailure(for: error, mode: .create)
             )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return .failed(.other(message: displayMessage(for: error)))
         }
     }
@@ -621,13 +635,13 @@ extension GaryxMobileModel {
             agentId: immutableAgentId,
             expectedUpdatedAt: request.expectedUpdatedAt ?? ""
         )
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().updateAgent(
                 agentId: immutableAgentId,
                 request: request
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             let requestedAvatar = request.avatarDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
             let didClearAvatar = requestedAvatar != nil && requestedAvatar?.isEmpty == true
             let didStoreAvatar: Bool
@@ -647,12 +661,12 @@ extension GaryxMobileModel {
             replaceAgent(updated, replacing: immutableAgentId)
             return .saved(updated)
         } catch let error as GaryxGatewayError {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return .failed(
                 GaryxCustomAgentDraftRules.mutationFailure(for: error, mode: mode)
             )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            guard runtimeGeneration == gatewayRequestToken else { return .superseded }
             return .failed(.other(message: displayMessage(for: error)))
         }
     }
@@ -660,64 +674,64 @@ extension GaryxMobileModel {
 
     func deleteAgent(_ agent: GaryxAgentSummary) async {
         guard !agent.builtIn else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteAgent(agentId: agent.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             await removeAvatar(id: agent.id)
             agents.removeAll { $0.id == agent.id }
             persistCatalogCacheSnapshot()
             await refreshAgentTargets()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func setAgentEnabled(_ agent: GaryxAgentSummary, enabled: Bool) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().setAgentEnabled(agentId: agent.id, enabled: enabled)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             replaceAgent(updated)
             await refreshAgentTargets()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func setDefaultAgent(_ agent: GaryxAgentSummary) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().setDefaultAgent(agentId: agent.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             // The response is one agent row; refresh the catalog so both raw and
             // effective defaults move together from the gateway truth source.
             await refreshAgentTargets()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func loadProviderModels(
         providerType: String,
-        runtimeGeneration: UUID? = nil,
+        runtimeGeneration: GaryxGatewayRequestToken? = nil,
         remoteStateRefreshRequestId: UUID? = nil
     ) async {
         let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !provider.isEmpty else { return }
-        let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
+        let observedGeneration = runtimeGeneration ?? gatewayRequestToken
         do {
             let models = try await client().providerModels(providerType: provider)
-            guard observedGeneration == gatewayRuntimeGeneration,
+            guard observedGeneration == gatewayRequestToken,
                   isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
                 return
             }
             providerModelsByType[provider] = models
         } catch {
-            guard observedGeneration == gatewayRuntimeGeneration,
+            guard observedGeneration == gatewayRequestToken,
                   isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
                 return
             }
@@ -730,14 +744,14 @@ extension GaryxMobileModel {
     /// of a possibly cache-restored projection (the mobile-ui "fetch
     /// authoritative data before saving" contract).
     func refreshAuthoritativeGatewaySettings() async -> Bool {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let settings = try await client().gatewaySettings()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             gatewaySettingsDocument = settings
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -749,7 +763,7 @@ extension GaryxMobileModel {
     ) async -> Bool {
         let nextModel = request.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextReasoningEffort = request.reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             var patch: [String: GaryxJSONValue] = [:]
             GaryxModelProviderDefaults.update(
@@ -760,7 +774,7 @@ extension GaryxMobileModel {
                 serviceTier: request.serviceTier
             )
             _ = try await client().saveGatewaySettings(patch, merge: true)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             GaryxModelProviderDefaults.update(
                 settings: &gatewaySettingsDocument,
                 provider: provider,
@@ -773,7 +787,7 @@ extension GaryxMobileModel {
             await refreshRemoteState()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -806,7 +820,7 @@ extension GaryxMobileModel {
         let path = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return }
         let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let gateway = try client()
             async let listingResult = gateway.listWorkspaceFiles(
@@ -850,7 +864,7 @@ extension GaryxMobileModel {
         }
         let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let preview = try await client().previewWorkspaceFile(
                 workspaceDir: workspace,
@@ -957,7 +971,7 @@ extension GaryxMobileModel {
         workspaceBotsDrilldown = nil
         openWorkspaceFilesPanel(source: source)
 
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let gateway = try client()
             async let listingResult: GaryxWorkspaceFileListing? = try? gateway.listWorkspaceFiles(
@@ -1027,7 +1041,7 @@ extension GaryxMobileModel {
         let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !workspace.isEmpty, !urls.isEmpty else { return }
         let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         isUploadingWorkspaceFiles = true
         workspaceUploadStatus = nil
         defer { isUploadingWorkspaceFiles = false }
@@ -1104,15 +1118,15 @@ extension GaryxMobileModel {
     func isCurrentWorkspaceRequest(
         workspace: String,
         directory: String,
-        runtimeGeneration: UUID
+        runtimeGeneration: GaryxGatewayRequestToken
     ) -> Bool {
-        runtimeGeneration == gatewayRuntimeGeneration
+        runtimeGeneration == gatewayRequestToken
             && selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines) == workspace
             && selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines) == directory
     }
 
     func refreshProviderModelsForVisibleAgents(
-        runtimeGeneration: UUID? = nil,
+        runtimeGeneration: GaryxGatewayRequestToken? = nil,
         remoteStateRefreshRequestId: UUID? = nil
     ) async {
         let providerTypes = Set(agents.map(\.providerType).filter { !$0.isEmpty })

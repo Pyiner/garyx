@@ -5,6 +5,61 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
+    /// The UIKit route path is the navigation truth. Legacy panel state and
+    /// selectedThread remain compatibility projections for existing feature
+    /// views until their A4c route-value migration.
+    func applyCanonicalRouteProjection(_ path: [GaryxRouteEntry]) {
+        var projectedNavigation = GaryxMobileNavigationState()
+        for (index, entry) in path.enumerated() {
+            let source: GaryxMobilePanelOpenSource = index == 0 ? .replace : .current
+            switch entry.destination {
+            case .conversation, .conversationDraft:
+                projectedNavigation.openConversation(source: source)
+            case .panel(let rawPanel):
+                if let panel = GaryxMobilePanel(rawValue: rawPanel) {
+                    projectedNavigation.openPanel(panel, source: source)
+                }
+            case .settingsDetail(let rawTab):
+                projectedNavigation.openSettings(
+                    tab: GaryxMobileSettingsTab(rawValue: rawTab) ?? .manage,
+                    source: source
+                )
+            case .workspaceDrilldown:
+                projectedNavigation.openPanel(.workspaceBots, source: source)
+            }
+        }
+        if navigationState != projectedNavigation {
+            navigationState = projectedNavigation
+        }
+
+        guard let top = path.last else {
+            stopSelectedThreadStreamForHome()
+            cancelSelectedThreadReconcileLoop()
+            selectedThread = nil
+            return
+        }
+        switch top.destination {
+        case .conversation(let threadID):
+            let summary = cachedThreadSummary(for: threadID)
+                ?? Self.placeholderThreadSummary(id: threadID)
+            applySelectedThreadRouteProjection(summary)
+            ensureSelectedThreadStreamForVisibleConversation()
+        case .conversationDraft:
+            if selectedThread != nil {
+                resetSelectedTurnRowsWindow()
+            }
+            stopSelectedThreadStream()
+            cancelSelectedThreadReconcileLoop()
+            selectedThread = nil
+            messages = []
+            draftThreadTitle = ""
+        case .panel, .settingsDetail, .workspaceDrilldown:
+            stopSelectedThreadStreamForHome()
+            cancelSelectedThreadReconcileLoop()
+            selectedThread = nil
+        }
+    }
+
     var activePanel: GaryxMobilePanel {
         get { navigationState.activePanel }
         set {
@@ -54,13 +109,11 @@ extension GaryxMobileModel {
     }
 
     func popToHome() {
-        guard navigationState.presentsContent else { return }
+        guard !productionRouteStore.path.isEmpty else { return }
         invalidatePendingThreadOpen()
         stopSelectedThreadStreamForHome()
         cancelSelectedThreadReconcileLoop()
-        var nextState = navigationState
-        nextState.popToHome()
-        navigationState = nextState
+        productionRouteStore.popToHome()
     }
 
     func setSidebarVisible(_ visible: Bool, animated: Bool = true) {
@@ -80,25 +133,30 @@ extension GaryxMobileModel {
         _ panel: GaryxMobilePanel,
         invalidatesPendingThreadOpen: Bool = true
     ) {
-        guard navigationState.activePanel != panel else {
-            // Same panel, but it may not be presented above the home list
-            // yet (for example reopening the conversation after a pop).
-            if !navigationState.presentsContent {
-                var nextState = navigationState
-                nextState.setActivePanel(panel)
-                navigationState = nextState
-                if panel == .chat {
-                    ensureSelectedThreadStreamForVisibleConversation()
-                }
-            }
-            return
-        }
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
-        var nextState = navigationState
-        nextState.setActivePanel(panel)
-        navigationState = nextState
+        let resolved = panel == .bots || panel == .workspaces ? GaryxMobilePanel.workspaceBots : panel
+        let destination: GaryxRouteDestination
+        if resolved == .chat {
+            destination = selectedThread.map {
+                .conversation(threadID: $0.id)
+            } ?? .conversationDraft(draftID: newThreadComposerPayloadKey.draftRouteID)
+        } else if resolved == .settings {
+            destination = .settingsDetail(activeSettingsTab.rawValue)
+        } else {
+            destination = .panel(resolved.rawValue)
+        }
+
+        if productionRouteStore.path.last?.destination != destination {
+            _ = productionRouteStore.open(destination, source: .replace)
+        }
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
+        if resolved == .chat {
+            ensureSelectedThreadStreamForVisibleConversation()
+        }
     }
 
     func openConversation(
@@ -108,26 +166,33 @@ extension GaryxMobileModel {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
-        var nextState = navigationState
-        nextState.openConversation(source: source)
-        navigationState = nextState
+        let destination: GaryxRouteDestination = selectedThread.map {
+            .conversation(threadID: $0.id)
+        } ?? .conversationDraft(draftID: newThreadComposerPayloadKey.draftRouteID)
+        _ = productionRouteStore.open(destination, source: source)
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
         ensureSelectedThreadStreamForVisibleConversation()
         setSidebarVisible(false)
     }
 
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
         invalidatePendingThreadOpen()
-        var nextState = navigationState
-        nextState.openPanel(panel, source: source)
-        navigationState = nextState
+        let resolved = panel == .bots || panel == .workspaces ? GaryxMobilePanel.workspaceBots : panel
+        _ = productionRouteStore.open(.panel(resolved.rawValue), source: source)
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
         setSidebarVisible(false)
     }
 
     func openSettings(tab: GaryxMobileSettingsTab = .manage, source: GaryxMobilePanelOpenSource = .sidebar) {
         invalidatePendingThreadOpen()
-        var nextState = navigationState
-        nextState.openSettings(tab: tab, source: source)
-        navigationState = nextState
+        _ = productionRouteStore.open(.settingsDetail(tab.rawValue), source: source)
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
         setSidebarVisible(false)
     }
 
@@ -828,4 +893,15 @@ extension GaryxMobileModel {
         try? JSONDecoder().decode(type, from: Data(json.utf8))
     }
     #endif
+}
+
+extension GaryxComposerKey {
+    var draftRouteID: String {
+        switch self {
+        case .draft(let draftID):
+            draftID
+        case .thread(let threadID):
+            "new-thread:\(threadID)"
+        }
+    }
 }

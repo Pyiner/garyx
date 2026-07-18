@@ -50,7 +50,6 @@ private enum GaryxComposerLayout {
     static let workspaceModeRowFill = Color(.systemBackground).opacity(0.72)
     static let workspaceModeRowStroke = Color.primary.opacity(0.065)
     static let workspaceModeSelectedStroke = Color.primary.opacity(0.11)
-    static let draftFieldIdentity = "garyx-composer-draft-field"
 }
 
 private enum GaryxComposerCameraAlert: String, Identifiable {
@@ -71,16 +70,9 @@ private struct GaryxCapturedCameraImage: @unchecked Sendable {
 struct GaryxComposer: View {
     @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxRouteContext) private var routeContext
+    @ObservedObject var payload: GaryxComposerPayloadCoordinator
     let isFocused: FocusState<Bool>.Binding
-    @State private var draftText = ""
-    @State private var draftContextVersion = 0
-    /// Identity generation for the draft field. While a CJK keyboard still
-    /// reports an input session, SwiftUI can skip pushing a programmatic
-    /// clear into the focused vertical-axis `TextField`, leaving the sent
-    /// text visible until the next layout pass. Re-assigning the same empty
-    /// string cannot dirty state, so the only deterministic flush is
-    /// recreating the field when the draft context resets.
-    @State private var draftFieldGeneration = 0
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
@@ -91,11 +83,16 @@ struct GaryxComposer: View {
     @State private var isAddingAttachments = false
 
     private var hasLocalPayload: Bool {
-        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.composerAttachments.isEmpty
+        !payload.currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !model.activeComposerPayloadItems.isEmpty
     }
 
     private var canSendLocalPayload: Bool {
-        model.canSendComposerPayload(text: draftText, attachments: model.composerAttachments)
+        payload.canSend
+            && model.canSendComposerPayload(
+                text: payload.currentText,
+                attachments: model.activeComposerPayloadItems
+            )
     }
 
     /// Composer affordances as a pure function of the thread's real run state +
@@ -131,7 +128,10 @@ struct GaryxComposer: View {
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)
-        .animation(.spring(response: 0.24, dampingFraction: 0.88), value: model.composerAttachments)
+        .animation(
+            .spring(response: 0.24, dampingFraction: 0.88),
+            value: model.activeComposerPayloadItems
+        )
         .sheet(isPresented: $showsWorkspaceModeSheet) {
             GaryxComposerWorkspaceModeSheet(
                 selectedMode: model.newThreadUsesWorktree ? "worktree" : "local",
@@ -203,33 +203,9 @@ struct GaryxComposer: View {
             }
         }
         .onAppear {
-            draftContextVersion = model.composerContextVersion
-            draftText = model.activeComposerDraft
             #if DEBUG
             presentDebugWorkspaceModeSheetIfNeeded()
             #endif
-        }
-        .onChange(of: model.composerContextVersion) { _, newValue in
-            draftContextVersion = newValue
-            draftText = model.activeComposerDraft
-            let wasFocused = isFocused.wrappedValue
-            draftFieldGeneration &+= 1
-            if wasFocused {
-                // The recreated field starts unfocused; re-attach the
-                // keyboard on the next runloop so sending keeps the
-                // composer ready for a follow-up message.
-                DispatchQueue.main.async {
-                    isFocused.wrappedValue = true
-                }
-            }
-        }
-        .onChange(of: draftText) { _, newValue in
-            // Bind the live text to the thread it is being typed in, so a thread
-            // switch preserves it. The store is not @Published, so this is cheap
-            // per keystroke. Skip the brief window before a context reload so the
-            // outgoing thread's text is never written onto the incoming one.
-            guard draftContextVersion == model.composerContextVersion else { return }
-            model.setComposerDraft(newValue)
         }
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
@@ -264,10 +240,6 @@ struct GaryxComposer: View {
             presentDebugWorkspaceModeSheetIfNeeded()
         }
         #endif
-        .onDisappear {
-            guard draftContextVersion == model.composerContextVersion else { return }
-            model.setComposerDraft(draftText)
-        }
     }
 
     private var composerStack: some View {
@@ -325,8 +297,8 @@ struct GaryxComposer: View {
 
     private var composerCardContent: some View {
         VStack(spacing: 0) {
-            if !model.composerAttachments.isEmpty {
-                composerAttachmentsPreview
+            if !model.activeComposerPayloadItems.isEmpty {
+                composerPayloadItemsPreview
             }
 
             composerInput
@@ -420,10 +392,10 @@ struct GaryxComposer: View {
     }
     #endif
 
-    private var composerAttachmentsPreview: some View {
+    private var composerPayloadItemsPreview: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(model.composerAttachments) { attachment in
+                ForEach(model.activeComposerPayloadItems) { attachment in
                     GaryxAttachmentChip(attachment: attachment)
                 }
             }
@@ -435,7 +407,7 @@ struct GaryxComposer: View {
 
     private var composerInput: some View {
         ZStack(alignment: .topLeading) {
-            if draftText.isEmpty {
+            if payload.currentText.isEmpty {
                 Text(placeholderText)
                     .font(GaryxFont.subheadline())
                     .foregroundStyle(Color(.placeholderText))
@@ -443,20 +415,39 @@ struct GaryxComposer: View {
                     .allowsHitTesting(false)
             }
 
-            TextField("", text: $draftText, axis: .vertical)
-                .id("\(GaryxComposerLayout.draftFieldIdentity)-\(draftFieldGeneration)")
+            if let configuration = payload.inputConfiguration(),
+               routeContext.composerKey.map({ $0 == configuration.composerKey }) ?? true {
+                GaryxComposerUIKitField(
+                    occurrenceID: composerOccurrenceID,
+                    configuration: configuration,
+                    isFocused: isFocused,
+                    onRegister: { adapter in
+                        payload.register(
+                            adapter,
+                            isCanonicalTop: routeContext.isCanonicalTop
+                        )
+                    },
+                    onUnregister: payload.unregister,
+                    onOrderedText: payload.acceptText,
+                    onProducerTerminal: { producer in
+                        payload.producerReachedTerminal(
+                            producer,
+                            occurrenceID: composerOccurrenceID
+                        )
+                    },
+                    onSubmit: {
+                        Task { await sendLocalDraft() }
+                    }
+                )
                 .font(GaryxFont.subheadline())
-                .foregroundStyle(.primary)
-                .focused(isFocused)
-                .lineLimit(1...4)
-                .submitLabel(.send)
-                .onSubmit {
-                    Task { await sendLocalDraft() }
-                }
+            }
         }
         .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.inputMinHeight, alignment: .topLeading)
         .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
-        .padding(.top, model.composerAttachments.isEmpty ? GaryxComposerLayout.inputTopPadding : 6)
+        .padding(
+            .top,
+            model.activeComposerPayloadItems.isEmpty ? GaryxComposerLayout.inputTopPadding : 6
+        )
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -465,6 +456,11 @@ struct GaryxComposer: View {
             guard isEnabled else { return }
             isFocused.wrappedValue = true
         }
+    }
+
+    private var composerOccurrenceID: GaryxRouteInstanceID {
+        routeContext.occurrenceID
+            ?? GaryxRouteInstanceID(rawValue: "transitional-composer-host")
     }
 
     private var placeholderText: String {
@@ -623,19 +619,13 @@ struct GaryxComposer: View {
 
     private func insertSlashCommand(_ command: GaryxSlashCommand) {
         let normalizedName = command.name.hasPrefix("/") ? command.name : "/\(command.name)"
-        draftText = normalizedName + " "
-        model.setComposerDraft(draftText)
+        payload.replaceLiveText(normalizedName + " ")
         isFocused.wrappedValue = true
     }
 
     private func sendLocalDraft() async {
         guard canSendLocalPayload else { return }
-        let text = draftText
-        draftText = ""
-        let sent = await model.sendDraft(text: text)
-        if !sent {
-            draftText = text
-        }
+        _ = await model.sendDraft()
     }
 
     private func attachPhotos(_ items: [PhotosPickerItem]) async {
@@ -1119,7 +1109,7 @@ struct GaryxAttachmentChip: View {
                 }
 
             Button {
-                model.removeComposerAttachment(attachment)
+                model.removeComposerPayloadItem(attachment)
             } label: {
                 Image(systemName: "xmark")
                     .font(GaryxFont.system(size: 9, weight: .bold))
@@ -1141,7 +1131,7 @@ struct GaryxAttachmentChip: View {
                 .font(GaryxFont.caption(weight: .semibold))
                 .lineLimit(1)
             Button {
-                model.removeComposerAttachment(attachment)
+                model.removeComposerPayloadItem(attachment)
             } label: {
                 Image(systemName: "xmark")
                     .font(GaryxFont.caption(weight: .bold))

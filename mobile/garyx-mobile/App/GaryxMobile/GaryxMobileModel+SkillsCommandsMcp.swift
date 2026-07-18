@@ -10,7 +10,7 @@ extension GaryxMobileModel {
         let description = draftSkillDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = draftSkillBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, !name.isEmpty else { return false }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let skill = try await client().createSkill(
                 GaryxCreateSkillRequest(
@@ -20,7 +20,7 @@ extension GaryxMobileModel {
                     body: body.isEmpty ? "" : body
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             draftSkillId = ""
             draftSkillName = ""
             draftSkillDescription = ""
@@ -29,7 +29,7 @@ extension GaryxMobileModel {
             persistCatalogCacheSnapshot()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -37,59 +37,59 @@ extension GaryxMobileModel {
 
     @discardableResult
     func toggleSkill(_ skill: GaryxSkillSummary) async -> Bool {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().toggleSkill(skillId: skill.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             replaceSkill(updated)
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
     }
 
     func deleteSkill(_ skill: GaryxSkillSummary) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteSkill(skillId: skill.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             skills.removeAll { $0.id == skill.id }
             if selectedSkillEditor?.skill.id == skill.id {
                 closeSkillDetail()
             }
             persistCatalogCacheSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func updateSkill(_ skill: GaryxSkillSummary, name: String, description: String) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().updateSkill(
                 skillId: skill.id,
                 request: GaryxUpdateSkillRequest(name: name, description: description)
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             replaceSkill(updated)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func openSkillEditor(_ skill: GaryxSkillSummary, selecting requestedPath: String? = nil) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let editorRequestId = UUID()
         skillEditorLoadRequestId = editorRequestId
         skillFileLoadRequestId = nil
         do {
             let gateway = try client()
             let editor = try await gateway.skillEditor(skillId: skill.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   skillEditorLoadRequestId == editorRequestId else { return }
             selectedSkillEditor = editor
             selectedSkillDocument = nil
@@ -104,37 +104,37 @@ extension GaryxMobileModel {
             skillFileLoadRequestId = fileRequestId
             do {
                 let document = try await gateway.readSkillFile(skillId: skill.id, path: preferredPath)
-                guard runtimeGeneration == gatewayRuntimeGeneration,
+                guard runtimeGeneration == gatewayRequestToken,
                       skillEditorLoadRequestId == editorRequestId,
                       skillFileLoadRequestId == fileRequestId,
                       selectedSkillEditor?.skill.id == skill.id else { return }
                 selectedSkillDocument = document
             } catch {
-                guard runtimeGeneration == gatewayRuntimeGeneration,
+                guard runtimeGeneration == gatewayRequestToken,
                       skillEditorLoadRequestId == editorRequestId,
                       skillFileLoadRequestId == fileRequestId,
                       selectedSkillEditor?.skill.id == skill.id else { return }
                 lastError = displayMessage(for: error)
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   skillEditorLoadRequestId == editorRequestId else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func openSkillFile(skillId: String, path: String) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let fileRequestId = UUID()
         skillFileLoadRequestId = fileRequestId
         do {
             let document = try await client().readSkillFile(skillId: skillId, path: path)
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   skillFileLoadRequestId == fileRequestId,
                   selectedSkillEditor?.skill.id == skillId else { return }
             selectedSkillDocument = document
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   skillFileLoadRequestId == fileRequestId,
                   selectedSkillEditor?.skill.id == skillId else { return }
             lastError = displayMessage(for: error)
@@ -171,12 +171,12 @@ extension GaryxMobileModel {
         let description = draftSlashDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = draftSlashPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !description.isEmpty, !prompt.isEmpty else { return false }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let command = try await client().createSlashCommand(
                 GaryxSlashCommandRequest(name: name, description: description, prompt: prompt)
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             draftSlashName = ""
             draftSlashDescription = ""
             draftSlashPrompt = ""
@@ -185,21 +185,21 @@ extension GaryxMobileModel {
             persistCatalogCacheSnapshot()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
     }
 
     func deleteSlashCommand(_ command: GaryxSlashCommand) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteSlashCommand(name: command.name)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             slashCommands.removeAll { $0.name == command.name }
             persistCatalogCacheSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -209,7 +209,7 @@ extension GaryxMobileModel {
         let nextDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty, !nextDescription.isEmpty else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().updateSlashCommand(
                 currentName: command.name,
@@ -219,10 +219,10 @@ extension GaryxMobileModel {
                     prompt: nextPrompt.isEmpty ? nil : nextPrompt
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             replaceSlashCommand(updated, previousName: command.name)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -232,7 +232,7 @@ extension GaryxMobileModel {
         let command = draftMcpCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         let url = draftMcpUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !command.isEmpty || !url.isEmpty else { return false }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let request = GaryxMcpServerRequest(
                 name: name,
@@ -246,7 +246,7 @@ extension GaryxMobileModel {
                 headers: keyValueDictionary(from: draftMcpHeaders)
             )
             let server = try await client().createMcpServer(request)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             draftMcpName = ""
             draftMcpCommand = ""
             draftMcpArgs = ""
@@ -259,33 +259,33 @@ extension GaryxMobileModel {
             persistCatalogCacheSnapshot()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
     }
 
     func toggleMcpServer(_ server: GaryxMcpServer) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().toggleMcpServer(name: server.name, enabled: !server.enabled)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             replaceMcpServer(updated)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func deleteMcpServer(_ server: GaryxMcpServer) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteMcpServer(name: server.name)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             mcpServers.removeAll { $0.name == server.name }
             persistCatalogCacheSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -304,12 +304,12 @@ extension GaryxMobileModel {
         let nextCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextUrl = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty, !nextCommand.isEmpty || !nextUrl.isEmpty else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             var baseServer = server
             if catalogSnapshotRestored {
                 let latestServers = try await client().listMcpServers()
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard runtimeGeneration == gatewayRequestToken else { return }
                 guard let latestServer = latestServers.first(where: { $0.name == server.name }) else {
                     lastError = "MCP server details are still loading. Try again after refresh."
                     return
@@ -339,10 +339,10 @@ extension GaryxMobileModel {
                     headers: nextHeaders
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             replaceMcpServer(updated, previousName: server.name)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }

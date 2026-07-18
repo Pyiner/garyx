@@ -3,7 +3,7 @@ import XCTest
 @testable import GaryxMobile
 
 @MainActor
-final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
+final class GaryxGatewayRequestTokenTests: XCTestCase {
     func testQueuedInputFallbackDoesNotCrossGatewayRuntime() async throws {
         let streamInputStarted = expectation(description: "Gateway A queued input request started")
         let streamInputGate = DispatchSemaphore(value: 0)
@@ -61,7 +61,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
         XCTAssertTrue(model.pendingQueuedInputsByIntentId.isEmpty)
     }
 
-    func testSameURLHeaderChangeRotatesGatewayRuntimeGeneration() async throws {
+    func testSameURLHeaderChangeRotatesGatewayRequestToken() async throws {
         let replacementConnectStarted = expectation(description: "replacement header connect request started")
         let replacementConnectGate = DispatchSemaphore(value: 0)
         let session = makeStubSession { request in
@@ -89,7 +89,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
         let model = makeModel(session: session)
         model.gatewayHeaders = "X-Environment=A"
         model.loadGatewayScopedUserState(fallbackToLegacy: false)
-        let originalGeneration = model.gatewayRuntimeGeneration
+        let originalGeneration = model.gatewayRequestToken
 
         model.gatewayHeaders = "X-Environment=B"
         let connectTask = Task { @MainActor in
@@ -97,7 +97,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
         }
         await fulfillment(of: [replacementConnectStarted], timeout: 2)
 
-        XCTAssertNotEqual(model.gatewayRuntimeGeneration, originalGeneration)
+        XCTAssertNotEqual(model.gatewayRequestToken, originalGeneration)
 
         replacementConnectGate.signal()
         await connectTask.value
@@ -367,7 +367,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
     }
 
     private func makeModel(session: URLSession) -> GaryxMobileModel {
-        let suiteName = "GaryxGatewayRuntimeGenerationTests.\(UUID().uuidString)"
+        let suiteName = "GaryxGatewayRequestTokenTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         defaults.set(
@@ -498,7 +498,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             previousThreadSummaries: [],
             previouslyRemoteBusyThreadIds: [],
             selectionIdForThisRefresh: nil,
-            runtimeGeneration: model.gatewayRuntimeGeneration
+            runtimeGeneration: model.gatewayRequestToken
         )
 
         XCTAssertEqual(model.pinnedThreadIds, [pinned.id])
@@ -752,9 +752,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let auxiliaryTask = try XCTUnwrap(model.auxiliaryAllRecentThreadsRefreshTask)
         await selectedRefresh.value
 
-        let oldGeneration = model.gatewayRuntimeGeneration
+        let oldGeneration = model.gatewayRequestToken
         model.resetGatewayRuntimeState()
-        XCTAssertNotEqual(model.gatewayRuntimeGeneration, oldGeneration)
+        XCTAssertNotEqual(model.gatewayRequestToken, oldGeneration)
         XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .nonTask)
 
         auxiliaryGate.signal()
@@ -1232,7 +1232,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             previousThreadSummaries: [archived, survivor],
             previouslyRemoteBusyThreadIds: [],
             selectionIdForThisRefresh: nil,
-            runtimeGeneration: model.gatewayRuntimeGeneration
+            runtimeGeneration: model.gatewayRequestToken
         )
         await model.homeProjectionGateway.waitForIdleForTesting()
 

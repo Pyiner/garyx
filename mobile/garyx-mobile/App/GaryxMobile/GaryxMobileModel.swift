@@ -139,13 +139,9 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
     }
-    /// Per-thread composer drafts. Not `@Published`: the composer view owns the
-    /// live text and reloads on `composerContextVersion`, so persisting a single
-    /// keystroke must not publish and re-render the transcript. Read the active
-    /// context's text through `activeComposerDraft`.
-    var composerDraftStore = GaryxComposerDraftStore()
-    @Published var composerContextVersion = 0
-    @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
+    /// Route-owned, scope-partitioned payload state. The composer observes this
+    /// object directly so ordered keystrokes do not invalidate the transcript.
+    let composerPayloadCoordinator: GaryxComposerPayloadCoordinator
     /// Filter-keyed Recent feeds. Each filter owns a pager/cursor/failure
     /// gate; All remains the canonical Widget/Automation feed while the
     /// selected feed alone drives Home presentation.
@@ -478,7 +474,16 @@ final class GaryxMobileModel: ObservableObject {
     var lifecycleRetryDelayOverrideNanoseconds: UInt64?
     var auxiliaryAllRecentThreadsRefreshTask: Task<Void, Never>?
     var auxiliaryAllRecentThreadsRefreshTaskId: UUID?
-    var gatewayRuntimeGeneration = UUID()
+    /// Durable scope + ephemeral activation CAS captured by every gateway
+    /// request. Switching away and back to the same gateway creates a distinct
+    /// activation while retaining that scope's composer partition.
+    var gatewayRequestToken = GaryxGatewayRequestToken(
+        scope: GaryxGatewayScope(identity: "unconfigured", epoch: 1),
+        activationSequence: 1
+    )
+    var gatewayScopeRegistry = GaryxGatewayScopeRegistry()
+    var gatewayScopeEpochByIdentity: [String: UInt64] = [:]
+    var nextGatewayActivationSequence: UInt64 = 1
     var selectedThreadRecoveryTask: Task<Void, Never>?
     var selectedThreadRecoveryThreadId: String?
     var selectedThreadHistoryRequestId: UUID?
@@ -495,6 +500,7 @@ final class GaryxMobileModel: ObservableObject {
     var agentTargetsRefreshRequestId: UUID?
     var agentTargetsStateRequestId: UUID?
     var workspaceRefreshRequestId: UUID?
+    let productionRouteStore = GaryxProductionRouteStore()
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeObservationStore = GaryxHomeObservationStore()
@@ -558,7 +564,8 @@ final class GaryxMobileModel: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         keychain: GaryxMobileKeychain = .shared,
-        gatewayClientFactory: ((GaryxGatewayConfiguration) -> GaryxGatewayClient)? = nil
+        gatewayClientFactory: ((GaryxGatewayConfiguration) -> GaryxGatewayClient)? = nil,
+        composerPayloadCoordinator: GaryxComposerPayloadCoordinator? = nil
     ) {
         let threadSummaryCache = GaryxThreadSummaryCache()
         let threadSummaryLeaseOwner = GaryxThreadSummaryLeaseOwner(cache: threadSummaryCache)
@@ -574,6 +581,7 @@ final class GaryxMobileModel: ObservableObject {
         self.homeThreadListStore = GaryxHomeThreadListStore(
             mutationHubStore: threadMutationHubStore
         )
+        self.composerPayloadCoordinator = composerPayloadCoordinator ?? .production()
         let restoredRecentThreadFilter = GaryxRecentThreadFilterStorage.load(
             defaults: defaults,
             key: GaryxMobileSettingsKeys.recentThreadFilter
@@ -581,6 +589,7 @@ final class GaryxMobileModel: ObservableObject {
         self.defaults = defaults
         self.keychain = keychain
         self.gatewayClientFactory = gatewayClientFactory
+        self.gatewayScopeEpochByIdentity = Self.loadGatewayScopeEpochs(defaults: defaults)
         self.pinnedOrderOutboxStore = GaryxPinnedOrderUserDefaultsStore(defaults: defaults)
         self.recentThreadFeeds = GaryxRecentThreadFeeds(
             pageLimit: Self.threadListPageLimit,

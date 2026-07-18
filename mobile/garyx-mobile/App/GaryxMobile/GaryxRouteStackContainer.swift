@@ -10,6 +10,10 @@ struct GaryxRouteStackContainerCallbacks {
         GaryxRouteHostLifecyclePhase
     ) -> Void = { _, _ in }
     var phaseChanged: @MainActor (GaryxPresentationTransactionPhase) -> Void = { _ in }
+    var commitReleased: @MainActor (
+        GaryxRoutePresentationNode,
+        GaryxRoutePresentationNode
+    ) -> Void = { _, _ in }
     var canonicalPathChanged: @MainActor ([GaryxRouteEntry]) -> Void = { _ in }
     var terminalReached: @MainActor (GaryxPresentationTerminalState) -> Void = { _ in }
     var screenChanged: @MainActor (UIView) -> Void = { view in
@@ -131,8 +135,8 @@ final class GaryxRouteTransitionWrapperView: UIView {
 
 /// UIKit-owned route renderer for the fluid-navigation stack.
 ///
-/// A4a deliberately exposes this only to fake routes. GaryxRootView keeps its
-/// existing NavigationStack path until the A4b/A4c integration slices.
+/// A4a established this renderer with fake routes; A4b also uses it for the
+/// production home/conversation content stack.
 @MainActor
 final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDelegate {
     typealias HostBuilder = @MainActor (GaryxRoutePresentationNode) -> AnyView
@@ -151,6 +155,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         var node: GaryxRoutePresentationNode
         let controller: UIHostingController<AnyView>
         let wrapper: GaryxRouteTransitionWrapperView
+        let contextStore: GaryxRouteHostContextStore
         var lifecycle = GaryxRouteHostLifecycle()
         var lastAccess: UInt64
 
@@ -159,12 +164,14 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             node: GaryxRoutePresentationNode,
             controller: UIHostingController<AnyView>,
             wrapper: GaryxRouteTransitionWrapperView,
+            contextStore: GaryxRouteHostContextStore,
             lastAccess: UInt64
         ) {
             self.identity = identity
             self.node = node
             self.controller = controller
             self.wrapper = wrapper
+            self.contextStore = contextStore
             self.lastAccess = lastAccess
         }
     }
@@ -197,6 +204,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     private var presentationLeases = GaryxPresentationLeaseTree()
     private var pendingHardSnapPath: [GaryxRouteEntry]?
     private var isTearingDown = false
+    private let interactionShield = UIView()
 
     var layoutDirectionOverride: GaryxRouteLayoutDirection? {
         didSet {
@@ -261,6 +269,13 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         view.addGestureRecognizer(trailingEdgePanGestureRecognizer)
         applyLayoutDirectionOverride()
         mountInitialHosts()
+        interactionShield.frame = view.bounds
+        interactionShield.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        interactionShield.backgroundColor = .clear
+        interactionShield.isAccessibilityElement = false
+        interactionShield.accessibilityElementsHidden = true
+        interactionShield.isHidden = true
+        view.addSubview(interactionShield)
         refreshGestureAvailability()
     }
 
@@ -372,6 +387,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         self.transition = transition
         callbacks.phaseChanged(transition.coordinator.phase)
         if outcome == .committed {
+            callbacks.commitReleased(transition.source, transition.destination)
             commitPendingCanonicalMutation()
             deactivateSourceAtCommitBoundary()
         }
@@ -536,6 +552,76 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         return true
     }
 
+    /// Replaces a draft's domain payload in place. The occurrence identity,
+    /// host lifecycle, and wrapper geometry are deliberately unchanged.
+    @discardableResult
+    func promoteVisibleDraft(
+        instanceID: GaryxRouteInstanceID,
+        draftID: String,
+        threadID: String
+    ) -> Bool {
+        guard transition == nil,
+              canonicalState.promoteVisibleDraft(
+                instanceID: instanceID,
+                draftID: draftID,
+                threadID: threadID
+              ),
+              let entry = canonicalState.path.first(where: { $0.id == instanceID }) else {
+            return false
+        }
+        let identity = GaryxRoutePresentationIdentity.entry(instanceID)
+        if let record = hosts[identity] {
+            let node = GaryxRoutePresentationNode.entry(entry)
+            record.node = node
+            record.controller.rootView = wrappedHost(
+                node: node,
+                contextStore: record.contextStore
+            )
+            refreshContext(for: record)
+        }
+        callbacks.canonicalPathChanged(canonicalState.path)
+        return true
+    }
+
+    /// A draft target/key switch is a payload replacement on the same route
+    /// occurrence, but unlike promotion it is an input-session handoff. The
+    /// old key is finalized before the replacement becomes canonical.
+    @discardableResult
+    func replaceVisibleDraftKey(
+        instanceID: GaryxRouteInstanceID,
+        oldDraftID: String,
+        newDraftID: String
+    ) -> Bool {
+        guard transition == nil,
+              let oldEntry = canonicalState.path.first(where: { $0.id == instanceID }),
+              oldEntry.destination == .conversationDraft(draftID: oldDraftID) else {
+            return false
+        }
+        var newEntry = oldEntry
+        newEntry.replacePayload(with: .conversationDraft(draftID: newDraftID))
+        let source = GaryxRoutePresentationNode.entry(oldEntry)
+        let destination = GaryxRoutePresentationNode.entry(newEntry)
+        callbacks.commitReleased(source, destination)
+        guard canonicalState.replaceRoutePayload(
+            instanceID: instanceID,
+            expected: oldEntry.destination,
+            with: newEntry.destination
+        ) else { return false }
+        if let record = hosts[.entry(instanceID)] {
+            record.node = destination
+            record.controller.rootView = wrappedHost(
+                node: destination,
+                contextStore: record.contextStore
+            )
+            refreshContext(for: record)
+        }
+        callbacks.canonicalPathChanged(canonicalState.path)
+        callbacks.terminalReached(
+            .init(outcome: .committed, visibility: currentSceneVisibility)
+        )
+        return true
+    }
+
     // MARK: State-store seam
 
     func storeRouteState(
@@ -685,10 +771,15 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         )
         sourceHost.wrapper.isHidden = false
         destinationHost.wrapper.isHidden = false
-        sourceHost.wrapper.isUserInteractionEnabled = false
+        // Disabling the source wrapper would make UIKit revoke its current
+        // first responder. A sibling shield freezes content interaction while
+        // preserving the composer/keyboard across pre-commit and cancel.
+        sourceHost.wrapper.isUserInteractionEnabled = true
         destinationHost.wrapper.isUserInteractionEnabled = false
         sourceHost.wrapper.accessibilityElementsHidden = true
         destinationHost.wrapper.accessibilityElementsHidden = true
+        interactionShield.isHidden = false
+        view.bringSubviewToFront(interactionShield)
         applyTransitionVisualState()
         trimMountedHosts()
         refreshGestureAvailability()
@@ -705,6 +796,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         guard outcome == .committed else { return }
         self.transition = transition
         callbacks.phaseChanged(.commitSettle)
+        callbacks.commitReleased(transition.source, transition.destination)
         commitPendingCanonicalMutation()
         deactivateSourceAtCommitBoundary()
         if !animated || transition.visualPolicy == .immediate {
@@ -721,6 +813,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             return
         }
         let normalizedVelocity = logicalVelocity / viewportWidth
+        let settlesForward = target >= transition.progress
         settleDriver.settle(
             from: transition.progress,
             to: target,
@@ -728,7 +821,15 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             curve: GaryxRouteTransitionCalibration.settleCurve,
             onUpdate: { [weak self] sample in
                 guard let self, var transition = self.transition else { return }
-                guard transition.updateSettle(progress: sample.value) else { return }
+                // SwiftUI's analytic system spring is slightly underdamped and
+                // can overshoot under a high-velocity regrab. Full-screen
+                // navigation progress is endpoint-bounded and monotonic: keep
+                // the system timing while preventing a one-frame visual
+                // reversal after reaching either endpoint.
+                let progress = settlesForward
+                    ? min(max(sample.value, transition.progress), target)
+                    : max(min(sample.value, transition.progress), target)
+                guard transition.updateSettle(progress: progress) else { return }
                 self.transition = transition
                 self.applyTransitionVisualState()
             },
@@ -789,6 +890,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         pendingMutation = nil
         committedRemovedIdentities = []
         transition = nil
+        interactionShield.isHidden = true
         reconcileHostVisibility()
         trimMountedHosts()
         refreshGestureAvailability()
@@ -809,6 +911,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
                 stateStore.removePermanently(identity: identity)
             }
         }
+        refreshAllRouteContexts()
         callbacks.canonicalPathChanged(canonicalState.path)
     }
 
@@ -881,26 +984,69 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     // MARK: Host lifecycle and containment
 
+    private func wrappedHost(
+        node: GaryxRoutePresentationNode,
+        contextStore: GaryxRouteHostContextStore
+    ) -> AnyView {
+        AnyView(
+            GaryxRouteContextHost(
+                store: contextStore,
+                content: hostBuilder(node)
+            )
+        )
+    }
+
+    private func routeContext(
+        node: GaryxRoutePresentationNode,
+        lifecycle: GaryxRouteHostLifecyclePhase
+    ) -> GaryxRouteContext {
+        GaryxRouteContext(
+            node: node,
+            isCanonicalTop: GaryxRoutePresentationIdentity(node)
+                == GaryxRoutePresentationIdentity(canonicalState.topNode),
+            lifecycle: lifecycle
+        )
+    }
+
+    private func refreshContext(for record: HostRecord) {
+        record.contextStore.apply(
+            routeContext(node: record.node, lifecycle: record.lifecycle.phase)
+        )
+    }
+
+    private func refreshAllRouteContexts() {
+        for record in hosts.values {
+            refreshContext(for: record)
+        }
+    }
+
     private func mountInitialHosts() {
         let activeNode = canonicalState.topNode
         if canonicalState.path.count > 0 {
             _ = ensureMounted(canonicalState.predecessorNode)
         }
-        let active = ensureMounted(activeNode)
-        activate(active)
+        let active = ensureMounted(activeNode, initialContextLifecycle: .active)
+        activate(active, coalescingInitialContext: true)
         reconcileHostVisibility()
         trimMountedHosts()
     }
 
     @discardableResult
-    private func ensureMounted(_ node: GaryxRoutePresentationNode) -> HostRecord {
+    private func ensureMounted(
+        _ node: GaryxRoutePresentationNode,
+        initialContextLifecycle: GaryxRouteHostLifecyclePhase = .mounted
+    ) -> HostRecord {
         let identity = GaryxRoutePresentationIdentity(node)
         accessClock &+= 1
         if let existing = hosts[identity] {
             existing.lastAccess = accessClock
             if existing.node != node {
                 existing.node = node
-                existing.controller.rootView = hostBuilder(node)
+                existing.controller.rootView = wrappedHost(
+                    node: node,
+                    contextStore: existing.contextStore
+                )
+                refreshContext(for: existing)
             }
             return existing
         }
@@ -908,7 +1054,12 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         makeRoomForHost(mounting: identity)
 
         let wrapper = dequeueWrapper(identity: identity)
-        let controller = UIHostingController(rootView: hostBuilder(node))
+        let contextStore = GaryxRouteHostContextStore(
+            routeContext(node: node, lifecycle: initialContextLifecycle)
+        )
+        let controller = UIHostingController(
+            rootView: wrappedHost(node: node, contextStore: contextStore)
+        )
         controller.view.backgroundColor = .systemBackground
         addChild(controller)
         wrapper.attachHostedView(controller.view)
@@ -919,6 +1070,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             node: node,
             controller: controller,
             wrapper: wrapper,
+            contextStore: contextStore,
             lastAccess: accessClock
         )
         hosts[identity] = record
@@ -928,11 +1080,25 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         return record
     }
 
-    private func activate(_ record: HostRecord) {
+    private func activate(
+        _ record: HostRecord,
+        coalescingInitialContext: Bool = false
+    ) {
         switch record.lifecycle.phase {
         case .mounted:
-            transitionLifecycle(record, to: .appeared)
-            transitionLifecycle(record, to: .active)
+            transitionLifecycle(
+                record,
+                to: .appeared,
+                refreshesContext: !coalescingInitialContext
+            )
+            transitionLifecycle(
+                record,
+                to: .active,
+                refreshesContext: !coalescingInitialContext
+            )
+            if coalescingInitialContext {
+                refreshContext(for: record)
+            }
         case .appeared, .inactive:
             transitionLifecycle(record, to: .active)
         case .active:
@@ -944,12 +1110,16 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     private func transitionLifecycle(
         _ record: HostRecord,
-        to phase: GaryxRouteHostLifecyclePhase
+        to phase: GaryxRouteHostLifecyclePhase,
+        refreshesContext: Bool = true
     ) {
         guard record.lifecycle.phase != phase else { return }
         guard record.lifecycle.transition(to: phase) else {
             assertionFailure("illegal route host lifecycle \(record.lifecycle.phase) -> \(phase)")
             return
+        }
+        if refreshesContext {
+            refreshContext(for: record)
         }
         callbacks.hostLifecycleChanged(record.identity, phase)
     }
@@ -1081,6 +1251,15 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             supersedeActiveTransition()
         }
         settleDriver.invalidate()
+        let sourceNode = canonicalState.topNode
+        let destinationNode = replacement.last.map(GaryxRoutePresentationNode.entry) ?? .home
+        let changesVisibleRoute = sourceNode != destinationNode
+        if changesVisibleRoute {
+            // A root replacement has no animated release callback, so this is
+            // its commit boundary. Composer finalization still precedes the
+            // canonical path write exactly as it does for push/pop.
+            callbacks.commitReleased(sourceNode, destinationNode)
+        }
         let oldIdentities = Set(canonicalState.path.map {
             GaryxRoutePresentationIdentity.entry($0.id)
         })
@@ -1101,6 +1280,17 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         }
         callbacks.canonicalPathChanged(replacement)
         mountInitialHosts()
+        refreshAllRouteContexts()
+        if changesVisibleRoute {
+            let terminal = GaryxPresentationTerminalState(
+                outcome: .committed,
+                visibility: currentSceneVisibility
+            )
+            callbacks.terminalReached(terminal)
+            if terminal.visibility == .visible, let active = activeHostRecord() {
+                emitScreenChangedOnce(for: active)
+            }
+        }
         assertTerminalHasZeroResidue()
     }
 

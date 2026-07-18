@@ -2,20 +2,20 @@ import Foundation
 
 extension GaryxMobileModel {
     func runAutomation(_ automation: GaryxAutomationSummary) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let run = try await client().runAutomationNow(id: automation.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastAutomationRun = run
             await refreshRemoteState()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if !run.threadId.isEmpty {
                 await openThread(id: run.threadId)
             } else if let targetThreadId = automation.targetThreadId, !targetThreadId.isEmpty {
                 await openThread(id: targetThreadId)
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -26,17 +26,17 @@ extension GaryxMobileModel {
 
     @discardableResult
     func setAutomationEnabled(_ automation: GaryxAutomationSummary, enabled: Bool) async -> Bool {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().updateAutomationEnabled(
                 id: automation.id,
                 enabled: enabled
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             await refreshRemoteState()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -68,7 +68,7 @@ extension GaryxMobileModel {
         } else {
             guard !nextWorkspacePath.isEmpty else { return false }
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let updated = try await client().updateAutomation(
                 id: automation.id,
@@ -82,11 +82,11 @@ extension GaryxMobileModel {
                     schedule: schedule
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             replaceAutomation(updated)
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -110,7 +110,7 @@ extension GaryxMobileModel {
         if targetThreadId.isEmpty {
             guard !agentId.isEmpty else { return false }
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let automation = try await client().createAutomation(
                 GaryxAutomationCreateRequest(
@@ -123,27 +123,27 @@ extension GaryxMobileModel {
                     enabled: true
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             automations.insert(automation, at: 0)
             activePanel = .automations
             persistCatalogCacheSnapshot()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
     }
 
     func deleteAutomation(_ automation: GaryxAutomationSummary) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteAutomation(id: automation.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             automations.removeAll { $0.id == automation.id }
             persistCatalogCacheSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }

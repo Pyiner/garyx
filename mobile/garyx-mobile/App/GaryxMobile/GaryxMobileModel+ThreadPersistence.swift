@@ -97,7 +97,7 @@ extension GaryxMobileModel {
             return
         }
 
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         Task { [weak self] in
             await self?.finishThreadPinRequest(
                 normalizedId,
@@ -142,11 +142,11 @@ extension GaryxMobileModel {
         _ normalizedId: String,
         pinned: Bool,
         membershipRequest: GaryxPinnedOrderMembershipRequest,
-        runtimeGeneration: UUID
+        runtimeGeneration: GaryxGatewayRequestToken
     ) async {
         do {
             let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             _ = completePinnedOrderMembershipChange(membershipRequest, page: page)
             homeThreadListStore.resolvePinTransition(
                 threadId: normalizedId,
@@ -154,7 +154,7 @@ extension GaryxMobileModel {
             )
             refreshResidentThreadListStores()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             failPinnedOrderMembershipChange(membershipRequest)
             _ = homeThreadListStore.rollbackPinTransition(
                 threadId: normalizedId,

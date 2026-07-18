@@ -49,10 +49,10 @@ extension GaryxMobileModel {
     func mergeMissingSidebarRequiredThreads(
         using gatewayClient: GaryxGatewayClient,
         extraThreadIds: [String?] = [],
-        runtimeGeneration: UUID? = nil,
+        runtimeGeneration: GaryxGatewayRequestToken? = nil,
         remoteStateRefreshRequestId: UUID? = nil
     ) async {
-        let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
+        let observedGeneration = runtimeGeneration ?? gatewayRequestToken
         let requiredThreadIds = sidebarRequiredThreadIds(
             pinnedThreadIds: pinnedThreadIds,
             extraThreadIds: extraThreadIds
@@ -64,7 +64,7 @@ extension GaryxMobileModel {
                 requiredThreadIds.filter { threadSummaryCache.summary(for: $0) != nil }
             )
         )
-        guard observedGeneration == gatewayRuntimeGeneration,
+        guard observedGeneration == gatewayRequestToken,
               isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
             return
         }

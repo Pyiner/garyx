@@ -25,27 +25,27 @@ extension GaryxMobileModel {
     func bindBot(_ bot: GaryxConfiguredBot, toThreadId threadId: String) async {
         let threadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let status = try await client().bindBot(botId: bot.id, threadId: threadId)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             botStatusesById[bot.id] = status
             await refreshRemoteState()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func unbindBot(_ bot: GaryxConfiguredBot) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let status = try await client().unbindBot(botId: bot.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             botStatusesById[bot.id] = status
             await refreshRemoteState()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -73,15 +73,15 @@ extension GaryxMobileModel {
         }
 
         isSavingBotSettings = true
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         defer {
-            if runtimeGeneration == gatewayRuntimeGeneration {
+            if runtimeGeneration == gatewayRequestToken {
                 isSavingBotSettings = false
             }
         }
         do {
             var settings = try await client().gatewaySettings()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             let validation = try await client().validateChannelAccount(
                 pluginId: channel,
                 request: GaryxChannelAccountValidationRequest(
@@ -90,7 +90,7 @@ extension GaryxMobileModel {
                     config: input.config
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             guard validation.validated else {
                 lastError = validation.message
                 return false
@@ -106,12 +106,12 @@ extension GaryxMobileModel {
                 return false
             }
             _ = try await client().saveGatewaySettings(settings, merge: false)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             gatewaySettingsDocument = settings
             await refreshRemoteState()
             return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -133,15 +133,15 @@ extension GaryxMobileModel {
 
     func deleteConfiguredBotAccount(_ account: GaryxConfiguredBotAccountSettings) async {
         isSavingBotSettings = true
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         defer {
-            if runtimeGeneration == gatewayRuntimeGeneration {
+            if runtimeGeneration == gatewayRequestToken {
                 isSavingBotSettings = false
             }
         }
         do {
             var settings = try await client().gatewaySettings()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             guard GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: account.channel,
@@ -151,7 +151,7 @@ extension GaryxMobileModel {
                 return
             }
             _ = try await client().saveGatewaySettings(settings, merge: false)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             gatewaySettingsDocument = settings
             configuredBots.removeAll {
                 $0.channel.caseInsensitiveCompare(account.channel) == .orderedSame
@@ -169,16 +169,16 @@ extension GaryxMobileModel {
             persistCatalogCacheSnapshot()
             await refreshRemoteState()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func deleteConfiguredBotAccount(_ bot: GaryxConfiguredBot) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             var settings = try await client().gatewaySettings()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             guard GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: bot.channel,
@@ -188,7 +188,7 @@ extension GaryxMobileModel {
                 return
             }
             _ = try await client().saveGatewaySettings(settings, merge: false)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             configuredBots.removeAll { $0.id == bot.id }
             channelEndpoints.removeAll { endpoint in
                 endpoint.channel.caseInsensitiveCompare(bot.channel) == .orderedSame
@@ -202,32 +202,32 @@ extension GaryxMobileModel {
             persistCatalogCacheSnapshot()
             await refreshRemoteState()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func bindEndpointToSelectedThread(_ endpoint: GaryxChannelEndpoint) async {
         guard let threadId = selectedThread?.id else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().bindChannelEndpoint(endpointKey: endpoint.endpointKey, threadId: threadId)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             await refreshRemoteState()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func detachEndpoint(_ endpoint: GaryxChannelEndpoint) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().detachChannelEndpoint(endpointKey: endpoint.endpointKey)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             await refreshRemoteState()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -261,7 +261,7 @@ extension GaryxMobileModel {
             additionalEndpointKey: additionalEndpointKey
         )
 
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         guard let request = makeLifecycleMutationRequest(
             kind: .archive,
             threadId: normalizedThreadId,
@@ -283,7 +283,7 @@ extension GaryxMobileModel {
         do {
             gatewayClient = try client()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
             refreshResidentThreadListStores()
@@ -299,7 +299,7 @@ extension GaryxMobileModel {
                     endpointKeys: attempt.request.endpointKeys
                 )
             }
-        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        guard runtimeGeneration == gatewayRequestToken else { return }
         switch result {
         case .applied:
             // A native SwiftUI List cannot safely delete a swipe-action row

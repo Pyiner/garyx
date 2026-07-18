@@ -3,7 +3,86 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
 
+enum GaryxGatewayScopeExit {
+    case suspend
+    case revoke
+}
+
 extension GaryxMobileModel {
+    static func loadGatewayScopeEpochs(defaults: UserDefaults) -> [String: UInt64] {
+        guard let stored = defaults.dictionary(forKey: GaryxMobileSettingsKeys.gatewayScopeEpochs) else {
+            return [:]
+        }
+        return stored.reduce(into: [:]) { result, pair in
+            let value: UInt64?
+            if let number = pair.value as? NSNumber {
+                value = number.uint64Value
+            } else if let string = pair.value as? String {
+                value = UInt64(string)
+            } else {
+                value = nil
+            }
+            if let value, value > 0 {
+                result[pair.key] = value
+            }
+        }
+    }
+
+    func persistGatewayScopeEpochs() {
+        defaults.set(
+            gatewayScopeEpochByIdentity.mapValues { NSNumber(value: $0) },
+            forKey: GaryxMobileSettingsKeys.gatewayScopeEpochs
+        )
+    }
+
+    func activateCurrentGatewayScope() {
+        let identity = currentGatewayScopeId
+        let epoch = max(gatewayScopeEpochByIdentity[identity] ?? 1, 1)
+        gatewayScopeEpochByIdentity[identity] = epoch
+        persistGatewayScopeEpochs()
+        let scope = GaryxGatewayScope(identity: identity, epoch: epoch)
+        precondition(
+            gatewayScopeRegistry.switchActive(to: scope),
+            "a revoked gateway epoch must never be reactivated"
+        )
+        nextGatewayActivationSequence &+= 1
+        gatewayRequestToken = GaryxGatewayRequestToken(
+            scope: scope,
+            activationSequence: nextGatewayActivationSequence
+        )
+        let key = activeComposerPayloadKey
+        Task { [weak self] in
+            guard let self else { return }
+            await composerPayloadCoordinator.activate(scope: scope, key: key)
+        }
+    }
+
+    func exitCurrentGatewayScope(_ exit: GaryxGatewayScopeExit) {
+        let scope = gatewayRequestToken.scope
+        switch exit {
+        case .suspend:
+            composerPayloadCoordinator.terminateActiveInputForScopeExit(.scopeSuspend)
+            _ = gatewayScopeRegistry.suspendActive()
+            composerPayloadCoordinator.suspendScope(scope)
+        case .revoke:
+            composerPayloadCoordinator.terminateActiveInputForScopeExit(.scopeRevoke)
+            _ = gatewayScopeRegistry.revoke(scope)
+            composerPayloadCoordinator.revokeScope(scope)
+            gatewayScopeEpochByIdentity[scope.identity] = max(
+                gatewayScopeEpochByIdentity[scope.identity] ?? scope.epoch,
+                scope.epoch
+            ) &+ 1
+            persistGatewayScopeEpochs()
+        }
+        // Invalidate all old async work immediately, including the interval
+        // between reset and activation of the destination scope.
+        nextGatewayActivationSequence &+= 1
+        gatewayRequestToken = GaryxGatewayRequestToken(
+            scope: scope,
+            activationSequence: nextGatewayActivationSequence
+        )
+    }
+
     func saveGatewaySettings() {
         gatewaySettingsStatus = nil
         gatewayURL = normalizedGatewayURL(gatewayURL)
@@ -73,6 +152,7 @@ extension GaryxMobileModel {
         if !workspace.isEmpty, workspaceGitStatuses[workspace] == nil {
             Task { await refreshWorkspaceGitStatus(for: workspace) }
         }
+        activateCurrentGatewayScope()
     }
 
     func saveGatewayScopedUserState() {
@@ -90,8 +170,8 @@ extension GaryxMobileModel {
         defaults.removeObject(forKey: GaryxMobileSettingsKeys.userWorkspacePaths)
     }
 
-    func resetGatewayRuntimeState() {
-        gatewayRuntimeGeneration = UUID()
+    func resetGatewayRuntimeState(scopeExit: GaryxGatewayScopeExit = .suspend) {
+        exitCurrentGatewayScope(scopeExit)
         clearThreadFavoritesRuntime()
         pinnedOrderReorderTask?.cancel()
         pinnedOrderReorderTask = nil
@@ -155,7 +235,6 @@ extension GaryxMobileModel {
         activeAssistantMessageIdsByThread = [:]
         pendingDirectFollowUpsByThread = [:]
         pendingQueuedInputsByIntentId = [:]
-        clearAllComposerDrafts()
         draftThreadTitle = ""
         agents = []
         gatewayDefaultAgentId = nil
@@ -202,7 +281,7 @@ extension GaryxMobileModel {
 
     func selectGatewayProfile(_ profile: GaryxGatewayProfile) {
         saveGatewayScopedUserState()
-        resetGatewayRuntimeState()
+        resetGatewayRuntimeState(scopeExit: .suspend)
         gatewayURL = profile.gatewayUrl
         gatewayAuthToken = keychain.readGatewayProfileToken(profileId: profile.id)
         gatewayHeaders = profile.gatewayHeaders
@@ -269,7 +348,9 @@ extension GaryxMobileModel {
             saveGatewayScopedUserState()
             let didResetRuntime = currentURLChanged || activeTokenChanged || activeHeadersChanged
             if didResetRuntime {
-                resetGatewayRuntimeState()
+                resetGatewayRuntimeState(
+                    scopeExit: currentURLChanged ? .suspend : .revoke
+                )
             }
             gatewayURL = normalizedURL
             gatewayAuthToken = trimmedToken
@@ -307,6 +388,8 @@ extension GaryxMobileModel {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            productionRouteStore.sceneDidBecomeActive()
+            composerPayloadCoordinator.sceneDidBecomeActive()
             capsulePreviewSceneSignal.publish(.active)
             servicePinnedOrderRetry(source: .userAction)
             sceneRefreshTask?.cancel()
@@ -346,8 +429,14 @@ extension GaryxMobileModel {
                 await refreshCodingUsageWidget()
             }
         case .inactive:
+            productionRouteStore.sceneDidBecomeInactive()
+            composerPayloadCoordinator.sceneDidBecomeInactive()
+            composerPayloadCoordinator.cancelPendingInput(.sceneInactive)
             capsulePreviewSceneSignal.publish(.inactive)
         case .background:
+            productionRouteStore.sceneDidBecomeInactive()
+            composerPayloadCoordinator.sceneDidBecomeInactive()
+            composerPayloadCoordinator.cancelPendingInput(.sceneInactive)
             capsulePreviewSceneSignal.publish(.background)
             // Remember where the user left: only an exit from the
             // conversation page restores that thread on the next launch.
@@ -358,6 +447,9 @@ extension GaryxMobileModel {
             cancelBackgroundCommittedRunReconcileLoop()
             stopSelectedThreadStream()
         @unknown default:
+            productionRouteStore.sceneDidBecomeInactive()
+            composerPayloadCoordinator.sceneDidBecomeInactive()
+            composerPayloadCoordinator.cancelPendingInput(.sceneInactive)
             capsulePreviewSceneSignal.publish(.inactive)
         }
     }
@@ -396,7 +488,7 @@ extension GaryxMobileModel {
         }
         pendingMobileRoute = nil
         saveGatewayScopedUserState()
-        resetGatewayRuntimeState()
+        resetGatewayRuntimeState(scopeExit: .suspend)
         gatewayURL = payload.gatewayUrl
         gatewayAuthToken = payload.gatewayAuthToken
         gatewayHeaders = payload.gatewayHeaders
@@ -418,10 +510,11 @@ extension GaryxMobileModel {
         gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
         if activeGatewayScopeId != currentGatewayScopeId
             || activeGatewayRuntimeIdentity != currentGatewayRuntimeIdentity {
-            resetGatewayRuntimeState()
+            let identityChanged = activeGatewayScopeId != currentGatewayScopeId
+            resetGatewayRuntimeState(scopeExit: identityChanged ? .suspend : .revoke)
             loadGatewayScopedUserState(fallbackToLegacy: false)
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let gatewayScopeId = currentGatewayScopeId
         let requestId = UUID()
         connectRefreshRequestId = requestId
@@ -504,7 +597,7 @@ extension GaryxMobileModel {
 
     func refreshAgentTargets() async {
         guard hasGatewaySettings else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let requestId = UUID()
         agentTargetsRefreshRequestId = requestId
         agentTargetsStateRequestId = requestId
@@ -549,7 +642,7 @@ extension GaryxMobileModel {
 
     func refreshRemoteState() async {
         guard hasGatewaySettings else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let requestId = UUID()
         remoteStateRefreshRequestId = requestId
         workspaceRefreshRequestId = requestId
@@ -718,20 +811,20 @@ extension GaryxMobileModel {
         }
     }
 
-    func isCurrentRemoteStateRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
-        runtimeGeneration == gatewayRuntimeGeneration && remoteStateRefreshRequestId == requestId
+    func isCurrentRemoteStateRefresh(_ requestId: UUID, runtimeGeneration: GaryxGatewayRequestToken) -> Bool {
+        runtimeGeneration == gatewayRequestToken && remoteStateRefreshRequestId == requestId
     }
 
-    func isCurrentAgentTargetsRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
-        runtimeGeneration == gatewayRuntimeGeneration && agentTargetsRefreshRequestId == requestId
+    func isCurrentAgentTargetsRefresh(_ requestId: UUID, runtimeGeneration: GaryxGatewayRequestToken) -> Bool {
+        runtimeGeneration == gatewayRequestToken && agentTargetsRefreshRequestId == requestId
     }
 
-    func isCurrentConnectRefresh(_ requestId: UUID, runtimeGeneration: UUID, scopeId: String? = nil) -> Bool {
+    func isCurrentConnectRefresh(_ requestId: UUID, runtimeGeneration: GaryxGatewayRequestToken, scopeId: String? = nil) -> Bool {
         connectRefreshRequestId == requestId && isCurrentGatewayRuntime(runtimeGeneration, scopeId: scopeId)
     }
 
-    func isCurrentGatewayRuntime(_ runtimeGeneration: UUID, scopeId: String? = nil) -> Bool {
-        guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+    func isCurrentGatewayRuntime(_ runtimeGeneration: GaryxGatewayRequestToken, scopeId: String? = nil) -> Bool {
+        guard runtimeGeneration == gatewayRequestToken else { return false }
         guard let scopeId else { return true }
         return scopeId == currentGatewayScopeId
     }

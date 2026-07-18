@@ -40,7 +40,7 @@ extension GaryxMobileModel {
             endpointKeys: endpointKeys,
             expectedStoreIncarnation: incarnation,
             gatewayScope: currentGatewayScopeId,
-            runtimeGeneration: gatewayRuntimeGeneration
+            gatewayRequestToken: gatewayRequestToken
         )
     }
 
@@ -86,7 +86,7 @@ extension GaryxMobileModel {
     private func lifecycleRequestIsCurrent(
         _ request: GaryxLifecycleMutationRequest
     ) -> Bool {
-        request.runtimeGeneration == gatewayRuntimeGeneration
+        request.gatewayRequestToken == gatewayRequestToken
             && request.gatewayScope == currentGatewayScopeId
     }
 
@@ -138,6 +138,20 @@ extension GaryxMobileModel {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
+        cacheThreadSummaries([thread])
+        _ = productionRouteStore.open(
+            .conversation(threadID: thread.id),
+            source: source
+        )
+        // Unit-test and cold-start fallback before the UIKit owner attaches.
+        if !productionRouteStore.isAttached {
+            applySelectedThreadRouteProjection(thread)
+        }
+    }
+
+    /// Selection is a compatibility projection of the canonical route top.
+    /// It is never consulted to decide which route the container renders.
+    func applySelectedThreadRouteProjection(_ thread: GaryxThreadSummary) {
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
             advanceSelectedThreadDraftGeneration()
@@ -147,7 +161,9 @@ extension GaryxMobileModel {
             // Reset the render window to the newest page for the new thread
             // (TASK-1751 P3); event-driven, before any body eval.
             resetSelectedTurnRowsWindow()
-            switchComposerDraft(to: thread.id)
+            if !productionRouteStore.isAttached {
+                activateComposerPayload(for: .thread(thread.id))
+            }
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
@@ -165,10 +181,6 @@ extension GaryxMobileModel {
         clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()
         draftThreadTitle = thread.title
-        openConversation(
-            source: source,
-            invalidatesPendingThreadOpen: false
-        )
         if previousThreadId != thread.id {
             let inMemory = cachedMessages(for: thread.id)
             if inMemory.isEmpty {
@@ -265,13 +277,19 @@ extension GaryxMobileModel {
         isLoadingSelectedThreadHistory = false
         resetSelectedThreadHistoryPagination()
         clearPendingBotDraft()
-        selectedThread = nil
         draftThreadTitle = ""
         setPendingNewThreadAgentTarget(agentTargetOverride)
         clearNewThreadModelOverride()
-        switchComposerDraft(to: newThreadComposerDraftKey)
-        messages = []
-        activePanel = .chat
+        let destination = GaryxRouteDestination.conversationDraft(
+            draftID: newThreadComposerPayloadKey.draftRouteID
+        )
+        if !productionRouteStore.isAttached {
+            activateComposerPayload(for: newThreadComposerPayloadKey)
+        }
+        _ = productionRouteStore.open(destination, source: .replace)
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
         setSidebarVisible(false)
         lastError = nil
     }
@@ -288,13 +306,16 @@ extension GaryxMobileModel {
             await createThread()
             return
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             saveGatewaySettings()
             let existingThreadId = selectedThread?.id
             let thread = try await ensureSelectedThread()
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
+            if case .some(.draft) = composerPayloadCoordinator.activeKey {
+                try await promoteActiveComposerPayload(to: thread.id)
+            }
             activePanel = .chat
             draftThreadTitle = thread.title
             if existingThreadId == nil {
@@ -302,14 +323,14 @@ extension GaryxMobileModel {
             }
             setSidebarVisible(false)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func createThread(workspaceOverride: String?, agentOverride: String? = nil) async {
         invalidatePendingThreadOpen()
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             saveGatewaySettings()
             let workspace = (workspaceOverride ?? newThreadWorkspace).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -332,7 +353,7 @@ extension GaryxMobileModel {
                 )
             )
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             let mutationId = nextThreadMutationId(kind: "insert", threadId: thread.id)
             let affectedStoreIds = threadMutationHubStore.value
                 .residentStoreIdsAffectedByInsert(workspacePath: thread.workspacePath)
@@ -353,17 +374,23 @@ extension GaryxMobileModel {
             )
             applyThreadMutationAuthorityToResidentProviders(authority)
             threadHistoryLoadedIds.insert(thread.id)
-            selectedThread = thread
+            if !productionRouteStore.isAttached {
+                selectedThread = thread
+            }
             clearPendingNewThreadAgentTarget()
             clearNewThreadModelOverride()
             clearPendingBotDraft()
-            switchComposerDraft(to: thread.id)
+            if case .some(.draft) = composerPayloadCoordinator.activeKey {
+                try await promoteActiveComposerPayload(to: thread.id)
+            } else if !productionRouteStore.isAttached {
+                activateComposerPayload(for: .thread(thread.id))
+            }
             draftThreadTitle = thread.title
             activePanel = .chat
             clearMessages(for: thread.id)
             setSidebarVisible(false)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -400,12 +427,18 @@ extension GaryxMobileModel {
         pendingBotDraftGeneration = selectedThreadDraftGeneration
         clearPendingNewThreadAgentTarget()
         cancelSelectedThreadReconcileLoop()
-        selectedThread = nil
         resetSelectedThreadHistoryPagination()
         draftThreadTitle = ""
-        switchComposerDraft(to: newThreadComposerDraftKey)
-        messages = []
-        activePanel = .chat
+        let destination = GaryxRouteDestination.conversationDraft(
+            draftID: newThreadComposerPayloadKey.draftRouteID
+        )
+        if !productionRouteStore.isAttached {
+            activateComposerPayload(for: newThreadComposerPayloadKey)
+        }
+        _ = productionRouteStore.open(destination, source: .replace)
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
         setSidebarVisible(false)
         lastError = nil
     }
@@ -429,7 +462,7 @@ extension GaryxMobileModel {
             lastError = "This thread is active or managed by an automation or channel."
             return
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let gatewayClient: GaryxGatewayClient
         do {
             gatewayClient = try client()
@@ -460,13 +493,13 @@ extension GaryxMobileModel {
                     expectedStoreIncarnation: attempt.request.expectedStoreIncarnation
                 )
             }
-        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        guard runtimeGeneration == gatewayRequestToken else { return }
         switch result {
         case .applied:
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""
-                discardComposerDraft(forThread: thread.id)
+                discardComposerPayload(forThread: thread.id)
                 messages = []
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
@@ -532,7 +565,7 @@ extension GaryxMobileModel {
         let threadId = selectedThread.id
         let title = (proposedTitle ?? draftThreadTitle).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title != selectedThread.title else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let mutationEpoch = threadMutationHubStore.value.gatewayRuntimeEpoch
         let rollbackSummary = threadRenameRollbackSummaries[threadId] ?? selectedThread
         threadRenameRollbackSummaries[threadId] = rollbackSummary
@@ -557,7 +590,7 @@ extension GaryxMobileModel {
         cacheThreadSummaries([optimistic])
         do {
             let updated = try await client().updateThread(threadId: threadId, label: title)
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   threadRenameMutationIds[threadId] == mutationId else { return }
             threadRenameMutationIds[threadId] = nil
             threadRenameRollbackSummaries[threadId] = nil
@@ -572,7 +605,7 @@ extension GaryxMobileModel {
                 authority: GaryxThreadMutationAuthority(summary: updated)
             )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   threadRenameMutationIds[threadId] == mutationId else { return }
             threadRenameMutationIds[threadId] = nil
             threadRenameRollbackSummaries[threadId] = nil
@@ -597,7 +630,7 @@ extension GaryxMobileModel {
     ) async {
         guard let selectedThread else { return }
         let threadId = selectedThread.id
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let mutationEpoch = threadMutationHubStore.value.gatewayRuntimeEpoch
         let mutationId = nextThreadMutationId(kind: "runtime", threadId: threadId)
         let rollbackSnapshot = threadRuntimeRollbackSnapshots[threadId]
@@ -633,7 +666,7 @@ extension GaryxMobileModel {
                 modelReasoningEffort: reasoningEffort,
                 modelServiceTier: serviceTier
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   threadRuntimeMutationIds[threadId] == mutationId else { return }
             threadRuntimeMutationIds[threadId] = nil
             threadRuntimeRollbackSnapshots[threadId] = nil
@@ -654,7 +687,7 @@ extension GaryxMobileModel {
             )
             await loadSelectedThreadHistory()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   threadRuntimeMutationIds[threadId] == mutationId else { return }
             threadRuntimeMutationIds[threadId] = nil
             threadRuntimeRollbackSnapshots[threadId] = nil

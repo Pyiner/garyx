@@ -32,7 +32,7 @@ final class GaryxChatImageUploadBatchTests: XCTestCase {
         )
     }
 
-    func testUploadedBatchMapsToComposerAttachmentsWithLocalPreviews() throws {
+    func testUploadedBatchMapsToPayloadItemsWithLocalPreviews() throws {
         let images = [
             GaryxMobileSelectedImage(
                 name: "photo-1.jpg",
@@ -71,7 +71,7 @@ final class GaryxChatImageUploadBatchTests: XCTestCase {
         )
 
         let attachments = try XCTUnwrap(
-            batch.composerAttachments(from: uploaded.files) { index, _ in
+            batch.composerPayloadItems(from: uploaded.files) { index, _ in
                 "attachment-\(index)"
             }
         )
@@ -110,6 +110,6 @@ final class GaryxChatImageUploadBatchTests: XCTestCase {
             )
         )
 
-        XCTAssertNil(batch.composerAttachments(from: uploaded.files))
+        XCTAssertNil(batch.composerPayloadItems(from: uploaded.files))
     }
 }

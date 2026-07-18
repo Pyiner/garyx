@@ -17,18 +17,15 @@ struct GaryxRootView: View {
         ZStack {
             if homeObservationStore.isGatewayConfigured, case .ready = homeObservationStore.connectionState {
                 GaryxShellView(
+                    model: model,
                     shellStore: model.shellChromeStore,
                     drawerStore: model.navigationDrawerStore,
-                    navigationStore: model.rootNavigationPathStore,
+                    routeStore: model.productionRouteStore,
                     routeNotFoundStore: model.routeNotFoundStore,
                     homeListStore: model.homeThreadListStore,
                     onSetSidebarVisible: { visible, animated in
                         model.setSidebarVisible(visible, animated: animated)
                     },
-                    onPerformMainPanelLeadingEdgeAction: {
-                        model.performMainPanelLeadingEdgeAction()
-                    },
-                    applyRootNavigationPath: { model.applyRootNavigationPath($0) },
                     onRefreshAll: {
                         // Pull-to-refresh awaits only the thread list; the
                         // catalog sweep refreshes in the background so the
@@ -491,16 +488,15 @@ private struct GaryxDrawerPanelClipShape: Shape {
 }
 
 struct GaryxShellView: View, Equatable {
+    let model: GaryxMobileModel
     @ObservedObject var shellStore: GaryxShellChromeStore
     @ObservedObject var drawerStore: GaryxNavigationDrawerStore
-    @ObservedObject var navigationStore: GaryxRootNavigationPathStore
+    @ObservedObject var routeStore: GaryxProductionRouteStore
     @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     let onSetSidebarVisible: (Bool, Bool) -> Void
-    let onPerformMainPanelLeadingEdgeAction: () -> Void
-    let applyRootNavigationPath: ([GaryxMobileRootRoute]) -> Void
     let onRefreshAll: () async -> Void
     let onRefreshSidebarThreads: () async -> Void
     let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
@@ -542,9 +538,10 @@ struct GaryxShellView: View, Equatable {
     private let sidebarAxisDecisionRatio: CGFloat = 1.5
 
     static func == (lhs: GaryxShellView, rhs: GaryxShellView) -> Bool {
-        lhs.shellStore === rhs.shellStore
+        lhs.model === rhs.model
+            && lhs.shellStore === rhs.shellStore
             && lhs.drawerStore === rhs.drawerStore
-            && lhs.navigationStore === rhs.navigationStore
+            && lhs.routeStore === rhs.routeStore
             && lhs.routeNotFoundStore === rhs.routeNotFoundStore
             && lhs.homeListStore === rhs.homeListStore
             && lhs.debugShowsGatewaySwitcher == rhs.debugShowsGatewaySwitcher
@@ -622,14 +619,14 @@ struct GaryxShellView: View, Equatable {
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
 
                 GaryxRootNavigationView(
-                    navigationStore: navigationStore,
+                    routeStore: routeStore,
                     routeNotFoundStore: routeNotFoundStore,
                     homeListStore: homeListStore,
+                    model: model,
                     isSidebarDragActive: drawerDragActive,
                     onOpenDrawer: {
                         onSetSidebarVisible(true, true)
                     },
-                    applyRootNavigationPath: applyRootNavigationPath,
                     onRefreshAll: onRefreshAll,
                     onRefreshSidebarThreads: onRefreshSidebarThreads,
                     onLoadMoreThreads: onLoadMoreThreads,
@@ -730,6 +727,12 @@ struct GaryxShellView: View, Equatable {
             }
             .onChanged { value in
                 guard !shellStore.snapshot.sidebarVisible else { return }
+                guard case .openSidebar = shellStore.snapshot.leadingEdgeAction else {
+                    // A pushed route's leading edge belongs exclusively to
+                    // GaryxRouteStackContainer's UIKit edge recognizer.
+                    sidebarDragAxis = .vertical
+                    return
+                }
                 if sidebarDragAxis == nil {
                     sidebarDragAxis = decideSidebarAxis(
                         translation: value.translation,
@@ -738,12 +741,7 @@ struct GaryxShellView: View, Equatable {
                     )
                 }
                 guard sidebarDragAxis == .horizontal else { return }
-                switch shellStore.snapshot.leadingEdgeAction {
-                case .openSidebar:
-                    sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
-                case .popToHome, .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
-                    sidebarDragOffset = 0
-                }
+                sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
             }
             .onEnded { value in
                 // The closing gesture owns drags while the drawer is open;
@@ -759,18 +757,11 @@ struct GaryxShellView: View, Equatable {
                 }
                 let shouldOpen = value.translation.width > sidebarWidth * 0.22
                     || value.predictedEndTranslation.width > sidebarWidth * 0.35
-                switch shellStore.snapshot.leadingEdgeAction {
-                case .openSidebar:
-                    finishGesture(open: shouldOpen)
-                case .popToHome, .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
+                guard case .openSidebar = shellStore.snapshot.leadingEdgeAction else {
                     resetSidebarDrag()
-                    if shouldOpen {
-                        hideKeyboard()
-                        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                            onPerformMainPanelLeadingEdgeAction()
-                        }
-                    }
+                    return
                 }
+                finishGesture(open: shouldOpen)
             }
     }
 

@@ -98,11 +98,11 @@ extension GaryxMobileModel {
         var latestResult: Result<[GaryxCapsuleSummary], Error> = .success(capsules)
         while true {
             let attemptTicket = capsuleCatalogRequestedTicket
-            let runtimeGeneration = gatewayRuntimeGeneration
+            let runtimeGeneration = gatewayRequestToken
             let favoritesGeneration = capsuleFavoriteState.favoritesGeneration
             do {
                 let nextCapsules = try await client().listCapsules()
-                guard runtimeGeneration == gatewayRuntimeGeneration else {
+                guard runtimeGeneration == gatewayRequestToken else {
                     latestResult = .failure(CancellationError())
                     capsuleCatalogFinishedTicket = max(capsuleCatalogFinishedTicket, attemptTicket)
                     return latestResult
@@ -145,10 +145,10 @@ extension GaryxMobileModel {
         guard !id.isEmpty else { return nil }
         if let cached = sidebarThreadSummary(for: id) { return cached }
         guard hasGatewaySettings else { return nil }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let thread = try await client().getThread(threadId: id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            guard runtimeGeneration == gatewayRequestToken else { return nil }
             return thread
         } catch {
             return nil
@@ -166,14 +166,14 @@ extension GaryxMobileModel {
         applyCapsuleFavoriteTransition(transition)
         guard var effect = transition.effect else { return }
 
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         while true {
             do {
                 let response = try await client().setCapsuleFavorite(
                     id: effect.capsuleId,
                     favorited: effect.favorited
                 )
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard runtimeGeneration == gatewayRequestToken else { return }
                 let settled = GaryxCapsuleFavoriteReducer.succeeded(
                     capsules: capsules,
                     state: capsuleFavoriteState,
@@ -185,7 +185,7 @@ extension GaryxMobileModel {
                 guard let followUp = settled.effect else { return }
                 effect = followUp
             } catch {
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard runtimeGeneration == gatewayRequestToken else { return }
                 let failed = GaryxCapsuleFavoriteReducer.failed(
                     capsules: capsules,
                     state: capsuleFavoriteState,
@@ -234,14 +234,14 @@ extension GaryxMobileModel {
         if !forceRefresh, let cached = capsuleHTMLCache[key] {
             return .html(cached)
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let html = try await client().capsuleHTML(id: capsuleId)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .failed }
+            guard runtimeGeneration == gatewayRequestToken else { return .failed }
             capsuleHTMLCache[key] = html
             return .html(html)
         } catch let error as GaryxGatewayError {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return .failed }
+            guard runtimeGeneration == gatewayRequestToken else { return .failed }
             if case .httpStatus(404, _, _) = error {
                 // The whole capsule is gone. Centralized eviction so *every*
                 // surface re-validates: HTML cache, rendered-thumbnail memory +
@@ -281,11 +281,11 @@ extension GaryxMobileModel {
     ) async throws -> GaryxFocusedCapsuleHTMLAttempt {
         try Task.checkCancellation()
         guard hasGatewaySettings else { throw GaryxGatewayError.invalidURL(gatewayURL) }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let html = try await client().capsuleHTML(id: key.id, allowsRetry: false)
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { throw CancellationError() }
+            guard runtimeGeneration == gatewayRequestToken else { throw CancellationError() }
             guard acceptsFocusedCapsuleHTMLRequest(key: key, token: token) else { return .stale }
             if let revision = key.projectedRevision {
                 capsuleHTMLCache[GaryxCapsuleHTMLCacheKey(id: key.id, revision: revision)] = html
@@ -295,7 +295,7 @@ extension GaryxMobileModel {
             if GaryxGatewayRetryClassifier.isCancellation(error) {
                 throw CancellationError()
             }
-            guard runtimeGeneration == gatewayRuntimeGeneration else { throw CancellationError() }
+            guard runtimeGeneration == gatewayRequestToken else { throw CancellationError() }
             guard acceptsFocusedCapsuleHTMLRequest(key: key, token: token) else { return .stale }
             if case GaryxGatewayError.httpStatus(404, _, _) = error {
                 await evictDeletedCapsuleCaches(capsuleId: key.id)
@@ -341,10 +341,10 @@ extension GaryxMobileModel {
     }
 
     func deleteCapsule(_ capsule: GaryxCapsuleSummary) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteCapsule(id: capsule.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if galleryFocusedCapsule?.id == capsule.id { galleryFocusedCapsule = nil }
             if conversationCapsulePreview?.id == capsule.id { conversationCapsulePreview = nil }
             capsuleFavoriteState.mutations.removeValue(forKey: capsule.id)
@@ -352,7 +352,7 @@ extension GaryxMobileModel {
             capsules.removeAll { $0.id == capsule.id }
             persistCatalogCacheSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
     }

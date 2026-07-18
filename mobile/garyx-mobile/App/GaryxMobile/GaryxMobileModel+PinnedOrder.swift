@@ -179,7 +179,7 @@ extension GaryxMobileModel {
               pinnedOrderReorderTaskToken == nil else {
             return
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         pinnedOrderReorderTaskToken = request.token
         pinnedOrderReorderTask = Task { [weak self] in
             guard let self else { return }
@@ -188,10 +188,10 @@ extension GaryxMobileModel {
                     threadIds: request.threadIds,
                     expectedRevision: request.expectedRevision
                 )
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard runtimeGeneration == gatewayRequestToken else { return }
                 completePinnedOrderReorder(request, page: result.page)
             } catch {
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard runtimeGeneration == gatewayRequestToken else { return }
                 failPinnedOrderReorder(request, error: error)
             }
         }

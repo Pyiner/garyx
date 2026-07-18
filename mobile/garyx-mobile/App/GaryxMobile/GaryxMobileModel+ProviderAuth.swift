@@ -8,17 +8,17 @@ extension GaryxMobileModel {
     /// the Authorize screen, so this no longer auto-opens the browser.
     func startClaudeCodeAuth(options: GaryxClaudeCodeLoginOptions) async {
         cancelClaudeCodeAuthPolling()
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         claudeCodeAuthSession = GaryxClaudeCodeAuthSession(loginId: "", status: .starting)
         do {
             let session = try await client().startClaudeCodeAuth(options.startRequest)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             claudeCodeAuthSession = session
             if session.status == .succeeded {
                 await refreshClaudeCodeAuthSuccessState(runtimeGeneration: runtimeGeneration)
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             let message = displayMessage(for: error)
             claudeCodeAuthSession = GaryxClaudeCodeAuthSession(
                 loginId: "",
@@ -36,7 +36,7 @@ extension GaryxMobileModel {
               !current.loginId.isEmpty else {
             return
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         cancelClaudeCodeAuthPolling()
         claudeCodeAuthSession = GaryxClaudeCodeAuthSession(
             loginId: current.loginId,
@@ -51,7 +51,7 @@ extension GaryxMobileModel {
                 loginId: current.loginId,
                 code: trimmedCode
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             claudeCodeAuthSession = session
             if session.status == .succeeded {
                 await refreshClaudeCodeAuthSuccessState(runtimeGeneration: runtimeGeneration)
@@ -64,7 +64,7 @@ extension GaryxMobileModel {
                 )
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if isClaudeCodeAuthSessionMissing(error) {
                 markClaudeCodeAuthSessionExpired()
                 return
@@ -101,7 +101,7 @@ extension GaryxMobileModel {
 
     private func startClaudeCodeAuthPolling(
         loginId: String,
-        runtimeGeneration: UUID
+        runtimeGeneration: GaryxGatewayRequestToken
     ) {
         guard !loginId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         cancelClaudeCodeAuthPolling()
@@ -119,7 +119,7 @@ extension GaryxMobileModel {
 
     private func pollClaudeCodeAuth(
         loginId: String,
-        runtimeGeneration: UUID,
+        runtimeGeneration: GaryxGatewayRequestToken,
         pollGeneration: UUID
     ) async {
         while !Task.isCancelled {
@@ -127,7 +127,7 @@ extension GaryxMobileModel {
                 try await Task.sleep(nanoseconds: 1_500_000_000)
                 try Task.checkCancellation()
                 let session = try await client().claudeCodeAuth(loginId: loginId)
-                guard runtimeGeneration == gatewayRuntimeGeneration,
+                guard runtimeGeneration == gatewayRequestToken,
                       pollGeneration == claudeCodeAuthPollGeneration,
                       claudeCodeAuthSession?.loginId == loginId else {
                     return
@@ -149,7 +149,7 @@ extension GaryxMobileModel {
                 }
             } catch {
                 guard !GaryxGatewayRetryClassifier.isCancellation(error) else { return }
-                guard runtimeGeneration == gatewayRuntimeGeneration,
+                guard runtimeGeneration == gatewayRequestToken,
                       pollGeneration == claudeCodeAuthPollGeneration,
                       claudeCodeAuthSession?.loginId == loginId else {
                     return
@@ -172,17 +172,17 @@ extension GaryxMobileModel {
         }
     }
 
-    private func refreshClaudeCodeAuthSuccessState(runtimeGeneration: UUID) async {
+    private func refreshClaudeCodeAuthSuccessState(runtimeGeneration: GaryxGatewayRequestToken) async {
         do {
             let usage = try await client().codingUsage()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             codingUsage = usage
             GaryxUsageWidgetStore.saveSnapshot(
                 GaryxUsageWidgetSnapshot(usage: usage, fetchedAt: Date())
             )
             WidgetCenter.shared.reloadTimelines(ofKind: GaryxCodingUsageWidgetConstants.kind)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             lastError = displayMessage(for: error)
         }
         await loadProviderModels(

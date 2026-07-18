@@ -46,7 +46,7 @@ extension GaryxMobileModel {
             runtimeEpoch: favoritesEpoch,
             forceReplacement: forceReplacement || source == .userPullToRefresh
         ) else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         if ticket.filter == .nonTask {
             startAuxiliaryAllRecentThreadsRefresh(source: source)
         }
@@ -65,7 +65,7 @@ extension GaryxMobileModel {
             )
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (fetchedRefresh, pinsPage) = try await (recentRefresh, threadPinsPage)
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 recentThreadFeeds.failRefresh(ticket)
                 return
             }
@@ -79,7 +79,7 @@ extension GaryxMobileModel {
                 requiredThreadIds: requiredThreadIds,
                 existingThreadIds: Set(fetchedThreads.map(\.id))
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 // Release the refresh gate: this transaction is abandoned
                 // (no-op if a pager reset already bumped the epoch).
                 recentThreadFeeds.failRefresh(ticket)
@@ -133,7 +133,7 @@ extension GaryxMobileModel {
             return
         } catch {
             recentThreadFeeds.failRefresh(ticket)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if recentThreadFeeds.selectedFilter == ticket.filter {
                 presentThreadListRefreshFailure(source: source, error: error)
             }
@@ -150,7 +150,7 @@ extension GaryxMobileModel {
             runtimeEpoch: threadFavoritesState.runtimeEpoch,
             forceReplacement: forceReplacement
         ) else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let taskId = UUID()
         auxiliaryAllRecentThreadsRefreshTaskId = taskId
         let task = Task { [weak self] in
@@ -171,14 +171,14 @@ extension GaryxMobileModel {
     private func performAuxiliaryAllRecentThreadsRefresh(
         ticket: GaryxRecentThreadRefreshTicket,
         source: GaryxThreadListRefreshSource,
-        runtimeGeneration: UUID
+        runtimeGeneration: GaryxGatewayRequestToken
     ) async {
         do {
             let fetched = try await fetchRecentRefresh(
                 ticket: ticket,
                 gatewayClient: client()
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 recentThreadFeeds.failRefresh(ticket)
                 return
             }
@@ -211,7 +211,7 @@ extension GaryxMobileModel {
             return
         } catch {
             recentThreadFeeds.failRefresh(ticket)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             // Auxiliary All failures remain silent while Chats is selected.
             // If the user switched to All while the coalesced request was in
             // flight, the request now owns the visible feed and follows the
@@ -228,7 +228,7 @@ extension GaryxMobileModel {
     private func refreshThreadPinsForFavorites(
         source: GaryxThreadListRefreshSource
     ) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let gatewayClient = try client()
             let requestStamp = capturePinnedOrderRequestStamp()
@@ -243,7 +243,7 @@ extension GaryxMobileModel {
                     requiredThreadIds.filter { threadSummaryCache.summary(for: $0) != nil }
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             let transactionId = homeProjectionGateway.beginTransaction(
                 label: "favorites-pins-refresh"
             )
@@ -261,7 +261,7 @@ extension GaryxMobileModel {
             }
             persistRecentThreadsWidgetSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   recentThreadFeeds.selectedFilter == .favorites else { return }
             presentThreadListRefreshFailure(source: source, error: error)
         }
@@ -504,13 +504,13 @@ extension GaryxMobileModel {
                   runtimeEpoch: threadFavoritesState.runtimeEpoch,
                   forceReplacement: true
               ) else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let fetched = try await fetchRecentRefresh(
                 ticket: ticket,
                 gatewayClient: client()
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 recentThreadFeeds.failRefresh(ticket)
                 return
             }
@@ -545,7 +545,7 @@ extension GaryxMobileModel {
         previousThreadSummaries: [GaryxThreadSummary],
         previouslyRemoteBusyThreadIds: Set<String>,
         selectionIdForThisRefresh: String?,
-        runtimeGeneration: UUID,
+        runtimeGeneration: GaryxGatewayRequestToken,
         pinsRevision: Int64 = 0,
         pinsRequestStamp: GaryxPinnedOrderRequestStamp? = nil
     ) {
@@ -746,14 +746,14 @@ extension GaryxMobileModel {
     }
 
     private func performLoadMoreThreads(ticket: GaryxRecentThreadLoadMoreTicket) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listRecentThreads(
                 filter: ticket.filter,
                 limit: ticket.limit,
                 cursor: ticket.cursor
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 recentThreadFeeds.failLoadMore(ticket)
                 return
             }
@@ -830,7 +830,7 @@ extension GaryxMobileModel {
         previousThreads: [GaryxThreadSummary],
         previouslyRemoteBusyThreadIds: Set<String>,
         refreshedThreads: [GaryxThreadSummary],
-        runtimeGeneration: UUID
+        runtimeGeneration: GaryxGatewayRequestToken
     ) {
         guard hasGatewaySettings else { return }
         let previousThreadsById = Dictionary(uniqueKeysWithValues: previousThreads.map { ($0.id, $0) })
@@ -864,7 +864,7 @@ extension GaryxMobileModel {
         )
     }
 
-    func hydrateCompletedRecentThreadHistory(threadId: String, runtimeGeneration: UUID) {
+    func hydrateCompletedRecentThreadHistory(threadId: String, runtimeGeneration: GaryxGatewayRequestToken) {
         guard completedThreadHistoryHydrationTasks[threadId] == nil else { return }
         completedThreadHistoryHydrationTasks[threadId] = Task { [weak self] in
             guard let self else { return }
@@ -876,11 +876,11 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    func hydrateCompletedRecentThreadHistoryNow(threadId: String, runtimeGeneration: UUID) async -> Bool {
+    func hydrateCompletedRecentThreadHistoryNow(threadId: String, runtimeGeneration: GaryxGatewayRequestToken) async -> Bool {
         defer {
             completedThreadHistoryHydrationTasks[threadId] = nil
         }
-        guard runtimeGeneration == gatewayRuntimeGeneration,
+        guard runtimeGeneration == gatewayRequestToken,
               hasGatewaySettings else {
             return true
         }
@@ -890,7 +890,7 @@ extension GaryxMobileModel {
                 limit: Self.threadHistoryPageLimit,
                 userQueryLimit: Self.threadHistoryUserQueryLimit
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return true }
+            guard runtimeGeneration == gatewayRequestToken else { return true }
             let prepared = await Task.detached(priority: .utility) {
                 GaryxPreparedThreadTranscriptUpdate.make(from: transcript)
             }.value
@@ -902,7 +902,7 @@ extension GaryxMobileModel {
                 scheduleRecoveryIfSelected: false
             )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return true }
+            guard runtimeGeneration == gatewayRequestToken else { return true }
             let message = displayMessage(for: error)
             if Self.isTransientGatewayErrorMessage(message) {
                 gatewaySettingsStatus = "Waiting to sync with gateway"
@@ -919,7 +919,7 @@ extension GaryxMobileModel {
             return
         }
         guard backgroundCommittedRunReconcileTask == nil else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         backgroundCommittedRunReconcileTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
@@ -935,8 +935,8 @@ extension GaryxMobileModel {
         backgroundCommittedRunReconcileTask = nil
     }
 
-    func reconcileBackgroundCommittedRunStates(runtimeGeneration: UUID) async {
-        guard runtimeGeneration == gatewayRuntimeGeneration,
+    func reconcileBackgroundCommittedRunStates(runtimeGeneration: GaryxGatewayRequestToken) async {
+        guard runtimeGeneration == gatewayRequestToken,
               hasGatewaySettings,
               case .ready = connectionState else {
             cancelBackgroundCommittedRunReconcileLoop()
@@ -962,7 +962,7 @@ extension GaryxMobileModel {
             )
             observedCompletion = observedCompletion || !remainedBusy
         }
-        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        guard runtimeGeneration == gatewayRequestToken else { return }
         if observedCompletion {
             await refreshThreads(source: .backgroundLoop)
         }

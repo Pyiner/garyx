@@ -770,7 +770,7 @@ private struct GaryxAvatarEditorSection: View {
         .sheet(isPresented: $showsStyleSheet) {
             GaryxAvatarStyleSheet(
                 state: $editorState,
-                cancellationToken: model.gatewayRuntimeGeneration,
+                cancellationToken: model.gatewayRequestToken,
                 identifier: trimmedIdentifier,
                 displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 providerType: providerType,
@@ -985,7 +985,7 @@ private struct GaryxAvatarEditorSection: View {
 private struct GaryxAvatarStyleSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var state: GaryxMobileAvatarEditorState
-    let cancellationToken: UUID
+    let cancellationToken: GaryxGatewayRequestToken
     let identifier: String
     let displayName: String
     let providerType: String

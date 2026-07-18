@@ -143,17 +143,28 @@ public struct GaryxCanonicalRouteState: Equatable, Sendable {
         stackRevision &+= 1
     }
 
-    fileprivate mutating func promoteVisibleDraft(
+    public mutating func promoteVisibleDraft(
         instanceID: GaryxRouteInstanceID,
         draftID: String,
         threadID: String
     ) -> Bool {
+        replaceRoutePayload(
+            instanceID: instanceID,
+            expected: .conversationDraft(draftID: draftID),
+            with: .conversation(threadID: threadID)
+        )
+    }
+
+    @discardableResult
+    public mutating func replaceRoutePayload(
+        instanceID: GaryxRouteInstanceID,
+        expected: GaryxRouteDestination,
+        with replacement: GaryxRouteDestination
+    ) -> Bool {
         guard let index = path.firstIndex(where: { entry in
-            entry.id == instanceID && entry.destination == .conversationDraft(draftID: draftID)
-        }) else {
-            return false
-        }
-        path[index].replacePayload(with: .conversation(threadID: threadID))
+            entry.id == instanceID && entry.destination == expected
+        }) else { return false }
+        path[index].replacePayload(with: replacement)
         // Payload replacement is not a topology change: stackRevision stays put.
         return true
     }

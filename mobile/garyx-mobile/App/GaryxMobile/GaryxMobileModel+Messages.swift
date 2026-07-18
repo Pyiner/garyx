@@ -138,58 +138,68 @@ extension GaryxMobileModel {
         setMessages(nextMessages, for: threadId)
     }
 
-    /// The unsent text bound to the current composer context (thread or new-thread).
+    /// Route-owned payload projection for the current scope/key. Empty text is
+    /// data, not an instruction to delete the key or its attachments.
     var activeComposerDraft: String {
-        composerDraftStore.current
+        composerPayloadCoordinator.currentText
     }
 
-    /// Persist the live composer text for the current context. Called on every
-    /// edit; cheap because the store is not `@Published`.
-    func setComposerDraft(_ text: String) {
-        composerDraftStore.setCurrent(text)
+    var activeComposerPayloadItems: [GaryxMobileComposerAttachment] {
+        composerPayloadCoordinator.currentAttachments.map { attachment in
+            GaryxMobileComposerAttachment(
+                id: attachment.id.rawValue,
+                kind: attachment.kind ?? "file",
+                name: attachment.name ?? "attachment",
+                mediaType: attachment.mediaType ?? "application/octet-stream",
+                path: attachment.uploadedPath ?? "",
+                previewDataUrl: attachment.previewDataURL
+            )
+        }
     }
 
-    /// Switch the composer to another thread/new-thread context, preserving the
-    /// outgoing context's unsent draft and loading the incoming one. Bumps
-    /// `composerContextVersion` so the field reloads only when the key changes.
-    func switchComposerDraft(to key: String) {
-        guard composerDraftStore.switchTo(key) else { return }
-        composerAttachments = []
-        composerContextVersion &+= 1
+    var activeComposerPayloadKey: GaryxComposerKey {
+        selectedThread.map { .thread($0.id) } ?? newThreadComposerPayloadKey
     }
 
-    /// Clear only the current context's draft — after a successful send.
-    func resetComposerDraft() {
-        composerDraftStore.reset()
-        composerAttachments = []
-        composerContextVersion &+= 1
+    func activateComposerPayload(for key: GaryxComposerKey) {
+        let token = gatewayRequestToken
+        Task { [weak self] in
+            guard let self, token == gatewayRequestToken else { return }
+            await composerPayloadCoordinator.activate(scope: token.scope, key: key)
+        }
     }
 
-    /// Drop a thread's draft (it was deleted or unbound); reload the field only
-    /// when that thread was the active context.
-    func discardComposerDraft(forThread threadId: String) {
-        guard composerDraftStore.discard(threadId: threadId) else { return }
-        composerAttachments = []
-        composerContextVersion &+= 1
+    func promoteActiveComposerPayload(to threadID: String) async throws {
+        let draftID: String? = if case .draft(let rawDraftID) = composerPayloadCoordinator.activeKey {
+            rawDraftID
+        } else {
+            nil
+        }
+        try await composerPayloadCoordinator.promoteActive(to: .thread(threadID))
+        if let draftID {
+            _ = productionRouteStore.promoteVisibleDraft(
+                draftID: draftID,
+                threadID: threadID
+            )
+            if !productionRouteStore.isAttached {
+                applyCanonicalRouteProjection(productionRouteStore.path)
+            }
+        }
     }
 
-    /// Drop every draft — the gateway changed, so the whole thread set is gone.
-    func clearAllComposerDrafts() {
-        composerDraftStore.clearAll()
-        composerAttachments = []
-        composerContextVersion &+= 1
+    func discardComposerPayload(forThread threadID: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            try? await composerPayloadCoordinator.discard(key: .thread(threadID))
+        }
     }
 
-    /// Draft key for the current new-thread composer, scoped to the target it will
-    /// create a thread for (the pending bot, else the agent), so composing for one
-    /// target and then switching to another does not show or send the first
-    /// target's draft under the second.
-    var newThreadComposerDraftKey: String {
+    /// Draft identity is scoped to the target it will create a thread for, so
+    /// changing target restores each target's own text and attachments.
+    var newThreadComposerPayloadKey: GaryxComposerKey {
         let botTarget = pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let target = botTarget.isEmpty ? newThreadAgentTargetId() : botTarget
-        return target.isEmpty
-            ? GaryxComposerDraftStore.newThreadKey
-            : "\(GaryxComposerDraftStore.newThreadKey):\(target)"
+        return .draft(target.isEmpty ? "new-thread" : "new-thread:\(target)")
     }
 
 }

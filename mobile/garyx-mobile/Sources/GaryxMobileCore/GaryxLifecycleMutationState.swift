@@ -24,7 +24,7 @@ public struct GaryxLifecycleMutationRequest: Equatable, Sendable {
     public var operationId: String
     public var expectedStoreIncarnation: String
     public var gatewayScope: String
-    public var runtimeGeneration: UUID
+    public var gatewayRequestToken: GaryxGatewayRequestToken
 
     public init(
         kind: GaryxLifecycleMutationKind,
@@ -33,7 +33,7 @@ public struct GaryxLifecycleMutationRequest: Equatable, Sendable {
         operationId: UUID = UUID(),
         expectedStoreIncarnation: String,
         gatewayScope: String,
-        runtimeGeneration: UUID
+        gatewayRequestToken: GaryxGatewayRequestToken
     ) {
         self.kind = kind
         self.threadId = threadId
@@ -41,7 +41,7 @@ public struct GaryxLifecycleMutationRequest: Equatable, Sendable {
         self.operationId = operationId.uuidString.lowercased()
         self.expectedStoreIncarnation = expectedStoreIncarnation
         self.gatewayScope = gatewayScope
-        self.runtimeGeneration = runtimeGeneration
+        self.gatewayRequestToken = gatewayRequestToken
     }
 }
 

@@ -333,19 +333,19 @@ extension GaryxMobileModel {
         workspaceThreadProviders[path] = provider
         store.setAvailability(.ready)
         commitThreadListStore(store, snapshot: provider.snapshot)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listThreadSummaries(
                 workspaceDir: ticket.workspacePath,
                 limit: provider.pager.pageLimit
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = workspaceThreadProviders[path] else { return }
             let completion = owned.completeRefresh(ticket, page: page)
             workspaceThreadProviders[path] = owned
             applyWorkspaceCompletion(completion, path: path, store: store)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = workspaceThreadProviders[path] else { return }
             owned.failRefresh(ticket)
             workspaceThreadProviders[path] = owned
@@ -372,7 +372,7 @@ extension GaryxMobileModel {
         guard let ticket else { return }
         workspaceThreadProviders[path] = provider
         commitThreadListStore(store, snapshot: provider.snapshot)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listThreadSummaries(
                 workspaceDir: ticket.workspacePath,
@@ -380,13 +380,13 @@ extension GaryxMobileModel {
                 limit: provider.pager.pageLimit,
                 cursor: ticket.cursor
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = workspaceThreadProviders[path] else { return }
             let completion = owned.completeLoadMore(ticket, page: page)
             workspaceThreadProviders[path] = owned
             applyWorkspaceCompletion(completion, path: path, store: store)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = workspaceThreadProviders[path] else { return }
             owned.failLoadMore(ticket)
             workspaceThreadProviders[path] = owned
@@ -446,14 +446,14 @@ extension GaryxMobileModel {
         }
         guard let ticket = owner.requestRefresh() else { return }
         owner.setAvailability(.ready)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listThreadSummaries(
                 query: ticket.query,
                 limit: owner.provider.pager.pageLimit
             )
             guard !Task.isCancelled,
-                  runtimeGeneration == gatewayRuntimeGeneration else { return }
+                  runtimeGeneration == gatewayRequestToken else { return }
             switch owner.completeRefresh(ticket, page: page) {
             case .accepted:
                 publishThreadSummaryState()
@@ -464,7 +464,7 @@ extension GaryxMobileModel {
             }
         } catch {
             guard !Task.isCancelled,
-                  runtimeGeneration == gatewayRuntimeGeneration else { return }
+                  runtimeGeneration == gatewayRequestToken else { return }
             owner.failRefresh(ticket)
             owner.setAvailability(.failed(message: displayMessage(for: error)))
         }
@@ -480,7 +480,7 @@ extension GaryxMobileModel {
             ? owner.retryLoadMore()
             : owner.requestLoadMore(trigger: trigger)
         guard let ticket else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listThreadSummaries(
                 query: ticket.query,
@@ -488,7 +488,7 @@ extension GaryxMobileModel {
                 cursor: ticket.cursor
             )
             guard !Task.isCancelled,
-                  runtimeGeneration == gatewayRuntimeGeneration else { return }
+                  runtimeGeneration == gatewayRequestToken else { return }
             switch owner.completeLoadMore(ticket, page: page) {
             case .accepted:
                 publishThreadSummaryState()
@@ -499,7 +499,7 @@ extension GaryxMobileModel {
             }
         } catch {
             guard !Task.isCancelled,
-                  runtimeGeneration == gatewayRuntimeGeneration else { return }
+                  runtimeGeneration == gatewayRequestToken else { return }
             owner.failLoadMore(ticket)
         }
     }
@@ -521,11 +521,11 @@ extension GaryxMobileModel {
             owner.swapSelectedTarget(cached)
             return cached
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let summary = try await client().getThread(threadId: threadId)
             guard !Task.isCancelled,
-                  runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+                  runtimeGeneration == gatewayRequestToken else { return nil }
             owner.swapSelectedTarget(summary)
             publishThreadSummaryState()
             return summary
@@ -556,20 +556,20 @@ extension GaryxMobileModel {
               let ticket = provider.requestRefresh() else { return }
         automationThreadProviders[automationId] = provider
         commitThreadListStore(store, snapshot: provider.snapshot)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().automationThreads(
                 id: automationId,
                 limit: provider.pager.pageLimit,
                 offset: 0
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = automationThreadProviders[automationId] else { return }
             let completion = owned.completeRefresh(ticket, page: page)
             automationThreadProviders[automationId] = owned
             applyAutomationCompletion(completion, automationId: automationId, store: store)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = automationThreadProviders[automationId] else { return }
             owned.failRefresh(ticket)
             automationThreadProviders[automationId] = owned
@@ -595,20 +595,20 @@ extension GaryxMobileModel {
         guard let ticket else { return }
         automationThreadProviders[automationId] = provider
         commitThreadListStore(store, snapshot: provider.snapshot)
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().automationThreads(
                 id: automationId,
                 limit: ticket.pagerTicket.limit,
                 offset: ticket.pagerTicket.offset
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = automationThreadProviders[automationId] else { return }
             let completion = owned.completeLoadMore(ticket, page: page)
             automationThreadProviders[automationId] = owned
             applyAutomationCompletion(completion, automationId: automationId, store: store)
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration,
+            guard runtimeGeneration == gatewayRequestToken,
                   var owned = automationThreadProviders[automationId] else { return }
             owned.failLoadMore(ticket)
             automationThreadProviders[automationId] = owned

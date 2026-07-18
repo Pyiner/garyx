@@ -10,7 +10,10 @@ final class GaryxLifecycleMutationStateTests: XCTestCase {
         operationId: UUID(uuidString: "10000000-0000-4000-8000-000000000001")!,
         expectedStoreIncarnation: "20000000-0000-4000-8000-000000000002",
         gatewayScope: "gateway-scope",
-        runtimeGeneration: UUID(uuidString: "30000000-0000-4000-8000-000000000003")!
+        gatewayRequestToken: GaryxGatewayRequestToken(
+            scope: GaryxGatewayScope(identity: "gateway-scope", epoch: 3),
+            activationSequence: 1
+        )
     )
 
     func testRealTimingPolicyKeepsJoinInsideTransportAndDefinesFiveResends() {

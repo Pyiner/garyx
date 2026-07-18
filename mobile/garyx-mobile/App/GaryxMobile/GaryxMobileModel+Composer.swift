@@ -3,141 +3,197 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
 
-private struct GaryxPreparedLocalChatFile: Sendable {
-    let blob: GaryxUploadChatAttachmentBlob
-    let preview: GaryxPendingUploadPreview
-}
-
 extension GaryxMobileModel {
     func attachFiles(from urls: [URL]) async {
         guard !urls.isEmpty else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let requestToken = gatewayRequestToken
         do {
-            let localFiles = try await Task.detached(priority: .userInitiated) {
-                try Self.prepareLocalChatFiles(from: urls)
-            }.value
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let uploaded = try await client().uploadChatAttachments(
-                GaryxUploadChatAttachmentsRequest(files: localFiles.map(\.blob))
-            )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            guard uploaded.files.count == localFiles.count else {
-                throw GaryxGatewayError.encodingFailed(
-                    "Gateway did not return every uploaded file."
-                )
-            }
-            var previews = localFiles.map(\.preview)
-            composerAttachments.append(
-                contentsOf: uploaded.files.map { file in
-                    let preview = Self.matchedUploadPreview(for: file, from: &previews)
-                    return GaryxMobileComposerAttachment(
-                        id: "\(file.path)-\(UUID().uuidString)",
-                        kind: file.kind,
-                        name: file.name,
-                        mediaType: file.mediaType,
-                        path: file.path,
-                        previewDataUrl: preview?.previewDataUrl
+            // Freeze the destination configuration before the picker result
+            // crosses an await. A gateway switch may suspend this scope, but
+            // this operation must still upload to and settle in its origin.
+            let uploadClient = try client()
+            for url in urls {
+                let didAccess = url.startAccessingSecurityScopedResource()
+                let metadata: GaryxComposerAttachmentMetadata
+                let staged: GaryxComposerStagedUpload
+                do {
+                    metadata = try Self.localAttachmentMetadata(for: url)
+                    staged = try await composerPayloadCoordinator.stageAttachment(
+                        sourceURL: url,
+                        metadata: metadata,
+                        requestToken: requestToken
                     )
+                } catch {
+                    if didAccess { url.stopAccessingSecurityScopedResource() }
+                    throw error
                 }
-            )
+                if didAccess { url.stopAccessingSecurityScopedResource() }
+                do {
+                    let uploaded = try await Self.upload(staged, using: uploadClient)
+                    try await composerPayloadCoordinator.completeUpload(staged, uploaded: uploaded)
+                } catch {
+                    await composerPayloadCoordinator.failUpload(staged)
+                    throw error
+                }
+            }
         } catch {
-            guard !Task.isCancelled, runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard !Task.isCancelled else { return }
             lastError = displayMessage(for: error)
         }
     }
 
-    nonisolated private static func prepareLocalChatFiles(
-        from urls: [URL]
-    ) throws -> [GaryxPreparedLocalChatFile] {
-        try urls.map { url in
-            let didAccess = url.startAccessingSecurityScopedResource()
-            defer {
-                if didAccess {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-            let data = try Data(contentsOf: url)
-            let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
-            let mediaType = resourceValues?.contentType?.preferredMIMEType
-                ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                ?? "application/octet-stream"
-            let kind = mediaType.hasPrefix("image/") ? "image" : "file"
-            let encoded = data.base64EncodedString()
-            let name = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
-            return GaryxPreparedLocalChatFile(
-                blob: GaryxUploadChatAttachmentBlob(
-                    kind: kind,
-                    name: name,
-                    mediaType: mediaType,
-                    dataBase64: encoded
-                ),
-                preview: GaryxPendingUploadPreview(
-                    name: name,
-                    mediaType: mediaType,
-                    previewDataUrl: kind == "image"
-                        ? Self.dataUrl(mediaType: mediaType, base64: encoded)
-                        : nil
-                )
+    nonisolated private static func localAttachmentMetadata(
+        for url: URL
+    ) throws -> GaryxComposerAttachmentMetadata {
+        let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
+        let mediaType = resourceValues?.contentType?.preferredMIMEType
+            ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+            ?? "application/octet-stream"
+        let kind = mediaType.hasPrefix("image/") ? "image" : "file"
+        let name = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
+        let preview: String?
+        if kind == "image" {
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            preview = dataUrl(mediaType: mediaType, base64: data.base64EncodedString())
+        } else {
+            preview = nil
+        }
+        return GaryxComposerAttachmentMetadata(
+            kind: kind,
+            name: name,
+            mediaType: mediaType,
+            previewDataURL: preview
+        )
+    }
+
+    nonisolated private static func upload(
+        _ staged: GaryxComposerStagedUpload,
+        using client: GaryxGatewayClient
+    ) async throws -> GaryxUploadedChatAttachment {
+        let blob = try await Task.detached(priority: .userInitiated) {
+            let data = try Data(contentsOf: staged.fileURL, options: .mappedIfSafe)
+            return GaryxUploadChatAttachmentBlob(
+                kind: staged.metadata.kind,
+                name: staged.metadata.name,
+                mediaType: staged.metadata.mediaType,
+                dataBase64: data.base64EncodedString()
+            )
+        }.value
+        let response = try await client.uploadChatAttachments(
+            GaryxUploadChatAttachmentsRequest(files: [blob])
+        )
+        guard response.files.count == 1, let uploaded = response.files.first else {
+            throw GaryxGatewayError.encodingFailed(
+                "Gateway did not return the uploaded file."
             )
         }
+        return uploaded
     }
 
     func attachImages(_ images: [GaryxMobileSelectedImage]) async {
         guard !images.isEmpty else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        let batch = await Task.detached(priority: .userInitiated) {
-            GaryxChatImageUploadBatch.prepare(images)
-        }.value
-        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        let requestToken = gatewayRequestToken
         do {
-            let uploaded = try await client().uploadChatAttachments(batch.request)
-            let attachments = await Task.detached(priority: .userInitiated) {
-                batch.composerAttachments(from: uploaded.files)
-            }.value
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            guard let attachments else {
-                throw GaryxGatewayError.encodingFailed(
-                    "Gateway did not return every uploaded image."
+            let uploadClient = try client()
+            for image in images {
+                let temporaryURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("garyx-composer-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: temporaryURL) }
+                try image.data.write(to: temporaryURL, options: .atomic)
+                let preview = Self.dataUrl(
+                    mediaType: image.mediaType,
+                    base64: image.data.base64EncodedString()
                 )
+                let staged = try await composerPayloadCoordinator.stageAttachment(
+                    sourceURL: temporaryURL,
+                    metadata: GaryxComposerAttachmentMetadata(
+                        kind: "image",
+                        name: image.name,
+                        mediaType: image.mediaType,
+                        previewDataURL: preview
+                    ),
+                    requestToken: requestToken
+                )
+                do {
+                    let uploaded = try await Self.upload(staged, using: uploadClient)
+                    try await composerPayloadCoordinator.completeUpload(staged, uploaded: uploaded)
+                } catch {
+                    await composerPayloadCoordinator.failUpload(staged)
+                    throw error
+                }
             }
-            composerAttachments.append(contentsOf: attachments)
         } catch {
-            guard !Task.isCancelled, runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard !Task.isCancelled else { return }
             lastError = displayMessage(for: error)
         }
     }
 
-    func removeComposerAttachment(_ attachment: GaryxMobileComposerAttachment) {
-        composerAttachments.removeAll { $0.id == attachment.id }
+    func removeComposerPayloadItem(_ attachment: GaryxMobileComposerAttachment) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await composerPayloadCoordinator.removeAttachment(
+                    GaryxAttachmentID(rawValue: attachment.id)
+                )
+            } catch {
+                lastError = displayMessage(for: error)
+            }
+        }
     }
 
     @discardableResult
     func sendDraft() async -> Bool {
-        await sendDraft(text: activeComposerDraft)
+        let projectedText = activeComposerDraft
+        let projectedItems = activeComposerPayloadItems
+        guard composerPayloadCoordinator.canSend,
+              canSendComposerPayload(text: projectedText, attachments: projectedItems),
+              !projectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !projectedItems.isEmpty else {
+            return false
+        }
+        let clientIntentID = "mobile-\(UUID().uuidString)"
+        do {
+            let (rawText, durableItems) = try await composerPayloadCoordinator.takeReadyPayload(
+                clientIntentID: clientIntentID
+            )
+            let text = rawText
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let attachments = durableItems.compactMap { item -> GaryxMobileComposerAttachment? in
+                guard let path = item.uploadedPath, !path.isEmpty else { return nil }
+                return GaryxMobileComposerAttachment(
+                    id: item.id.rawValue,
+                    kind: item.kind ?? "file",
+                    name: item.name ?? "attachment",
+                    mediaType: item.mediaType ?? "application/octet-stream",
+                    path: path,
+                    previewDataUrl: item.previewDataURL
+                )
+            }
+            guard attachments.count == durableItems.count else {
+                throw GaryxComposerPayloadRuntimeError.attachmentNotUploaded
+            }
+            await send(
+                text,
+                attachments: attachments,
+                clientIntentId: clientIntentID
+            )
+            return true
+        } catch {
+            lastError = displayMessage(for: error)
+            return false
+        }
     }
 
-    @discardableResult
-    func sendDraft(text rawText: String) async -> Bool {
-        // The iOS composer emits carriage returns (`\r`) for line breaks, and
-        // pasted text can carry `\r\n`. Downstream storage, the provider prompt,
-        // and the `\n`-based transcript renderer only understand `\n`, so collapse
-        // line endings before trimming the surrounding whitespace.
-        let text = rawText
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let attachments = composerAttachments
-        guard canSendComposerPayload(text: text, attachments: attachments) else { return false }
-        guard !text.isEmpty || !attachments.isEmpty else { return false }
-        resetComposerDraft()
-        await send(text, attachments: attachments)
-        return true
-    }
-
-    func send(_ text: String, attachments: [GaryxMobileComposerAttachment] = []) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+    func send(
+        _ text: String,
+        attachments: [GaryxMobileComposerAttachment] = [],
+        clientIntentId suppliedClientIntentId: String? = nil
+    ) async {
+        let runtimeGeneration = gatewayRequestToken
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
-        let clientIntentId = "mobile-\(UUID().uuidString)"
+        let clientIntentId = suppliedClientIntentId ?? "mobile-\(UUID().uuidString)"
         let userMessage = GaryxMobileMessage(
             id: Self.userOriginMessageId(clientIntentId),
             role: .user,
@@ -187,16 +243,16 @@ extension GaryxMobileModel {
         do {
             let ensuredThread = try await ensureSelectedThreadForDraftCreation()
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             let thread = ensuredThread.thread
             if optimisticThreadId == nil {
+                // Promotion changes only the destination index. The stable
+                // Entry/token continues to own follow-up input that arrived
+                // while thread creation was in flight.
+                try await promoteActiveComposerPayload(to: thread.id)
                 optimisticThreadId = thread.id
                 setMessages(draftOptimisticMessages, for: thread.id)
                 activeAssistantMessageIdsByThread[thread.id] = assistantId
-                // The thread was just created from the new-thread composer; bind
-                // the draft context to it so any follow-up text is saved against
-                // this thread instead of the new-thread buffer.
-                switchComposerDraft(to: thread.id)
             }
             guard runTracker.beginLocalDispatch(
                 threadId: thread.id,
@@ -232,7 +288,7 @@ extension GaryxMobileModel {
                 assistantMessageId: assistantId
             )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if let optimisticThreadId {
                 markLatestLocalUserFailed(for: optimisticThreadId, message: displayMessage(for: error))
                 forgetPendingDirectFollowUp(
@@ -301,7 +357,7 @@ extension GaryxMobileModel {
     }
 
     func submitQueuedInputViaGateway(_ queued: GaryxPendingQueuedInput) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         pendingQueuedInputsByIntentId[queued.clientIntentId] = queued
         threadSummaryLeaseOwner.replaceComposerReferences(
             ownerId: queued.clientIntentId,
@@ -318,7 +374,7 @@ extension GaryxMobileModel {
                 )
             )
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if Self.isSuccessfulStreamInputStatus(result.status) {
                 bindLocalPendingInput(
                     threadId: queued.threadId,
@@ -354,7 +410,7 @@ extension GaryxMobileModel {
                 }
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             if pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) != nil {
                 threadSummaryLeaseOwner.cancelComposer(ownerId: queued.clientIntentId)
                 let message = displayMessage(for: error)
@@ -376,12 +432,12 @@ extension GaryxMobileModel {
 
     func dispatchQueuedInputFallback(
         _ queued: GaryxPendingQueuedInput,
-        runtimeGeneration: UUID
+        runtimeGeneration: GaryxGatewayRequestToken
     ) async {
         defer {
             threadSummaryLeaseOwner.settleComposer(ownerId: queued.clientIntentId)
         }
-        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        guard runtimeGeneration == gatewayRequestToken else { return }
         let fallbackSelectedThread = selectedThread?.id == queued.threadId ? selectedThread : nil
         guard let thread = cachedThreadSummary(for: queued.threadId) ?? fallbackSelectedThread else {
             markLocalInputFailed(
@@ -439,7 +495,7 @@ extension GaryxMobileModel {
                 assistantMessageId: assistantId
             )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return }
             markLocalInputFailed(
                 threadId: queued.threadId,
                 clientIntentId: queued.clientIntentId,
@@ -466,7 +522,7 @@ extension GaryxMobileModel {
         workspacePath: String?,
         assistantMessageId: String
     ) async throws {
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let result = try await client().startChat(
             GaryxStartChatRequest(
                 threadId: threadId,
@@ -481,7 +537,7 @@ extension GaryxMobileModel {
             )
         )
         try Task.checkCancellation()
-        guard runtimeGeneration == gatewayRuntimeGeneration else {
+        guard runtimeGeneration == gatewayRequestToken else {
             throw CancellationError()
         }
         guard Self.isSuccessfulStreamInputStatus(result.status) else {
@@ -526,9 +582,9 @@ extension GaryxMobileModel {
             messages.removeSubrange(index..<messages.endIndex)
         }
         guard let text = capturedText else { return false }
-        let composerAttachments = capturedAttachments.compactMap(Self.composerAttachment(from:))
+        let composerPayloadItems = capturedAttachments.compactMap(Self.composerAttachment(from:))
         lastError = nil
-        await send(text, attachments: composerAttachments)
+        await send(text, attachments: composerPayloadItems)
         return true
     }
 
@@ -587,7 +643,7 @@ extension GaryxMobileModel {
         if let selectedThread {
             return GaryxEnsuredThread(thread: selectedThread, adoptedSelection: true)
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
+        let runtimeGeneration = gatewayRequestToken
         let draftGeneration = selectedThreadDraftGeneration
         let pendingBotDraft = currentPendingBotDraft()
         let pendingWorkspace = pendingBotDraft?.workspace ?? ""
@@ -617,7 +673,7 @@ extension GaryxMobileModel {
             )
         )
         try Task.checkCancellation()
-        guard runtimeGeneration == gatewayRuntimeGeneration else {
+        guard runtimeGeneration == gatewayRequestToken else {
             throw CancellationError()
         }
         let mutationId = nextThreadMutationId(kind: "insert", threadId: thread.id)
@@ -644,7 +700,9 @@ extension GaryxMobileModel {
             || (selectedThread == nil && selectedThreadDraftGeneration == draftGeneration)
         if canAdoptSelection {
             adoptsDraftConversationToken = true
-            selectedThread = thread
+            if !productionRouteStore.isAttached {
+                selectedThread = thread
+            }
             draftThreadTitle = thread.title
             clearPendingNewThreadAgentTarget()
             clearNewThreadModelOverride()
@@ -652,7 +710,7 @@ extension GaryxMobileModel {
         if !pendingBotIdForThread.isEmpty {
             _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 throw CancellationError()
             }
             clearPendingBotDraftIfCurrent(
@@ -663,7 +721,7 @@ extension GaryxMobileModel {
             )
             await refreshRemoteState()
             try Task.checkCancellation()
-            guard runtimeGeneration == gatewayRuntimeGeneration else {
+            guard runtimeGeneration == gatewayRequestToken else {
                 throw CancellationError()
             }
         }
