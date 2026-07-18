@@ -1112,6 +1112,10 @@ enum GaryxComposerDurabilityTransactionEngine {
                   entry.lifecycle.token == operation.context.payloadLifecycle.token else {
                 throw invariant("operation capability is absent from authoritative Entry membership")
             }
+            if operation.state == .superseded,
+               operation.stagedAssetID != nil || operation.reservedBytes != 0 {
+                throw invariant("superseded operation must retain lineage only")
+            }
         }
         for (key, manifest) in state.manifests {
             guard manifest.key == key,
