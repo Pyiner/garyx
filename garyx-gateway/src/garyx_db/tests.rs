@@ -1336,7 +1336,7 @@ fn recent_membership_cutover_registration_requires_summary_then_activity() {
             .already_completed
     );
 
-    let source = include_str!("mod.rs");
+    let source = include_str!("migrations.rs");
     let registrations = source
         .split_once("pub(crate) fn run_thread_data_startup_migrations")
         .unwrap()

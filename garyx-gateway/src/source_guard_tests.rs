@@ -39,10 +39,23 @@ fn production_calls(source: &Path, needle: &str) -> Vec<String> {
     calls
 }
 
+fn garyx_db_production_source(source: &Path) -> String {
+    let mut files = Vec::new();
+    production_rust_files(&source.join("garyx_db"), &mut files);
+    files.sort();
+    let mut combined = String::new();
+    for path in files {
+        let body = fs::read_to_string(&path).expect("read garyx db source");
+        combined.push_str(body.split("#[cfg(test)]\nmod ").next().unwrap_or(&body));
+        combined.push('\n');
+    }
+    combined
+}
+
 #[test]
 fn raw_destructive_database_methods_are_crate_private_and_call_site_guarded() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let db = fs::read_to_string(source.join("garyx_db/mod.rs")).expect("read garyx db source");
+    let db = garyx_db_production_source(&source);
     assert!(db.contains("pub(crate) fn archive_thread_record("));
     assert!(db.contains("pub(crate) fn delete_thread_record_with_projections("));
     assert!(!db.contains("pub fn archive_thread_record("));
@@ -70,8 +83,8 @@ fn raw_destructive_database_methods_are_crate_private_and_call_site_guarded() {
 #[test]
 fn direct_recent_thread_updates_are_prebind_only_and_call_site_guarded() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let db = fs::read_to_string(source.join("garyx_db/mod.rs")).expect("read garyx db source");
-    let production = db.split("#[cfg(test)]\nmod ").next().unwrap_or(&db);
+    let db = garyx_db_production_source(&source);
+    let production = db.as_str();
 
     assert_eq!(
         production.matches("\"UPDATE recent_threads\n").count()
