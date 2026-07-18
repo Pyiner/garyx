@@ -1,6 +1,6 @@
 # Tool Projection: File Change Bodies (Write / Edit)
 
-Status: v5 for review (v4 FAIL findings addressed)
+Status: v6 for review (v5 FAIL findings addressed)
 Date: 2026-07-18
 
 ## Problem
@@ -90,6 +90,10 @@ presentation. Reusing the display selector would force meaningless
 sensible to put there) and would route resolution through display-oriented
 filters.
 
+The block below documents the **wire shape only** — in code it is the raw
+serde shadow DTO, not the domain API (see the invariants section for the
+domain types that make illegal states unrepresentable):
+
 ```rust
 /// Pure location: which root and path inside one message body.
 pub struct RenderToolValueSelector {
@@ -143,15 +147,33 @@ pub struct RenderToolFieldProjection {
 ```
 
 **Structural invariants** (unrepresentable, not advisory): a recipe holds
-at least one segment, and a `Pair` carries at least one side. These are
-enforced by construction — private fields with checked constructors (a
-non-empty segments wrapper; `Pair` construction requires a side) — so the
-server *cannot* build or serialize an illegal recipe, and by a custom
-`Deserialize` (decode into a raw shadow shape, then validate via the same
-constructors) that keeps the wire shape given above, so an illegal recipe
-*fails decode*. On the client, a failing recipe decode is a malformed
-projection and takes the lossy boundary (below). Plain derive would accept
-empty `Vec`s and double-`None` pairs; that is explicitly not sufficient.
+at least one segment, and a `Pair` carries at least one side. The public
+domain API exposes only types that cannot express violations:
+
+```rust
+// Domain API (sketch; names indicative). All fields private.
+pub struct RenderToolDiffPair { /* old/new, ≥1 side, private */ }
+impl RenderToolDiffPair {
+    pub fn old_new(old: RenderToolValueSelector, new: RenderToolValueSelector) -> Self;
+    pub fn insert(new: RenderToolValueSelector) -> Self;   // old absent
+    pub fn delete(old: RenderToolValueSelector) -> Self;   // new absent
+}
+pub enum RenderToolDiffSegment { Unified(RenderToolValueSelector), Pair(RenderToolDiffPair) }
+pub struct RenderToolDiffRecipe { /* source + non-empty segments, private */ }
+impl RenderToolDiffRecipe {
+    pub fn new(source: RenderToolDiffSource, segments: Vec<RenderToolDiffSegment>) -> Option<Self>; // None when empty
+}
+```
+
+Serialization goes through the shadow DTO (`From<&Recipe>`), so the server
+*cannot* build or serialize an illegal recipe — there is no public
+constructor or field access that admits one. Deserialization decodes the
+shadow DTO and validates through the same constructors (`TryFrom`), so an
+illegal recipe *fails decode* while the wire shape stays exactly as
+documented above. On the client, a failing recipe decode is a malformed
+projection and takes the lossy boundary (below). Plain derive on public
+shapes would accept empty `Vec`s and double-`None` pairs; that is
+explicitly not sufficient.
 
 **Zero-contribution pruning (derive time).** The deriver holds the
 committed raw values, so visual emptiness is decided where the values are
@@ -165,6 +187,17 @@ with `content: ""`, `Edit` with both strings empty) would suppress a valid
 result-side recipe and render nothing. Render-time composition semantics
 below still cover values that later resolve empty on the client (e.g. the
 source body is not loaded).
+
+**Consumed set.** "Consumed" is defined *after* pruning: the consumed set
+of a pass is exactly the set of value locations referenced by the
+**surviving** segments of that pass's recipe. A pass whose recipe pruned
+to `None` has an empty consumed set — `{foo, bar, diff: ""}` and
+`{foo, bar, changes: []}` therefore keep today's whole-object fallback and
+lose nothing. Array consumption is per-element (partial): in
+`changes: [{diff: "+x"}, {diff: ""}]` only the first element's location is
+consumed; since `changes`/`diff` left the scalar key lists, the pruned
+elements are not re-selected anyway, and the whole-object fallback is
+suppressed because the consumed set is non-empty.
 
 **Raw resolution path.** Clients resolve diff operands with a dedicated
 raw-string resolution: recipe `source` body + value selector → the exact
@@ -257,15 +290,23 @@ none behind.
    (`MultiEdit`) → one `Pair` per element; `content`/`new_source`
    (`Write`, `NotebookEdit`) → one `Pair` with `old` absent. A `content`
    key outside these kinds keeps its existing output/text meaning.
-4. **Summary owns the path; `call` is forced empty.** When the call pass
-   derived a recipe for a file-kind tool, the path (`file_path`,
-   `filePath`, `AbsolutePath`, `TargetFile`, `notebook_path`, `path`,
-   `file`) belongs exclusively to `summary` (`label: file`,
-   `format: path`) and **`call` is `None`** — scalar call selection does
-   not run for these rows. Without this rule the path-first key list would
-   re-select `file_path` into `call` after `content` was consumed, and the
-   existing "summary equals call" filter would then drop the summary,
-   recreating today's bug shape. If no path key exists, keep the existing
+4. **Summary owns the path; `call` is forced empty — a shape invariant,
+   not a recipe-survival condition.** For a `FileWrite`/`FileEdit` call
+   pass whose input matches a **recognized file-change shape** — any of
+   the structured keys (`old_string`/`new_string`, `edits`,
+   `content`/`new_source`) or pre-rendered keys (`changes`/`diff`) is
+   present, regardless of whether the derived recipe survived pruning —
+   the path (`file_path`, `filePath`, `AbsolutePath`, `TargetFile`,
+   `notebook_path`, `path`, `file`) belongs exclusively to `summary`
+   (`label: file`, `format: path`) and **`call` is `None`**; scalar call
+   selection does not run. Keying this on recipe survival would let an
+   empty `Write`/`Edit` fall back to path-in-call (and the "summary equals
+   call" filter would then drop the summary); if a result-side recipe
+   later merged in, the row would end up `summary=None, call=path,
+   diff=result` — an inconsistent shape. With the shape invariant, an
+   empty `Write` still projects `summary=path, call=None`, with or without
+   a later result recipe. File-kind inputs matching no recognized shape
+   keep today's behavior. If no path key exists, keep the existing
    `CALL_SUMMARY_KEYS` behavior.
 5. **Classification sweep.** `NotebookEdit` currently classifies as
    `Generic` (its compacted name matches no rule); add it to `FileEdit`.
@@ -394,7 +435,11 @@ after the implementation**, at every layer that changes.
      (no call pass) adopts the `tool_result` recipe.
    - Slot exclusivity: for all four structured tools (`Write`, `Edit`,
      `MultiEdit`, `NotebookEdit`) assert `summary == path selector` **and**
-     `call == None`.
+     `call == None` — both for the call-only projection and for the final
+     merged projection; and for the empty-body variants (`content: ""`,
+     both strings empty) assert the same slots with `diff == None`, plus
+     the merged case where a valid result recipe is adopted while
+     `summary`/`call` stay `path`/`None`.
    - Orthogonal scan: Generic call `{diff: "+x"}` → recipe with empty
      call (no JSON degradation); `{foo, bar, diff}` on the call side and
      on the result side → recipe plus only precisely selectable scalars,
@@ -411,6 +456,10 @@ after the implementation**, at every layer that changes.
      call body + valid result recipe → result adopted" pass;
      whitespace-only values still derive segments. All four merge-table
      cases.
+   - Consumed set: `{foo, bar, diff: ""}` and `{foo, bar, changes: []}` on
+     both sides keep the whole-object fallback (pruned recipe ⇒ empty
+     consumed set); mixed array `changes: [{diff: "+x"}, {diff: ""}]`
+     consumes only the surviving element and suppresses the fallback.
    - Enforcement: illegal raw JSON (empty `segments`, double-`None` pair)
      fails recipe decode in Rust; the checked constructors make illegal
      recipes unrepresentable, pinned by a compile-visible API (no public
