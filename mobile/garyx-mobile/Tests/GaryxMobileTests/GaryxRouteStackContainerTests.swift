@@ -146,6 +146,105 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertFalse(try! XCTUnwrap(superseded.visibleWrapper()).isUserInteractionEnabled)
     }
 
+    func testProgrammaticImmediateSettleWhileInactiveDefersVisibleEffects() {
+        let harness = Harness(path: [entry(1)])
+        harness.container.sceneDidBecomeInactive()
+
+        XCTAssertTrue(harness.container.push(entry(2), animated: false))
+        XCTAssertEqual(
+            harness.probe.terminals,
+            [.init(outcome: .committed, visibility: .inactive)]
+        )
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+
+        harness.container.sceneDidBecomeInactive()
+        XCTAssertEqual(harness.probe.terminals.count, 1)
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+
+        harness.container.sceneDidBecomeActive()
+        harness.container.sceneDidBecomeActive()
+        XCTAssertEqual(harness.probe.screenChangedCount, 1)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testInteractiveImmediatePolicyWhileInactiveDefersVisibleEffects() {
+        let harness = Harness(
+            path: [entry(1)],
+            preferences: .init(reduceMotion: true, prefersCrossFadeTransitions: false)
+        )
+        harness.container.sceneDidBecomeInactive()
+
+        XCTAssertTrue(harness.container.beginInteractivePop())
+        harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.7)
+        XCTAssertEqual(harness.container.endInteractivePop(logicalVelocity: 0), .committed)
+        XCTAssertEqual(
+            harness.probe.terminals,
+            [.init(outcome: .committed, visibility: .inactive)]
+        )
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+
+        harness.container.sceneDidBecomeActive()
+        XCTAssertEqual(harness.probe.screenChangedCount, 1)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testDeferredCommittedDestinationCanStartNextCommitWithoutLifecycleViolation() {
+        let harness = Harness(path: [entry(1)])
+        XCTAssertTrue(harness.container.beginInteractivePop())
+        harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.7)
+        XCTAssertEqual(harness.container.endInteractivePop(logicalVelocity: 0), .committed)
+        harness.container.sceneDidBecomeInactive()
+
+        XCTAssertEqual(
+            harness.probe.terminals,
+            [.init(outcome: .committed, visibility: .inactive)]
+        )
+        XCTAssertTrue(harness.container.push(entry(2), animated: false))
+        XCTAssertEqual(harness.container.path, [entry(2)])
+        XCTAssertEqual(
+            harness.probe.terminals,
+            [
+                .init(outcome: .committed, visibility: .inactive),
+                .init(outcome: .committed, visibility: .inactive),
+            ]
+        )
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+
+        harness.container.sceneDidBecomeActive()
+        harness.container.sceneDidBecomeActive()
+        XCTAssertEqual(harness.probe.screenChangedCount, 1)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testNewTransitionPermanentlyCancelsDeferredVisibleEffects() {
+        let harness = Harness(path: [entry(1), entry(2)])
+        XCTAssertTrue(harness.container.beginInteractivePop())
+        harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.7)
+        XCTAssertEqual(harness.container.endInteractivePop(logicalVelocity: 0), .committed)
+        harness.container.sceneDidBecomeInactive()
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+
+        XCTAssertTrue(harness.container.beginInteractivePop())
+        harness.container.sceneDidBecomeActive()
+        XCTAssertEqual(
+            harness.probe.screenChangedCount,
+            0,
+            "a superseded inactive terminal must never replay during the next transaction"
+        )
+
+        harness.container.cancelInteractivePop()
+        harness.container.completeSettleImmediately()
+        XCTAssertEqual(
+            harness.probe.terminals,
+            [
+                .init(outcome: .committed, visibility: .inactive),
+                .init(outcome: .cancelled, visibility: .visible),
+            ]
+        )
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
     func testStagedDestinationPerformsNoLifecycleWritesUntilCommittedVisible() {
         let harness = Harness(path: [entry(1)])
         let home = GaryxRoutePresentationIdentity.home
@@ -270,6 +369,28 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             churn.container.metrics.stateStore.evictableCostBytes,
             2 * 1_024 * 1_024
         )
+    }
+
+    func testPopMultipleUnmountsEveryPermanentlyRemovedHostAtTerminal() {
+        let harness = Harness(path: [entry(1), entry(2), entry(3)])
+        let middle = GaryxRoutePresentationIdentity.entry(entry(2).id)
+        let source = GaryxRoutePresentationIdentity.entry(entry(3).id)
+        XCTAssertTrue(harness.container.mountedHostIdentities.contains(middle))
+        XCTAssertTrue(harness.container.mountedHostIdentities.contains(source))
+
+        XCTAssertTrue(harness.container.pop(count: 2, animated: false))
+
+        XCTAssertEqual(harness.container.path, [entry(1)])
+        XCTAssertFalse(harness.container.mountedHostIdentities.contains(middle))
+        XCTAssertFalse(harness.container.mountedHostIdentities.contains(source))
+        XCTAssertTrue(harness.probe.unmounted.contains(middle))
+        XCTAssertTrue(harness.probe.unmounted.contains(source))
+        XCTAssertEqual(harness.probe.lifecycle[middle, default: []], [])
+        XCTAssertEqual(
+            harness.probe.lifecycle[source, default: []],
+            [.appeared, .active, .inactive, .disappeared]
+        )
+        XCTAssertFalse(harness.container.hasTerminalResidue)
     }
 
     func testPresentationLeaseJoinSameFrameRaceAndHardSnapBarrier() throws {

@@ -191,7 +191,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     private var leadingTouchSnapshot: GaryxRouteEdgeTouchSnapshot?
     private var trailingTouchSnapshot: GaryxRouteEdgeTouchSnapshot?
     private var sceneIsActive = true
-    private var deferredTerminal: GaryxPresentationTerminalState?
+    private var deferredTerminalEffects: GaryxPresentationTerminalState?
     private var interactionFrozenAfterTerminal = false
     private var screenChangedDelivered = false
     private var presentationLeases = GaryxPresentationLeaseTree()
@@ -404,7 +404,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     /// Used by deterministic fake-host tests and hard-snap paths. Production
     /// gesture settling still completes from the display link.
-    func completeSettleImmediately(visibility: GaryxPresentationVisibility = .visible) {
+    func completeSettleImmediately() {
         guard var transition,
               transition.coordinator.phase == .cancelSettle
                 || transition.coordinator.phase == .commitSettle
@@ -414,7 +414,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         _ = transition.updateSettle(progress: target)
         self.transition = transition
         applyTransitionVisualState()
-        finishTransition(visibility: visibility)
+        finishTransition(visibility: currentSceneVisibility)
     }
 
     func sceneDidBecomeInactive() {
@@ -422,7 +422,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         refreshGestureAvailability()
         guard var transition else {
             if let active = activeHostRecord() {
-                transitionLifecycle(active, to: .inactive)
+                deactivateIfActive(active)
             }
             return
         }
@@ -431,24 +431,24 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         guard case .reachedTerminal(let terminal) = effect else { return }
         settleDriver.invalidate()
         if terminal.outcome == .cancelled, let source = host(for: transition.source) {
-            transitionLifecycle(source, to: .inactive)
+            deactivateIfActive(source)
         }
         finalizeForcedTerminal(terminal)
     }
 
     func sceneDidBecomeActive() {
         sceneIsActive = true
-        if let deferredTerminal {
-            let owner = deferredTerminal.outcome == .committed
+        if let deferredTerminalEffects {
+            let owner = deferredTerminalEffects.outcome == .committed
                 ? canonicalState.topNode
                 : transition?.source ?? canonicalState.topNode
             if let record = host(for: owner) {
                 activate(record)
-                if deferredTerminal.outcome == .committed {
+                if deferredTerminalEffects.outcome == .committed {
                     emitScreenChangedOnce(for: record)
                 }
             }
-            self.deferredTerminal = nil
+            self.deferredTerminalEffects = nil
             interactionFrozenAfterTerminal = false
             reconcileHostVisibility()
             refreshGestureAvailability()
@@ -642,6 +642,10 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     private var viewportWidth: CGFloat { max(view.bounds.width, 1) }
 
+    private var currentSceneVisibility: GaryxPresentationVisibility {
+        sceneIsActive ? .visible : .inactive
+    }
+
     private var routeLayoutDirection: GaryxRouteLayoutDirection {
         if let layoutDirectionOverride { return layoutDirectionOverride }
         return view.effectiveUserInterfaceLayoutDirection == .rightToLeft
@@ -663,6 +667,9 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
                   preferences: preferencesProvider()
               )
         else { return false }
+        // A new accepted transaction permanently supersedes any inactive
+        // terminal effects that have not yet become visible.
+        deferredTerminalEffects = nil
         let sourceHost = ensureMounted(source)
         let destinationHost = ensureMounted(destination)
         pendingMutation = mutation
@@ -726,7 +733,8 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
                 self.applyTransitionVisualState()
             },
             onCompletion: { [weak self] in
-                self?.finishTransition(visibility: self?.sceneIsActive == true ? .visible : .inactive)
+                guard let self else { return }
+                self.finishTransition(visibility: self.currentSceneVisibility)
             }
         )
         refreshGestureAvailability()
@@ -758,20 +766,21 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         let source = host(for: completedTransition.source)
         let destination = host(for: completedTransition.destination)
         if terminal.outcome == .committed {
-            if let source, committedRemovedIdentities.contains(source.identity) {
-                disappearAndUnmount(source)
+            let removedHosts = committedRemovedIdentities.compactMap { hosts[$0] }
+            for removedHost in removedHosts {
+                disappearAndUnmount(removedHost)
             }
             if terminal.visibility == .visible, let destination {
                 activate(destination)
                 emitScreenChangedOnce(for: destination)
             } else if terminal.visibility == .inactive {
-                deferredTerminal = terminal
+                deferredTerminalEffects = terminal
             }
         } else {
             if terminal.visibility == .visible, let source {
                 activate(source)
             } else if terminal.visibility == .inactive {
-                deferredTerminal = terminal
+                deferredTerminalEffects = terminal
             }
         }
 
@@ -805,7 +814,20 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     private func deactivateSourceAtCommitBoundary() {
         guard let transition, let source = host(for: transition.source) else { return }
-        transitionLifecycle(source, to: .inactive)
+        deactivateIfActive(source)
+    }
+
+    private func deactivateIfActive(_ record: HostRecord) {
+        switch record.lifecycle.phase {
+        case .active:
+            transitionLifecycle(record, to: .inactive)
+        case .mounted, .inactive:
+            break
+        case .appeared, .disappeared:
+            assertionFailure(
+                "route host reached deactivation in illegal lifecycle phase \(record.lifecycle.phase)"
+            )
+        }
     }
 
     private func applyTransitionVisualState() {
@@ -1070,7 +1092,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         }
         canonicalState.replacePath(replacement)
         interactionFrozenAfterTerminal = false
-        deferredTerminal = nil
+        deferredTerminalEffects = nil
         let newIdentities = Set(replacement.map {
             GaryxRoutePresentationIdentity.entry($0.id)
         })
@@ -1226,7 +1248,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         pendingMutation = nil
         committedRemovedIdentities.removeAll(keepingCapacity: false)
         pendingHardSnapPath = nil
-        deferredTerminal = nil
+        deferredTerminalEffects = nil
         interactionFrozenAfterTerminal = false
         assert(hosts.isEmpty, "route container deinit retained child hosts")
         assert(wrapperPool.isEmpty, "route container deinit retained wrapper pool")

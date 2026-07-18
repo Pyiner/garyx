@@ -29,7 +29,7 @@ skips or expected failures. It covers:
 - 500 push/pop churn iterations ending at the original path with zero terminal
   residue.
 
-The app-target container suite passed 84 of 84 tests in total. Its A4a cases
+The app-target container suite passed 89 of 89 tests in total. Its A4a cases
 assert exactly-one `screenChanged` at committed-and-visible terminal, no
 announcement after cancelled background restoration, no superseded side
 effects, no staged-host lifecycle writes, wrapper-only writes for all three
@@ -41,6 +41,17 @@ programmatic and interactive dismissal callbacks, result/dismissal in both
 orders, explicit no-result and presentation failure, forced subtree dismissal,
 same-frame intent contention, exactly-once release, and hard-snap blocking.
 
+The adversarial-review rework added five permanent app-host regressions. Before
+the fix, the selected tests reproduced an inactive immediate settle as
+`(committed, visible)` with one premature announcement, a deterministic
+`mounted -> inactive` lifecycle crash after deferred-terminal supersession,
+replay of a superseded deferred announcement, and a retained middle host after
+multi-pop. The same focused container suite passes 18 of 18 after the fix;
+scene visibility now has one source of truth, a new transaction permanently
+cancels prior deferred effects, host deactivation is idempotent for inactive
+scene delivery, and every permanently removed identity is unmounted at
+terminal.
+
 ## Frozen performance gates
 
 | Gate | Measured result | Limit | Result |
@@ -49,7 +60,7 @@ same-frame intent contention, exactly-once release, and hard-snap blocking.
 | 20-layer RSS delta, worst of three cold pairs | 2,896 KB (2.83 MB) | at most 100 MB | pass |
 | Actual settle route-subtree body recomputations | 0 over 39 frames | 0/frame | pass |
 | Synthetic 120-frame drag body recomputations | 0 | 0/frame | pass |
-| Actual settle maximum frame gap | 17.93 ms | at most 25 ms fixture gate | pass |
+| Actual settle maximum frame gap | 18.28 ms | at most 25 ms fixture gate | pass |
 | Actual settle backwards frames | 0 | 0 | pass |
 | Settle calibration | 404.69 ms | 300-440 ms | pass |
 | Weak host/root deallocation | all released | all released | pass |
@@ -73,7 +84,7 @@ a 160 KB band (308,752-308,912 KB).
 The retained XCUITest performance attachment reports:
 
 ```text
-performance=pass;settleFrames=39;maxGapMs=17.93;backwards=0;bodyDelta=0;peakMounted=2
+performance=pass;settleFrames=39;maxGapMs=18.28;backwards=0;bodyDelta=0;peakMounted=2
 ```
 
 ## Reproduction
@@ -97,5 +108,5 @@ xcodebuild build -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-Observed totals for this acceptance run were 1,315 SwiftPM tests, 84 app-hosted
+Observed totals for this acceptance run were 1,315 SwiftPM tests, 89 app-hosted
 unit tests, and 10 focused fake-route XCUITests, all passing with zero failures.
