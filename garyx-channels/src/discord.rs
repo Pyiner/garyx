@@ -23,7 +23,7 @@ use garyx_models::provider::{
     ATTACHMENTS_METADATA_KEY, PromptAttachment, PromptAttachmentKind, ProviderMessage,
     StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
 };
-use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, endpoint_key};
+use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY};
 
 use crate::channel_trait::{Channel, ChannelError};
 use crate::dispatcher::{
@@ -1615,7 +1615,6 @@ impl DiscordChannel {
         enrich_inbound_request_with_discord_attachments(runtime, &event, &mut request).await;
         let reply_target = event.channel_id.clone();
         let reply_to = event.id.clone();
-        let thread_binding_key = request.thread_binding_key.clone();
         let sender = DiscordSender {
             account_id: runtime.account_id.clone(),
             token: runtime.account.token.clone(),
@@ -1630,62 +1629,20 @@ impl DiscordChannel {
                 reply_to_message_id: Some(reply_to.clone()),
             });
 
-        let origin_endpoint_identity =
-            endpoint_key("discord", &runtime.account_id, &thread_binding_key);
-        let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
-            runtime.router.clone(),
-            runtime.dispatcher.clone(),
-            request.run_id.clone(),
-            origin_endpoint_identity,
-        );
-        let fanout_consumer = deferred_fanout.consumer(response_callback);
-
-        // Read this run's stream from the durable committed transcript:
-        // subscribe before dispatch and let the replay adapter drive the
-        // Discord sender. Bound non-origin endpoints attach after
-        // route_and_dispatch resolves the canonical thread id.
-        let replay_subscription = match crate::committed_replay::committed_callback(
-            &runtime.bridge,
-            &request.run_id,
-            fanout_consumer,
-        )
-        .await
-        {
-            Ok(subscription) => subscription,
-            Err(error) => {
-                tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Discord dispatch");
-                return;
-            }
+        let run_id = request.run_id.clone();
+        let pipeline = crate::inbound::InboundPipeline {
+            router: &runtime.router,
+            bridge: &runtime.bridge,
+            dispatcher: &runtime.dispatcher,
         };
-
-        let thread_store = {
-            let router = runtime.router.lock().await;
-            router.thread_store()
-        };
-        let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
-            runtime.bridge.as_ref(),
-            deferred_fanout.clone(),
-            thread_store,
-        );
-        let dispatch_callback = replay_subscription.callback();
-
-        let dispatch_result = {
-            let mut router = runtime.router.lock().await;
-            router
-                .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
-                .await
-        };
+        let dispatch_result = pipeline
+            .dispatch(request, response_callback, None, |thread_id| {
+                let _ = thread_id_tx.send(thread_id.to_owned());
+            })
+            .await;
         match dispatch_result {
             Ok(result) => {
-                deferred_fanout.attach_thread(&result.thread_id).await;
-                let _ = thread_id_tx.send(result.thread_id.clone());
-                let local_reply = result.local_reply;
-                if local_reply.is_some() {
-                    replay_subscription.abort();
-                } else {
-                    replay_subscription.detach();
-                }
-                if let Some(local_reply) = local_reply {
+                if let Some(local_reply) = result.local_reply {
                     match sender
                         .send_text(&reply_target, &local_reply, Some(&reply_to))
                         .await
@@ -1701,8 +1658,10 @@ impl DiscordChannel {
                     }
                 }
             }
-            Err(error) => {
-                replay_subscription.abort();
+            Err(crate::inbound::InboundDispatchFailure::CommittedReplay(error)) => {
+                tracing::error!(run_id = %run_id, error = %error, "committed replay bus missing for Discord dispatch");
+            }
+            Err(crate::inbound::InboundDispatchFailure::Dispatch(error)) => {
                 warn!(
                     account_id = %runtime.account_id,
                     error = %error,
