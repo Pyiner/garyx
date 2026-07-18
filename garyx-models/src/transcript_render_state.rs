@@ -3187,6 +3187,7 @@ mod tests {
             "stream-sync/multi-tool-lull.jsonl",
             "stream-sync/parallel-tool-lull.jsonl",
             "stream-sync/stream-events-with-user-ack.jsonl",
+            "render-layer/file-change-body-transcript.jsonl",
         ] {
             let path = fixture_root().join(fixture);
             let raw = fs::read_to_string(&path)
@@ -3449,6 +3450,91 @@ mod tests {
             forward.rows_hash,
             render_rows_digest(&snapshot.rows[..1]).rows_hash
         );
+    }
+
+    #[test]
+    fn captured_file_change_transcript_derives_write_and_edit_diff_recipes_end_to_end() {
+        let path = fixture_root().join("render-layer/file-change-body-transcript.jsonl");
+        let raw = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let records = raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let snapshot = reduce_transcript_render_state(&records);
+        let expected_path = fixture_root().join("render-layer/file-change-body-render-state.json");
+        let expected = fs::read_to_string(&expected_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", expected_path.display()));
+        assert_eq!(
+            serde_json::to_value(&snapshot).unwrap(),
+            serde_json::from_str::<Value>(&expected).unwrap(),
+            "the client E2E frame must stay byte-shape-equivalent to the reducer output",
+        );
+        let entries = snapshot
+            .rows
+            .iter()
+            .flat_map(|row| match row {
+                RenderRow::UserTurn(row) => row.activity.iter().collect::<Vec<_>>(),
+            })
+            .flat_map(|activity| match activity {
+                RenderActivityRow::AssistantReply(_) => Vec::new(),
+                RenderActivityRow::Step(step) => step.steps.iter().collect::<Vec<_>>(),
+            })
+            .flat_map(|step| match step {
+                RenderStepItem::AssistantMessage(_) => Vec::new(),
+                RenderStepItem::ToolGroup(group) => group.entries.iter().collect::<Vec<_>>(),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].tool_use.as_ref().map(|reference| reference.seq),
+            Some(2)
+        );
+        assert_eq!(
+            entries[1].tool_use.as_ref().map(|reference| reference.seq),
+            Some(4)
+        );
+        let write = serde_json::to_value(entries[0].projection.as_ref().unwrap()).unwrap();
+        let edit = serde_json::to_value(entries[1].projection.as_ref().unwrap()).unwrap();
+        assert_eq!(write["kind"], "file_write");
+        assert_eq!(write["summary"]["path"], json!(["input", "file_path"]));
+        assert!(write.get("call").is_none());
+        assert_eq!(
+            write["diff"],
+            json!({
+                "source": "tool_use",
+                "segments": [{
+                    "pair": {
+                        "old": null,
+                        "new": {"root": "content", "path": ["input", "content"]},
+                    }
+                }]
+            })
+        );
+        assert_eq!(edit["kind"], "file_edit");
+        assert_eq!(edit["summary"]["path"], json!(["input", "file_path"]));
+        assert!(edit.get("call").is_none());
+        assert_eq!(
+            edit["diff"],
+            json!({
+                "source": "tool_use",
+                "segments": [{
+                    "pair": {
+                        "old": {"root": "content", "path": ["input", "old_string"]},
+                        "new": {"root": "content", "path": ["input", "new_string"]},
+                    }
+                }]
+            })
+        );
+        let wire = serde_json::to_string(&snapshot).unwrap();
+        for body in ["alpha", "beta", "gamma"] {
+            assert!(
+                !wire.contains(body),
+                "render state copied file body {body:?}"
+            );
+        }
     }
 
     fn load_render_fixture() -> RenderFixture {

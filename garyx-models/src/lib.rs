@@ -92,8 +92,9 @@ pub use threading::{
     GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadOrigin, ThreadTokenUsage,
 };
 pub use tool_field_projection::{
+    RenderToolDiffPair, RenderToolDiffRecipe, RenderToolDiffSegment, RenderToolDiffSource,
     RenderToolFieldFormat, RenderToolFieldLabel, RenderToolFieldProjection, RenderToolFieldRoot,
-    RenderToolFieldSelector, RenderToolKind, RenderToolVisibility,
+    RenderToolFieldSelector, RenderToolKind, RenderToolValueSelector, RenderToolVisibility,
 };
 pub use transcript_kind::{
     is_control_message, is_tool_related_message, resolve_message_kind,

@@ -1,0 +1,140 @@
+{
+  "based_on_seq": 6,
+  "rows": [
+    {
+      "kind": "user_turn",
+      "id": "user_turn:seq:1",
+      "user": {
+        "id": "seq:1",
+        "seq": 1,
+        "role": "user"
+      },
+      "activity": [
+        {
+          "kind": "step",
+          "id": "step:tool_group:call_fixture_write",
+          "steps": [
+            {
+              "kind": "tool_group",
+              "id": "tool_group:call_fixture_write",
+              "status": "completed",
+              "entries": [
+                {
+                  "id": "tool_entry:call_fixture_write",
+                  "tool_use_id": "call_fixture_write",
+                  "status": "completed",
+                  "tool_use": {
+                    "id": "seq:2",
+                    "seq": 2,
+                    "role": "tool_use"
+                  },
+                  "tool_result": {
+                    "id": "seq:3",
+                    "seq": 3,
+                    "role": "tool_result"
+                  },
+                  "projection": {
+                    "tool_name": "Write",
+                    "kind": "file_write",
+                    "visibility": "normal",
+                    "summary": {
+                      "root": "content",
+                      "path": ["input", "file_path"],
+                      "format": "path",
+                      "label": "file"
+                    },
+                    "diff": {
+                      "source": "tool_use",
+                      "segments": [
+                        {
+                          "pair": {
+                            "old": null,
+                            "new": {
+                              "root": "content",
+                              "path": ["input", "content"]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "result": {
+                      "root": "content",
+                      "path": ["result"],
+                      "format": "text",
+                      "label": "result"
+                    }
+                  }
+                },
+                {
+                  "id": "tool_entry:call_fixture_edit",
+                  "tool_use_id": "call_fixture_edit",
+                  "status": "completed",
+                  "tool_use": {
+                    "id": "seq:4",
+                    "seq": 4,
+                    "role": "tool_use"
+                  },
+                  "tool_result": {
+                    "id": "seq:5",
+                    "seq": 5,
+                    "role": "tool_result"
+                  },
+                  "projection": {
+                    "tool_name": "Edit",
+                    "kind": "file_edit",
+                    "visibility": "normal",
+                    "summary": {
+                      "root": "content",
+                      "path": ["input", "file_path"],
+                      "format": "path",
+                      "label": "file"
+                    },
+                    "diff": {
+                      "source": "tool_use",
+                      "segments": [
+                        {
+                          "pair": {
+                            "old": {
+                              "root": "content",
+                              "path": ["input", "old_string"]
+                            },
+                            "new": {
+                              "root": "content",
+                              "path": ["input", "new_string"]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "result": {
+                      "root": "content",
+                      "path": ["result"],
+                      "format": "text",
+                      "label": "result"
+                    }
+                  }
+                }
+              ],
+              "started_at": "2026-07-18T10:00:01Z",
+              "finished_at": "2026-07-18T10:00:04Z"
+            }
+          ],
+          "final_message": {
+            "id": "seq:6",
+            "seq": 6,
+            "role": "assistant"
+          },
+          "running": false,
+          "started_at": "2026-07-18T10:00:00Z",
+          "finished_at": "2026-07-18T10:00:05Z"
+        }
+      ],
+      "started_at": "2026-07-18T10:00:00Z",
+      "finished_at": "2026-07-18T10:00:05Z"
+    }
+  ],
+  "tailActivity": "none",
+  "activeToolGroupId": null,
+  "progress_locus": "none",
+  "filtered_placeholders": []
+}
