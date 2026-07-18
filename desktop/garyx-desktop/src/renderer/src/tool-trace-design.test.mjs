@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const rendererDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.join(rendererDir, 'styles/turn-summary.css'), 'utf8');
+const component = readFileSync(path.join(rendererDir, 'tool-trace.tsx'), 'utf8');
 
 function declarationsFor(selector) {
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -49,4 +50,18 @@ test('expanded tool activity grows naturally without nested vertical scrolling',
       `${selector} must not create a nested vertical scroller`,
     );
   }
+});
+
+test('expanded projected sections keep File then Call then Diff then Result order', () => {
+  const detailStart = component.indexOf('<div className="tool-trace-details">');
+  assert.ok(detailStart >= 0, 'missing expanded detail container');
+  const detail = component.slice(detailStart, component.indexOf('{nestedChildren ?', detailStart));
+  const positions = [
+    detail.indexOf('merged.pathDetail'),
+    detail.indexOf('merged.inputDetail'),
+    detail.indexOf('merged.diffLines'),
+    detail.indexOf('merged.resultDetail'),
+  ];
+  assert.ok(positions.every((position) => position >= 0), 'all four projected sections must exist');
+  assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 });

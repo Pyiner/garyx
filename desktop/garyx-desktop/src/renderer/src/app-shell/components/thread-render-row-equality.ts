@@ -1,7 +1,10 @@
 import type {
   RenderCapsuleCard,
+  RenderToolDiffRecipe,
+  RenderToolDiffSegment,
   RenderToolFieldProjection,
   RenderToolFieldSelector,
+  RenderToolValueSelector,
 } from "@shared/contracts";
 
 import type {
@@ -24,9 +27,9 @@ function stringArrayEqual(
   return left.every((value, index) => value === right[index]);
 }
 
-function selectorEqual(
-  left: RenderToolFieldSelector | undefined,
-  right: RenderToolFieldSelector | undefined,
+function valueSelectorEqual(
+  left: RenderToolValueSelector | null | undefined,
+  right: RenderToolValueSelector | null | undefined,
 ): boolean {
   if (left === right) {
     return true;
@@ -36,9 +39,52 @@ function selectorEqual(
   }
   return (
     left.root === right.root &&
-    left.format === right.format &&
-    left.label === right.label &&
     stringArrayEqual(left.path, right.path)
+  );
+}
+
+function selectorEqual(
+  left: RenderToolFieldSelector | undefined,
+  right: RenderToolFieldSelector | undefined,
+): boolean {
+  return (
+    valueSelectorEqual(left, right) &&
+    left?.format === right?.format &&
+    left?.label === right?.label
+  );
+}
+
+function diffSegmentEqual(
+  left: RenderToolDiffSegment,
+  right: RenderToolDiffSegment,
+): boolean {
+  if ("unified" in left && "unified" in right) {
+    return valueSelectorEqual(left.unified.text, right.unified.text);
+  }
+  if ("pair" in left && "pair" in right) {
+    return (
+      valueSelectorEqual(left.pair.old, right.pair.old) &&
+      valueSelectorEqual(left.pair.new, right.pair.new)
+    );
+  }
+  return false;
+}
+
+function diffRecipeEqual(
+  left: RenderToolDiffRecipe | undefined,
+  right: RenderToolDiffRecipe | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  return Boolean(
+    left &&
+    right &&
+    left.source === right.source &&
+    left.segments.length === right.segments.length &&
+    left.segments.every((segment, index) =>
+      diffSegmentEqual(segment, right.segments[index]),
+    ),
   );
 }
 
@@ -61,6 +107,7 @@ export function renderToolProjectionEqual(
     left.duration_ms === right.duration_ms &&
     selectorEqual(left.summary, right.summary) &&
     selectorEqual(left.call, right.call) &&
+    diffRecipeEqual(left.diff, right.diff) &&
     selectorEqual(left.result, right.result)
   );
 }

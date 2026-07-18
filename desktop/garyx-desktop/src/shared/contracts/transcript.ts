@@ -113,7 +113,6 @@ export type RenderToolFieldFormat =
   | "code"
   | "path"
   | "json"
-  | "diff"
   | "image";
 
 export type RenderToolFieldLabel =
@@ -128,17 +127,35 @@ export type RenderToolFieldLabel =
   | "output"
   | "result"
   | "response"
-  | "diff"
   | "image"
   | "error";
 
 export type RenderToolVisibility = "normal" | "nested" | "quiet" | "hidden";
 
-export interface RenderToolFieldSelector {
+export interface RenderToolValueSelector {
   root: RenderToolFieldRoot;
   path?: string[];
+}
+
+export interface RenderToolFieldSelector extends RenderToolValueSelector {
   format: RenderToolFieldFormat;
   label: RenderToolFieldLabel;
+}
+
+export type RenderToolDiffSource = "tool_use" | "tool_result";
+
+export type RenderToolDiffSegment =
+  | { unified: { text: RenderToolValueSelector } }
+  | {
+      pair: {
+        old?: RenderToolValueSelector | null;
+        new?: RenderToolValueSelector | null;
+      };
+    };
+
+export interface RenderToolDiffRecipe {
+  source: RenderToolDiffSource;
+  segments: RenderToolDiffSegment[];
 }
 
 export interface RenderToolFieldProjection {
@@ -147,6 +164,7 @@ export interface RenderToolFieldProjection {
   visibility: RenderToolVisibility;
   summary?: RenderToolFieldSelector;
   call?: RenderToolFieldSelector;
+  diff?: RenderToolDiffRecipe;
   result?: RenderToolFieldSelector;
   status?: string;
   exit_code?: number;

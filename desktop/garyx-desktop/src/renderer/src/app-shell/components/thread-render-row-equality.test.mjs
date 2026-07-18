@@ -43,6 +43,16 @@ const projection = {
     format: "code",
     label: "command",
   },
+  diff: {
+    source: "tool_use",
+    segments: [
+      {
+        unified: {
+          text: { root: "content", path: ["changes", "0", "diff"] },
+        },
+      },
+    ],
+  },
   result: {
     root: "content",
     path: ["aggregatedOutput"],
@@ -156,6 +166,21 @@ test("projection selector and running-state changes rerender", () => {
   assert.equal(
     renderToolProjectionEqual(projection, changedSummaryProjection),
     false,
+  );
+
+  const changedDiffProjection = structuredClone(projection);
+  changedDiffProjection.diff.segments[0].unified.text.path = ["changes", "1", "diff"];
+  assert.equal(
+    renderToolProjectionEqual(projection, changedDiffProjection),
+    false,
+  );
+  assert.equal(
+    turnRenderRowPresentationEqual(
+      toolRow(),
+      toolRow({ nextProjection: changedDiffProjection }),
+    ),
+    false,
+    "a frame that changes only diff segments must rerender",
   );
 });
 

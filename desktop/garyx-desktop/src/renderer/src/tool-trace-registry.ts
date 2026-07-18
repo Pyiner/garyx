@@ -1,7 +1,9 @@
 import type {
+  RenderToolDiffRecipe,
   RenderToolFieldProjection,
   RenderToolFieldSelector,
   RenderToolKind,
+  RenderToolValueSelector,
   TranscriptMessage,
 } from '@shared/contracts';
 
@@ -43,14 +45,22 @@ type DiffStats = {
   removed: number;
 };
 
+export type ToolTraceDiffLine = {
+  kind: 'added' | 'removed' | 'context';
+  text: string;
+};
+
 export type MergedToolTrace = {
   title: string;
   summary?: string;
   badges: string[];
   diffStats?: DiffStats;
   status?: ToolTraceStatus;
+  pathDetail?: string;
+  pathLabel?: string;
   inputDetail?: string;
   inputLabel?: string;
+  diffLines?: ToolTraceDiffLine[];
   resultDetail?: string;
   resultLabel?: string;
   /** Image blocks extracted from the tool result, rendered as thumbnails. */
@@ -65,10 +75,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function parseMaybeJson(value: unknown): unknown {
@@ -251,7 +257,7 @@ function collectToolResultImageSegments(value: unknown): ToolResultImageSegment[
 
 function projectionRootValue(
   message: ToolTraceMessage | undefined,
-  selector: RenderToolFieldSelector | undefined,
+  selector: RenderToolValueSelector | undefined,
 ): unknown {
   if (!message || !selector) {
     return undefined;
@@ -270,7 +276,7 @@ function projectionRootValue(
 
 function projectionPathValue(
   message: ToolTraceMessage | undefined,
-  selector: RenderToolFieldSelector | undefined,
+  selector: RenderToolValueSelector | undefined,
 ): unknown {
   let value = projectionRootValue(message, selector);
   for (const component of selector?.path || []) {
@@ -364,37 +370,29 @@ function collectProjectedPathImages(
   return images;
 }
 
-function projectionDiffText(value: unknown): string | undefined {
-  if (typeof value === 'string') {
-    return unwrapProjectedString(value);
-  }
-  if (Array.isArray(value)) {
-    const chunks = value
-      .map((entry) => {
-        const record = asRecord(entry);
-        const diff = asString(record?.diff);
-        return diff || (entry === null || entry === undefined ? '' : stringifyUnknown(entry));
-      })
-      .filter((entry) => entry.trim());
-    return chunks.length ? chunks.join('\n') : undefined;
-  }
-  const record = asRecord(value);
-  return asString(record?.diff) || (record ? stringifyUnknown(record) : undefined);
-}
-
 function projectionDisplayValue(
   message: ToolTraceMessage | undefined,
   selector: RenderToolFieldSelector | undefined,
 ): string | undefined {
-  if (!selector || selector.format === 'image') {
+  if (!selector) {
     return undefined;
+  }
+  switch (selector.format) {
+    case 'image':
+      return undefined;
+    case 'text':
+    case 'code':
+    case 'path':
+    case 'json':
+      break;
+    default:
+      // Presentation vocabulary is intentionally lenient on desktop. An
+      // unknown/retired scalar format degrades only this field, not the row.
+      return undefined;
   }
   const value = projectionPathValue(message, selector);
   if (value === null || value === undefined) {
     return undefined;
-  }
-  if (selector.format === 'diff') {
-    return projectionDiffText(value);
   }
   if (typeof value === 'string') {
     const text = unwrapProjectedString(value);
@@ -402,6 +400,95 @@ function projectionDisplayValue(
   }
   const text = stringifyUnknown(value);
   return text.trim() ? text : undefined;
+}
+
+function projectionRawString(
+  message: ToolTraceMessage | undefined,
+  selector: RenderToolValueSelector | null | undefined,
+): string | undefined {
+  if (!selector) {
+    return undefined;
+  }
+  const value = projectionPathValue(message, selector);
+  return typeof value === 'string' ? value : undefined;
+}
+
+function rawLines(value: string | undefined): string[] {
+  return value === undefined || value.length === 0 ? [] : value.split('\n');
+}
+
+function unifiedDiffLine(line: string): ToolTraceDiffLine {
+  if (line.startsWith('+++') || line.startsWith('---')) {
+    return { kind: 'context', text: line };
+  }
+  if (line.startsWith('+')) {
+    return { kind: 'added', text: line.slice(1) };
+  }
+  if (line.startsWith('-')) {
+    return { kind: 'removed', text: line.slice(1) };
+  }
+  return { kind: 'context', text: line };
+}
+
+function resolveProjectionDiff(
+  recipe: RenderToolDiffRecipe | undefined,
+  toolUse: ToolTraceMessage | undefined,
+  toolResult: ToolTraceMessage | undefined,
+): ToolTraceDiffLine[] | undefined {
+  if (!recipe || !Array.isArray(recipe.segments)) {
+    return undefined;
+  }
+  const source = recipe.source === 'tool_use'
+    ? toolUse
+    : recipe.source === 'tool_result'
+      ? toolResult
+      : undefined;
+  if (!source) {
+    return undefined;
+  }
+  const lines: ToolTraceDiffLine[] = [];
+  for (const segment of recipe.segments) {
+    const record = asRecord(segment);
+    const unified = asRecord(record?.unified);
+    if (unified) {
+      for (const line of rawLines(projectionRawString(source, unified.text as RenderToolValueSelector))) {
+        lines.push(unifiedDiffLine(line));
+      }
+      continue;
+    }
+    const pair = asRecord(record?.pair);
+    if (!pair) {
+      continue;
+    }
+    for (const line of rawLines(
+      projectionRawString(source, pair.old as RenderToolValueSelector | null | undefined),
+    )) {
+      lines.push({ kind: 'removed', text: line });
+    }
+    for (const line of rawLines(
+      projectionRawString(source, pair.new as RenderToolValueSelector | null | undefined),
+    )) {
+      lines.push({ kind: 'added', text: line });
+    }
+  }
+  return lines.length ? lines : undefined;
+}
+
+function projectionDiffStats(
+  lines: ToolTraceDiffLine[] | undefined,
+): DiffStats | undefined {
+  if (!lines) {
+    return undefined;
+  }
+  const stats = lines.reduce(
+    (current, line) => {
+      if (line.kind === 'added') current.added += 1;
+      if (line.kind === 'removed') current.removed += 1;
+      return current;
+    },
+    { added: 0, removed: 0 },
+  );
+  return stats.added || stats.removed ? stats : undefined;
 }
 
 function projectionLabel(selector: RenderToolFieldSelector | undefined): string | undefined {
@@ -428,8 +515,6 @@ function projectionLabel(selector: RenderToolFieldSelector | undefined): string 
       return 'Result';
     case 'response':
       return 'Response';
-    case 'diff':
-      return 'Diff';
     case 'image':
       return 'Image';
     case 'error':
@@ -545,18 +630,23 @@ export function resolveMergedToolTrace(
     projectionDisplayValue(toolUse, projection.call) ??
     projectionDisplayValue(toolResult, projection.call);
   const projectedResult = projectionDisplayValue(toolResult, projection.result);
-  const projectedSummaryValue =
+  const resolvedSummary =
     projectionDisplayValue(toolUse, projection.summary) ??
-    projectionDisplayValue(toolResult, projection.summary) ??
+    projectionDisplayValue(toolResult, projection.summary);
+  const projectedPath = projection.summary?.format === 'path'
+    ? resolvedSummary
+    : projection.call?.format === 'path'
+      ? projectedCall
+      : undefined;
+  const projectedSummaryValue =
+    (projection.summary?.format === 'path' ? undefined : resolvedSummary) ??
     (projection.call?.format === 'json' ? undefined : projectedCall);
   const projectedSummary = truncateSingleLine(
     firstProjectedMeaningfulLine(projectedSummaryValue),
     132,
   );
-  const projectedPathBadge =
-    projection.call?.format === 'path'
-      ? pathTail(projectedCall) || projectedCall
-      : undefined;
+  const projectedPathBadge = pathTail(projectedPath) || projectedPath;
+  const diffLines = resolveProjectionDiff(projection.diff, toolUse, toolResult);
 
   return {
     title: projectionTitle(projection.kind, projection.tool_name),
@@ -566,8 +656,14 @@ export function resolveMergedToolTrace(
       ...projectionMetaBadges(projection),
     ]),
     status: projectionStatus(projection),
+    pathDetail: projection.summary?.format === 'path' ? resolvedSummary : undefined,
+    pathLabel: projection.summary?.format === 'path'
+      ? projectionLabel(projection.summary)
+      : undefined,
     inputDetail: projectedCall,
     inputLabel: projectionLabel(projection.call),
+    diffLines,
+    diffStats: projectionDiffStats(diffLines),
     resultDetail: projectedResult,
     resultLabel: projectionLabel(projection.result),
     resultImages: collectProjectedResultImages(toolResult, projection),

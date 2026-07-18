@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import * as esbuild from 'esbuild';
 
@@ -691,4 +693,218 @@ test('server projection unwraps Antigravity JSON-encoded scalar labels', () => {
 
   assert.equal(merged.summary, 'Check status');
   assert.equal(merged.inputDetail, 'Check status');
+});
+
+test('diff recipes compose Unified and Pair segments in wire order against their declared source', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        unified: '--- a/file\n+++ b/file\n-old\n+new',
+        old: 'first\n ',
+        inserted: '\nsecond',
+        ignored: '+wrong-source',
+      },
+      toolUseId: 'tool:diff-composition',
+      toolName: 'custom_tool',
+    },
+    {
+      role: 'tool_result',
+      content: { unified: '+wrong-result' },
+      toolUseId: 'tool:diff-composition',
+      toolName: 'custom_tool',
+    },
+    {
+      tool_name: 'custom_tool',
+      kind: 'generic',
+      visibility: 'normal',
+      diff: {
+        source: 'tool_use',
+        segments: [
+          { unified: { text: { root: 'content', path: ['unified'] } } },
+          {
+            pair: {
+              old: { root: 'content', path: ['old'] },
+              new: { root: 'content', path: ['inserted'] },
+            },
+          },
+          { pair: { old: null, new: { root: 'content', path: ['ignored'] } } },
+        ],
+      },
+    },
+  );
+
+  assert.deepEqual(merged.diffLines, [
+    { kind: 'context', text: '--- a/file' },
+    { kind: 'context', text: '+++ b/file' },
+    { kind: 'removed', text: 'old' },
+    { kind: 'added', text: 'new' },
+    { kind: 'removed', text: 'first' },
+    { kind: 'removed', text: ' ' },
+    { kind: 'added', text: '' },
+    { kind: 'added', text: 'second' },
+    { kind: 'added', text: '+wrong-source' },
+  ]);
+  assert.deepEqual(merged.diffStats, { added: 4, removed: 3 });
+});
+
+test('empty operands contribute zero lines while whitespace-only and empty split lines survive', () => {
+  const projection = {
+    tool_name: 'Edit',
+    kind: 'file_edit',
+    visibility: 'normal',
+    diff: {
+      source: 'tool_use',
+      segments: [
+        {
+          pair: {
+            old: { root: 'content', path: ['input', 'empty'] },
+            new: { root: 'content', path: ['input', 'whitespace'] },
+          },
+        },
+      ],
+    },
+  };
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: { input: { empty: '', whitespace: ' \n' } },
+      toolUseId: 'tool:raw-lines',
+      toolName: 'Edit',
+    },
+    undefined,
+    projection,
+  );
+  assert.deepEqual(merged.diffLines, [
+    { kind: 'added', text: ' ' },
+    { kind: 'added', text: '' },
+  ]);
+  assert.deepEqual(merged.diffStats, { added: 2, removed: 0 });
+
+  assert.equal(
+    resolveMergedToolTrace(undefined, undefined, projection).diffLines,
+    undefined,
+    'a recipe whose source body is not loaded omits the diff section',
+  );
+});
+
+test('path-formatted summary feeds File detail and badge but not collapsed summary text', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        input: {
+          file_path: '/Users/test/repo/Sample.txt',
+          content: 'synthetic body',
+        },
+      },
+      toolUseId: 'tool:path-summary',
+      toolName: 'Write',
+    },
+    undefined,
+    {
+      tool_name: 'Write',
+      kind: 'file_write',
+      visibility: 'normal',
+      summary: {
+        root: 'content',
+        path: ['input', 'file_path'],
+        format: 'path',
+        label: 'file',
+      },
+      diff: {
+        source: 'tool_use',
+        segments: [{ pair: { new: { root: 'content', path: ['input', 'content'] } } }],
+      },
+    },
+  );
+
+  assert.equal(merged.summary, undefined);
+  assert.deepEqual(merged.badges, ['repo/Sample.txt']);
+  assert.equal(merged.pathDetail, '/Users/test/repo/Sample.txt');
+  assert.equal(merged.pathLabel, 'File');
+  assert.deepEqual(merged.diffStats, { added: 1, removed: 0 });
+});
+
+test('unknown scalar format degrades only that field and keeps the row', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: { value: 'must stay hidden' },
+      toolUseId: 'tool:future-format',
+      toolName: 'future_tool',
+    },
+    undefined,
+    {
+      tool_name: 'future_tool',
+      kind: 'generic',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['value'],
+        format: 'future_format',
+        label: 'call',
+      },
+    },
+  );
+
+  assert.equal(merged.title, 'Future tool');
+  assert.equal(merged.inputDetail, undefined);
+  assert.equal(merged.summary, undefined);
+});
+
+test('shared captured transcript render state maps Write and Edit bodies end to end', () => {
+  const fixtureRoot = path.resolve(process.cwd(), '../../test-fixtures/render-layer');
+  const records = fs.readFileSync(
+    path.join(fixtureRoot, 'file-change-body-transcript.jsonl'),
+    'utf8',
+  )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const snapshot = JSON.parse(fs.readFileSync(
+    path.join(fixtureRoot, 'file-change-body-render-state.json'),
+    'utf8',
+  ));
+  const messagesBySeq = new Map(records.map((record) => [record.seq, record.message]));
+  const entries = snapshot.rows[0].activity[0].steps[0].entries;
+  const rows = entries.map((entry) => resolveMergedToolTrace(
+    messagesBySeq.get(entry.tool_use.seq),
+    messagesBySeq.get(entry.tool_result.seq),
+    entry.projection,
+  ));
+
+  assert.deepEqual(rows.map((row) => ({
+    title: row.title,
+    path: row.pathDetail,
+    diff: row.diffLines,
+    stats: row.diffStats,
+    result: row.resultDetail,
+  })), [
+    {
+      title: 'Write',
+      path: '/Users/test/repo/Sample.txt',
+      diff: [
+        { kind: 'added', text: 'alpha' },
+        { kind: 'added', text: 'beta' },
+        { kind: 'added', text: '' },
+      ],
+      stats: { added: 3, removed: 0 },
+      result: 'File created successfully at: /Users/test/repo/Sample.txt',
+    },
+    {
+      title: 'Edit',
+      path: '/Users/test/repo/Sample.txt',
+      diff: [
+        { kind: 'removed', text: 'alpha' },
+        { kind: 'removed', text: 'beta' },
+        { kind: 'removed', text: '' },
+        { kind: 'added', text: 'alpha' },
+        { kind: 'added', text: 'gamma' },
+        { kind: 'added', text: '' },
+      ],
+      stats: { added: 3, removed: 3 },
+      result: 'The file /Users/test/repo/Sample.txt has been updated successfully.',
+    },
+  ]);
 });

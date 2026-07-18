@@ -8,6 +8,7 @@ import { CodexMessageIcon, type CodexMessageIconName } from './codex-message-ico
 import {
   resolveMergedToolTrace,
   type MergedToolTrace,
+  type ToolTraceDiffLine,
   type ToolTraceMessage,
 } from './tool-trace-registry';
 import {
@@ -116,39 +117,26 @@ function ToolTraceHeader({ merged }: { merged: MergedToolTrace }) {
   );
 }
 
-function classifyDiffLine(line: string): 'added' | 'removed' | 'hunk' | 'plain' {
-  if (line.startsWith('+++') || line.startsWith('---')) {
-    return 'hunk';
-  }
-  if (line.startsWith('+')) {
-    return 'added';
-  }
-  if (line.startsWith('-')) {
-    return 'removed';
-  }
-  if (line.startsWith('@@')) {
-    return 'hunk';
-  }
-  return 'plain';
+function ToolTraceBody({ content }: { content: string }) {
+  return <pre className="tool-trace-body">{content}</pre>;
 }
 
-function ToolTraceBody({ content, label }: { content: string; label?: string }) {
-  if (label === 'Diff') {
-    return (
-      <pre className="tool-trace-body tool-trace-body-diff">
-        {content.split('\n').map((line, index) => (
+function ToolTraceDiffBody({ lines }: { lines: ToolTraceDiffLine[] }) {
+  return (
+    <pre className="tool-trace-body tool-trace-body-diff">
+      {lines.map((line, index) => {
+        const prefix = line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : '';
+        return (
           <span
-            className={`tool-trace-diff-line is-${classifyDiffLine(line)}`}
-            key={`${index}:${line}`}
+            className={`tool-trace-diff-line is-${line.kind === 'context' ? 'plain' : line.kind}`}
+            key={`${index}:${line.kind}:${line.text}`}
           >
-            {line || ' '}
+            {`${prefix}${line.text}` || ' '}
           </span>
-        ))}
-      </pre>
-    );
-  }
-
-  return <pre className="tool-trace-body">{content}</pre>;
+        );
+      })}
+    </pre>
+  );
 }
 
 function extractParentToolUseId(message?: ToolTraceMessage): string | null {
@@ -472,7 +460,13 @@ export function ToolTraceLine({
   );
   const [expanded, setExpanded] = useState(false);
   const targetThreadId = extractTargetThreadId(toolResult);
-  const hasDetails = Boolean(merged.inputDetail || merged.resultDetail || nestedChildren);
+  const hasDetails = Boolean(
+    merged.pathDetail ||
+    merged.inputDetail ||
+    merged.diffLines?.length ||
+    merged.resultDetail ||
+    nestedChildren
+  );
 
   return (
     <div className={`tool-trace ${merged.isError ? 'is-error' : ''} ${!hasDetails ? 'is-static' : ''}`}>
@@ -506,12 +500,26 @@ export function ToolTraceLine({
       ) : null}
       {expanded && hasDetails ? (
         <div className="tool-trace-details">
+          {merged.pathDetail ? (
+            <div className="tool-trace-section">
+              <span className="tool-trace-section-label">
+                {merged.pathLabel || 'File'}
+              </span>
+              <ToolTraceBody content={merged.pathDetail} />
+            </div>
+          ) : null}
           {merged.inputDetail ? (
             <div className="tool-trace-section">
               <span className="tool-trace-section-label">
                 {merged.inputLabel || t('Call')}
               </span>
-              <ToolTraceBody content={merged.inputDetail} label={merged.inputLabel} />
+              <ToolTraceBody content={merged.inputDetail} />
+            </div>
+          ) : null}
+          {merged.diffLines?.length ? (
+            <div className="tool-trace-section">
+              <span className="tool-trace-section-label">Diff</span>
+              <ToolTraceDiffBody lines={merged.diffLines} />
             </div>
           ) : null}
           {merged.resultDetail ? (
@@ -519,7 +527,7 @@ export function ToolTraceLine({
               <span className="tool-trace-section-label">
                 {merged.resultLabel || t('Result')}
               </span>
-              <ToolTraceBody content={merged.resultDetail} label={merged.resultLabel} />
+              <ToolTraceBody content={merged.resultDetail} />
             </div>
           ) : null}
           {nestedChildren ? (
