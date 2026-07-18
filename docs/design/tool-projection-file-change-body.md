@@ -1,6 +1,6 @@
 # Tool Projection: File Change Bodies (Write / Edit)
 
-Status: v7 for review (v6 FAIL findings addressed)
+Status: v8 for review (v7 FAIL findings addressed)
 Date: 2026-07-18
 
 ## Problem
@@ -188,36 +188,57 @@ result-side recipe and render nothing. Render-time composition semantics
 below still cover values that later resolve empty on the client (e.g. the
 source body is not loaded).
 
-**Composability predicate (one predicate drives everything).** Each
-candidate value under a `changes`/`diff` key (and each structured
-file-change value) is judged by a single type-aware predicate,
-**container-atomically**:
+**Special-shape analyzer (one analysis per derivation pass).** All special
+candidates of a pass are analyzed together by one typed analyzer whose
+single verdict drives recipe derivation, the consumed set, and slot
+exclusivity — three rules consuming one result cannot disagree, and the
+atomic boundary is the **entire pass**, not a single key or container.
 
-- a string (including the empty string) is composable;
-- a `{diff: string}` object is composable;
-- an array is composable only if **every meaningful member** is
-  composable — zero-contribution members (empty strings, empty `{diff:
-  ""}`) do not block atomicity, they simply prune, but a meaningful
-  unsupported member (`{note: "keep"}`) makes the **whole container**
-  non-composable;
-- anything else (`diff: {note: …}`, numbers, …) is non-composable.
+*Candidates per pass*: the pre-rendered keys `changes`/`diff` (every kind,
+both sides) and — on `FileWrite`/`FileEdit` call passes only — the
+structured keys `old_string`/`new_string`, `edits`, `content`/`new_source`.
 
-A non-composable container derives **no** recipe segments at all and its
-value stays fully available to today's scalar rules (whole-object fallback
-included) — no partial consumption ever strands a meaningful member behind
-a suppressed fallback. This same predicate gates recipe derivation,
-consumption, and slot exclusivity (below), so the three rules cannot
-disagree.
+*Value grammar (typed, two syntaxes)*:
 
-**Consumed set.** "Consumed" is defined *after* pruning: the consumed set
-of a pass is exactly the set of value locations referenced by the
-**surviving** segments of that pass's recipe. A pass whose recipe pruned
-to `None` has an empty consumed set — `{foo, bar, diff: ""}` and
-`{foo, bar, changes: []}` therefore keep today's whole-object fallback and
-lose nothing. Within a composable container, pruning is per-element: in
-`changes: [{diff: "+x"}, {diff: ""}]` the container is composable (the
-second member is zero-contribution, not unsupported), one segment
-survives, and the fallback is suppressed.
+- **Unified syntax** (pre-rendered keys): a string (including empty); a
+  `{diff: string}` object; an array whose meaningful members are Unified
+  syntax values.
+- **Pair syntax** (structured keys): `old_string`/`new_string` as string
+  fields with at least one present; `edits` as an array whose meaningful
+  members are objects in that form; `content`/`new_source` as a string.
+
+*Verdict (pass-atomic)*:
+
+- **Unsupported** — any meaningful candidate value, or any meaningful
+  member inside a candidate container, fails its grammar
+  (`diff: {note: …}`; `edits: [{old_string, new_string}, 42]`;
+  `{changes: "+x", diff: {note: "keep"}}`). The entire special derivation
+  for the pass is off: no recipe, empty consumed set, no slot exclusivity.
+  Every value — including well-formed siblings like that `changes: "+x"` —
+  stays fully available to today's scalar rules, whole-object fallback
+  included. Pass-level atomicity guarantees no partial consumption can
+  strand a meaningful value behind a suppressed fallback.
+- **ComposableEmpty** — every candidate parses, but all derived segments
+  prune to zero contribution (empty strings, empty arrays). No recipe,
+  empty consumed set — `{foo, bar, diff: ""}` and `{foo, bar,
+  changes: []}` keep today's whole-object fallback — but file-kind slot
+  exclusivity **does** trigger: a legal, merely empty file change still
+  owns its row shape (`summary=path, call=None`).
+- **Composable{segments, consumed}** — every candidate parses and at least
+  one segment survives pruning. The recipe carries the surviving segments;
+  `consumed` is exactly their value locations; the whole-object fallback
+  is suppressed; file-kind slot exclusivity triggers. Pruning inside a
+  parsed container is per-element: `changes: [{diff: "+x"}, {diff: ""}]`
+  parses whole, derives one surviving segment, and suppresses the
+  fallback.
+
+*Segment ordering*: derivation groups run in fixed order and the **first
+group with surviving segments** provides the recipe — pre-rendered first
+(`changes` then `diff`, contributing segments in that key order), then
+structured (`old_string`/`new_string`, then `edits`, then
+`content`/`new_source`). A pre-rendered candidate that prunes empty does
+not block a meaningful structured shape in the same pass
+(`{diff: "", old_string: "a", new_string: "b"}` derives the Pair).
 
 **Raw resolution path.** Clients resolve diff operands with a dedicated
 raw-string resolution: recipe `source` body + value selector → the exact
@@ -283,54 +304,47 @@ implementation must grep-enumerate every `RenderToolFieldFormat::Diff` /
 `RenderToolFieldLabel::Diff` production and consumption site and leave
 none behind.
 
-1. **Orthogonal pre-rendered diff scan — every pass, every kind.** Each
+1. **Analyzer-driven derivation — every pass, every kind.** Each
    derivation pass (call side and result side, all kinds including
-   Generic/MCP) independently scans its payload object's `changes`/`diff`
-   keys — *not* via the scalar key lists. Composable shapes — a string, a
-   `{diff: string}` object, or an array whose elements are either —
-   enumerate into `Unified` segments with value selectors pointing at the
-   exact strings. Non-composable values produce no segments and remain
-   available to scalar selection as ordinary values.
-2. **Scalar selection is independent, loses nothing else, and never
-   re-renders consumed values.** The `changes`/`diff` entries leave the
-   scalar key lists; scalar call/result selection excludes the values the
-   diff scan consumed. `{output, diff}` therefore projects `output` as the
-   result *and* a diff recipe. Because a location-only selector cannot
-   express "this object minus its consumed keys", **the whole-object JSON
-   fallback is suppressed whenever the pass consumed a value**: only
+   Generic/MCP) runs the special-shape analyzer over its candidates —
+   *not* via the scalar key lists. `Composable` verdicts enumerate into
+   segments with value selectors pointing at the exact strings
+   (server-side array indexing); `Unsupported` and `ComposableEmpty`
+   derive nothing.
+2. **Scalar selection is independent, keyed on the verdict.** The
+   `changes`/`diff` entries leave the scalar key lists. On `Composable`,
+   scalar selection excludes the consumed locations, and — because a
+   location-only selector cannot express "this object minus its consumed
+   keys" — **the whole-object JSON fallback is suppressed**; only
    precisely selectable scalars (the ordinary key lists) remain eligible.
-   A Generic call `{diff: "+x"}` gets a diff recipe and an empty call —
-   not a whole-arguments JSON selector that would repeat the diff; a
-   Generic call `{foo: 1, bar: 2, diff: "+x"}` gets the recipe plus
-   whatever single key the ordinary lists select (here: nothing), never
-   the enclosing object.
-3. **Structured pair shapes — file kinds only.** For `FileWrite`/`FileEdit`
-   call passes, in preference order after pre-rendered diffs:
-   `old_string`/`new_string` on the input → one `Pair`; `edits` array
-   (`MultiEdit`) → one `Pair` per element; `content`/`new_source`
-   (`Write`, `NotebookEdit`) → one `Pair` with `old` absent. A `content`
-   key outside these kinds keeps its existing output/text meaning.
-4. **Summary owns the path; `call` is forced empty — a shape invariant,
-   not a recipe-survival condition.** For a `FileWrite`/`FileEdit` call
-   pass whose input matches a **recognized file-change shape** — any of
-   the structured keys (`old_string`/`new_string`, `edits`,
-   `content`/`new_source`) or pre-rendered keys (`changes`/`diff`) is
-   present **with a value that passes the composability predicate**
-   (legal-but-empty values qualify; unsupported types such as
-   `diff: {note: …}` do not) — the path (`file_path`, `filePath`,
+   `{output, diff}` projects `output` as the result *and* a recipe; a
+   Generic call `{diff: "+x"}` gets a recipe and an empty call; `{foo,
+   bar, diff: "+x"}` gets the recipe plus whatever single key the lists
+   select, never the enclosing object. On `Unsupported` and
+   `ComposableEmpty`, the consumed set is empty and every scalar rule —
+   fallback included — behaves exactly as today.
+3. **Structured shapes stay file-kind-scoped.** The Pair-syntax candidates
+   apply only to `FileWrite`/`FileEdit` call passes (per the analyzer's
+   candidate list); a `content` key outside these kinds keeps its existing
+   output/text meaning.
+4. **Summary owns the path; `call` is forced empty — keyed on the
+   verdict.** For a `FileWrite`/`FileEdit` call pass whose analyzer
+   verdict is `Composable` or `ComposableEmpty` (at least one candidate
+   present and every candidate parsed), the path (`file_path`, `filePath`,
    `AbsolutePath`, `TargetFile`, `notebook_path`, `path`, `file`) belongs
    exclusively to `summary` (`label: file`, `format: path`) and **`call`
-   is `None`**; scalar call selection does not run. Recognition is
-   deliberately independent of pruning survival but *not* of type: keying
-   on survival would let an empty `Write`/`Edit` fall back to path-in-call
+   is `None`**; scalar call selection does not run. Keying on pruning
+   survival would let an empty `Write`/`Edit` fall back to path-in-call
    (and the "summary equals call" filter would then drop the summary),
    ending up `summary=None, call=path, diff=result` once a result-side
    recipe merged in; keying on bare key presence would swallow
-   non-composable values (`FileEdit {file_path, diff: {note: …}}` would
-   force `call=None` with nothing to show). With the predicate-gated shape
-   invariant, an empty `Write` still projects `summary=path, call=None`,
-   and unsupported-type inputs keep today's scalar behavior untouched. If
-   no path key exists, keep the existing `CALL_SUMMARY_KEYS` behavior.
+   non-composable values (`FileEdit {file_path, diff: {note: …}}`, or a
+   valid Pair with an unsupported sibling, would force `call=None` while
+   hiding the sibling). With the verdict-gated invariant, an empty `Write`
+   still projects `summary=path, call=None`, and any `Unsupported` pass —
+   even one containing a well-formed Pair — keeps today's scalar behavior
+   untouched. If no path key exists, keep the existing `CALL_SUMMARY_KEYS`
+   behavior.
 5. **Classification sweep.** `NotebookEdit` currently classifies as
    `Generic` (its compacted name matches no rule); add it to `FileEdit`.
 
@@ -479,19 +493,28 @@ after the implementation**, at every layer that changes.
      call body + valid result recipe → result adopted" pass;
      whitespace-only values still derive segments. All four merge-table
      cases.
-   - Consumed set and container atomicity: `{foo, bar, diff: ""}` and
-     `{foo, bar, changes: []}` on both sides keep the whole-object
-     fallback (pruned recipe ⇒ empty consumed set);
-     `changes: [{diff: "+x"}, {diff: ""}]` is composable, derives one
-     segment, and suppresses the fallback;
-     `changes: [{diff: "+x"}, {note: "keep"}]` on **both** sides is
-     non-composable as a container — no recipe, fallback preserved, the
-     unsupported member reachable.
-   - Predicate-gated shape recognition: `FileEdit {file_path, diff: {note:
-     …}}` (unsupported type) keeps today's scalar behavior — no forced
-     `call=None`; the same key with a legal zero-contribution value
-     (`diff: ""`) triggers exclusivity (`summary=path, call=None,
-     diff=None`).
+   - Analyzer verdicts, per pass on **both** sides:
+     `{foo, bar, diff: ""}` / `{foo, bar, changes: []}` → ComposableEmpty,
+     whole-object fallback kept;
+     `changes: [{diff: "+x"}, {diff: ""}]` → Composable with one segment,
+     fallback suppressed;
+     `changes: [{diff: "+x"}, {note: "keep"}]` → Unsupported, no recipe,
+     fallback preserved, the unsupported member reachable;
+     `{changes: "+x", diff: {note: "keep"}}` → Unsupported — the
+     well-formed `changes` does **not** derive.
+   - Pair-syntax grammar: `edits` valid → indexed Pairs; `edits` all-empty
+     → ComposableEmpty; `edits: [{old_string, new_string}, 42]` →
+     Unsupported (whole pass).
+   - Verdict-gated shape recognition: `FileEdit {file_path, diff: {note:
+     …}}` and `FileEdit {file_path, old_string: "a", new_string: "b",
+     diff: {note: "keep"}}` (valid Pair + unsupported sibling) →
+     Unsupported, today's scalar behavior, no forced `call=None`; the same
+     keys with legal zero-contribution values (`diff: ""`) → exclusivity
+     (`summary=path, call=None, diff=None`).
+   - Segment ordering: `{changes: "+a", diff: "+b"}` both composable →
+     segments in key order (`changes` then `diff`);
+     `{diff: "", old_string: "a", new_string: "b"}` → pre-rendered group
+     prunes empty, structured group derives the Pair.
    - Enforcement: illegal raw JSON (empty `segments`, double-`None` pair)
      fails recipe decode in Rust; the checked constructors make illegal
      recipes unrepresentable, pinned by a compile-visible API (no public
