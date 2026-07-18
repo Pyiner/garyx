@@ -146,99 +146,16 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(refs.count, 1)
     }
 
-    func testCommandDetailShowsBareCommandAndRunningOutput() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "bash",
-            title: "Bash",
-            inputText: "{\"command\": \"until [ -s output ]; do sleep 1; done\", \"description\": \"wait\"}",
-            resultText: nil,
-            status: .running
-        ))
-        XCTAssertEqual(detail.title, "Bash")
-        XCTAssertTrue(detail.isRunning)
-        XCTAssertEqual(detail.sections.map(\.label), ["Command", "Output"])
-        XCTAssertEqual(
-            detail.sections[0].content,
-            .codeCard("until [ -s output ]; do sleep 1; done")
+    func testProjectionlessDetailDoesNotReparseLegacyRawPayload() {
+        let legacyRawEntry = entry(
+            toolName: "Edit",
+            inputText: "{\"file_path\":\"/Users/test/repo/App.swift\",\"old_string\":\"a\",\"new_string\":\"b\"}",
+            resultText: "Updated",
+            primaryPath: "/Users/test/repo/App.swift"
         )
-        XCTAssertEqual(detail.sections[1].content, .codeCard("Running…"))
-    }
 
-    func testCommandDetailShowsBareCommandFromWrappedToolInput() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "bash",
-            title: "Bash",
-            inputText: #"{"input":{"description":"Run mobile tests","command":"swift test"},"tool":"Bash"}"#,
-            resultText: "Test Suite passed"
-        ))
-        XCTAssertEqual(detail.sections.map(\.label), ["Command", "Output"])
-        XCTAssertEqual(detail.sections[0].content, .codeCard("swift test"))
-    }
-
-    func testReadDetailOfImageShowsImagePreviewNotBase64() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "read",
-            title: "Read",
-            inputText: "{\"file_path\": \"/tmp/a.png\"}",
-            resultText: "iVBORw0KGgoAAAANSUh…",
-            primaryPath: "/tmp/a.png"
-        ))
-        XCTAssertEqual(detail.sections.map(\.label), ["File", "Content"])
-        XCTAssertEqual(detail.sections[0].content, .plainMonospace("/tmp/a.png"))
-        XCTAssertEqual(detail.sections[1].content, .imagePreview("/tmp/a.png"))
-    }
-
-    func testReadDetailOfTextFileKeepsResultCard() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "read",
-            title: "Read",
-            inputText: "{\"file_path\": \"/tmp/notes.md\"}",
-            resultText: "# Notes",
-            primaryPath: "/tmp/notes.md"
-        ))
-        XCTAssertEqual(detail.sections.map(\.label), ["File", "Result"])
-        XCTAssertEqual(detail.sections[1].content, .codeCard("# Notes"))
-    }
-
-    func testWriteDetailOfImagePathShowsImagePreview() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "write",
-            title: "Write",
-            inputText: "{\"file_path\": \"/tmp/generated.png\"}",
-            primaryPath: "/tmp/generated.png"
-        ))
-        XCTAssertEqual(detail.sections.map(\.label), ["File", "Content"])
-        XCTAssertEqual(detail.sections[1].content, .imagePreview("/tmp/generated.png"))
-    }
-
-    func testEditDetailRendersOldNewStringsAsDiff() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "edit",
-            title: "Edit",
-            inputText: "{\"file_path\": \"/src/App.swift\", \"old_string\": \"let a = 1\\nlet b = 2\", \"new_string\": \"let a = 3\"}",
-            resultText: "ok",
-            primaryPath: "/src/App.swift"
-        ))
-        XCTAssertEqual(detail.sections.map(\.label), ["File", "Output"])
-        guard case .diff(let lines) = detail.sections[1].content else {
-            return XCTFail("Expected a diff section for an edit call")
-        }
-        XCTAssertEqual(lines.map(\.kind), [.removed, .removed, .added])
-        XCTAssertEqual(lines.map(\.text), ["let a = 1", "let b = 2", "let a = 3"])
-    }
-
-    func testWriteDetailRendersContentAsAllAddedDiff() {
-        let detail = GaryxToolCallPresentation.detail(for: entry(
-            toolName: "write",
-            title: "Write",
-            inputText: "{\"file_path\": \"/src/New.swift\", \"content\": \"import Foundation\\nstruct New {}\"}",
-            primaryPath: "/src/New.swift"
-        ))
-        guard case .diff(let lines) = detail.sections[1].content else {
-            return XCTFail("Expected a diff section for a write call")
-        }
-        XCTAssertEqual(lines.map(\.kind), [.added, .added])
-        XCTAssertEqual(lines.map(\.text), ["import Foundation", "struct New {}"])
+        XCTAssertNil(legacyRawEntry.fieldProjection)
+        XCTAssertTrue(GaryxToolCallPresentation.detail(for: legacyRawEntry).sections.isEmpty)
     }
 
     func testProjectedDiffResolverComposesSegmentsInOrderAndPreservesWhitespace() throws {
@@ -339,21 +256,6 @@ final class GaryxToolCallPresentationTests: XCTestCase {
             GaryxToolCallPresentation.listRows(from: [projectedEntry]).first?.detail,
             "repo/Sample.swift"
         )
-    }
-
-    func testPatchStyleInputParsesPlusMinusLines() {
-        let lines = GaryxToolCallPresentation.diffLines(
-            input: nil,
-            inputText: "@@ context @@\n-old line\n+new line\n+second new\n unchanged"
-        )
-        XCTAssertEqual(lines?.map(\.kind), [.context, .removed, .added, .added, .context])
-    }
-
-    func testPlainTextInputIsNotMistakenForDiff() {
-        XCTAssertNil(GaryxToolCallPresentation.diffLines(
-            input: nil,
-            inputText: "ls -la\necho done"
-        ))
     }
 
     func testGroupSummaryCountsCommandsReadsAndEdits() {

@@ -149,56 +149,11 @@ enum GaryxToolCallPresentation {
                 sections: sections
             )
         }
-
-        let input = decodedInput(entry.inputText)
-        var sections: [GaryxToolCallDetailSectionModel] = []
-
-        if entry.isCommand {
-            // Surface the bare command, not the raw call payload.
-            let command = input?["command"]?.garyxDetailStringValue
-                ?? input?["cmd"]?.garyxDetailStringValue
-                ?? entry.inputText
-            if let command {
-                sections.append(.init(label: "Command", content: .codeCard(command)))
-            }
-            sections.append(outputSection(for: entry, label: "Output"))
-        } else if entry.isFileEdit {
-            let path = filePath(for: entry, input: input)
-            if let path {
-                sections.append(.init(label: "File", content: .plainMonospace(path)))
-            }
-            if let path, isImagePath(path) {
-                sections.append(.init(label: "Content", content: .imagePreview(path)))
-            } else if let diff = diffLines(input: input, inputText: entry.inputText) {
-                sections.append(.init(label: "Output", content: .diff(diff)))
-            } else {
-                sections.append(outputSection(for: entry, label: "Output"))
-            }
-        } else if entry.isFileRead {
-            let path = filePath(for: entry, input: input)
-            if let path {
-                sections.append(.init(label: "File", content: .plainMonospace(path)))
-            }
-            if let path, isImagePath(path) {
-                // The raw result of reading an image is base64 noise; show
-                // the image itself, like the reference design's Content
-                // section.
-                sections.append(.init(label: "Content", content: .imagePreview(path)))
-            } else {
-                sections.append(outputSection(for: entry, label: entry.resultLabel))
-            }
-        } else {
-            if let inputText = entry.inputText {
-                sections.append(.init(label: entry.inputLabel, content: .codeCard(inputText)))
-            }
-            sections.append(outputSection(for: entry, label: entry.resultLabel))
-        }
-
         return GaryxToolCallDetail(
             title: entry.title,
             isRunning: entry.status == .running,
             isError: entry.isError,
-            sections: sections
+            sections: []
         )
     }
 
@@ -241,30 +196,6 @@ enum GaryxToolCallPresentation {
         return .init(label: field.label, content: content)
     }
 
-    private static func outputSection(
-        for entry: GaryxMobileToolTraceEntry,
-        label: String
-    ) -> GaryxToolCallDetailSectionModel {
-        let text = entry.resultText
-            ?? (entry.status == .running ? "Running…" : "No output")
-        return .init(label: label, content: .codeCard(text))
-    }
-
-    private static func filePath(
-        for entry: GaryxMobileToolTraceEntry,
-        input: [String: GaryxJSONValue]?
-    ) -> String? {
-        if let path = entry.primaryPath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
-            return path
-        }
-        for key in ["file_path", "filePath", "path", "file"] {
-            if let path = input?[key]?.garyxDetailStringValue {
-                return path
-            }
-        }
-        return entry.primaryPathBadge
-    }
-
     private static func decodedInput(_ inputText: String?) -> [String: GaryxJSONValue]? {
         guard let inputText else { return nil }
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -283,78 +214,6 @@ enum GaryxToolCallPresentation {
             }
         }
         return object
-    }
-
-    /// Build diff lines for edit-style calls: `old_string`/`new_string`
-    /// pairs (Claude Code Edit/MultiEdit) become removed-then-added blocks,
-    /// `content` (Write) renders as all-added, and patch-style input text
-    /// (Codex apply_patch) is split by its +/- line prefixes.
-    static func diffLines(
-        input: [String: GaryxJSONValue]?,
-        inputText: String?
-    ) -> [GaryxToolCallDiffLine]? {
-        var pairs: [(old: String?, new: String?)] = []
-        if let input {
-            if input["old_string"] != nil || input["new_string"] != nil {
-                pairs.append((
-                    input["old_string"]?.garyxDetailStringValue,
-                    input["new_string"]?.garyxDetailStringValue
-                ))
-            } else if case .array(let edits)? = input["edits"] {
-                for edit in edits {
-                    guard case .object(let object) = edit else { continue }
-                    pairs.append((
-                        object["old_string"]?.garyxDetailStringValue,
-                        object["new_string"]?.garyxDetailStringValue
-                    ))
-                }
-            } else if let content = input["content"]?.garyxDetailStringValue {
-                pairs.append((nil, content))
-            }
-        }
-
-        var lines: [GaryxToolCallDiffLine] = []
-        func append(_ kind: GaryxToolCallDiffLine.Kind, _ text: String) {
-            lines.append(GaryxToolCallDiffLine(id: lines.count, kind: kind, text: text))
-        }
-
-        if !pairs.isEmpty {
-            for pair in pairs {
-                for line in (pair.old ?? "").split(separator: "\n", omittingEmptySubsequences: false) where pair.old != nil {
-                    append(.removed, String(line))
-                }
-                for line in (pair.new ?? "").split(separator: "\n", omittingEmptySubsequences: false) where pair.new != nil {
-                    append(.added, String(line))
-                }
-            }
-            return lines.isEmpty ? nil : lines
-        }
-
-        // Patch-style fallback: only treat the text as a diff when it has
-        // real +/- lines, so ordinary payloads keep the code-card rendering.
-        guard let inputText else { return nil }
-        let rawLines = inputText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var markerCount = 0
-        for line in rawLines {
-            if line.hasPrefix("+"), !line.hasPrefix("+++") {
-                markerCount += 1
-                continue
-            }
-            if line.hasPrefix("-"), !line.hasPrefix("---") {
-                markerCount += 1
-            }
-        }
-        guard markerCount >= 2 else { return nil }
-        for line in rawLines {
-            if line.hasPrefix("+"), !line.hasPrefix("+++") {
-                append(.added, String(line.dropFirst()))
-            } else if line.hasPrefix("-"), !line.hasPrefix("---") {
-                append(.removed, String(line.dropFirst()))
-            } else {
-                append(.context, line)
-            }
-        }
-        return lines.isEmpty ? nil : lines
     }
 
     static func isImagePath(_ path: String) -> Bool {
