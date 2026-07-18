@@ -387,6 +387,13 @@ public struct GaryxComposerInputReducerState: Equatable, Codable, Sendable {
         }
         guard !isRetired else { return .rejectedRetiredSession }
         if let finalSequence {
+            // The terminal identity row is more specific than the sequence
+            // boundary row: a callback from another payload generation can
+            // never prove a contract violation in this closing epoch. Keep it
+            // as audit evidence without mutating text or fault counters.
+            guard identity.payloadGeneration == expectedEventGeneration else {
+                return .auditedTerminalDuplicate
+            }
             if identity.inputSequence <= finalSequence {
                 return .auditedTerminalDuplicate
             }

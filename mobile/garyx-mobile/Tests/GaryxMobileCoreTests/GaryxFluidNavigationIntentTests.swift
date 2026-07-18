@@ -136,6 +136,23 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
             .cancelledOrStale
         )
         XCTAssertEqual(coordinator.queued, [forced], "late ordinary intent cannot supersede safety")
+        let lateScopeChange = scopeChange("late-scope-change", to: scope2)
+        let lateScopeTicket = coordinator.beginPreparation(
+            intentID: lateScopeChange.id,
+            key: lateScopeChange.coalescingKey,
+            scope: scope1
+        )
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                lateScopeTicket,
+                outcome: .ready(lateScopeChange),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: leases.hasBarrier
+            ),
+            .cancelledOrStale
+        )
+        XCTAssertEqual(coordinator.queued, [forced], "gateway change cannot displace queued safety")
         XCTAssertEqual(
             coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
             .requestPresentationDismissal
@@ -152,6 +169,42 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
             coordinator.drainAdmissible(presentationBarrier: leases.hasBarrier),
             [forced]
         )
+    }
+
+    func testPresentationStartAndDeepLinkInSameFrameQueueUntilLeaseRelease() {
+        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+        var coordinator = GaryxNavigationIntentCoordinator()
+        var leases = GaryxPresentationLeaseTree()
+        let intent = ordinary("same-frame-deep-link", thread: "thread-a")
+        let ticket = coordinator.beginPreparation(
+            intentID: intent.id,
+            key: intent.coalescingKey,
+            scope: scope1
+        )
+
+        let modal = GaryxPresentationLeaseToken(rawValue: "same-frame-modal")
+        XCTAssertTrue(leases.acquire(modal), "presentation-start acquires synchronously")
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                ticket,
+                outcome: .ready(intent),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: leases.hasBarrier
+            ),
+            .queued
+        )
+        XCTAssertEqual(
+            coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
+            .waitForPresentationBarrier
+        )
+        XCTAssertTrue(coordinator.drainAdmissible(presentationBarrier: leases.hasBarrier).isEmpty)
+
+        leases.markPresented(modal)
+        leases.markDismissing(modal)
+        leases.dismissalCompleted(modal)
+        XCTAssertFalse(leases.hasBarrier)
+        XCTAssertEqual(coordinator.drainAdmissible(presentationBarrier: leases.hasBarrier), [intent])
     }
 
     func testResolverIgnoringCancellationLosesTripleCASInBothCompletionOrders() {
@@ -525,6 +578,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
         XCTAssertEqual(registry.admitDomainEvent(from: scope1), .rejectedRevoked)
 
         let unknown = GaryxGatewayScope(identity: scope1.identity, epoch: 99)
+        XCTAssertEqual(registry.lifecycle(of: unknown), .revoked)
+        XCTAssertEqual(registry.admitDomainEvent(from: unknown), .rejectedRevoked)
         XCTAssertFalse(registry.revoke(unknown))
         XCTAssertEqual(registry.revokedThroughEpoch[scope1.identity], 1)
 

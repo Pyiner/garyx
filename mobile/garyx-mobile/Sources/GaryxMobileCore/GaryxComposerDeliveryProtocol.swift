@@ -460,6 +460,31 @@ public struct GaryxDeliveryQuota: Equatable, Codable, Sendable {
         self.payloadByteLimit = payloadByteLimit
     }
 
+    /// Rebuilds admission accounting exclusively from durable records after a
+    /// relaunch. Terminal/evidence records remain bounded correlation state,
+    /// but no longer consume non-terminal or envelope quota.
+    public init(
+        rebuilding records: [GaryxDeliveryRecord],
+        payloadByteLimit: Int = 64 * 1024 * 1024
+    ) {
+        var byScope: [GaryxGatewayScope: Int] = [:]
+        var global = 0
+        var payloadBytes = 0
+        for record in records {
+            if !record.phase.isTerminalOrEvidence {
+                byScope[record.scope, default: 0] += 1
+                global += 1
+            }
+            payloadBytes += record.envelope?.estimatedBytes ?? 0
+        }
+        self.init(
+            nonTerminalByScope: byScope,
+            nonTerminalGlobal: global,
+            payloadBytesUsed: payloadBytes,
+            payloadByteLimit: payloadByteLimit
+        )
+    }
+
     public func canSeal(scope: GaryxGatewayScope, envelopeBytes: Int) -> Bool {
         (nonTerminalByScope[scope] ?? 0) < Self.perScopeRecordLimit
             && nonTerminalGlobal < Self.globalRecordLimit

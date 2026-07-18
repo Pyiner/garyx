@@ -471,6 +471,65 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         XCTAssertFalse(globalFull.canSeal(scope: scope, envelopeBytes: 0))
     }
 
+    func testOfflineAmbiguousQuotaSurvivesRelaunchAndReclaimsToSteadyState() throws {
+        let scopes = (0..<4).map {
+            GaryxGatewayScope(identity: "gateway-\($0)", epoch: 1)
+        }
+        var records: [GaryxDeliveryRecord] = []
+        for (scopeIndex, recordScope) in scopes.enumerated() {
+            for row in 0..<GaryxDeliveryQuota.perScopeRecordLimit {
+                var record = GaryxDeliveryRecord(
+                    id: GaryxDeliveryRecordID(rawValue: "delivery-\(scopeIndex)-\(row)"),
+                    scope: recordScope,
+                    entryID: GaryxComposerPayloadEntryID(rawValue: "entry-\(scopeIndex)"),
+                    reservationID: GaryxSendReservationID(rawValue: UInt64(row + 1)),
+                    correlationID: "correlation-\(scopeIndex)-\(row)",
+                    envelope: GaryxDeliveryEnvelope(
+                        text: "offline-message",
+                        attachmentIDs: [],
+                        generation: UInt64(row + 1),
+                        clientIntentID: "intent-\(scopeIndex)-\(row)"
+                    )
+                )
+                XCTAssertTrue(record.markTransportAttempted())
+                XCTAssertTrue(record.markAmbiguous())
+                records.append(record)
+            }
+        }
+        XCTAssertEqual(records.count, GaryxDeliveryQuota.globalRecordLimit)
+
+        let relaunched = try JSONDecoder().decode(
+            [GaryxDeliveryRecord].self,
+            from: JSONEncoder().encode(records)
+        )
+        var quota = GaryxDeliveryQuota(rebuilding: relaunched)
+        XCTAssertEqual(quota.nonTerminalGlobal, GaryxDeliveryQuota.globalRecordLimit)
+        XCTAssertEqual(quota.nonTerminalByScope.values.sorted(), [64, 64, 64, 64])
+        for recordScope in scopes {
+            XCTAssertFalse(quota.canSeal(scope: recordScope, envelopeBytes: 0))
+        }
+
+        var reclaimed = relaunched
+        reclaimed[0].recordServerAcknowledgement()
+        quota = GaryxDeliveryQuota(rebuilding: reclaimed)
+        XCTAssertEqual(quota.nonTerminalGlobal, GaryxDeliveryQuota.globalRecordLimit - 1)
+        XCTAssertTrue(quota.canSeal(scope: scopes[0], envelopeBytes: 0))
+        XCTAssertFalse(quota.canSeal(scope: scopes[1], envelopeBytes: 0))
+
+        for index in reclaimed.indices {
+            reclaimed[index].recordServerAcknowledgement()
+        }
+        let steadyRelaunch = try JSONDecoder().decode(
+            [GaryxDeliveryRecord].self,
+            from: JSONEncoder().encode(reclaimed)
+        )
+        quota = GaryxDeliveryQuota(rebuilding: steadyRelaunch)
+        XCTAssertEqual(quota.nonTerminalGlobal, 0)
+        XCTAssertTrue(quota.nonTerminalByScope.isEmpty)
+        XCTAssertEqual(quota.payloadBytesUsed, 0)
+        XCTAssertTrue(quota.canSeal(scope: scopes[0], envelopeBytes: 1))
+    }
+
     func testCreateResponseLossIsExplicitlyAmbiguousAtEveryUnacknowledgedStage() {
         var create = GaryxCreateDeliveryState(scope: scope, createIntentID: "create-intent")
         create.responseLost()

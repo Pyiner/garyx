@@ -887,13 +887,13 @@ public enum GaryxReplacementReclamationDecision: Equatable, Sendable {
 public enum GaryxReplacementPlanner {
     public static func recover(_ record: GaryxReplacementRecord) -> GaryxReplacementRecoveryDecision {
         switch record.phase {
-        case .pendingReplacement:
+        case .pendingReplacement, .aborted:
             .abortReleaseQuotaAndDeleteProvisional
         case .committed:
             record.hasValidCommittedKey
                 ? .restoreSuccessor(record.newKey!)
                 : .abortReleaseQuotaAndDeleteProvisional
-        case .aborted, .settled:
+        case .settled:
             .garbageCollect
         }
     }

@@ -47,7 +47,7 @@ RouteDestination = .conversation(threadID) | .conversationDraft(draftID)
 - **`InputSequence`**：epoch 内单调写序。
 - **reducer 决定表**：
 
-**乘积 reducer 12 格表（r23-F1 真内联，唯一权威）**：`ReservationPhase{none, sealed, committed, revoked} × ProducerFinalizationPhase{live, finalizing, terminal}`。**物化与 close 只发生在双边 terminal**（producer terminal ∧ reservation ∈ {none,committed,revoked}）；**producer 事件的拒绝只以 `finalSequence` 已固化为准**，与 reservation 结算先后无关：
+**乘积 reducer 12 格表（r23-F1 真内联，唯一权威）**：`ReservationPhase{none, sealed, committed, revoked} × ProducerFinalizationPhase{live, finalizing, terminal}`。**物化与 close 只发生在双边 terminal**（producer terminal ∧ reservation ∈ {none,committed,revoked}）；**producer 事件的拒绝只以 `finalSequence` 已固化为准**，与 reservation 结算先后无关；但须先通过下方六元组身份表，closing epoch 的异 generation 事件恒为审计，不进入同 generation 的 sequence fault 判定：
 
 | Reservation \ Producer | live | finalizing（drain 中，finalSequence 未固化） | terminal（finalSequence 已固化） |
 |---|---|---|---|
@@ -67,7 +67,7 @@ RouteDestination = .conversation(threadID) | .conversationDraft(draftID)
 | SessionID 与 epoch 绑定不符 | 契约错误：log fault + 丢弃 |
 | closing epoch N + 同 gen，seq ≤ finalSequence | 仅审计去重；**finalText 一经 close 固化不可变** |
 | closing epoch N + 异 gen | 仅审计，不动 closing record 主体 |
-| closing epoch N，seq > finalSequence | producer 契约错误：log fault + 丢弃 |
+| closing epoch N + 同 gen，seq > finalSequence | producer 契约错误：log fault + 丢弃 |
 | 重复 close(N) | 幂等 |
 | retired / unknown epoch | 拒绝 |
 

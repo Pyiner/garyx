@@ -391,6 +391,9 @@ public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
     public let clearedGeneration: UInt64
     public let allocatedGeneration: UInt64
     public let cancelledOperationKeys: [GaryxOperationCapabilityKey]
+    /// Replacement journals retained in `.aborted` until the caller has
+    /// deleted their provisional file and released its physical quota.
+    public let pendingReplacementCleanupIDs: [GaryxReplacementID]
     public let transaction: GaryxComposerDurabilityTransaction
 
     public init(
@@ -398,12 +401,14 @@ public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
         clearedGeneration: UInt64,
         allocatedGeneration: UInt64,
         cancelledOperationKeys: [GaryxOperationCapabilityKey],
+        pendingReplacementCleanupIDs: [GaryxReplacementID],
         transaction: GaryxComposerDurabilityTransaction
     ) {
         self.entryID = entryID
         self.clearedGeneration = clearedGeneration
         self.allocatedGeneration = allocatedGeneration
         self.cancelledOperationKeys = cancelledOperationKeys
+        self.pendingReplacementCleanupIDs = pendingReplacementCleanupIDs
         self.transaction = transaction
     }
 }
@@ -471,6 +476,14 @@ public enum GaryxPayloadGenerationResetPlanner {
                 affectedKeySet.contains(owner) ? assetID : nil
             }
         )
+        // A failed-terminal operation may have already released ownership
+        // while retaining the canonical pending-file-cleanup obligation. Its
+        // own staged asset is therefore an independent discovery source.
+        for key in affectedKeys {
+            if let assetID = snapshot.operations[key]?.stagedAssetID {
+                affectedAssets.insert(assetID)
+            }
+        }
         for replacementID in affectedReplacementIDs {
             if let replacement = snapshot.replacements[replacementID] {
                 affectedAssets.insert(replacement.stagedAssetID)
@@ -490,8 +503,25 @@ public enum GaryxPayloadGenerationResetPlanner {
             mutations.append(.removeOperation(key))
             entry.removeOperation(key)
         }
+        var pendingReplacementCleanupIDs: [GaryxReplacementID] = []
         for replacementID in affectedReplacementIDs {
-            mutations.append(.removeReplacement(replacementID))
+            guard var replacement = snapshot.replacements[replacementID] else { continue }
+            switch replacement.phase {
+            case .pendingReplacement:
+                replacement.abort()
+                mutations.append(.upsertReplacement(replacement))
+                pendingReplacementCleanupIDs.append(replacementID)
+            case .aborted:
+                // `.aborted` is the durable cleanup obligation. Retain it
+                // until the file/quota executor settles the record.
+                pendingReplacementCleanupIDs.append(replacementID)
+            case .committed:
+                replacement.settle()
+                mutations.append(.upsertReplacement(replacement))
+                mutations.append(.removeReplacement(replacementID))
+            case .settled:
+                mutations.append(.removeReplacement(replacementID))
+            }
         }
 
         let affectedFeedback = snapshot.feedback.values
@@ -528,6 +558,7 @@ public enum GaryxPayloadGenerationResetPlanner {
             clearedGeneration: generation,
             allocatedGeneration: allocatedGeneration,
             cancelledOperationKeys: affectedKeys,
+            pendingReplacementCleanupIDs: pendingReplacementCleanupIDs,
             transaction: GaryxComposerDurabilityTransaction(
                 expectedRevision: snapshot.revision,
                 label: "payload generation reset",
@@ -683,18 +714,31 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
     ) throws {
         switch mutation {
         case .upsertEntry(let entry):
-            if state.payloadStore.entry(entry.id, scope: entry.scope) == nil {
+            if let existing = state.payloadStore.entry(entry.id, scope: entry.scope) {
+                guard entry.lifecycle.token == existing.lifecycle.token,
+                      entry.lifecycle.revision >= existing.lifecycle.revision,
+                      entry.currentGeneration >= existing.currentGeneration,
+                      lifecycleRank(entry.lifecycle.phase) >= lifecycleRank(existing.lifecycle.phase) else {
+                    throw invariant("entry identity, lifecycle, or generation regressed")
+                }
+                state.payloadStore.update(entry)
+            } else {
                 guard state.payloadStore.insert(entry) else {
                     throw invariant("entry insert failed")
                 }
-            } else {
-                state.payloadStore.update(entry)
             }
         case .removeEntry(let scope, let entryID):
             _ = state.payloadStore.remove(entryID, scope: scope)
         case .replaceAliases(let aliases):
             state.aliases = aliases
         case .upsertOperation(let operation):
+            try requireLedgerIfNeeded(
+                scope: operation.context.key.scope,
+                entryID: operation.context.key.entryID,
+                reservationID: operation.context.key.reservationID,
+                state: state,
+                descendant: "operation capability"
+            )
             state.operations[operation.context.key] = operation
         case .removeOperation(let key):
             state.operations.removeValue(forKey: key)
@@ -862,6 +906,32 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         }) else {
             throw invariant("claimed generation is outside the durable hi-lo watermark")
         }
+        for (key, operation) in state.operations {
+            guard operation.context.key == key,
+                  let entry = state.payloadStore.entry(key.entryID, scope: key.scope),
+                  entry.operationKeys.contains(key),
+                  entry.lifecycle.token == operation.context.payloadLifecycle.token else {
+                throw invariant("operation capability is absent from authoritative Entry membership")
+            }
+        }
+        for (key, manifest) in state.manifests {
+            guard manifest.key == key,
+                  let entry = state.payloadStore.entry(key.entryID, scope: key.scope),
+                  entry.operationKeys.contains(key) else {
+                throw invariant("operation manifest is absent from authoritative Entry membership")
+            }
+        }
+        for (scope, entries) in state.payloadStore.entriesByScope {
+            for entry in entries.values {
+                for key in entry.operationKeys {
+                    guard key.scope == scope,
+                          key.entryID == entry.id,
+                          state.operations[key] != nil || state.manifests[key] != nil else {
+                        throw invariant("Entry operation membership has no durable descendant")
+                    }
+                }
+            }
+        }
         for ledger in state.ledgers.values {
             guard (ledger.terminalOutcome == nil) == (ledger.targetMapping == nil) else {
                 throw invariant("reservation outcome and target mapping must publish together")
@@ -913,5 +983,13 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
 
     private func invariant(_ message: String) -> GaryxComposerDurabilityError {
         .invariantViolation(message)
+    }
+
+    private func lifecycleRank(_ phase: GaryxPayloadLifecyclePhase) -> Int {
+        switch phase {
+        case .active: 0
+        case .discarding: 1
+        case .discarded: 2
+        }
     }
 }

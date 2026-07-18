@@ -554,6 +554,35 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         XCTAssertEqual(state.finalText, "AB", "final text is immutable")
     }
 
+    func testTerminalBoundaryAuditsDifferentGenerationBeforeSequenceFaultRule() {
+        var state = makeState(text: "A")
+        let context = activeContext(for: state)
+        _ = state.applyText(
+            "AB",
+            identity: event(state, sequence: 1),
+            lifecycle: context.lifecycle,
+            scopes: context.scopes
+        )
+        _ = state.releaseForCommittedNavigation(
+            pendingProducers: [],
+            lifecycle: context.lifecycle,
+            scopes: context.scopes
+        )
+        let faultsBefore = state.faultCount
+
+        XCTAssertEqual(
+            state.applyText(
+                "late old generation",
+                identity: event(state, sequence: 2, generation: 9),
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .auditedTerminalDuplicate
+        )
+        XCTAssertEqual(state.faultCount, faultsBefore)
+        XCTAssertEqual(state.finalText, "AB")
+    }
+
     func testTokenAndScopeCASRejectEveryDurableInputMutation() {
         var state = makeState(text: "A")
         var context = activeContext(for: state)

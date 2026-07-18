@@ -4,6 +4,125 @@ import XCTest
 final class GaryxComposerPayloadLifecycleTests: XCTestCase {
     private let scope = GaryxGatewayScope(identity: "gateway", epoch: 1)
 
+    func testPerEntryAttachmentSurvivesAToBToAAndScopeRevokeCleansPartition() throws {
+        let entryAID = GaryxComposerPayloadEntryID(rawValue: "entry-a")
+        var entryA = GaryxComposerPayloadEntry(
+            id: entryAID,
+            scope: scope,
+            destination: .thread("A"),
+            lifecycleToken: .init(entryID: entryAID, nonce: "token-a"),
+            currentGeneration: 1,
+            text: "draft-a"
+        )
+        let retainedAttachment = GaryxComposerAttachment(
+            id: GaryxAttachmentID(rawValue: "attachment-a"),
+            stagedAssetID: GaryxStagedAssetID(rawValue: "asset-a"),
+            generation: 1,
+            byteCount: 32
+        )
+        let operationKey = GaryxOperationCapabilityKey(
+            scope: scope,
+            entryID: entryAID,
+            generation: 1,
+            reservationID: nil,
+            branch: .followup,
+            operationID: GaryxOperationID(rawValue: "operation-a")
+        )
+        let operation = GaryxOperationCapability(
+            context: GaryxScopeBoundOperationContext(
+                key: operationKey,
+                clientIdentity: "client",
+                configurationFingerprint: "configuration",
+                payloadLifecycle: GaryxPayloadLifecycleCapture(
+                    token: entryA.lifecycle.token,
+                    revision: entryA.lifecycle.revision
+                )
+            ),
+            state: .completed,
+            stagedAssetID: retainedAttachment.stagedAssetID,
+            reservedBytes: retainedAttachment.byteCount
+        )
+        entryA.addAttachment(retainedAttachment)
+        entryA.addOperation(operationKey)
+
+        let entryBID = GaryxComposerPayloadEntryID(rawValue: "entry-b")
+        let entryB = GaryxComposerPayloadEntry(
+            id: entryBID,
+            scope: scope,
+            destination: .thread("B"),
+            lifecycleToken: .init(entryID: entryBID, nonce: "token-b"),
+            currentGeneration: 1,
+            text: "draft-b"
+        )
+        var store = GaryxComposerPayloadStore()
+        XCTAssertTrue(store.insert(entryA))
+        XCTAssertTrue(store.insert(entryB))
+
+        XCTAssertTrue(store.entry(entryBID, scope: scope)?.attachments.isEmpty == true)
+        XCTAssertEqual(
+            store.entry(entryAID, scope: scope)?.attachments[retainedAttachment.id],
+            retainedAttachment,
+            "opening B must not clear A; returning to A restores its attachment"
+        )
+
+        var registry = GaryxGatewayScopeRegistry(initialActiveScope: scope)
+        XCTAssertTrue(registry.revoke(scope))
+        XCTAssertEqual(registry.admitDomainEvent(from: scope), .rejectedRevoked)
+        for entryID in [entryAID, entryBID] {
+            guard case .beganDiscard = GaryxPayloadIdentityReducer.apply(
+                .payloadEntryDiscarded(entryID, revision: 7),
+                scope: scope,
+                store: &store
+            ) else {
+                return XCTFail("scope revoke must begin every payload discard")
+            }
+        }
+
+        let discardingA = try XCTUnwrap(store.entry(entryAID, scope: scope))
+        var convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: discardingA.lifecycle,
+            barrier: GaryxSendCommitBarrier(
+                entryID: entryAID,
+                scope: scope,
+                payloadLifecycle: operation.context.payloadLifecycle
+            ),
+            operations: [operationKey: operation],
+            stagedAssetIDs: [retainedAttachment.stagedAssetID],
+            reservedBytes: retainedAttachment.byteCount
+        )
+        convergence.settleDeliveries()
+        convergence.settleReservation()
+        convergence.settleSessions()
+        convergence.settleResources()
+        XCTAssertTrue(convergence.finishToken())
+        XCTAssertTrue(convergence.stagedAssetIDs.isEmpty)
+        XCTAssertEqual(convergence.reservedBytes, 0)
+        XCTAssertNil(convergence.operations[operationKey]?.stagedAssetID)
+
+        let discardingB = try XCTUnwrap(store.entry(entryBID, scope: scope))
+        var emptyConvergence = GaryxPayloadDiscardConvergence(
+            lifecycle: discardingB.lifecycle,
+            barrier: GaryxSendCommitBarrier(
+                entryID: entryBID,
+                scope: scope,
+                payloadLifecycle: GaryxPayloadLifecycleCapture(
+                    token: entryB.lifecycle.token,
+                    revision: entryB.lifecycle.revision
+                )
+            )
+        )
+        emptyConvergence.settleDeliveries()
+        emptyConvergence.settleReservation()
+        emptyConvergence.settleSessions()
+        emptyConvergence.settleResources()
+        XCTAssertTrue(emptyConvergence.finishToken())
+
+        XCTAssertNotNil(store.remove(entryAID, scope: scope))
+        XCTAssertNotNil(store.remove(entryBID, scope: scope))
+        XCTAssertNil(store.entry(entryAID, scope: scope))
+        XCTAssertNil(store.entry(entryBID, scope: scope))
+    }
+
     func testPayloadEntryChildIdentityKeepsTextAndSiblingWhenOneOperationFails() {
         var entry = makeEntry(text: "draft")
         let first = attachment("first", generation: 1)
@@ -759,6 +878,11 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             .abortReleaseQuotaAndDeleteProvisional
         )
         pending.abort()
+        XCTAssertEqual(
+            GaryxReplacementPlanner.recover(pending),
+            .abortReleaseQuotaAndDeleteProvisional
+        )
+        pending.settle()
         XCTAssertEqual(GaryxReplacementPlanner.recover(pending), .garbageCollect)
 
         let reserved = GaryxSendReservationID(rawValue: 9)

@@ -51,8 +51,7 @@ public struct GaryxGatewayScopeRegistry: Equatable, Sendable {
 
     @discardableResult
     public mutating func switchActive(to scope: GaryxGatewayScope) -> Bool {
-        guard scope.epoch > (revokedThroughEpoch[scope.identity] ?? 0),
-              lifecycles[scope] != .revoked else {
+        guard scope.epoch > (revokedThroughEpoch[scope.identity] ?? 0) else {
             return false
         }
         if let old = activeScope, old != scope {
