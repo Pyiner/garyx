@@ -782,6 +782,8 @@ public struct GaryxComposerCommitSend: Equatable, Sendable {
 /// to A4d-1.
 public protocol GaryxComposerDurabilityStore: Sendable {
     func load() async throws -> GaryxComposerDurabilitySnapshot
+    func allocatePayloadGeneration() async throws -> UInt64
+    func allocateSendReservationID() async throws -> GaryxSendReservationID
     func commit(
         _ transaction: GaryxComposerDurabilityTransaction
     ) async throws -> GaryxComposerDurabilitySnapshot
@@ -796,13 +798,55 @@ public protocol GaryxComposerDurabilityStore: Sendable {
 public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
     private var state: GaryxComposerDurabilitySnapshot
     private var failAtMutationIndex: Int?
+    private var generationAllocator: GaryxDurableHiLoAllocator
+    private var reservationAllocator: GaryxDurableHiLoAllocator
 
     public init(initial: GaryxComposerDurabilitySnapshot = .init()) {
         state = initial
         failAtMutationIndex = nil
+        generationAllocator = GaryxDurableHiLoAllocator(
+            persistedHighWatermark: initial.generationHighWatermark
+        )
+        reservationAllocator = GaryxDurableHiLoAllocator(
+            persistedHighWatermark: initial.reservationHighWatermark
+        )
     }
 
     public func load() async throws -> GaryxComposerDurabilitySnapshot { state }
+
+    public func allocatePayloadGeneration() async throws -> UInt64 {
+        var candidate = generationAllocator
+        let value = candidate.allocate()
+        if candidate.persistedHighWatermark != generationAllocator.persistedHighWatermark {
+            state = try GaryxComposerDurabilityTransactionEngine.applying(
+                .init(
+                    expectedRevision: state.revision,
+                    label: "reserve payload-generation hi-lo block",
+                    mutations: [.setGenerationHighWatermark(candidate.persistedHighWatermark)]
+                ),
+                to: state
+            )
+        }
+        generationAllocator = candidate
+        return value
+    }
+
+    public func allocateSendReservationID() async throws -> GaryxSendReservationID {
+        var candidate = reservationAllocator
+        let value = candidate.allocate()
+        if candidate.persistedHighWatermark != reservationAllocator.persistedHighWatermark {
+            state = try GaryxComposerDurabilityTransactionEngine.applying(
+                .init(
+                    expectedRevision: state.revision,
+                    label: "reserve send-reservation hi-lo block",
+                    mutations: [.setReservationHighWatermark(candidate.persistedHighWatermark)]
+                ),
+                to: state
+            )
+        }
+        reservationAllocator = candidate
+        return GaryxSendReservationID(rawValue: value)
+    }
 
     public func injectFailure(atMutationIndex index: Int) {
         precondition(index >= 0)
@@ -812,6 +856,32 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
     public func commit(
         _ transaction: GaryxComposerDurabilityTransaction
     ) async throws -> GaryxComposerDurabilitySnapshot {
+        defer { failAtMutationIndex = nil }
+        state = try GaryxComposerDurabilityTransactionEngine.applying(
+            transaction,
+            to: state,
+            failAtMutationIndex: failAtMutationIndex
+        )
+        return state
+    }
+
+    public func commitSend(
+        _ send: GaryxComposerCommitSend
+    ) async throws -> GaryxComposerDurabilitySnapshot {
+        try await commit(send.transaction)
+    }
+}
+
+/// Shared value transaction engine used by both the A3 fake and the concrete
+/// SQLite store. Persistence implementations own publication and fsync; this
+/// reducer owns mutation ordering, CAS, and cross-record invariants.
+enum GaryxComposerDurabilityTransactionEngine {
+    static func applying(
+        _ transaction: GaryxComposerDurabilityTransaction,
+        to state: GaryxComposerDurabilitySnapshot,
+        failAtMutationIndex: Int? = nil,
+        afterApplyingMutation: ((Int) throws -> Void)? = nil
+    ) throws -> GaryxComposerDurabilitySnapshot {
         guard transaction.expectedRevision == state.revision else {
             throw GaryxComposerDurabilityError.revisionConflict(
                 expected: transaction.expectedRevision,
@@ -821,25 +891,17 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         var candidate = state
         for (index, mutation) in transaction.mutations.enumerated() {
             if failAtMutationIndex == index {
-                failAtMutationIndex = nil
                 throw GaryxComposerDurabilityError.injectedFailure(mutationIndex: index)
             }
             try apply(mutation, to: &candidate)
+            try afterApplyingMutation?(index)
         }
         try validate(candidate)
         candidate.revision &+= 1
-        state = candidate
-        failAtMutationIndex = nil
-        return state
+        return candidate
     }
 
-    public func commitSend(
-        _ send: GaryxComposerCommitSend
-    ) async throws -> GaryxComposerDurabilitySnapshot {
-        try await commit(send.transaction)
-    }
-
-    private func apply(
+    private static func apply(
         _ mutation: GaryxComposerDurabilityMutation,
         to state: inout GaryxComposerDurabilitySnapshot
     ) throws {
@@ -1012,7 +1074,7 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         }
     }
 
-    private func requireLedgerIfNeeded(
+    private static func requireLedgerIfNeeded(
         scope: GaryxGatewayScope,
         entryID: GaryxComposerPayloadEntryID,
         reservationID: GaryxSendReservationID?,
@@ -1030,7 +1092,7 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         }
     }
 
-    private func validate(_ state: GaryxComposerDurabilitySnapshot) throws {
+    private static func validate(_ state: GaryxComposerDurabilitySnapshot) throws {
         let tombstoneUsage = state.persistentTombstoneUsage
         guard state.tombstoneBudget.admits(
             count: tombstoneUsage.count,
@@ -1137,11 +1199,11 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         }
     }
 
-    private func invariant(_ message: String) -> GaryxComposerDurabilityError {
+    private static func invariant(_ message: String) -> GaryxComposerDurabilityError {
         .invariantViolation(message)
     }
 
-    private func lifecycleRank(_ phase: GaryxPayloadLifecyclePhase) -> Int {
+    private static func lifecycleRank(_ phase: GaryxPayloadLifecyclePhase) -> Int {
         switch phase {
         case .active: 0
         case .discarding: 1
