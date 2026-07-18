@@ -132,6 +132,9 @@ independent acceptance surfaces:
   mutation-discriminating fixtures pin ambiguous create without disposition as
   non-terminal, create-before-delivery cross-family eviction, and retention of
   a terminal ledger while discard convergence is its only remaining child.
+  The latter is split into isolated barrier, delivery, reservation-tagged
+  operation, and reservation-tagged replacement shapes, so every convergence
+  descendant predicate is independently mutation-discriminating.
 - Discard resource settlement removes `producerDrained` and recovered-close
   payload records for the stable lifecycle token, returns any persisted send
   barrier to idle with all envelope/follow-up fields cleared and then removes
@@ -241,8 +244,8 @@ xcodebuild test -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,385 of 1,385 tests with zero failures in
-214.774 seconds, including all 17 real-process durability suites. The generated
+The final clean SwiftPM run passed 1,388 of 1,388 tests with zero failures in
+220.047 seconds, including all 17 real-process durability suites. The generated
 Xcode project had zero drift and passed Debug and Release generic iOS Simulator
 builds, and the `GaryxMobile` app-hosted suite passed 91 of 91 tests on iPhone
 17 Pro / iOS 26.5. Build warnings were pre-existing app-source deprecations;
