@@ -13,12 +13,23 @@ let package = Package(
             name: "GaryxMobileCore",
             targets: ["GaryxMobileCore"]
         ),
+        .executable(
+            name: "GaryxComposerDurabilityCrashHarness",
+            targets: ["GaryxComposerDurabilityCrashHarness"]
+        ),
     ],
     targets: [
         .target(name: "GaryxMobileCore"),
+        .executableTarget(
+            name: "GaryxComposerDurabilityCrashHarness",
+            dependencies: ["GaryxMobileCore"]
+        ),
         .testTarget(
             name: "GaryxMobileCoreTests",
-            dependencies: ["GaryxMobileCore"],
+            dependencies: [
+                "GaryxMobileCore",
+                "GaryxComposerDurabilityCrashHarness",
+            ],
             resources: [.copy("Fixtures")]
         ),
     ]
