@@ -74,6 +74,19 @@ private enum GaryxComposerDurabilityCrashHarness {
                 try await seedMultipleOperations(store: store)
             case "seed-ownerless-manifest":
                 try await seedOwnerlessManifest(store: store)
+            case "seed-replacement":
+                guard let phase = GaryxReplacementPhase(
+                    rawValue: try arguments.required("phase")
+                ) else {
+                    throw HarnessError.invalidArgument("phase")
+                }
+                try await seedReplacement(
+                    store: store,
+                    applicationSupportURL: arguments.applicationSupportURL,
+                    phase: phase,
+                    includeRecordFamilies: arguments.flag("families"),
+                    forceEntryErase: arguments.flag("erase-entry")
+                )
             case "seed-discard-operation":
                 guard let state = GaryxOperationCapabilityState(
                     rawValue: try arguments.required("state")
@@ -436,6 +449,164 @@ private enum GaryxComposerDurabilityCrashHarness {
                         )
                     ),
                 ]
+            )
+        )
+    }
+
+    private static func seedReplacement(
+        store: GaryxSQLiteComposerDurabilityStore,
+        applicationSupportURL: URL,
+        phase: GaryxReplacementPhase,
+        includeRecordFamilies: Bool,
+        forceEntryErase: Bool
+    ) async throws {
+        var entry = makeEntry(text: "replacement-sibling-text")
+        let siblingAttachmentID = GaryxAttachmentID(rawValue: "replacement-sibling")
+        entry.addAttachment(
+            .init(
+                id: siblingAttachmentID,
+                stagedAssetID: .init(rawValue: "replacement-sibling.bin"),
+                generation: entry.currentGeneration,
+                byteCount: 7
+            )
+        )
+        let oldKey = operationKey("replacement-old")
+        let successorKey = operationKey("replacement-successor")
+        let assetID = GaryxStagedAssetID(rawValue: "replacement-provisional.bin")
+        var replacement = GaryxReplacementRecord(
+            id: .init(rawValue: "replacement-record"),
+            scope: scope,
+            entryID: entryID,
+            oldKey: oldKey,
+            reservationID: nil,
+            branch: .followup,
+            stagedAssetID: assetID,
+            reservedBytes: 43
+        )
+        var mutations: [GaryxComposerDurabilityMutation] = [.upsertEntry(entry)]
+        let feedbackOperationID: GaryxOperationID
+
+        switch phase {
+        case .pendingReplacement, .aborted:
+            let state: GaryxOperationCapabilityState = forceEntryErase
+                ? .requested
+                : .failedRetryable
+            let owner = makeOperation(
+                key: oldKey,
+                entry: entry,
+                state: state,
+                assetID: assetID,
+                bytes: 43,
+                attempted: state == .failedRetryable
+            )
+            entry.addOperation(oldKey)
+            if phase == .aborted { replacement.abort() }
+            mutations = [
+                .upsertEntry(entry),
+                .upsertOperation(owner),
+                .upsertManifest(
+                    .init(
+                        key: oldKey,
+                        stagedPath: assetID.rawValue,
+                        state: state,
+                        uploadAttempted: state == .failedRetryable
+                    )
+                ),
+            ]
+            feedbackOperationID = oldKey.operationID
+        case .committed:
+            let old = makeOperation(
+                key: oldKey,
+                entry: entry,
+                state: .superseded,
+                assetID: nil,
+                bytes: 0,
+                attempted: true
+            )
+            let successor = makeOperation(
+                key: successorKey,
+                entry: entry,
+                state: .failedRetryable,
+                assetID: assetID,
+                bytes: 43,
+                attempted: true
+            )
+            entry.addOperation(oldKey)
+            entry.addOperation(successorKey)
+            replacement.commit(newKey: successorKey)
+            mutations = [
+                .upsertEntry(entry),
+                .upsertOperation(old),
+                .upsertManifest(
+                    .init(
+                        key: oldKey,
+                        stagedPath: "transferred",
+                        state: .superseded,
+                        uploadAttempted: true
+                    )
+                ),
+                .upsertOperation(successor),
+                .upsertManifest(
+                    .init(
+                        key: successorKey,
+                        stagedPath: assetID.rawValue,
+                        state: .failedRetryable,
+                        uploadAttempted: true
+                    )
+                ),
+            ]
+            feedbackOperationID = successorKey.operationID
+        case .settled:
+            throw HarnessError.invalidArgument("settled replacement seed")
+        }
+
+        mutations.append(.upsertReplacement(replacement))
+        if includeRecordFamilies {
+            let feedbackID = GaryxFeedbackID(rawValue: "replacement-feedback")
+            let lineageID = GaryxAttachmentLineageID(rawValue: "replacement-lineage")
+            entry.addFeedbackReference(feedbackID)
+            let feedback = GaryxOperationFeedback(
+                id: feedbackID,
+                scope: scope,
+                entryID: entryID,
+                operationID: feedbackOperationID,
+                lineageID: lineageID,
+                kind: .uploadRetryable
+            )
+            let lineage = GaryxAttachmentLineageTombstone(
+                id: lineageID,
+                scope: scope,
+                entryID: entryID,
+                attachmentSlotID: siblingAttachmentID,
+                failedOperationID: feedbackOperationID,
+                feedbackID: feedbackID,
+                payloadLifecycle: .init(
+                    token: entry.lifecycle.token,
+                    revision: entry.lifecycle.revision
+                )
+            )
+            mutations[0] = .upsertEntry(entry)
+            mutations.append(.upsertFeedback(feedback))
+            mutations.append(.upsertAttachmentLineage(lineage))
+        }
+        let owner = phase == .committed ? successorKey : oldKey
+        mutations.append(.reserveStagedAsset(assetID: assetID, owner: owner, bytes: 43))
+
+        let stagedRoot = applicationSupportURL
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stagedRoot,
+            withIntermediateDirectories: true
+        )
+        try Data("replacement provisional".utf8).write(
+            to: stagedRoot.appendingPathComponent(assetID.rawValue)
+        )
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "harness seed replacement recovery",
+                mutations: mutations
             )
         )
     }
@@ -852,9 +1023,11 @@ private struct HarnessSummary: Codable {
     let targetGenerations: [String: UInt64]
     let operationStates: [String: String]
     let entryOperationMembershipCount: Int
+    let entryAttachmentCount: Int
     let manifestCount: Int
     let replacementCount: Int
     let feedbackCount: Int
+    let attachmentLineageCount: Int
     let discardCount: Int
     let discardTombstoneCount: Int
     let reservedBytes: Int
@@ -895,9 +1068,11 @@ private struct HarnessSummary: Codable {
             ($0.key.operationID.rawValue, $0.value.state.rawValue)
         })
         entryOperationMembershipCount = entry?.operationKeys.count ?? 0
+        entryAttachmentCount = entry?.attachments.count ?? 0
         manifestCount = snapshot.manifests.count
         replacementCount = snapshot.replacements.count
         feedbackCount = snapshot.feedback.count
+        attachmentLineageCount = snapshot.attachmentLineages.count
         discardCount = snapshot.discardConvergence.count
         discardTombstoneCount = snapshot.discardConvergence.values.reduce(0) {
             $0 + $1.persistentTombstoneCount

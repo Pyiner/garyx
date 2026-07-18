@@ -253,6 +253,88 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         }
     }
 
+    func testReplacementRecoveryPhaseScopeAndKillBoundaryMatrixConvergesTwice() throws {
+        let phases = ["pendingReplacement", "aborted", "committed"]
+        for phase in phases {
+            for scope in ["active", "suspended", "revoked"] {
+                for boundary in ["beforeCommit", "afterCommit"] {
+                    let context = "\(phase):\(scope):\(boundary)"
+                    let fixture = try makeFixture(label: "replacement-\(context)")
+                    var seedArguments = [
+                        "--phase", phase,
+                        "--kill", "afterCommit",
+                    ]
+                    if scope == "revoked" { seedArguments.append("--families") }
+                    _ = try run(
+                        "seed-replacement",
+                        fixture: fixture,
+                        extra: seedArguments,
+                        expecting: .killed
+                    )
+                    _ = try run(
+                        "recover",
+                        fixture: fixture,
+                        extra: [
+                            "--scope", scope,
+                            "--kill", boundary,
+                        ],
+                        expecting: .killed
+                    )
+
+                    var summary = try recover(fixture, scope: scope)
+                    try assertReplacementRecovery(
+                        summary,
+                        fixture: fixture,
+                        phase: phase,
+                        scope: scope,
+                        context: context
+                    )
+                    summary = try recover(fixture, scope: scope)
+                    try assertReplacementRecovery(
+                        summary,
+                        fixture: fixture,
+                        phase: phase,
+                        scope: scope,
+                        context: "second relaunch \(context)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testRevokedEntryReplacementFeedbackAndLineageFamiliesConvergeAcrossKillBoundaries() throws {
+        for boundary in ["beforeCommit", "afterCommit"] {
+            let fixture = try makeFixture(label: "replacement-families-\(boundary)")
+            _ = try run(
+                "seed-replacement",
+                fixture: fixture,
+                extra: [
+                    "--phase", "pendingReplacement",
+                    "--families",
+                    "--erase-entry",
+                    "--kill", "afterCommit",
+                ],
+                expecting: .killed
+            )
+            _ = try run(
+                "recover",
+                fixture: fixture,
+                extra: [
+                    "--scope", "revoked",
+                    "--kill", boundary,
+                ],
+                expecting: .killed
+            )
+            var summary = try recover(fixture, scope: "revoked")
+            assertRevokedReplacementFamiliesCleared(summary, context: boundary)
+            summary = try recover(fixture, scope: "revoked")
+            assertRevokedReplacementFamiliesCleared(
+                summary,
+                context: "second relaunch \(boundary)"
+            )
+        }
+    }
+
     func testEveryOperationStateDestinationDiscardCrashRelaunchReleasesAllResources() throws {
         for state in GaryxOperationCapabilityState.allCases {
             let fixture = try makeFixture(label: "discard-operation-\(state.rawValue)")
@@ -552,6 +634,59 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         XCTAssertEqual(summary.pendingCleanupCount, 0, context)
     }
 
+    private func assertReplacementRecovery(
+        _ summary: HarnessSummary,
+        fixture: Fixture,
+        phase: String,
+        scope: String,
+        context: String
+    ) throws {
+        XCTAssertEqual(summary.currentText, "replacement-sibling-text", context)
+        XCTAssertEqual(summary.entryAttachmentCount, 1, context)
+        XCTAssertEqual(summary.feedbackCount, 0, context)
+        XCTAssertEqual(summary.attachmentLineageCount, 0, context)
+        if phase == "committed", scope != "revoked" {
+            XCTAssertEqual(
+                summary.operationStates,
+                ["replacement-successor": "failedRetryable"],
+                context
+            )
+            XCTAssertEqual(summary.entryOperationMembershipCount, 1, context)
+            XCTAssertEqual(summary.manifestCount, 1, context)
+            XCTAssertEqual(summary.replacementCount, 1, context)
+            XCTAssertEqual(summary.reservedBytes, 43, context)
+            XCTAssertEqual(summary.stagedOwnerCount, 1, context)
+            XCTAssertEqual(summary.pendingCleanupCount, 0, context)
+            XCTAssertEqual(try stagedFiles(fixture).count, 1, context)
+        } else {
+            XCTAssertTrue(summary.operationStates.isEmpty, context)
+            XCTAssertEqual(summary.entryOperationMembershipCount, 0, context)
+            XCTAssertEqual(summary.manifestCount, 0, context)
+            XCTAssertEqual(summary.replacementCount, 0, context)
+            XCTAssertEqual(summary.reservedBytes, 0, context)
+            XCTAssertEqual(summary.stagedOwnerCount, 0, context)
+            XCTAssertEqual(summary.pendingCleanupCount, 0, context)
+            XCTAssertTrue(try stagedFiles(fixture).isEmpty, context)
+        }
+    }
+
+    private func assertRevokedReplacementFamiliesCleared(
+        _ summary: HarnessSummary,
+        context: String
+    ) {
+        XCTAssertNil(summary.currentText, context)
+        XCTAssertEqual(summary.entryAttachmentCount, 0, context)
+        XCTAssertTrue(summary.operationStates.isEmpty, context)
+        XCTAssertEqual(summary.entryOperationMembershipCount, 0, context)
+        XCTAssertEqual(summary.manifestCount, 0, context)
+        XCTAssertEqual(summary.replacementCount, 0, context)
+        XCTAssertEqual(summary.feedbackCount, 0, context)
+        XCTAssertEqual(summary.attachmentLineageCount, 0, context)
+        XCTAssertEqual(summary.reservedBytes, 0, context)
+        XCTAssertEqual(summary.stagedOwnerCount, 0, context)
+        XCTAssertEqual(summary.pendingCleanupCount, 0, context)
+    }
+
     // MARK: - Process harness
 
     private var commitSendBoundaries: [(name: String, committed: Bool)] {
@@ -742,9 +877,11 @@ private struct HarnessSummary: Decodable {
     let targetGenerations: [String: UInt64]
     let operationStates: [String: String]
     let entryOperationMembershipCount: Int
+    let entryAttachmentCount: Int
     let manifestCount: Int
     let replacementCount: Int
     let feedbackCount: Int
+    let attachmentLineageCount: Int
     let discardCount: Int
     let discardTombstoneCount: Int
     let reservedBytes: Int
