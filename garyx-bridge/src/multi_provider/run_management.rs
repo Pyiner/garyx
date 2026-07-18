@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
-#[cfg(test)]
 use garyx_models::provider::ProviderRunResult;
 use garyx_models::provider::{
     AgentDispatchOutcome, AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY,
@@ -571,6 +570,139 @@ async fn finalize_partial_persistence(
     persistence_result
 }
 
+/// Persists the terminal state of a successful provider call (including the
+/// Codex soft-failure `Ok` with `success == false`): applies a provider
+/// thread title if the thread has none, consumes the soft-failure rate-limit
+/// context, writes user/assistant/tool messages with the terminal control,
+/// and emits the committed records. Returns the applied thread title.
+#[allow(clippy::too_many_arguments)]
+async fn persist_terminal_success(
+    store: &Arc<dyn ThreadStore>,
+    history: &Arc<ThreadHistoryRepository>,
+    provider: &dyn ProviderRuntime,
+    thread_id: &str,
+    user_message: &str,
+    run_id: &str,
+    provider_key: &str,
+    run_started_at: &str,
+    graph_state: &RunGraphState,
+    res: &ProviderRunResult,
+    persistence_result: Option<&StreamingPersistenceWorkerResult>,
+    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
+) -> Option<String> {
+    let user_images = graph_state.run_options.images.clone().unwrap_or_default();
+    let persisted_assistant_response = persistence_result
+        .map(|value| value.assistant_response.as_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&res.response);
+    let persisted_session_messages = persistence_result
+        .map(|value| value.session_messages.as_slice())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&res.session_messages);
+    let persisted_transcript_controls = persistence_result
+        .map(|value| value.transcript_controls.as_slice())
+        .unwrap_or(&[]);
+    let sdk_session_id = resolve_sdk_session_id_for_persistence(
+        &graph_state.run_options.metadata,
+        res.sdk_session_id.as_deref(),
+    );
+    let applied_thread_title =
+        persist_provider_thread_title_if_missing(store, thread_id, res.thread_title.as_deref())
+            .await;
+    // Codex surfaces a usage-quota exhaustion as a soft failure (`Ok` result
+    // with `success == false`), so the rate-limit context is consumed here
+    // rather than on the hard-error path.
+    let rate_limit = if res.success {
+        None
+    } else {
+        provider.take_rate_limit(thread_id).await
+    };
+    let terminal_committed = save_thread_messages_with_terminal_control(
+        store,
+        history,
+        PersistedRun {
+            thread_id,
+            user_message,
+            user_timestamp: Some(run_started_at),
+            user_images: &user_images,
+            assistant_response: persisted_assistant_response,
+            sdk_session_id: sdk_session_id.as_deref(),
+            provider_key,
+            provider_type: provider.provider_type(),
+            session_messages: persisted_session_messages,
+            metadata: &graph_state.run_options.metadata,
+        },
+        persisted_transcript_controls,
+        Some(TerminalRunControl {
+            duration_ms: Some(graph_state.metrics.duration_ms()),
+            success: Some(res.success),
+            error: res.error.clone(),
+            thread_title: applied_thread_title.clone(),
+            rate_limit,
+        }),
+    )
+    .await;
+    emit_committed_records(event_tx, thread_id, Some(run_id), terminal_committed);
+    applied_thread_title
+}
+
+/// Persists the terminal state of a hard-failed provider call: consumes the
+/// rate-limit context, writes whatever partial output the persistence worker
+/// captured with a failed terminal control, and emits the committed records.
+#[allow(clippy::too_many_arguments)]
+async fn persist_terminal_failure(
+    store: &Arc<dyn ThreadStore>,
+    history: &Arc<ThreadHistoryRepository>,
+    provider: &dyn ProviderRuntime,
+    thread_id: &str,
+    user_message: &str,
+    run_id: &str,
+    provider_key: &str,
+    run_started_at: &str,
+    graph_state: &RunGraphState,
+    error: &BridgeError,
+    persistence_result: Option<&StreamingPersistenceWorkerResult>,
+    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
+) {
+    let user_images = graph_state.run_options.images.clone().unwrap_or_default();
+    let failed_assistant_response = persistence_result
+        .map(|value| value.assistant_response.as_str())
+        .unwrap_or_default();
+    let failed_session_messages = persistence_result
+        .map(|value| value.session_messages.as_slice())
+        .unwrap_or(&[]);
+    let persisted_transcript_controls = persistence_result
+        .map(|value| value.transcript_controls.as_slice())
+        .unwrap_or(&[]);
+    let rate_limit = provider.take_rate_limit(thread_id).await;
+    let terminal_committed = save_failed_thread_messages_with_terminal_control(
+        store,
+        history,
+        PersistedRun {
+            thread_id,
+            user_message,
+            user_timestamp: Some(run_started_at),
+            user_images: &user_images,
+            assistant_response: failed_assistant_response,
+            sdk_session_id: None,
+            provider_key,
+            provider_type: provider.provider_type(),
+            session_messages: failed_session_messages,
+            metadata: &graph_state.run_options.metadata,
+        },
+        persisted_transcript_controls,
+        Some(TerminalRunControl {
+            duration_ms: Some(graph_state.metrics.duration_ms()),
+            success: Some(false),
+            error: Some(error.to_string()),
+            thread_title: None,
+            rate_limit,
+        }),
+    )
+    .await;
+    emit_committed_records(event_tx, thread_id, Some(run_id), terminal_committed);
+}
+
 impl MultiProviderBridge {
     async fn resolve_thread_execution_target(
         &self,
@@ -1001,72 +1133,21 @@ impl MultiProviderBridge {
                         &*inner.thread_store.read().await,
                         &*inner.thread_history.read().await,
                     ) {
-                        let user_images =
-                            graph_state.run_options.images.clone().unwrap_or_default();
-                        let persisted_assistant_response = persistence_result
-                            .as_ref()
-                            .map(|value| value.assistant_response.as_str())
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or(&res.response);
-                        let persisted_session_messages = persistence_result
-                            .as_ref()
-                            .map(|value| value.session_messages.as_slice())
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or(&res.session_messages);
-                        let persisted_transcript_controls = persistence_result
-                            .as_ref()
-                            .map(|value| value.transcript_controls.as_slice())
-                            .unwrap_or(&[]);
-                        let sdk_session_id = resolve_sdk_session_id_for_persistence(
-                            &graph_state.run_options.metadata,
-                            res.sdk_session_id.as_deref(),
-                        );
-                        applied_thread_title = persist_provider_thread_title_if_missing(
-                            store,
-                            &thread_id_owned,
-                            res.thread_title.as_deref(),
-                        )
-                        .await;
-                        // Codex surfaces a usage-quota exhaustion as a soft
-                        // failure (`Ok` result with `success == false`), so the
-                        // rate-limit context is consumed here rather than on the
-                        // hard-error path below.
-                        let rate_limit = if res.success {
-                            None
-                        } else {
-                            provider.take_rate_limit(&thread_id_owned).await
-                        };
-                        let terminal_committed = save_thread_messages_with_terminal_control(
+                        applied_thread_title = persist_terminal_success(
                             store,
                             history,
-                            PersistedRun {
-                                thread_id: &thread_id_owned,
-                                user_message: &user_message,
-                                user_timestamp: Some(&run_started_at),
-                                user_images: &user_images,
-                                assistant_response: persisted_assistant_response,
-                                sdk_session_id: sdk_session_id.as_deref(),
-                                provider_key: &provider_key_owned,
-                                provider_type: provider.provider_type(),
-                                session_messages: persisted_session_messages,
-                                metadata: &graph_state.run_options.metadata,
-                            },
-                            persisted_transcript_controls,
-                            Some(TerminalRunControl {
-                                duration_ms: Some(graph_state.metrics.duration_ms()),
-                                success: Some(res.success),
-                                error: res.error.clone(),
-                                thread_title: applied_thread_title.clone(),
-                                rate_limit,
-                            }),
+                            provider.as_ref(),
+                            &thread_id_owned,
+                            &user_message,
+                            &run_id_owned,
+                            &provider_key_owned,
+                            &run_started_at,
+                            &graph_state,
+                            res,
+                            persistence_result.as_ref(),
+                            &final_gateway_event_tx,
                         )
                         .await;
-                        emit_committed_records(
-                            &final_gateway_event_tx,
-                            &thread_id_owned,
-                            Some(&run_id_owned),
-                            terminal_committed,
-                        );
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -1159,53 +1240,25 @@ impl MultiProviderBridge {
                         .as_ref()
                         .map(|value| value.assistant_response.as_str())
                         .unwrap_or_default();
-                    let failed_session_messages = persistence_result
-                        .as_ref()
-                        .map(|value| value.session_messages.as_slice())
-                        .unwrap_or(&[]);
-                    let persisted_transcript_controls = persistence_result
-                        .as_ref()
-                        .map(|value| value.transcript_controls.as_slice())
-                        .unwrap_or(&[]);
-
                     if let (Some(store), Some(history)) = (
                         &*inner.thread_store.read().await,
                         &*inner.thread_history.read().await,
                     ) {
-                        let user_images =
-                            graph_state.run_options.images.clone().unwrap_or_default();
-                        let rate_limit = provider.take_rate_limit(&thread_id_owned).await;
-                        let terminal_committed = save_failed_thread_messages_with_terminal_control(
+                        persist_terminal_failure(
                             store,
                             history,
-                            PersistedRun {
-                                thread_id: &thread_id_owned,
-                                user_message: &user_message,
-                                user_timestamp: Some(&run_started_at),
-                                user_images: &user_images,
-                                assistant_response: failed_assistant_response,
-                                sdk_session_id: None,
-                                provider_key: &provider_key_owned,
-                                provider_type: provider.provider_type(),
-                                session_messages: failed_session_messages,
-                                metadata: &graph_state.run_options.metadata,
-                            },
-                            persisted_transcript_controls,
-                            Some(TerminalRunControl {
-                                duration_ms: Some(graph_state.metrics.duration_ms()),
-                                success: Some(false),
-                                error: Some(e.to_string()),
-                                thread_title: None,
-                                rate_limit,
-                            }),
+                            provider.as_ref(),
+                            &thread_id_owned,
+                            &user_message,
+                            &run_id_owned,
+                            &provider_key_owned,
+                            &run_started_at,
+                            &graph_state,
+                            e,
+                            persistence_result.as_ref(),
+                            &final_gateway_event_tx,
                         )
                         .await;
-                        emit_committed_records(
-                            &final_gateway_event_tx,
-                            &thread_id_owned,
-                            Some(&run_id_owned),
-                            terminal_committed,
-                        );
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -1496,68 +1549,22 @@ impl MultiProviderBridge {
                     &*self.inner.thread_store.read().await,
                     &*self.inner.thread_history.read().await,
                 ) {
-                    let user_images = graph_state.run_options.images.clone().unwrap_or_default();
-                    let persisted_assistant_response = persistence_result
-                        .as_ref()
-                        .map(|value| value.assistant_response.as_str())
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or(&res.response);
-                    let persisted_session_messages = persistence_result
-                        .as_ref()
-                        .map(|value| value.session_messages.as_slice())
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or(&res.session_messages);
-                    let persisted_transcript_controls = persistence_result
-                        .as_ref()
-                        .map(|value| value.transcript_controls.as_slice())
-                        .unwrap_or(&[]);
-                    let sdk_session_id = resolve_sdk_session_id_for_persistence(
-                        &graph_state.run_options.metadata,
-                        res.sdk_session_id.as_deref(),
-                    );
-                    applied_thread_title = persist_provider_thread_title_if_missing(
-                        store,
-                        thread_id,
-                        res.thread_title.as_deref(),
-                    )
-                    .await;
-                    let rate_limit = if res.success {
-                        None
-                    } else {
-                        provider.take_rate_limit(thread_id).await
-                    };
-                    let terminal_committed = save_thread_messages_with_terminal_control(
+                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
+                    applied_thread_title = persist_terminal_success(
                         store,
                         history,
-                        PersistedRun {
-                            thread_id,
-                            user_message: message,
-                            user_timestamp: Some(&run_started_at),
-                            user_images: &user_images,
-                            assistant_response: persisted_assistant_response,
-                            sdk_session_id: sdk_session_id.as_deref(),
-                            provider_key: &provider_key,
-                            provider_type: provider.provider_type(),
-                            session_messages: persisted_session_messages,
-                            metadata: &graph_state.run_options.metadata,
-                        },
-                        persisted_transcript_controls,
-                        Some(TerminalRunControl {
-                            duration_ms: Some(graph_state.metrics.duration_ms()),
-                            success: Some(res.success),
-                            error: res.error.clone(),
-                            thread_title: applied_thread_title.clone(),
-                            rate_limit,
-                        }),
+                        provider.as_ref(),
+                        thread_id,
+                        message,
+                        &run_id,
+                        &provider_key,
+                        &run_started_at,
+                        &graph_state,
+                        res,
+                        persistence_result.as_ref(),
+                        &terminal_event_tx,
                     )
                     .await;
-                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
-                    emit_committed_records(
-                        &terminal_event_tx,
-                        thread_id,
-                        Some(&run_id),
-                        terminal_committed,
-                    );
                 }
                 forward_applied_thread_title_update(
                     final_external_callback.as_ref(),
@@ -1570,52 +1577,22 @@ impl MultiProviderBridge {
                     &*self.inner.thread_store.read().await,
                     &*self.inner.thread_history.read().await,
                 ) {
-                    let user_images = graph_state.run_options.images.clone().unwrap_or_default();
-                    let failed_assistant_response = persistence_result
-                        .as_ref()
-                        .map(|value| value.assistant_response.as_str())
-                        .unwrap_or_default();
-                    let failed_session_messages = persistence_result
-                        .as_ref()
-                        .map(|value| value.session_messages.as_slice())
-                        .unwrap_or(&[]);
-                    let persisted_transcript_controls = persistence_result
-                        .as_ref()
-                        .map(|value| value.transcript_controls.as_slice())
-                        .unwrap_or(&[]);
-                    let rate_limit = provider.take_rate_limit(thread_id).await;
-                    let terminal_committed = save_failed_thread_messages_with_terminal_control(
+                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
+                    persist_terminal_failure(
                         store,
                         history,
-                        PersistedRun {
-                            thread_id,
-                            user_message: message,
-                            user_timestamp: Some(&run_started_at),
-                            user_images: &user_images,
-                            assistant_response: failed_assistant_response,
-                            sdk_session_id: None,
-                            provider_key: &provider_key,
-                            provider_type: provider.provider_type(),
-                            session_messages: failed_session_messages,
-                            metadata: &graph_state.run_options.metadata,
-                        },
-                        persisted_transcript_controls,
-                        Some(TerminalRunControl {
-                            duration_ms: Some(graph_state.metrics.duration_ms()),
-                            success: Some(false),
-                            error: Some(error.to_string()),
-                            thread_title: None,
-                            rate_limit,
-                        }),
+                        provider.as_ref(),
+                        thread_id,
+                        message,
+                        &run_id,
+                        &provider_key,
+                        &run_started_at,
+                        &graph_state,
+                        error,
+                        persistence_result.as_ref(),
+                        &terminal_event_tx,
                     )
                     .await;
-                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
-                    emit_committed_records(
-                        &terminal_event_tx,
-                        thread_id,
-                        Some(&run_id),
-                        terminal_committed,
-                    );
                 }
 
                 Err(error.clone())
