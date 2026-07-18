@@ -128,7 +128,10 @@ independent acceptance surfaces:
   the same transaction that removes their last durable descendant; and
   terminal create correlations share the count/byte tombstone pool. Focused
   tests discriminate every count/byte/per-scope gate and a SQLite double
-  relaunch proves that a compacted generation remains unclaimable.
+  relaunch proves that a compacted generation remains unclaimable. Additional
+  mutation-discriminating fixtures pin ambiguous create without disposition as
+  non-terminal, create-before-delivery cross-family eviction, and retention of
+  a terminal ledger while discard convergence is its only remaining child.
 - Discard resource settlement removes `producerDrained` and recovered-close
   payload records for the stable lifecycle token, returns any persisted send
   barrier to idle with all envelope/follow-up fields cleared and then removes
@@ -238,9 +241,9 @@ xcodebuild test -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,382 of 1,382 tests with zero failures in
-224.052 seconds; its 17 real-process durability suites passed in 215.534
-seconds. The generated Xcode project had zero drift and passed Debug and
-Release generic iOS Simulator builds, and the `GaryxMobile` app-hosted suite
-passed 91 of 91 tests on iPhone 17 Pro / iOS 26.5. Build warnings were
-pre-existing app-source deprecations; the A4d-1 files emitted no warnings.
+The final clean SwiftPM run passed 1,385 of 1,385 tests with zero failures in
+214.774 seconds, including all 17 real-process durability suites. The generated
+Xcode project had zero drift and passed Debug and Release generic iOS Simulator
+builds, and the `GaryxMobile` app-hosted suite passed 91 of 91 tests on iPhone
+17 Pro / iOS 26.5. Build warnings were pre-existing app-source deprecations;
+the A4d-1 files emitted no warnings.
