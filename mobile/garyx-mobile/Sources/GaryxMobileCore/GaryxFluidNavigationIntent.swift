@@ -233,6 +233,7 @@ public struct GaryxNavigationPreparationTicket: Equatable, Sendable {
 public enum GaryxNavigationQueueResult: Equatable, Sendable {
     case queued
     case admittedImmediately
+    case presentationDismissalRequired
     case authenticationRequired
     case userVisibleNotFound
     case retryableFailure(message: String)
@@ -246,6 +247,14 @@ public enum GaryxNavigationQueueResult: Equatable, Sendable {
 public enum GaryxNavigationTransactionStatus: Equatable, Sendable {
     case terminal
     case nonTerminal
+}
+
+public enum GaryxNavigationAdmissionAction: Equatable, Sendable {
+    case none
+    case waitForTransactionTerminal
+    case waitForPresentationBarrier
+    case requestPresentationDismissal
+    case admit
 }
 
 public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
@@ -313,7 +322,8 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
         _ ticket: GaryxNavigationPreparationTicket,
         outcome: GaryxPrepareOutcome<GaryxPreparedNavigationIntent>,
         scopes: GaryxGatewayScopeRegistry,
-        routeState: GaryxCanonicalRouteState
+        routeState: GaryxCanonicalRouteState,
+        presentationBarrier: Bool
     ) -> GaryxNavigationQueueResult {
         guard owns(ticket, scopes: scopes) else { return .stalePreparation }
 
@@ -345,15 +355,41 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
             case .discard:
                 return .dependencyDiscarded
             }
-            return transactionStatus == .terminal ? .admittedImmediately : .queued
+            switch nextAdmissionAction(presentationBarrier: presentationBarrier) {
+            case .admit:
+                return .admittedImmediately
+            case .requestPresentationDismissal:
+                return .presentationDismissalRequired
+            case .none, .waitForTransactionTerminal, .waitForPresentationBarrier:
+                return .queued
+            }
         }
+    }
+
+    /// Composes the transaction boundary with the PresentationLease barrier.
+    /// Ordinary and gateway-change intents wait without unloading the presenter;
+    /// a safety-forced intent asks the host to dismiss the lease tree, then waits
+    /// for the exactly-once release event before it can be drained atomically.
+    public func nextAdmissionAction(
+        presentationBarrier: Bool
+    ) -> GaryxNavigationAdmissionAction {
+        guard !queued.isEmpty else { return .none }
+        guard transactionStatus == .terminal else { return .waitForTransactionTerminal }
+        guard presentationBarrier else { return .admit }
+        return queued.contains(where: { $0.priority == .safetyForced })
+            ? .requestPresentationDismissal
+            : .waitForPresentationBarrier
     }
 
     /// Returns the next effects only at a terminal boundary. Safety effects use
     /// distinct keys and therefore survive together; their canonical order is
     /// route invalidation then logout, making both arrival orders equivalent.
-    public mutating func drainAdmissible() -> [GaryxPreparedNavigationIntent] {
-        guard transactionStatus == .terminal, !queued.isEmpty else { return [] }
+    public mutating func drainAdmissible(
+        presentationBarrier: Bool
+    ) -> [GaryxPreparedNavigationIntent] {
+        guard nextAdmissionAction(presentationBarrier: presentationBarrier) == .admit else {
+            return []
+        }
         let ordered = queued.sorted { lhs, rhs in
             if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
             return canonicalOrder(lhs.coalescingKey) < canonicalOrder(rhs.coalescingKey)

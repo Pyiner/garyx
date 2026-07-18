@@ -207,7 +207,8 @@ public enum GaryxDraftPromotionNavigationDisposition: Equatable, Sendable {
     /// The origin epoch is at or below the revocation watermark. No partition
     /// or outbox mutation may be created from the late event.
     case originScopeRevoked
-    /// Outbox durability failed, so the visible draft remains authoritative.
+    /// Outbox durability failed, so the origin-scope draft remains authoritative
+    /// without mutating whichever scope currently owns the visible path.
     case draftRestored
 }
 

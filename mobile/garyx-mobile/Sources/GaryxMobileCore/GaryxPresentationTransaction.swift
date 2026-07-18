@@ -606,7 +606,9 @@ public enum GaryxPathDiffPlanner {
                case .conversation = new[changedIndex].destination {
                 return .promoteInPlace
             }
-            if changedIndices == [old.index(before: old.endIndex)] {
+            if changedIndices == [old.index(before: old.endIndex)],
+               old.last?.destination == new.last?.destination,
+               old.last?.payloadRevision != new.last?.payloadRevision {
                 return .inPlacePayloadUpdate
             }
             return .normalizeIllegalMutationAndLogFault

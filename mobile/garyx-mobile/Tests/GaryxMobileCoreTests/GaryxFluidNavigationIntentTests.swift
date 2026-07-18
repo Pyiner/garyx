@@ -40,7 +40,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                     ticket,
                     outcome: outcome,
                     scopes: scopes,
-                    routeState: .init()
+                    routeState: .init(),
+                    presentationBarrier: false
                 ),
                 expected[index]
             )
@@ -62,13 +63,95 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 ticket,
                 outcome: .ready(intent),
                 scopes: scopes,
-                routeState: .init()
+                routeState: .init(),
+                presentationBarrier: false
             ),
             .queued
         )
-        XCTAssertTrue(coordinator.drainAdmissible().isEmpty)
+        XCTAssertTrue(coordinator.drainAdmissible(presentationBarrier: false).isEmpty)
         coordinator.setTransactionStatus(.terminal)
-        XCTAssertEqual(coordinator.drainAdmissible(), [intent])
+        XCTAssertEqual(coordinator.drainAdmissible(presentationBarrier: false), [intent])
+    }
+
+    func testModalForcedAndLateOrdinaryWaitForLeaseTreeWithoutDroppingForcedIntent() {
+        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+        var leases = GaryxPresentationLeaseTree()
+        let modal = GaryxPresentationLeaseToken(rawValue: "modal")
+        XCTAssertTrue(leases.acquire(modal))
+        var coordinator = GaryxNavigationIntentCoordinator()
+
+        let initialOrdinary = ordinary("initial-ordinary", thread: "thread-a")
+        let ordinaryTicket = coordinator.beginPreparation(
+            intentID: initialOrdinary.id,
+            key: initialOrdinary.coalescingKey,
+            scope: scope1
+        )
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                ordinaryTicket,
+                outcome: .ready(initialOrdinary),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: leases.hasBarrier
+            ),
+            .queued
+        )
+        XCTAssertEqual(
+            coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
+            .waitForPresentationBarrier
+        )
+
+        let forced = logout("forced-logout")
+        let forcedTicket = coordinator.beginPreparation(
+            intentID: forced.id,
+            key: forced.coalescingKey,
+            scope: scope1
+        )
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                forcedTicket,
+                outcome: .ready(forced),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: leases.hasBarrier
+            ),
+            .presentationDismissalRequired
+        )
+        XCTAssertEqual(coordinator.queued, [forced])
+
+        let lateOrdinary = ordinary("late-ordinary", thread: "thread-b")
+        let lateTicket = coordinator.beginPreparation(
+            intentID: lateOrdinary.id,
+            key: lateOrdinary.coalescingKey,
+            scope: scope1
+        )
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                lateTicket,
+                outcome: .ready(lateOrdinary),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: leases.hasBarrier
+            ),
+            .cancelledOrStale
+        )
+        XCTAssertEqual(coordinator.queued, [forced], "late ordinary intent cannot supersede safety")
+        XCTAssertEqual(
+            coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
+            .requestPresentationDismissal
+        )
+        XCTAssertTrue(coordinator.drainAdmissible(presentationBarrier: true).isEmpty)
+
+        leases.forceDismissSubtree(modal)
+        XCTAssertFalse(leases.hasBarrier)
+        XCTAssertEqual(
+            coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
+            .admit
+        )
+        XCTAssertEqual(
+            coordinator.drainAdmissible(presentationBarrier: leases.hasBarrier),
+            [forced]
+        )
     }
 
     func testResolverIgnoringCancellationLosesTripleCASInBothCompletionOrders() {
@@ -95,26 +178,30 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                     secondTicket,
                     outcome: .ready(second),
                     scopes: scopes,
-                    routeState: .init()
+                    routeState: .init(),
+                    presentationBarrier: false
                 )
                 firstResult = coordinator.completePreparation(
                     firstTicket,
                     outcome: .ready(first),
                     scopes: scopes,
-                    routeState: .init()
+                    routeState: .init(),
+                    presentationBarrier: false
                 )
             } else {
                 firstResult = coordinator.completePreparation(
                     firstTicket,
                     outcome: .ready(first),
                     scopes: scopes,
-                    routeState: .init()
+                    routeState: .init(),
+                    presentationBarrier: false
                 )
                 secondResult = coordinator.completePreparation(
                     secondTicket,
                     outcome: .ready(second),
                     scopes: scopes,
-                    routeState: .init()
+                    routeState: .init(),
+                    presentationBarrier: false
                 )
             }
             XCTAssertEqual(firstResult, .stalePreparation)
@@ -142,7 +229,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 oldTicket,
                 outcome: .ready(intent),
                 scopes: scopes,
-                routeState: .init()
+                routeState: .init(),
+                presentationBarrier: false
             ),
             .stalePreparation
         )
@@ -153,10 +241,56 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 currentTicket,
                 outcome: .ready(intent),
                 scopes: scopes,
-                routeState: .init()
+                routeState: .init(),
+                presentationBarrier: false
             ),
             .stalePreparation
         )
+    }
+
+    func testReauthenticationAsDifferentIdentityCannotReviveOldScopePreparation() {
+        var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+        var coordinator = GaryxNavigationIntentCoordinator()
+        let oldIntent = ordinary("old-identity", thread: "thread-old")
+        let oldTicket = coordinator.beginPreparation(
+            intentID: oldIntent.id,
+            key: oldIntent.coalescingKey,
+            scope: scope1
+        )
+
+        XCTAssertTrue(scopes.revoke(scope1))
+        let differentIdentity = GaryxGatewayScope(identity: "different-gateway", epoch: 1)
+        XCTAssertTrue(scopes.switchActive(to: differentIdentity))
+        XCTAssertEqual(scopes.admitDomainEvent(from: scope1), .rejectedRevoked)
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                oldTicket,
+                outcome: .ready(oldIntent),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: false
+            ),
+            .stalePreparation
+        )
+        XCTAssertTrue(coordinator.queued.isEmpty)
+
+        let currentIntent = ordinary("new-identity", thread: "thread-new")
+        let currentTicket = coordinator.beginPreparation(
+            intentID: currentIntent.id,
+            key: currentIntent.coalescingKey,
+            scope: differentIdentity
+        )
+        XCTAssertEqual(
+            coordinator.completePreparation(
+                currentTicket,
+                outcome: .ready(currentIntent),
+                scopes: scopes,
+                routeState: .init(),
+                presentationBarrier: false
+            ),
+            .admittedImmediately
+        )
+        XCTAssertEqual(coordinator.drainAdmissible(presentationBarrier: false), [currentIntent])
     }
 
     func testSafetyEffectsUseDistinctIdempotentKeysAndCommute() {
@@ -184,14 +318,18 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 lateTicket,
                 outcome: .ready(late),
                 scopes: scopes,
-                routeState: .init()
+                routeState: .init(),
+                presentationBarrier: false
             ),
             .cancelledOrStale
         )
         XCTAssertEqual(coordinator.queued.map(\.coalescingKey), [.logout])
 
         coordinator.setTransactionStatus(.terminal)
-        XCTAssertEqual(coordinator.drainAdmissible().map(\.coalescingKey), [.logout])
+        XCTAssertEqual(
+            coordinator.drainAdmissible(presentationBarrier: false).map(\.coalescingKey),
+            [.logout]
+        )
         XCTAssertTrue(coordinator.authenticationBarrier)
 
         let blocked = ordinary("blocked", thread: "thread-c")
@@ -205,7 +343,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 ticket,
                 outcome: .ready(blocked),
                 scopes: scopes,
-                routeState: .init()
+                routeState: .init(),
+                presentationBarrier: false
             ),
             .authenticationRequired
         )
@@ -257,7 +396,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 absoluteTicket,
                 outcome: .ready(absolute),
                 scopes: scopes,
-                routeState: route
+                routeState: route,
+                presentationBarrier: false
             ),
             .admittedImmediately
         )
@@ -283,7 +423,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 relativeTicket,
                 outcome: .ready(staleRelative),
                 scopes: scopes,
-                routeState: route
+                routeState: route,
+                presentationBarrier: false
             ),
             .reprepareRequired
         )
@@ -309,7 +450,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                 discardTicket,
                 outcome: .ready(discarded),
                 scopes: scopes,
-                routeState: route
+                routeState: route,
+                presentationBarrier: false
             ),
             .dependencyDiscarded
         )
@@ -356,7 +498,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
                     ticket,
                     outcome: .ready(intent),
                     scopes: scopes,
-                    routeState: route
+                    routeState: route,
+                    presentationBarrier: false
                 ),
                 commitPop ? .reprepareRequired : .admittedImmediately
             )
@@ -425,7 +568,7 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
             enqueue(intent, into: &coordinator, scopes: scopes)
         }
         coordinator.setTransactionStatus(.terminal)
-        return coordinator.drainAdmissible()
+        return coordinator.drainAdmissible(presentationBarrier: false)
     }
 
     private func enqueue(
@@ -442,7 +585,8 @@ final class GaryxFluidNavigationIntentTests: XCTestCase {
             ticket,
             outcome: .ready(intent),
             scopes: scopes,
-            routeState: .init()
+            routeState: .init(),
+            presentationBarrier: false
         )
     }
 

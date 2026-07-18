@@ -323,6 +323,22 @@ final class GaryxPresentationTransactionTests: XCTestCase {
             .normalizeIllegalMutationAndLogFault,
             "same-instance middle mutations are still illegal path diffs"
         )
+        var illegalTopDestination = b
+        illegalTopDestination.replacePayload(with: .panel("skills"))
+        XCTAssertEqual(
+            GaryxPathDiffPlanner.decide(from: [a, b], to: [a, illegalTopDestination]),
+            .normalizeIllegalMutationAndLogFault,
+            "same-instance top destination changes require a declared promotion"
+        )
+        let refreshedTop = GaryxRouteEntry(
+            id: b.id,
+            destination: b.destination,
+            payloadRevision: b.payloadRevision + 1
+        )
+        XCTAssertEqual(
+            GaryxPathDiffPlanner.decide(from: [a, b], to: [a, refreshedTop]),
+            .inPlacePayloadUpdate
+        )
         XCTAssertEqual(
             GaryxPathDiffPlanner.decide(from: [a, b], to: [a, b, a2]),
             .push,

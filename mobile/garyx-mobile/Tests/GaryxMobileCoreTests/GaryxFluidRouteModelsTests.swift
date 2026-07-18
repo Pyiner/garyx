@@ -151,6 +151,31 @@ final class GaryxFluidRouteModelsTests: XCTestCase {
         XCTAssertEqual(state.path, [draft])
     }
 
+    func testSuspendedOriginOutboxFailureKeepsPartitionDraftWithoutTouchingPath() {
+        let draft = entry("draft-occurrence", .conversationDraft(draftID: "draft-1"))
+        var state = GaryxCanonicalRouteState(path: [draft])
+        var scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope1)
+        XCTAssertTrue(scopes.switchActive(to: scope2))
+        let originalRevision = state.stackRevision
+
+        let result = state.promoteDraft(
+            promotion(stage: .threadCreatedButNotDispatched),
+            scopes: scopes,
+            outboxAdmission: .failed(code: "fsync_failed")
+        )
+
+        XCTAssertEqual(result.navigation, .draftRestored)
+        XCTAssertEqual(result.send, .typedFailure(code: "fsync_failed"))
+        XCTAssertFalse(result.migratedDomainInOriginScope)
+        XCTAssertFalse(result.keptOptimisticThread)
+        XCTAssertEqual(result.outboxInsertCount, 0)
+        XCTAssertEqual(result.dispatchCountDelta, 0)
+        XCTAssertEqual(state.path, [draft])
+        XCTAssertEqual(state.stackRevision, originalRevision)
+        XCTAssertEqual(scopes.activeScope, scope2)
+        XCTAssertEqual(scopes.lifecycle(of: scope1), .suspended)
+    }
+
     func testPromotionStagesAcrossActiveAndSuspendedOriginScopes() {
         let cases: [
             (GaryxDraftPromotionSendStage, GaryxDraftPromotionSendDisposition, Int)
