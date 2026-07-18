@@ -4,7 +4,6 @@ import type { CSSProperties, ReactNode } from 'react';
 import type {
   DesktopApiProviderType,
   DesktopCodingUsage,
-  DesktopProviderModelOption,
   DesktopProviderModels,
   DesktopProviderUsage,
   DesktopModelUsage,
@@ -46,38 +45,32 @@ import {
   formatUsageDuration,
   formatUsagePercent,
   usageLevelForRemainingPercent,
-  usageProviderIdForModelProviderKey,
   usageResetText,
 } from '../provider-usage';
+import {
+  MODEL_PROVIDER_ROWS,
+  applyProviderCatalogDefaults,
+  applyProviderConfigDraftToGatewayConfig,
+  emptyModelProviderConfigDraft,
+  fixedModelProviderRow,
+  highestReasoningEffort,
+  modelProviderDraftFromState,
+  normalizeClaudeCliMode,
+  providerAgentConfig,
+  providerModelOptionsWithCurrent,
+  reasoningEffortOptionsForModel,
+  sanitizedServiceTier,
+  serviceTierOptionsForModel,
+  type FixedModelProviderKey,
+  type FixedModelProviderRow,
+  type ModelProviderConfigDraft,
+} from './provider-settings-model.ts';
 import { classNames } from './shared';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
   silent?: boolean;
   refreshDesktopState?: 'await' | 'background' | 'skip';
-};
-
-type FixedModelProviderKey =
-  | 'claude_code'
-  | 'codex_app_server'
-  | 'antigravity'
-  | 'traex';
-
-type FixedModelProviderRow = {
-  key: FixedModelProviderKey;
-  agentId: string;
-  label: string;
-  providerType: DesktopApiProviderType;
-  defaultModel: string;
-  usageProviderId?: string;
-};
-
-type ModelProviderConfigDraft = {
-  key: FixedModelProviderKey;
-  claudeCliMode: 'cctty' | 'native';
-  claudeCliPath: string;
-  model: string;
-  modelReasoningEffort: string;
 };
 
 type ProviderAuthState = 'ready' | 'error';
@@ -92,53 +85,11 @@ type ProviderRowDetails = {
   serviceTier: string;
 };
 
-const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
-  {
-    key: 'claude_code',
-    agentId: 'claude',
-    label: 'Claude Code',
-    providerType: 'claude_code',
-    defaultModel: '(provider default)',
-    usageProviderId: usageProviderIdForModelProviderKey('claude_code'),
-  },
-  {
-    key: 'codex_app_server',
-    agentId: 'codex',
-    label: 'Codex',
-    providerType: 'codex_app_server',
-    defaultModel: '(provider default)',
-    usageProviderId: usageProviderIdForModelProviderKey('codex_app_server'),
-  },
-  {
-    key: 'antigravity',
-    agentId: 'antigravity',
-    label: 'Antigravity',
-    providerType: 'antigravity',
-    defaultModel: 'Claude Opus 4.6 (Thinking)',
-    usageProviderId: usageProviderIdForModelProviderKey('antigravity'),
-  },
-  {
-    key: 'traex',
-    agentId: 'traex',
-    label: 'Traex',
-    providerType: 'traex',
-    defaultModel: '(provider default)',
-  },
-];
-
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default_model__';
 
 const PROVIDER_DEFAULT_REASONING_VALUE = '__provider_default_reasoning__';
 
-const REASONING_EFFORT_RANK: Record<string, number> = {
-  off: 0,
-  minimal: 1,
-  low: 2,
-  medium: 3,
-  high: 4,
-  xhigh: 5,
-  max: 6,
-};
+const PROVIDER_DEFAULT_SERVICE_TIER_VALUE = '__provider_default_service_tier__';
 
 const PROVIDER_MODEL_TYPES = Array.from(
   new Set(MODEL_PROVIDER_ROWS.map((row) => row.providerType)),
@@ -146,150 +97,8 @@ const PROVIDER_MODEL_TYPES = Array.from(
 
 const METERED_MODEL_PROVIDER_ROWS = MODEL_PROVIDER_ROWS.filter((row) => row.usageProviderId);
 
-function fixedModelProviderRow(key: FixedModelProviderKey): FixedModelProviderRow {
-  return MODEL_PROVIDER_ROWS.find((row) => row.key === key) || MODEL_PROVIDER_ROWS[0];
-}
-
-function providerModelOptionsWithCurrent(
-  providerModels: DesktopProviderModels | null | undefined,
-  currentModel: string,
-): DesktopProviderModelOption[] {
-  const options = providerModels?.models || [];
-  const trimmed = currentModel.trim();
-  if (!trimmed || options.some((model) => model.id === trimmed)) {
-    return options;
-  }
-  return [
-    ...options,
-    {
-      id: trimmed,
-      label: trimmed,
-      recommended: false,
-      supportedReasoningEfforts: providerModels?.reasoningEfforts || [],
-      serviceTiers: providerModels?.serviceTiers || [],
-    },
-  ];
-}
-
-function reasoningEffortOptionsForModel(
-  providerModels: DesktopProviderModels | null | undefined,
-  modelId: string,
-  currentEffort: string,
-): DesktopProviderModelOption[] {
-  const selectedModel = providerModels?.models.find((model) => model.id === modelId.trim());
-  const options = selectedModel?.supportedReasoningEfforts?.length
-    ? selectedModel.supportedReasoningEfforts
-    : providerModels?.reasoningEfforts || [];
-  const trimmed = currentEffort.trim();
-  if (!trimmed || options.some((option) => option.id === trimmed)) {
-    return options;
-  }
-  return [
-    ...options,
-    {
-      id: trimmed,
-      label: trimmed,
-      recommended: false,
-    },
-  ];
-}
-
-function highestReasoningEffort(options: DesktopProviderModelOption[]): string {
-  return options.reduce((best, option) => {
-    if (!best) {
-      return option.id;
-    }
-    return (REASONING_EFFORT_RANK[option.id] ?? -1) > (REASONING_EFFORT_RANK[best] ?? -1)
-      ? option.id
-      : best;
-  }, '');
-}
-
-function applyProviderCatalogDefaults(
-  draft: ModelProviderConfigDraft,
-  _row: FixedModelProviderRow,
-  providerModels: DesktopProviderModels | null | undefined,
-): ModelProviderConfigDraft {
-  if (!providerModels) {
-    return draft;
-  }
-  const model = draft.model.trim();
-  if (!model) {
-    return {
-      ...draft,
-      model: '',
-      modelReasoningEffort: '',
-    };
-  }
-  const reasoningOptions = reasoningEffortOptionsForModel(
-    providerModels,
-    model,
-    draft.modelReasoningEffort,
-  );
-  const currentReasoning = draft.modelReasoningEffort.trim();
-  const modelReasoningEffort = currentReasoning
-    && reasoningOptions.some((option) => option.id === currentReasoning)
-    ? currentReasoning
-    : highestReasoningEffort(reasoningOptions);
-  return {
-    ...draft,
-    model,
-    modelReasoningEffort,
-  };
-}
-
-function providerAgentConfig(gatewayDraft: any, key: FixedModelProviderKey): Record<string, any> {
-  const row = fixedModelProviderRow(key);
-  const agentsConfig = gatewayDraft && typeof gatewayDraft === 'object' && gatewayDraft.agents && typeof gatewayDraft.agents === 'object'
-    ? gatewayDraft.agents
-    : {};
-  const candidates = Array.from(new Set([row.agentId, row.key]));
-  for (const candidate of candidates) {
-    const value = agentsConfig[candidate];
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      return value;
-    }
-  }
-  return {};
-}
-
-function claudeAgentConfig(gatewayDraft: any): Record<string, any> {
-  return providerAgentConfig(gatewayDraft, 'claude_code');
-}
-
-function normalizeClaudeCliMode(value: unknown): 'cctty' | 'native' {
-  return String(value || '').trim().toLowerCase() === 'cctty' ? 'cctty' : 'native';
-}
-
 function claudeCliModeLabel(value: 'cctty' | 'native', t: Translate): string {
   return value === 'native' ? t('Native Claude CLI') : t('cctty TTY wrapper');
-}
-
-function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code'): ModelProviderConfigDraft {
-  const row = fixedModelProviderRow(key);
-  return {
-    key,
-    claudeCliMode: 'native',
-    claudeCliPath: '',
-    model: row.defaultModel.startsWith('(') ? '' : row.defaultModel,
-    modelReasoningEffort: '',
-  };
-}
-
-function modelProviderDraftFromState(
-  key: FixedModelProviderKey,
-  gatewayDraft: any,
-): ModelProviderConfigDraft {
-  const providerConfig = providerAgentConfig(gatewayDraft, key);
-  const configModel = String(providerConfig.default_model || '');
-  const configReasoning = String(providerConfig.model_reasoning_effort || '');
-  return {
-    key,
-    claudeCliMode: normalizeClaudeCliMode(providerConfig.claude_cli_mode),
-    claudeCliPath: String(providerConfig.claude_cli_path || ''),
-    model: configModel,
-    modelReasoningEffort: configReasoning,
-  };
 }
 
 type ProviderSettingsPanelProps = {
@@ -340,6 +149,15 @@ export function ProviderSettingsPanel({
     providerConfigDraft.model,
     providerConfigDraft.modelReasoningEffort,
   );
+  const activeServiceTierOptions = serviceTierOptionsForModel(
+    activeProviderModels,
+    providerConfigDraft.model,
+    providerConfigDraft.modelServiceTier,
+  );
+  const activeSupportsServiceTier =
+    (activeProviderModels?.supportsServiceTierSelection === true
+      || providerConfigDraft.modelServiceTier.trim().length > 0)
+    && activeServiceTierOptions.length > 0;
   const codingUsageByProviderId = useMemo(() => {
     const map: Record<string, DesktopProviderUsage> = {};
     for (const provider of codingUsage?.providers || []) {
@@ -424,7 +242,7 @@ export function ProviderSettingsPanel({
       if (current.key !== providerConfigRow.key) {
         return current;
       }
-      return applyProviderCatalogDefaults(current, providerConfigRow, activeProviderModels);
+      return applyProviderCatalogDefaults(current, activeProviderModels);
     });
   }, [providerConfigRow?.key, activeProviderModels]);
   function providerRowDetails(row: FixedModelProviderRow): ProviderRowDetails {
@@ -446,7 +264,7 @@ export function ProviderSettingsPanel({
       };
     };
     if (row.key === 'claude_code') {
-      const mode = normalizeClaudeCliMode(claudeAgentConfig(gatewayDraft).claude_cli_mode);
+      const mode = normalizeClaudeCliMode(providerAgentConfig(gatewayDraft, 'claude_code').claude_cli_mode);
       return finalize({
         status: t('Default'),
         auth: claudeCliModeLabel(mode, t),
@@ -837,7 +655,7 @@ export function ProviderSettingsPanel({
     const row = fixedModelProviderRow(key);
     const draft = modelProviderDraftFromState(key, gatewayDraft);
     ensureProviderModels(row.providerType, { retry: true });
-    setProviderConfigDraft(applyProviderCatalogDefaults(draft, row, providerModelsByType[row.providerType]));
+    setProviderConfigDraft(applyProviderCatalogDefaults(draft, providerModelsByType[row.providerType]));
     setProviderConfigKey(key);
   }
 
@@ -846,63 +664,19 @@ export function ProviderSettingsPanel({
     setProviderConfigDraft(emptyModelProviderConfigDraft());
   }
 
-  function mutateGatewayProviderModelDefaults(
-    row: FixedModelProviderRow,
-    draft: ModelProviderConfigDraft,
-  ) {
-    // Optimistically updates the settings draft; handleSaveProviderConfig keeps
-    // the dialog open if the subsequent gateway save fails so the user can retry.
-    onMutateGatewayDraft((next) => {
-      next.agents = next.agents || {};
-      const current = next.agents[row.agentId] && typeof next.agents[row.agentId] === 'object'
-        ? next.agents[row.agentId]
-        : {};
-      const nextConfig: Record<string, any> = {
-        ...current,
-        provider_type: row.providerType,
-        default_model: draft.model.trim(),
-        model_reasoning_effort: draft.modelReasoningEffort.trim(),
-      };
-      delete nextConfig.model;
-      delete nextConfig.model_service_tier;
-      next.agents[row.agentId] = nextConfig;
-    });
-  }
-
   async function handleSaveProviderConfig() {
     if (!providerConfigRow || providerConfigSaving) {
       return;
     }
     setProviderConfigSaving(true);
     try {
-      if (providerConfigRow.key === 'claude_code') {
-        onMutateGatewayDraft((next) => {
-          next.agents = next.agents || {};
-          const current = next.agents.claude && typeof next.agents.claude === 'object'
-            ? next.agents.claude
-            : {};
-          next.agents.claude = {
-            ...current,
-            provider_type: 'claude_code',
-            claude_cli_mode: providerConfigDraft.claudeCliMode,
-            default_model: providerConfigDraft.model.trim(),
-            model_reasoning_effort: providerConfigDraft.modelReasoningEffort.trim(),
-          };
-          const cliPath = providerConfigDraft.claudeCliPath.trim();
-          if (cliPath) {
-            next.agents.claude.claude_cli_path = cliPath;
-          } else {
-            delete next.agents.claude.claude_cli_path;
-          }
-        });
-        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
-          closeProviderConfigDialog();
-        }
-        return;
-      }
-      // CLI providers authenticate through their own login or provider env;
-      // this surface persists model defaults only.
-      mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
+      // Optimistically updates the settings draft; the dialog stays open if
+      // the subsequent gateway save fails so the user can retry. Providers
+      // authenticate through their own CLI login or provider env; this
+      // surface persists model defaults (and the Claude CLI mode/path).
+      onMutateGatewayDraft((next) => {
+        applyProviderConfigDraftToGatewayConfig(next, providerConfigRow, providerConfigDraft);
+      });
       if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
         closeProviderConfigDialog();
       }
@@ -1104,6 +878,11 @@ export function ProviderSettingsPanel({
                               ...current,
                               model: nextModel,
                               modelReasoningEffort: nextModel ? highestReasoningEffort(reasoningOptions) : '',
+                              modelServiceTier: sanitizedServiceTier(
+                                activeProviderModels,
+                                nextModel,
+                                current.modelServiceTier,
+                              ),
                             };
                           });
                         }}
@@ -1171,6 +950,34 @@ export function ProviderSettingsPanel({
                       />
                     )}
                   </div>
+                  {activeSupportsServiceTier ? (
+                    <div className="commands-field">
+                      <Label className="commands-field-label" htmlFor="provider-service-tier">{t('Speed')}</Label>
+                      <Select
+                        value={providerConfigDraft.modelServiceTier.trim() || PROVIDER_DEFAULT_SERVICE_TIER_VALUE}
+                        onValueChange={(value) => {
+                          setProviderConfigDraft((current) => ({
+                            ...current,
+                            modelServiceTier: value === PROVIDER_DEFAULT_SERVICE_TIER_VALUE ? '' : value,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger id="provider-service-tier">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value={PROVIDER_DEFAULT_SERVICE_TIER_VALUE}>{t('Standard')}</SelectItem>
+                            {activeServiceTierOptions.map((option) => (
+                              <SelectItem key={option.id} value={option.id}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : null}
