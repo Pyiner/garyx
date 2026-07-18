@@ -2130,6 +2130,40 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertNil(snapshot.ledgers[ledger.key])
     }
 
+    func testTerminalLedgerRemainsWhileOnlyDiscardConvergenceCapturesReservation() async throws {
+        let ledger = makeLedger(outcome: .revoked)
+        var convergence = makeDiscardConvergence()
+        convergence.settleReservation()
+        convergence.settleDeliveries()
+        convergence.settleSessions()
+        convergence.settleResources()
+        XCTAssertTrue(convergence.finishToken())
+        let fake = GaryxFakeComposerDurabilityStore()
+
+        var snapshot = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "retain terminal ledger through convergence record GC window",
+                mutations: [
+                    .upsertLedger(ledger),
+                    .upsertDiscardConvergence(convergence),
+                ]
+            )
+        )
+        XCTAssertEqual(snapshot.ledgers[ledger.key], ledger)
+        XCTAssertEqual(snapshot.discardConvergence[entryID], convergence)
+
+        snapshot = try await fake.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "retire terminal ledger with final convergence descendant",
+                mutations: [.removeDiscardConvergence(entryID)]
+            )
+        )
+        XCTAssertNil(snapshot.discardConvergence[entryID])
+        XCTAssertNil(snapshot.ledgers[ledger.key])
+    }
+
     func testUnsettledReservationLedgerBudgetsAreFailClosed() async throws {
         func ledger(index: Int, scope: GaryxGatewayScope) -> GaryxProvisionalReservationLedger {
             GaryxProvisionalReservationLedger(
@@ -2345,10 +2379,15 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         }
         let first = acknowledgedCreate("create-0001")
         let second = acknowledgedCreate("create-0002")
-        let nonTerminal = GaryxCreateDeliveryState(
+        var nonTerminal = GaryxCreateDeliveryState(
             scope: scope,
-            createIntentID: "aa-non-terminal-create"
+            createIntentID: "aa-ambiguous-non-terminal-create"
         )
+        nonTerminal.created(threadID: "ambiguous-thread")
+        nonTerminal.chatStartAttempted()
+        nonTerminal.responseLost()
+        XCTAssertEqual(nonTerminal.phase, .ambiguous)
+        XCTAssertEqual(nonTerminal.userDisposition, .none)
         let fake = GaryxFakeComposerDurabilityStore(
             initial: .init(tombstoneBudget: .init(countLimit: 1, byteLimit: 4 * 1024 * 1024))
         )
@@ -2387,9 +2426,98 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(byteCompacted.persistentTombstoneUsage.bytes, second.estimatedBytes)
     }
 
+    func testCorrelationCompactionRetiresCreateBeforeDelivery() async throws {
+        var create = GaryxCreateDeliveryState(scope: scope, createIntentID: "terminal-create")
+        create.created(threadID: "created-thread")
+        create.chatStartAttempted()
+        create.acknowledged()
+        var delivery = makeDelivery()
+        XCTAssertTrue(delivery.markTransportAttempted())
+        delivery.recordServerAcknowledgement()
+        let ledger = makeLedger(outcome: .committed)
+        let fake = GaryxFakeComposerDurabilityStore(
+            initial: .init(tombstoneBudget: .init(countLimit: 1, byteLimit: 4 * 1024 * 1024))
+        )
+
+        let compacted = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "retire create correlation before delivery correlation",
+                mutations: [
+                    .upsertLedger(ledger),
+                    .upsertDelivery(delivery),
+                    .upsertCreateDelivery(create),
+                ]
+            )
+        )
+
+        XCTAssertNil(compacted.createDeliveries[create.key])
+        XCTAssertEqual(compacted.deliveries[delivery.id], delivery)
+        XCTAssertEqual(compacted.ledgers[ledger.key], ledger)
+        XCTAssertEqual(compacted.persistentTombstoneUsage.correlationCount, 1)
+        XCTAssertEqual(compacted.persistentTombstoneUsage.createCorrelationCount, 0)
+    }
+
+    func testCreateDeliveryRemovalRequiresTerminalCorrelation() async throws {
+        var ambiguous = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: "ambiguous-without-disposition"
+        )
+        ambiguous.created(threadID: "ambiguous-thread")
+        ambiguous.chatStartAttempted()
+        ambiguous.responseLost()
+        var acknowledged = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: "acknowledged-create"
+        )
+        acknowledged.created(threadID: "acknowledged-thread")
+        acknowledged.chatStartAttempted()
+        acknowledged.acknowledged()
+        let fake = GaryxFakeComposerDurabilityStore()
+        var snapshot = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "seed terminal and unresolved create correlations",
+                mutations: [
+                    .upsertCreateDelivery(ambiguous),
+                    .upsertCreateDelivery(acknowledged),
+                ]
+            )
+        )
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: snapshot.revision,
+                    label: "reject unresolved create correlation GC",
+                    mutations: [.removeCreateDelivery(ambiguous.key)]
+                )
+            )
+            XCTFail("ambiguous create without user disposition is non-terminal")
+            return
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("create delivery GC requires terminal correlation")
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, snapshot)
+
+        snapshot = try await fake.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "remove terminal create correlation",
+                mutations: [.removeCreateDelivery(acknowledged.key)]
+            )
+        )
+        XCTAssertEqual(snapshot.createDeliveries[ambiguous.key], ambiguous)
+        XCTAssertNil(snapshot.createDeliveries[acknowledged.key])
+    }
+
     func testNonTerminalCreateDeliveryBudgetIsFailClosed() async throws {
         let fake = GaryxFakeComposerDurabilityStore()
-        let mutations = (0...GaryxCreateDeliveryState.nonTerminalGlobalLimit).map { index in
+        var mutations = (0..<GaryxCreateDeliveryState.nonTerminalGlobalLimit).map { index in
             GaryxComposerDurabilityMutation.upsertCreateDelivery(
                 .init(
                     scope: .init(identity: "create-scope-\(index % 5)", epoch: 1),
@@ -2397,6 +2525,14 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
                 )
             )
         }
+        var unresolvedAmbiguous = GaryxCreateDeliveryState(
+            scope: .init(identity: "ambiguous-create-scope", epoch: 1),
+            createIntentID: "ambiguous-without-disposition"
+        )
+        unresolvedAmbiguous.created(threadID: "ambiguous-thread")
+        unresolvedAmbiguous.chatStartAttempted()
+        unresolvedAmbiguous.responseLost()
+        mutations.append(.upsertCreateDelivery(unresolvedAmbiguous))
         do {
             _ = try await fake.commit(
                 .init(
