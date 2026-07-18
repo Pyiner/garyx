@@ -574,7 +574,8 @@ async fn finalize_partial_persistence(
 /// Codex soft-failure `Ok` with `success == false`): applies a provider
 /// thread title if the thread has none, consumes the soft-failure rate-limit
 /// context, writes user/assistant/tool messages with the terminal control,
-/// and emits the committed records. Returns the applied thread title.
+/// and returns the applied thread title plus the committed records for the
+/// caller to emit at its own event-bus read point.
 #[allow(clippy::too_many_arguments)]
 async fn persist_terminal_success(
     store: &Arc<dyn ThreadStore>,
@@ -582,14 +583,12 @@ async fn persist_terminal_success(
     provider: &dyn ProviderRuntime,
     thread_id: &str,
     user_message: &str,
-    run_id: &str,
     provider_key: &str,
     run_started_at: &str,
     graph_state: &RunGraphState,
     res: &ProviderRunResult,
     persistence_result: Option<&StreamingPersistenceWorkerResult>,
-    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
-) -> Option<String> {
+) -> (Option<String>, Vec<(u64, Value)>) {
     let user_images = graph_state.run_options.images.clone().unwrap_or_default();
     let persisted_assistant_response = persistence_result
         .map(|value| value.assistant_response.as_str())
@@ -642,13 +641,13 @@ async fn persist_terminal_success(
         }),
     )
     .await;
-    emit_committed_records(event_tx, thread_id, Some(run_id), terminal_committed);
-    applied_thread_title
+    (applied_thread_title, terminal_committed)
 }
 
 /// Persists the terminal state of a hard-failed provider call: consumes the
 /// rate-limit context, writes whatever partial output the persistence worker
-/// captured with a failed terminal control, and emits the committed records.
+/// captured with a failed terminal control, and returns the committed
+/// records for the caller to emit at its own event-bus read point.
 #[allow(clippy::too_many_arguments)]
 async fn persist_terminal_failure(
     store: &Arc<dyn ThreadStore>,
@@ -656,14 +655,12 @@ async fn persist_terminal_failure(
     provider: &dyn ProviderRuntime,
     thread_id: &str,
     user_message: &str,
-    run_id: &str,
     provider_key: &str,
     run_started_at: &str,
     graph_state: &RunGraphState,
     error: &BridgeError,
     persistence_result: Option<&StreamingPersistenceWorkerResult>,
-    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
-) {
+) -> Vec<(u64, Value)> {
     let user_images = graph_state.run_options.images.clone().unwrap_or_default();
     let failed_assistant_response = persistence_result
         .map(|value| value.assistant_response.as_str())
@@ -700,7 +697,7 @@ async fn persist_terminal_failure(
         }),
     )
     .await;
-    emit_committed_records(event_tx, thread_id, Some(run_id), terminal_committed);
+    terminal_committed
 }
 
 impl MultiProviderBridge {
@@ -1133,21 +1130,26 @@ impl MultiProviderBridge {
                         &*inner.thread_store.read().await,
                         &*inner.thread_history.read().await,
                     ) {
-                        applied_thread_title = persist_terminal_success(
+                        let (applied, terminal_committed) = persist_terminal_success(
                             store,
                             history,
                             provider.as_ref(),
                             &thread_id_owned,
                             &user_message,
-                            &run_id_owned,
                             &provider_key_owned,
                             &run_started_at,
                             &graph_state,
                             res,
                             persistence_result.as_ref(),
-                            &final_gateway_event_tx,
                         )
                         .await;
+                        applied_thread_title = applied;
+                        emit_committed_records(
+                            &final_gateway_event_tx,
+                            &thread_id_owned,
+                            Some(&run_id_owned),
+                            terminal_committed,
+                        );
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -1244,21 +1246,25 @@ impl MultiProviderBridge {
                         &*inner.thread_store.read().await,
                         &*inner.thread_history.read().await,
                     ) {
-                        persist_terminal_failure(
+                        let terminal_committed = persist_terminal_failure(
                             store,
                             history,
                             provider.as_ref(),
                             &thread_id_owned,
                             &user_message,
-                            &run_id_owned,
                             &provider_key_owned,
                             &run_started_at,
                             &graph_state,
                             e,
                             persistence_result.as_ref(),
-                            &final_gateway_event_tx,
                         )
                         .await;
+                        emit_committed_records(
+                            &final_gateway_event_tx,
+                            &thread_id_owned,
+                            Some(&run_id_owned),
+                            terminal_committed,
+                        );
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -1549,22 +1555,27 @@ impl MultiProviderBridge {
                     &*self.inner.thread_store.read().await,
                     &*self.inner.thread_history.read().await,
                 ) {
-                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
-                    applied_thread_title = persist_terminal_success(
+                    let (applied, terminal_committed) = persist_terminal_success(
                         store,
                         history,
                         provider.as_ref(),
                         thread_id,
                         message,
-                        &run_id,
                         &provider_key,
                         &run_started_at,
                         &graph_state,
                         res,
                         persistence_result.as_ref(),
-                        &terminal_event_tx,
                     )
                     .await;
+                    applied_thread_title = applied;
+                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
+                    emit_committed_records(
+                        &terminal_event_tx,
+                        thread_id,
+                        Some(&run_id),
+                        terminal_committed,
+                    );
                 }
                 forward_applied_thread_title_update(
                     final_external_callback.as_ref(),
@@ -1577,22 +1588,26 @@ impl MultiProviderBridge {
                     &*self.inner.thread_store.read().await,
                     &*self.inner.thread_history.read().await,
                 ) {
-                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
-                    persist_terminal_failure(
+                    let terminal_committed = persist_terminal_failure(
                         store,
                         history,
                         provider.as_ref(),
                         thread_id,
                         message,
-                        &run_id,
                         &provider_key,
                         &run_started_at,
                         &graph_state,
                         error,
                         persistence_result.as_ref(),
-                        &terminal_event_tx,
                     )
                     .await;
+                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
+                    emit_committed_records(
+                        &terminal_event_tx,
+                        thread_id,
+                        Some(&run_id),
+                        terminal_committed,
+                    );
                 }
 
                 Err(error.clone())
