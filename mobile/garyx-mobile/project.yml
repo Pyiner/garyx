@@ -29,6 +29,15 @@ schemes:
       config: Debug
       targets:
         - GaryxMobileUITests
+  GaryxMobileFluidRoutes:
+    build:
+      targets:
+        GaryxMobile: all
+        GaryxMobileUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - GaryxMobileUITests
 targets:
   GaryxMobile:
     type: application

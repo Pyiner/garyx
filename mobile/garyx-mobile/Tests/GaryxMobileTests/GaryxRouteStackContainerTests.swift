@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class GaryxRouteStackContainerTests: XCTestCase {
+    func testFakeRouteHostRequiresExplicitDebugEnvironmentOptIn() throws {
+        XCTAssertNil(GaryxFluidFakeRouteDebugFixture.Configuration.load(environment: [:]))
+        let configuration = try XCTUnwrap(
+            GaryxFluidFakeRouteDebugFixture.Configuration.load(environment: [
+                "GARYX_MOBILE_FLUID_FAKE_ROUTES": "1",
+                "GARYX_MOBILE_FLUID_FAKE_DEPTH": "20",
+                "GARYX_MOBILE_FLUID_FAKE_RTL": "1",
+                "GARYX_MOBILE_FLUID_FAKE_VISUAL_POLICY": "crossFade",
+            ])
+        )
+        XCTAssertEqual(configuration.initialDepth, 20)
+        XCTAssertEqual(configuration.layoutDirection, .rightToLeft)
+        XCTAssertEqual(configuration.preferences.resolvedPolicy, .crossFade)
+    }
+
     func testCommitWritesCanonicalAtReleaseAndScreenChangedOnlyAtVisibleTerminal() {
         let harness = Harness(path: [entry(1), entry(2)])
         let bodyCountBeforeDrag = harness.bodyCounter.count

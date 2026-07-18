@@ -26,7 +26,9 @@ struct GaryxMobileApp: App {
     @ViewBuilder
     private var rootContent: some View {
         #if DEBUG
-        if let fixture = GaryxImagePreviewDebugFixture.current {
+        if let fixture = GaryxFluidFakeRouteDebugFixture.current {
+            fixture.view
+        } else if let fixture = GaryxImagePreviewDebugFixture.current {
             fixture.view
         } else {
             GaryxRootView(model: model)
