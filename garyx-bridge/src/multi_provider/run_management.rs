@@ -517,6 +517,60 @@ fn build_streaming_response_callback(
     })
 }
 
+/// Finalizes the partial-persistence worker for a finished provider run:
+/// detaches this run's active-persistence handle, drops the shared sender so
+/// the worker stops waiting for commands, sends `Finish`, awaits the worker
+/// result, and clears the handle again afterwards. Shared by the production
+/// dispatch path and the inline sub-agent path.
+async fn finalize_partial_persistence(
+    active_thread_persistence: &tokio::sync::Mutex<HashMap<String, ActiveThreadPersistence>>,
+    thread_id: &str,
+    run_id: &str,
+    partial_persistence_tx: Option<mpsc::UnboundedSender<ThreadPersistenceCommand>>,
+    partial_persistence_task: Option<JoinHandle<StreamingPersistenceWorkerResult>>,
+    failure_log: &'static str,
+) -> Option<StreamingPersistenceWorkerResult> {
+    let removed_persistence = {
+        let mut persistence = active_thread_persistence.lock().await;
+        let should_remove = persistence
+            .get(thread_id)
+            .map(|handle| handle.run_id == run_id)
+            .unwrap_or(false);
+        if should_remove {
+            persistence.remove(thread_id)
+        } else {
+            None
+        }
+    };
+    drop(removed_persistence);
+    if let Some(tx) = partial_persistence_tx.as_ref() {
+        let _ = tx.send(ThreadPersistenceCommand::Finish);
+    }
+    drop(partial_persistence_tx);
+    let persistence_result = if let Some(task) = partial_persistence_task {
+        match task.await {
+            Ok(result) => Some(result),
+            Err(error) => {
+                tracing::warn!(run_id = %run_id, error = %error, "{}", failure_log);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    {
+        let mut persistence = active_thread_persistence.lock().await;
+        let should_remove = persistence
+            .get(thread_id)
+            .map(|handle| handle.run_id == run_id)
+            .unwrap_or(false);
+        if should_remove {
+            persistence.remove(thread_id);
+        }
+    }
+    persistence_result
+}
+
 impl MultiProviderBridge {
     async fn resolve_thread_execution_target(
         &self,
@@ -903,51 +957,15 @@ impl MultiProviderBridge {
 
             let result =
                 execute_agent_run(provider.as_ref(), &mut graph_state, response_callback).await;
-            // Drop the shared persistence sender before awaiting the worker.
-            // Otherwise the worker keeps waiting for more commands and the run
-            // never reaches final persistence/cleanup.
-            let removed_persistence = {
-                let mut persistence = inner.active_thread_persistence.lock().await;
-                let should_remove = persistence
-                    .get(&thread_id_owned)
-                    .map(|handle| handle.run_id == run_id_owned.as_str())
-                    .unwrap_or(false);
-                if should_remove {
-                    persistence.remove(&thread_id_owned)
-                } else {
-                    None
-                }
-            };
-            drop(removed_persistence);
-            if let Some(tx) = partial_persistence_tx.as_ref() {
-                let _ = tx.send(ThreadPersistenceCommand::Finish);
-            }
-            drop(partial_persistence_tx);
-            let persistence_result = if let Some(task) = partial_persistence_task {
-                match task.await {
-                    Ok(result) => Some(result),
-                    Err(error) => {
-                        tracing::warn!(
-                            run_id = %run_id_owned,
-                            error = %error,
-                            "partial thread persistence task failed"
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            {
-                let mut persistence = inner.active_thread_persistence.lock().await;
-                let should_remove = persistence
-                    .get(&thread_id_owned)
-                    .map(|handle| handle.run_id == run_id_owned.as_str())
-                    .unwrap_or(false);
-                if should_remove {
-                    persistence.remove(&thread_id_owned);
-                }
-            }
+            let persistence_result = finalize_partial_persistence(
+                &inner.active_thread_persistence,
+                &thread_id_owned,
+                &run_id_owned,
+                partial_persistence_tx,
+                partial_persistence_task,
+                "partial thread persistence task failed",
+            )
+            .await;
 
             match &result {
                 Ok(res) => {
@@ -1461,48 +1479,15 @@ impl MultiProviderBridge {
         let result =
             execute_agent_run(provider.as_ref(), &mut graph_state, response_callback).await;
 
-        let removed_persistence = {
-            let mut persistence = self.inner.active_thread_persistence.lock().await;
-            let should_remove = persistence
-                .get(thread_id)
-                .map(|handle| handle.run_id == run_id.as_str())
-                .unwrap_or(false);
-            if should_remove {
-                persistence.remove(thread_id)
-            } else {
-                None
-            }
-        };
-        drop(removed_persistence);
-        if let Some(tx) = partial_persistence_tx.as_ref() {
-            let _ = tx.send(ThreadPersistenceCommand::Finish);
-        }
-        drop(partial_persistence_tx);
-        let persistence_result = if let Some(task) = partial_persistence_task {
-            match task.await {
-                Ok(result) => Some(result),
-                Err(error) => {
-                    tracing::warn!(
-                        run_id = %run_id,
-                        error = %error,
-                        "sub-agent partial thread persistence task failed"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        {
-            let mut persistence = self.inner.active_thread_persistence.lock().await;
-            let should_remove = persistence
-                .get(thread_id)
-                .map(|handle| handle.run_id == run_id.as_str())
-                .unwrap_or(false);
-            if should_remove {
-                persistence.remove(thread_id);
-            }
-        }
+        let persistence_result = finalize_partial_persistence(
+            &self.inner.active_thread_persistence,
+            thread_id,
+            &run_id,
+            partial_persistence_tx,
+            partial_persistence_task,
+            "sub-agent partial thread persistence task failed",
+        )
+        .await;
 
         let outcome = match &result {
             Ok(res) => {
