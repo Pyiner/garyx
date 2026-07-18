@@ -988,6 +988,37 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
         return retired
     }
 
+    /// Retires every alias edge in the connected promotion lineage containing
+    /// a discarded destination. This closes multi-hop chains such as
+    /// D -> T1 -> T2 instead of retiring only the edge adjacent to T2.
+    @discardableResult
+    public mutating func retireConnectedLineage(
+        containing destination: GaryxComposerKey,
+        scope: GaryxGatewayScope
+    ) -> Int {
+        guard let records = partitions[scope], !records.isEmpty else { return 0 }
+        var connected: Set<GaryxComposerKey> = [destination]
+        var changed = true
+        while changed {
+            changed = false
+            for record in records.values where
+                connected.contains(record.source) || connected.contains(record.target) {
+                changed = connected.insert(record.source).inserted || changed
+                changed = connected.insert(record.target).inserted || changed
+            }
+        }
+        let sources = records.values.compactMap { record in
+            connected.contains(record.source) && connected.contains(record.target)
+                ? record.source
+                : nil
+        }
+        var retired = 0
+        for source in sources where markDrained(source: source, scope: scope) {
+            retired += 1
+        }
+        return retired
+    }
+
     @discardableResult
     public mutating func retireIfDrained(
         source: GaryxComposerKey,

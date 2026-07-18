@@ -135,10 +135,40 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             Self.operationKeySort($0, $1)
         }
         for key in keys {
+            let lifecycle = scopes.lifecycle(of: key.scope)
+            if lifecycle == .revoked {
+                if Self.revokedEntryRequiresPayloadErase(
+                    scope: key.scope,
+                    entryID: key.entryID,
+                    snapshot: snapshot
+                ) {
+                    try await cleanRevokedEntry(
+                        scope: key.scope,
+                        entryID: key.entryID,
+                        snapshot: snapshot
+                    )
+                } else {
+                    try await cleanRevokedOperationChildren(
+                        scope: key.scope,
+                        entryID: key.entryID,
+                        triggerKey: key,
+                        snapshot: snapshot
+                    )
+                }
+                return true
+            }
             guard let operation = snapshot.operations[key] else {
                 // A manifest without its capability cannot own a network
-                // action; archive it and its file before continuing.
-                var mutations: [GaryxComposerDurabilityMutation] = [.removeManifest(key)]
+                // action; archive it, its Entry membership, and its file in
+                // one transaction before continuing.
+                guard var entry = snapshot.payloadStore.entry(key.entryID, scope: key.scope) else {
+                    throw GaryxComposerDurabilityRecoveryError.operationEntryMissing(key)
+                }
+                entry.removeOperation(key)
+                var mutations: [GaryxComposerDurabilityMutation] = [
+                    .removeManifest(key),
+                    .upsertEntry(entry),
+                ]
                 if let assetID = snapshot.stagedAssetOwners.first(where: { $0.value == key })?.key {
                     mutations.insert(.registerFileCleanup(assetID: assetID, owner: key), at: 0)
                     mutations.insert(.releaseStagedAsset(assetID), at: 1)
@@ -175,7 +205,6 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             let manifest = snapshot.manifests[key]
             let state = manifest?.state ?? operation.state
             let attempted = manifest?.uploadAttempted ?? operation.uploadAttempted
-            let lifecycle = scopes.lifecycle(of: key.scope)
             let decision = GaryxOperationRecoveryPlanner.decide(
                 state: state,
                 uploadAttempted: attempted,
@@ -269,8 +298,7 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 try await cleanOperation(
                     operation,
                     entry: &entry,
-                    snapshot: snapshot,
-                    eraseEntry: lifecycle == .revoked
+                    snapshot: snapshot
                 )
                 return true
             }
@@ -328,8 +356,7 @@ public actor GaryxComposerDurabilityLaunchRecovery {
     private func cleanOperation(
         _ original: GaryxOperationCapability,
         entry: inout GaryxComposerPayloadEntry,
-        snapshot: GaryxComposerDurabilitySnapshot,
-        eraseEntry: Bool
+        snapshot: GaryxComposerDurabilitySnapshot
     ) async throws {
         let key = original.context.key
         var operation = original
@@ -346,11 +373,7 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         }
         mutations.append(.removeManifest(key))
         mutations.append(.removeOperation(key))
-        if eraseEntry {
-            mutations.append(.removeEntry(scope: key.scope, entryID: key.entryID))
-        } else {
-            mutations.append(.upsertEntry(entry))
-        }
+        mutations.append(.upsertEntry(entry))
         _ = try await durability.commit(
             .init(
                 expectedRevision: snapshot.revision,
@@ -358,6 +381,144 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 mutations: mutations
             )
         )
+    }
+
+    /// Revocation removes a shared Entry only after every operation descendant
+    /// and staged owner in that Entry has been settled in the same transaction.
+    /// Removing one child and the Entry separately would invalidate siblings
+    /// and brick every subsequent launch on the same durable snapshot.
+    private func cleanRevokedEntry(
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) async throws {
+        let keys = Set(snapshot.operations.keys)
+            .union(snapshot.manifests.keys)
+            .filter { $0.scope == scope && $0.entryID == entryID }
+        var mutations: [GaryxComposerDurabilityMutation] = []
+        var newlyCondemned: Set<GaryxStagedAssetID> = []
+
+        func appendAssetCleanup(
+            assetID: GaryxStagedAssetID,
+            owner: GaryxOperationCapabilityKey
+        ) {
+            if snapshot.pendingFileCleanup[assetID] == nil,
+               newlyCondemned.insert(assetID).inserted {
+                mutations.append(.registerFileCleanup(assetID: assetID, owner: owner))
+            }
+            if snapshot.stagedAssetOwners[assetID] != nil {
+                mutations.append(.releaseStagedAsset(assetID))
+            }
+        }
+
+        for key in keys {
+            if let assetID = snapshot.operations[key]?.stagedAssetID {
+                appendAssetCleanup(assetID: assetID, owner: key)
+            }
+            mutations.append(.removeManifest(key))
+            mutations.append(.removeOperation(key))
+        }
+        for replacement in snapshot.replacements.values where
+            replacement.scope == scope && replacement.entryID == entryID {
+            let owner = snapshot.stagedAssetOwners[replacement.stagedAssetID]
+                ?? replacement.newKey
+                ?? replacement.oldKey
+            appendAssetCleanup(assetID: replacement.stagedAssetID, owner: owner)
+            mutations.append(.removeReplacement(replacement.id))
+        }
+        for feedback in snapshot.feedback.values where
+            feedback.scope == scope && feedback.entryID == entryID {
+            mutations.append(.removeFeedback(feedback.id))
+        }
+        for lineage in snapshot.attachmentLineages.values where
+            lineage.scope == scope && lineage.entryID == entryID {
+            mutations.append(.removeAttachmentLineage(lineage.id))
+        }
+        mutations.append(.removeEntry(scope: scope, entryID: entryID))
+
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "settle revoked Entry descendants atomically",
+                mutations: mutations
+            )
+        )
+    }
+
+    /// Cancelled and failed-retryable rows use the matrix's child-only revoke
+    /// rule: their operation resources are removed without deleting sibling
+    /// text or attachments from the shared Entry.
+    private func cleanRevokedOperationChildren(
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        triggerKey: GaryxOperationCapabilityKey,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) async throws {
+        guard var entry = snapshot.payloadStore.entry(entryID, scope: scope) else {
+            throw GaryxComposerDurabilityRecoveryError.operationEntryMissing(triggerKey)
+        }
+        let keys = Set(snapshot.operations.keys)
+            .union(snapshot.manifests.keys)
+            .filter { $0.scope == scope && $0.entryID == entryID }
+        let operationIDs = Set(keys.map(\.operationID))
+        var mutations: [GaryxComposerDurabilityMutation] = []
+        var newlyCondemned: Set<GaryxStagedAssetID> = []
+
+        for key in keys {
+            if let assetID = snapshot.operations[key]?.stagedAssetID {
+                if snapshot.pendingFileCleanup[assetID] == nil,
+                   newlyCondemned.insert(assetID).inserted {
+                    mutations.append(.registerFileCleanup(assetID: assetID, owner: key))
+                }
+                if snapshot.stagedAssetOwners[assetID] != nil {
+                    mutations.append(.releaseStagedAsset(assetID))
+                }
+            }
+            entry.removeOperation(key)
+            mutations.append(.removeManifest(key))
+            mutations.append(.removeOperation(key))
+        }
+
+        let removedFeedback = snapshot.feedback.values.filter {
+            $0.scope == scope
+                && $0.entryID == entryID
+                && $0.operationID.map(operationIDs.contains) == true
+        }
+        let removedFeedbackIDs = Set(removedFeedback.map { $0.id })
+        for lineage in snapshot.attachmentLineages.values where
+            removedFeedbackIDs.contains(lineage.feedbackID) {
+            mutations.append(.removeAttachmentLineage(lineage.id))
+        }
+        for feedback in removedFeedback {
+            entry.removeFeedbackReference(feedback.id)
+            mutations.append(.removeFeedback(feedback.id))
+        }
+        mutations.append(.upsertEntry(entry))
+
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "settle revoked operation children without erasing Entry",
+                mutations: mutations
+            )
+        )
+    }
+
+    private static func revokedEntryRequiresPayloadErase(
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) -> Bool {
+        Set(snapshot.operations.keys).union(snapshot.manifests.keys).contains { key in
+            guard key.scope == scope, key.entryID == entryID else { return false }
+            switch snapshot.manifests[key]?.state ?? snapshot.operations[key]?.state {
+            case .cancelled, .failedRetryable:
+                return false
+            case .requested, .preparing, .uploading, .completed,
+                 .failedTerminal, .superseded, .none:
+                return true
+            }
+        }
     }
 
     private func recoverOneReplacement() async throws -> Bool {
@@ -420,12 +581,19 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         let entryID = original.lifecycle.token.entryID
         var convergence = original
 
-        if !convergence.deliveriesSettled {
-            convergence.settleDeliveries()
+        let authoritativeDeliveryRequiresSettlement = snapshot.deliveries.values.contains {
+            $0.entryID == entryID
+                && $0.scope == convergence.barrier.scope
+                && !$0.phase.isSettledForIdentityDiscard
+        }
+        if !convergence.deliveriesSettled || authoritativeDeliveryRequiresSettlement {
+            let settledDeliveries = convergence.settleDeliveries(
+                authoritativeRecords: snapshot.deliveries
+            )
             var mutations: [GaryxComposerDurabilityMutation] = [
                 .upsertDiscardConvergence(convergence),
             ]
-            mutations.append(contentsOf: convergence.deliveries.values.map {
+            mutations.append(contentsOf: settledDeliveries.map {
                 .upsertDelivery($0)
             })
             _ = try await durability.commit(
@@ -499,16 +667,10 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             if let destination = snapshot.payloadStore
                 .entry(entryID, scope: convergence.barrier.scope)?.destination {
                 var aliases = snapshot.aliases
-                let retiringSources = aliases.partitions[convergence.barrier.scope, default: [:]]
-                    .values
-                    .filter { $0.source == destination || $0.target == destination }
-                    .map(\.source)
-                for source in retiringSources {
-                    _ = aliases.markDrained(
-                        source: source,
-                        scope: convergence.barrier.scope
-                    )
-                }
+                _ = aliases.retireConnectedLineage(
+                    containing: destination,
+                    scope: convergence.barrier.scope
+                )
                 if aliases != snapshot.aliases {
                     mutations.append(.replaceAliases(aliases))
                 }
@@ -635,8 +797,20 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         key: GaryxOperationCapabilityKey,
         kind: String
     ) -> GaryxFeedbackID {
-        GaryxFeedbackID(
-            rawValue: "launch-\(kind)-\(key.scope.identity)-\(key.scope.epoch)-\(key.operationID.rawValue)"
+        let reservation = key.reservationID.map { String($0.rawValue) } ?? "none"
+        let components = [
+            "launch",
+            kind,
+            key.scope.identity,
+            String(key.scope.epoch),
+            key.entryID.rawValue,
+            String(key.generation),
+            reservation,
+            key.branch.rawValue,
+            key.operationID.rawValue,
+        ]
+        return GaryxFeedbackID(
+            rawValue: components.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
         )
     }
 

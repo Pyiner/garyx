@@ -1023,6 +1023,10 @@ enum GaryxComposerDurabilityTransactionEngine {
             guard state.ledgers[ledgerKey]?.terminalOutcome == .committed else {
                 throw invariant("delivery requires committed reservation ledger")
             }
+            if let existing = state.deliveries[delivery.id],
+               !delivery.durablyAdvances(from: existing) {
+                throw invariant("delivery phase or evidence regressed")
+            }
             state.deliveries[delivery.id] = delivery
         case .removeDelivery(let id):
             state.deliveries.removeValue(forKey: id)

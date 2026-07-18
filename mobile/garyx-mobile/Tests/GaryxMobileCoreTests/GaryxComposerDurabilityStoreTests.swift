@@ -1366,6 +1366,37 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(committed.conflicts[conflict.id]?.candidates, [candidate])
     }
 
+    func testDeliveryUpsertRejectsAcknowledgementEvidenceRegression() async throws {
+        let ledger = makeLedger(outcome: .committed)
+        var attempted = makeDelivery()
+        XCTAssertTrue(attempted.markTransportAttempted())
+        var acknowledged = attempted
+        acknowledged.recordServerAcknowledgement()
+        let initial = GaryxComposerDurabilitySnapshot(
+            ledgers: [ledger.key: ledger],
+            deliveries: [acknowledged.id: acknowledged]
+        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject stale delivery overwrite",
+                    mutations: [.upsertDelivery(attempted)]
+                )
+            )
+            XCTFail("server acknowledgement must not regress to attempted evidence")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("delivery phase or evidence regressed")
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, initial)
+    }
+
     func testFailedTerminalFeedbackEntryReferenceAndOperationAreAtomic() async throws {
         var entry = makeEntry()
         let feedback = makeFeedback()

@@ -214,6 +214,16 @@ public enum GaryxDeliveryRecordPhase: String, CaseIterable, Codable, Sendable {
             false
         }
     }
+
+    var isSettledForIdentityDiscard: Bool {
+        switch self {
+        case .cancelledByDiscard, .evidence, .terminalEvidence,
+             .abandoned, .supersededByDuplicate:
+            true
+        case .notDispatched, .transportAttempted, .ambiguous, .acknowledged:
+            false
+        }
+    }
 }
 
 public enum GaryxDeliveryEvidence: String, Codable, Sendable {
@@ -347,6 +357,82 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
         settleForDiscard()
         if userDisposition == .none || userDisposition == .payloadDiscarded {
             userDisposition = .scopeRevoked
+        }
+    }
+
+    /// Durable delivery rows are a monotonic evidence ledger. A writer may
+    /// advance transport/evidence state or clear the envelope, but it may not
+    /// publish an older snapshot over a concurrently acknowledged record.
+    func durablyAdvances(from previous: Self) -> Bool {
+        guard id == previous.id,
+              scope == previous.scope,
+              entryID == previous.entryID,
+              reservationID == previous.reservationID,
+              correlationID == previous.correlationID,
+              Self.phaseCanAdvance(from: previous.phase, to: phase),
+              Self.evidenceRank(evidence) >= Self.evidenceRank(previous.evidence),
+              Self.userDispositionCanAdvance(
+                  from: previous.userDisposition,
+                  to: userDisposition
+              ),
+              Self.envelopeCanAdvance(from: previous.envelope, to: envelope),
+              previous.duplicateRecordID == nil
+                  ? true
+                  : duplicateRecordID == previous.duplicateRecordID else {
+            return false
+        }
+        return true
+    }
+
+    private static func envelopeCanAdvance(
+        from previous: GaryxDeliveryEnvelope?,
+        to next: GaryxDeliveryEnvelope?
+    ) -> Bool {
+        guard let previous else { return next == nil }
+        return next == nil || next == previous
+    }
+
+    private static func phaseCanAdvance(
+        from previous: GaryxDeliveryRecordPhase,
+        to next: GaryxDeliveryRecordPhase
+    ) -> Bool {
+        if previous == next { return true }
+        switch (previous, next) {
+        case (.notDispatched, .transportAttempted),
+             (.notDispatched, .acknowledged),
+             (.notDispatched, .cancelledByDiscard),
+             (.transportAttempted, .ambiguous),
+             (.transportAttempted, .acknowledged),
+             (.transportAttempted, .evidence),
+             (.ambiguous, .acknowledged),
+             (.ambiguous, .evidence),
+             (.ambiguous, .abandoned),
+             (.ambiguous, .supersededByDuplicate),
+             (.acknowledged, .terminalEvidence):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func evidenceRank(_ evidence: GaryxDeliveryEvidence) -> Int {
+        switch evidence {
+        case .none: 0
+        case .transportAttempted: 1
+        case .serverAcknowledged: 2
+        }
+    }
+
+    private static func userDispositionCanAdvance(
+        from previous: GaryxDeliveryUserDisposition,
+        to next: GaryxDeliveryUserDisposition
+    ) -> Bool {
+        if previous == next { return true }
+        switch (previous, next) {
+        case (.none, _), (.payloadDiscarded, .scopeRevoked):
+            return true
+        default:
+            return false
         }
     }
 
@@ -1033,8 +1119,10 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
     }
     public var deliveriesSettled: Bool {
         deliveries.values
-            .filter { $0.entryID == lifecycle.token.entryID }
-            .allSatisfy { $0.phase.isTerminalOrEvidence }
+            .filter {
+                $0.entryID == lifecycle.token.entryID && $0.scope == barrier.scope
+            }
+            .allSatisfy { $0.phase.isSettledForIdentityDiscard }
     }
     public var persistentTombstoneCount: Int { tombstones.count }
     public var persistentTombstoneBytes: Int {
@@ -1043,9 +1131,39 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
 
     /// Orthogonal component 1: every record uses its own phase CAS.
     public mutating func settleDeliveries() {
-        for id in Array(deliveries.keys) where deliveries[id]?.entryID == lifecycle.token.entryID {
-            deliveries[id]?.settleForDiscard()
+        let captured = deliveries
+        _ = settleDeliveries(authoritativeRecords: captured)
+    }
+
+    /// Reconciles the convergence snapshot with the current durable delivery
+    /// ledger before applying each discard CAS. Captured records are discovery
+    /// metadata only; an absent current row is never resurrected, and current
+    /// rows added after admission are included in the settlement.
+    @discardableResult
+    public mutating func settleDeliveries(
+        authoritativeRecords: [GaryxDeliveryRecordID: GaryxDeliveryRecord]
+    ) -> [GaryxDeliveryRecord] {
+        let entryID = lifecycle.token.entryID
+        let scope = barrier.scope
+        let capturedIDs = Set(deliveries.compactMap { id, record in
+            record.entryID == entryID && record.scope == scope ? id : nil
+        })
+        let currentIDs = Set(authoritativeRecords.compactMap { id, record in
+            record.entryID == entryID && record.scope == scope ? id : nil
+        })
+        var settled: [GaryxDeliveryRecord] = []
+        for id in capturedIDs.union(currentIDs) {
+            guard var record = authoritativeRecords[id],
+                  record.entryID == entryID,
+                  record.scope == scope else {
+                deliveries.removeValue(forKey: id)
+                continue
+            }
+            record.settleForDiscard()
+            deliveries[id] = record
+            settled.append(record)
         }
+        return settled
     }
 
     /// Orthogonal component 2: active reservation becomes revoked and all
