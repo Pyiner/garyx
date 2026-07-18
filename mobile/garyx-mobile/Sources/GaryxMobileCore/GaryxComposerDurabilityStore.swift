@@ -84,6 +84,9 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
     public fileprivate(set) var reservedBytes: Int
     public fileprivate(set) var generationHighWatermark: UInt64
     public fileprivate(set) var reservationHighWatermark: UInt64
+    /// Every generation at or below this floor is permanently consumed or
+    /// abandoned. Exact claims are retained only for the current hi-lo block.
+    public fileprivate(set) var generationClaimFloor: UInt64
     public fileprivate(set) var claimedGenerations: Set<UInt64>
     public fileprivate(set) var tombstoneBudget: GaryxPersistentTombstoneBudget
 
@@ -114,10 +117,11 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
         reservedBytes: Int = 0,
         generationHighWatermark: UInt64 = 0,
         reservationHighWatermark: UInt64 = 0,
+        generationClaimFloor: UInt64 = 0,
         claimedGenerations: Set<UInt64> = [],
         tombstoneBudget: GaryxPersistentTombstoneBudget = .init()
     ) {
-        precondition(reservedBytes >= 0)
+        precondition(reservedBytes >= 0 && generationClaimFloor <= generationHighWatermark)
         self.revision = revision
         self.payloadStore = payloadStore
         self.aliases = aliases
@@ -140,17 +144,23 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
         self.reservedBytes = reservedBytes
         self.generationHighWatermark = generationHighWatermark
         self.reservationHighWatermark = reservationHighWatermark
+        self.generationClaimFloor = generationClaimFloor
         self.claimedGenerations = claimedGenerations
         self.tombstoneBudget = tombstoneBudget
     }
 
     public var persistentTombstoneUsage: GaryxPersistentTombstoneUsage {
         let correlationBytes = deliveries.values.compactMap(\.persistentTombstoneEstimatedBytes)
+        let createCorrelationBytes = createDeliveries.values.compactMap(
+            \.persistentTombstoneEstimatedBytes
+        )
         let discardCounts = discardConvergence.values.map(\.persistentTombstoneCount)
         let discardBytes = discardConvergence.values.map(\.persistentTombstoneBytes)
         return GaryxPersistentTombstoneUsage(
             correlationCount: correlationBytes.count,
             correlationBytes: correlationBytes.reduce(0, +),
+            createCorrelationCount: createCorrelationBytes.count,
+            createCorrelationBytes: createCorrelationBytes.reduce(0, +),
             discardFinalizationCount: discardCounts.reduce(0, +),
             discardFinalizationBytes: discardBytes.reduce(0, +)
         )
@@ -174,7 +184,9 @@ public enum GaryxComposerDurabilityMutation: Equatable, Sendable {
     case upsertAttachmentLineage(GaryxAttachmentLineageTombstone)
     case removeAttachmentLineage(GaryxAttachmentLineageID)
     case upsertBarrier(GaryxSendCommitBarrier)
+    case removeBarrier(GaryxComposerPayloadEntryID)
     case upsertLedger(GaryxProvisionalReservationLedger)
+    case removeLedger(GaryxReservationLedgerKey)
     case synthesizeReservationRevocation(GaryxReservationLedgerKey)
     case persistReservationTargetMapping(GaryxReservationLedgerKey, generation: UInt64)
     case upsertProducerDrained(GaryxSessionDescendantKey, GaryxDurableProducerDrainedRecord)
@@ -186,6 +198,7 @@ public enum GaryxComposerDurabilityMutation: Equatable, Sendable {
     case upsertDiscardConvergence(GaryxPayloadDiscardConvergence)
     case removeDiscardConvergence(GaryxComposerPayloadEntryID)
     case upsertCreateDelivery(GaryxCreateDeliveryState)
+    case removeCreateDelivery(GaryxCreateDeliveryKey)
     case reserveStagedAsset(
         assetID: GaryxStagedAssetID,
         owner: GaryxOperationCapabilityKey,
@@ -249,6 +262,7 @@ public enum GaryxSyntheticReservationRecoveryPlanner {
               ledger.targetMapping == nil,
               mergeGeneration > ledger.followupGeneration,
               mergeGeneration <= snapshot.generationHighWatermark,
+              mergeGeneration > snapshot.generationClaimFloor,
               !snapshot.claimedGenerations.contains(mergeGeneration),
               var entry = snapshot.payloadStore.entry(ledgerKey.entryID, scope: ledgerKey.scope),
               var barrier = snapshot.barriers[ledgerKey.entryID],
@@ -439,6 +453,7 @@ public enum GaryxPayloadGenerationResetPlanner {
         guard producerLive,
               allocatedGeneration > generation,
               allocatedGeneration <= snapshot.generationHighWatermark,
+              allocatedGeneration > snapshot.generationClaimFloor,
               !snapshot.claimedGenerations.contains(allocatedGeneration),
               snapshot.barriers[entryID].map({ $0.phase == .idle }) ?? true,
               var entry = snapshot.payloadStore.entry(entryID, scope: scope),
@@ -897,6 +912,7 @@ enum GaryxComposerDurabilityTransactionEngine {
             try afterApplyingMutation?(index)
         }
         compactCorrelationTombstonesToBudget(in: &candidate)
+        compactRetiredReservationLedgers(in: &candidate)
         try validate(candidate)
         candidate.revision &+= 1
         return candidate
@@ -982,8 +998,28 @@ enum GaryxComposerDurabilityTransactionEngine {
                 descendant: "send barrier"
             )
             state.barriers[barrier.entryID] = barrier
+        case .removeBarrier(let entryID):
+            guard let barrier = state.barriers[entryID],
+                  barrier.phase == .idle,
+                  barrier.reservationID == nil,
+                  barrier.envelopeGeneration == nil,
+                  barrier.followupGeneration == nil,
+                  barrier.envelopeText == nil,
+                  barrier.envelopeAttachmentIDs.isEmpty,
+                  barrier.envelopeClientIntentID == nil,
+                  barrier.provisionalFollowupText.isEmpty,
+                  barrier.provisionalFollowupAttachmentIDs.isEmpty else {
+                throw invariant("send barrier GC requires idle phase")
+            }
+            state.barriers.removeValue(forKey: entryID)
         case .upsertLedger(let ledger):
             state.ledgers[ledger.key] = ledger
+        case .removeLedger(let key):
+            guard state.ledgers[key]?.terminalOutcome != nil,
+                  !ledgerHasDurableDescendant(key, state: state) else {
+                throw invariant("reservation ledger GC requires terminal descendant-free state")
+            }
+            state.ledgers.removeValue(forKey: key)
         case .synthesizeReservationRevocation(let key):
             guard var ledger = state.ledgers[key],
                   ledger.synthesizeTerminalOutcome(.revoked) else {
@@ -1045,6 +1081,11 @@ enum GaryxComposerDurabilityTransactionEngine {
             state.discardConvergence.removeValue(forKey: entryID)
         case .upsertCreateDelivery(let create):
             state.createDeliveries[create.key] = create
+        case .removeCreateDelivery(let key):
+            guard state.createDeliveries[key]?.isTerminalCorrelation == true else {
+                throw invariant("create delivery GC requires terminal correlation")
+            }
+            state.createDeliveries.removeValue(forKey: key)
         case .reserveStagedAsset(let assetID, let owner, let bytes):
             guard bytes >= 0 else { throw invariant("negative asset reservation") }
             if let existing = state.stagedAssetOwners[assetID], existing != owner {
@@ -1069,9 +1110,19 @@ enum GaryxComposerDurabilityTransactionEngine {
             guard watermark >= state.generationHighWatermark else {
                 throw invariant("generation watermark regressed")
             }
+            if watermark > state.generationHighWatermark {
+                state.generationClaimFloor = max(
+                    state.generationClaimFloor,
+                    state.generationHighWatermark
+                )
+                state.claimedGenerations = state.claimedGenerations.filter {
+                    $0 > state.generationClaimFloor
+                }
+            }
             state.generationHighWatermark = watermark
         case .claimGeneration(let generation):
             guard generation > 0,
+                  generation > state.generationClaimFloor,
                   generation <= state.generationHighWatermark,
                   state.claimedGenerations.insert(generation).inserted else {
                 throw invariant("generation was not durably allocated or was already claimed")
@@ -1110,9 +1161,11 @@ enum GaryxComposerDurabilityTransactionEngine {
         ) else {
             throw invariant("persistent tombstone budget exceeded")
         }
-        guard state.claimedGenerations.allSatisfy({
-            $0 > 0 && $0 <= state.generationHighWatermark
-        }) else {
+        guard state.generationClaimFloor <= state.generationHighWatermark,
+              state.claimedGenerations.count <= Int(GaryxDurableHiLoAllocator.maximumBlockSize),
+              state.claimedGenerations.allSatisfy({
+                  $0 > state.generationClaimFloor && $0 <= state.generationHighWatermark
+              }) else {
             throw invariant("claimed generation is outside the durable hi-lo watermark")
         }
         for (key, operation) in state.operations {
@@ -1158,6 +1211,29 @@ enum GaryxComposerDurabilityTransactionEngine {
             guard (ledger.terminalOutcome == nil) == (ledger.targetMapping == nil) else {
                 throw invariant("reservation outcome and target mapping must publish together")
             }
+        }
+        let unsettledLedgers = state.ledgers.values.filter { $0.terminalOutcome == nil }
+        let unsettledLedgerBytes = unsettledLedgers.reduce(0) { $0 + $1.estimatedBytes }
+        let unsettledLedgersByScope = Dictionary(grouping: unsettledLedgers) { $0.key.scope }
+        guard unsettledLedgers.count <= GaryxProvisionalReservationLedger.unsettledGlobalLimit,
+              unsettledLedgerBytes <= GaryxProvisionalReservationLedger.unsettledByteLimit,
+              unsettledLedgersByScope.values.allSatisfy({
+                  $0.count <= GaryxProvisionalReservationLedger.unsettledPerScopeLimit
+              }) else {
+            throw invariant("unsettled reservation ledger budget exceeded")
+        }
+        let nonTerminalCreates = state.createDeliveries.values.filter {
+            !$0.isTerminalCorrelation
+        }
+        let nonTerminalCreateBytes = nonTerminalCreates.reduce(0) { $0 + $1.estimatedBytes }
+        let nonTerminalCreatesByScope = Dictionary(grouping: nonTerminalCreates, by: \.scope)
+        guard nonTerminalCreates.count <= GaryxCreateDeliveryState.nonTerminalGlobalLimit,
+              nonTerminalCreateBytes <= GaryxCreateDeliveryState.nonTerminalByteLimit,
+              nonTerminalCreatesByScope.values.allSatisfy({
+                  $0.count <= GaryxCreateDeliveryState.nonTerminalPerScopeLimit
+              }),
+              state.createDeliveries.allSatisfy({ $0.key == $0.value.key }) else {
+            throw invariant("non-terminal create delivery budget or identity exceeded")
         }
         for close in state.recoveredInputClosures.values {
             let ledgerKey = GaryxReservationLedgerKey(
@@ -1213,18 +1289,44 @@ enum GaryxComposerDurabilityTransactionEngine {
         }
     }
 
-    /// Terminal delivery rows are bounded correlation evidence, not immortal
-    /// outbox entries. Every write deterministically evicts the oldest such
-    /// rows in the same transaction until the shared tombstone budget fits.
-    /// Non-terminal deliveries and discard-finalization tombstones are never
-    /// selected; if those records alone exceed the budget, validation remains
-    /// fail-closed.
+    /// Terminal send/create rows are bounded correlation evidence, not
+    /// immortal history. Create rows are retired first by stable identity;
+    /// delivery rows retain their mandated `(ReservationID, DeliveryRecordID)`
+    /// order. Non-terminal rows and discard-finalization tombstones are never
+    /// selected, so an unprunable overage remains fail-closed.
     private static func compactCorrelationTombstonesToBudget(
         in state: inout GaryxComposerDurabilitySnapshot
     ) {
         var usage = state.persistentTombstoneUsage
         guard !state.tombstoneBudget.admits(count: usage.count, bytes: usage.bytes) else {
             return
+        }
+        let createCandidates = state.createDeliveries.values.compactMap {
+            record -> (GaryxCreateDeliveryState, Int)? in
+            guard let bytes = record.persistentTombstoneEstimatedBytes else { return nil }
+            return (record, bytes)
+        }.sorted { lhs, rhs in
+            if lhs.0.scope.identity != rhs.0.scope.identity {
+                return lhs.0.scope.identity < rhs.0.scope.identity
+            }
+            if lhs.0.scope.epoch != rhs.0.scope.epoch {
+                return lhs.0.scope.epoch < rhs.0.scope.epoch
+            }
+            return lhs.0.createIntentID < rhs.0.createIntentID
+        }
+        for (record, bytes) in createCandidates {
+            guard !state.tombstoneBudget.admits(count: usage.count, bytes: usage.bytes) else {
+                break
+            }
+            state.createDeliveries.removeValue(forKey: record.key)
+            usage = GaryxPersistentTombstoneUsage(
+                correlationCount: usage.correlationCount,
+                correlationBytes: usage.correlationBytes,
+                createCorrelationCount: usage.createCorrelationCount - 1,
+                createCorrelationBytes: usage.createCorrelationBytes - bytes,
+                discardFinalizationCount: usage.discardFinalizationCount,
+                discardFinalizationBytes: usage.discardFinalizationBytes
+            )
         }
         let candidates = state.deliveries.values.compactMap { record -> (GaryxDeliveryRecord, Int)? in
             guard let bytes = record.persistentTombstoneEstimatedBytes else { return nil }
@@ -1243,9 +1345,78 @@ enum GaryxComposerDurabilityTransactionEngine {
             usage = GaryxPersistentTombstoneUsage(
                 correlationCount: usage.correlationCount - 1,
                 correlationBytes: usage.correlationBytes - bytes,
+                createCorrelationCount: usage.createCorrelationCount,
+                createCorrelationBytes: usage.createCorrelationBytes,
                 discardFinalizationCount: usage.discardFinalizationCount,
                 discardFinalizationBytes: usage.discardFinalizationBytes
             )
+        }
+    }
+
+    /// Once a reservation has a terminal mapping and no durable descendant
+    /// can consume it, absence is the protocol's stable unknown-reservation
+    /// fence. Retire it in the same transaction that removes its last child.
+    private static func compactRetiredReservationLedgers(
+        in state: inout GaryxComposerDurabilitySnapshot
+    ) {
+        let retired = state.ledgers.keys.filter { key in
+            state.ledgers[key]?.terminalOutcome != nil
+                && !ledgerHasDurableDescendant(key, state: state)
+        }
+        for key in retired {
+            state.ledgers.removeValue(forKey: key)
+        }
+    }
+
+    private static func ledgerHasDurableDescendant(
+        _ key: GaryxReservationLedgerKey,
+        state: GaryxComposerDurabilitySnapshot
+    ) -> Bool {
+        if state.barriers.values.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) {
+            return true
+        }
+        if state.operations.keys.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) || state.manifests.keys.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) {
+            return true
+        }
+        if state.replacements.values.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) || state.producerDrained.values.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) || state.recoveredInputClosures.values.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) || state.deliveries.values.contains(where: {
+            $0.scope == key.scope && $0.entryID == key.entryID
+                && $0.reservationID == key.reservationID
+        }) {
+            return true
+        }
+        return state.discardConvergence.values.contains { convergence in
+            guard convergence.barrier.scope == key.scope,
+                  convergence.lifecycle.token.entryID == key.entryID else {
+                return false
+            }
+            return convergence.barrier.reservationID == key.reservationID
+                || convergence.operations.keys.contains(where: {
+                    $0.reservationID == key.reservationID
+                })
+                || convergence.replacements.values.contains(where: {
+                    $0.reservationID == key.reservationID
+                })
+                || convergence.deliveries.values.contains(where: {
+                    $0.reservationID == key.reservationID
+                })
         }
     }
 

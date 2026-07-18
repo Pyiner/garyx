@@ -822,6 +822,7 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 var idleBarrier = convergence.barrier
                 idleBarrier.returnToIdle()
                 mutations.append(.upsertBarrier(idleBarrier))
+                mutations.append(.removeBarrier(entryID))
             }
             mutations.append(
                 .removeEntry(scope: convergence.barrier.scope, entryID: entryID)

@@ -888,13 +888,12 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             let restored = try await relaunched.load()
             XCTAssertTrue(restored.producerDrained.isEmpty)
             XCTAssertTrue(restored.recoveredInputClosures.isEmpty)
-            let restoredBarrier = try XCTUnwrap(restored.barriers[entryID])
-            XCTAssertEqual(restoredBarrier.phase, .idle)
-            XCTAssertNil(restoredBarrier.envelopeText)
-            XCTAssertTrue(restoredBarrier.envelopeAttachmentIDs.isEmpty)
-            XCTAssertNil(restoredBarrier.envelopeClientIntentID)
-            XCTAssertTrue(restoredBarrier.provisionalFollowupText.isEmpty)
-            XCTAssertTrue(restoredBarrier.provisionalFollowupAttachmentIDs.isEmpty)
+            XCTAssertNil(restored.barriers[entryID])
+            XCTAssertNil(restored.ledgers[closeLedger.key])
+            XCTAssertNotNil(
+                restored.ledgers[send.ledger.key],
+                "terminal send ledger remains rooted by its bounded correlation row"
+            )
             XCTAssertNil(restored.payloadStore.entry(entryID, scope: scope))
             XCTAssertNil(restored.discardConvergence[entryID])
         }

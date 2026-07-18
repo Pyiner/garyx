@@ -298,7 +298,12 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             revision: Int64(snapshot.revision),
             generationHighWatermark: Int64(snapshot.generationHighWatermark),
             reservationHighWatermark: Int64(snapshot.reservationHighWatermark),
-            claimedGenerations: try encode(snapshot.claimedGenerations),
+            claimedGenerations: try encode(
+                GaryxPersistedGenerationClaims(
+                    floor: snapshot.generationClaimFloor,
+                    claims: snapshot.claimedGenerations
+                )
+            ),
             tombstoneBudget: try encode(snapshot.tombstoneBudget)
         )
     }
@@ -350,10 +355,7 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             try decodeFamily(.createDeliveries, connection)
         let staged: GaryxStagedAssetDurabilityState =
             try decodeFamily(.stagedAssets, connection)
-        let claimedGenerations: Set<UInt64> = try decode(
-            metadata.claimedGenerations,
-            label: "claimed generations"
-        )
+        let generationClaims = try decodeGenerationClaims(metadata.claimedGenerations)
         let tombstoneBudget: GaryxPersistentTombstoneBudget = try decode(
             metadata.tombstoneBudget,
             label: "tombstone budget"
@@ -382,7 +384,8 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             reservedBytes: staged.totalReservedBytes,
             generationHighWatermark: UInt64(metadata.generationHighWatermark),
             reservationHighWatermark: UInt64(metadata.reservationHighWatermark),
-            claimedGenerations: claimedGenerations,
+            generationClaimFloor: generationClaims.floor,
+            claimedGenerations: generationClaims.claims,
             tombstoneBudget: tombstoneBudget
         )
     }
@@ -447,6 +450,25 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         }
     }
 
+    private static func decodeGenerationClaims(
+        _ data: Data
+    ) throws -> GaryxPersistedGenerationClaims {
+        let decoder = JSONDecoder()
+        if let persisted = try? decoder.decode(GaryxPersistedGenerationClaims.self, from: data) {
+            return persisted
+        }
+        do {
+            return GaryxPersistedGenerationClaims(
+                floor: 0,
+                claims: try decoder.decode(Set<UInt64>.self, from: data)
+            )
+        } catch {
+            throw GaryxSQLiteComposerDurabilityError.encoding(
+                "claimed generations: \(String(describing: error))"
+            )
+        }
+    }
+
     private static func preparePrivateDirectory(
         _ directory: URL,
         fileProtectionPolicy: GaryxComposerFileProtectionPolicy
@@ -484,6 +506,11 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             try fileProtectionPolicy.apply(to: path)
         }
     }
+}
+
+private struct GaryxPersistedGenerationClaims: Codable {
+    let floor: UInt64
+    let claims: Set<UInt64>
 }
 
 private struct GaryxStagedAssetDurabilityState: Codable {

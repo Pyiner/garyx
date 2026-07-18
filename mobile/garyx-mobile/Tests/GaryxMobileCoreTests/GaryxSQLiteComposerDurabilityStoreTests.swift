@@ -194,6 +194,101 @@ final class GaryxSQLiteComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(restored.revision, 4)
     }
 
+    func testGenerationClaimFloorSurvivesSQLiteRelaunchAndRejectsOldBlock() async throws {
+        let fixture = try makeDatabaseFixture()
+        let first = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL,
+            allocationBlockSize: 4
+        )
+        let firstGeneration = try await first.allocatePayloadGeneration()
+        XCTAssertEqual(firstGeneration, 1)
+        var snapshot = try await first.load()
+        snapshot = try await first.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "claim first allocation block identity",
+                mutations: [.claimGeneration(firstGeneration)]
+            )
+        )
+        XCTAssertEqual(snapshot.claimedGenerations, [1])
+        XCTAssertEqual(snapshot.generationClaimFloor, 0)
+
+        let second = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL,
+            allocationBlockSize: 4
+        )
+        let nextProcessGeneration = try await second.allocatePayloadGeneration()
+        XCTAssertEqual(nextProcessGeneration, 5)
+        snapshot = try await second.load()
+        XCTAssertEqual(snapshot.generationHighWatermark, 8)
+        XCTAssertEqual(snapshot.generationClaimFloor, 4)
+        XCTAssertTrue(snapshot.claimedGenerations.isEmpty)
+
+        let third = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL,
+            allocationBlockSize: 4
+        )
+        do {
+            _ = try await third.commit(
+                .init(
+                    expectedRevision: snapshot.revision,
+                    label: "reject compacted generation after relaunch",
+                    mutations: [.claimGeneration(firstGeneration)]
+                )
+            )
+            XCTFail("an old allocation block must remain fenced after relaunch")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        let unchanged = try await third.load()
+        XCTAssertEqual(unchanged, snapshot)
+    }
+
+    func testLegacyExactClaimSetMetadataDecodesWithZeroFloor() async throws {
+        let fixture = try makeDatabaseFixture()
+        var creatingStore: GaryxSQLiteComposerDurabilityStore? = try .init(
+            databaseURL: fixture.databaseURL
+        )
+        _ = creatingStore
+        creatingStore = nil
+
+        var database: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open_v2(
+                fixture.databaseURL.path,
+                &database,
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            ),
+            SQLITE_OK
+        )
+        let handle = try XCTUnwrap(database)
+        XCTAssertEqual(
+            sqlite3_exec(
+                handle,
+                "UPDATE composer_durability_metadata "
+                    + "SET generation_high_watermark = 4, claimed_generations = '[3]' "
+                    + "WHERE singleton = 1",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        XCTAssertEqual(sqlite3_close_v2(handle), SQLITE_OK)
+        database = nil
+
+        let migrated = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL,
+            allocationBlockSize: 4
+        )
+        let snapshot = try await migrated.load()
+        XCTAssertEqual(snapshot.generationClaimFloor, 0)
+        XCTAssertEqual(snapshot.claimedGenerations, [3])
+    }
+
     func testConcreteStoreEnforcesLedgerBeforeDurableDescendant() async throws {
         let fixture = try makeDatabaseFixture()
         let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)

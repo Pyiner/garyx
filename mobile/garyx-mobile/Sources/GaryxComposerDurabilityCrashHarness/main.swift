@@ -1168,6 +1168,10 @@ private struct HarnessSummary: Codable {
     let feedbackCount: Int
     let attachmentLineageCount: Int
     let producerDrainedCount: Int
+    let ledgerCount: Int
+    let claimedGenerationCount: Int
+    let createDeliveryCount: Int
+    let barrierCount: Int
     let nonIdleBarrierCount: Int
     let barrierPayloadFieldCount: Int
     let discardCount: Int
@@ -1216,6 +1220,10 @@ private struct HarnessSummary: Codable {
         feedbackCount = snapshot.feedback.count
         attachmentLineageCount = snapshot.attachmentLineages.count
         producerDrainedCount = snapshot.producerDrained.count
+        ledgerCount = snapshot.ledgers.count
+        claimedGenerationCount = snapshot.claimedGenerations.count
+        createDeliveryCount = snapshot.createDeliveries.count
+        barrierCount = snapshot.barriers.count
         nonIdleBarrierCount = snapshot.barriers.values.filter { $0.phase != .idle }.count
         barrierPayloadFieldCount = snapshot.barriers.values.reduce(0) { count, barrier in
             count

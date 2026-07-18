@@ -1917,7 +1917,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertTrue(delivery.markTransportAttempted())
         delivery.recordServerAcknowledgement()
         let nonTerminal = GaryxDeliveryRecord(
-            id: .init(rawValue: "non-terminal-delivery"),
+            id: .init(rawValue: "aa-non-terminal-delivery"),
             scope: scope,
             entryID: entryID,
             reservationID: reservation,
@@ -2074,6 +2074,390 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         }
         let unchanged = try await fake.load()
         XCTAssertEqual(unchanged, initial)
+    }
+
+    func testTerminalLedgerWithoutDurableDescendantsIsRetiredOnNextTransaction() async throws {
+        let ledger = makeLedger(outcome: .revoked)
+        let initial = GaryxComposerDurabilitySnapshot(ledgers: [ledger.key: ledger])
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+
+        let compacted = try await fake.commit(
+            .init(expectedRevision: 0, label: "compact descendant-free ledger", mutations: [])
+        )
+
+        XCTAssertTrue(compacted.ledgers.isEmpty)
+    }
+
+    func testTerminalLedgerRetiresOnlyAfterItsLastDurableDescendant() async throws {
+        let ledger = makeLedger(outcome: .committed)
+        let delivery = makeDelivery()
+        let fake = GaryxFakeComposerDurabilityStore()
+        var snapshot = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "root terminal ledger by delivery",
+                mutations: [.upsertLedger(ledger), .upsertDelivery(delivery)]
+            )
+        )
+        XCTAssertEqual(snapshot.ledgers[ledger.key], ledger)
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: snapshot.revision,
+                    label: "reject rooted ledger GC",
+                    mutations: [.removeLedger(ledger.key)]
+                )
+            )
+            XCTFail("a ledger with a durable descendant must not be removed")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation(
+                    "reservation ledger GC requires terminal descendant-free state"
+                )
+            )
+        }
+
+        snapshot = try await fake.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "remove final reservation descendant",
+                mutations: [.removeDelivery(delivery.id)]
+            )
+        )
+        XCTAssertNil(snapshot.deliveries[delivery.id])
+        XCTAssertNil(snapshot.ledgers[ledger.key])
+    }
+
+    func testUnsettledReservationLedgerBudgetsAreFailClosed() async throws {
+        func ledger(index: Int, scope: GaryxGatewayScope) -> GaryxProvisionalReservationLedger {
+            GaryxProvisionalReservationLedger(
+                key: .init(
+                    scope: scope,
+                    entryID: .init(rawValue: "entry-\(index)"),
+                    reservationID: .init(rawValue: UInt64(index + 1))
+                ),
+                envelopeGeneration: 10,
+                followupGeneration: 11
+            )
+        }
+        let fake = GaryxFakeComposerDurabilityStore()
+        let overGlobalLimit = (0...GaryxProvisionalReservationLedger.unsettledGlobalLimit)
+            .map { index in
+                GaryxComposerDurabilityMutation.upsertLedger(
+                    ledger(
+                        index: index,
+                        scope: .init(identity: "scope-\(index % 5)", epoch: 1)
+                    )
+                )
+            }
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject global unsettled-ledger overflow",
+                    mutations: overGlobalLimit
+                )
+            )
+            XCTFail("unsettled ledgers must have a global bound")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        let unchanged = try await fake.load()
+        XCTAssertTrue(unchanged.ledgers.isEmpty)
+
+        let perScope = GaryxFakeComposerDurabilityStore()
+        let overPerScopeLimit = (0...GaryxProvisionalReservationLedger.unsettledPerScopeLimit)
+            .map { index in
+                GaryxComposerDurabilityMutation.upsertLedger(
+                    ledger(index: index, scope: scope)
+                )
+            }
+        do {
+            _ = try await perScope.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject per-scope unsettled-ledger overflow",
+                    mutations: overPerScopeLimit
+                )
+            )
+            XCTFail("unsettled ledgers must have a per-scope bound")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+
+        let byteBounded = GaryxFakeComposerDurabilityStore()
+        let oversizedScope = GaryxGatewayScope(
+            identity: String(
+                repeating: "x",
+                count: GaryxProvisionalReservationLedger.unsettledByteLimit
+            ),
+            epoch: 1
+        )
+        do {
+            _ = try await byteBounded.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject unsettled-ledger byte overflow",
+                    mutations: [.upsertLedger(ledger(index: 0, scope: oversizedScope))]
+                )
+            )
+            XCTFail("unsettled ledgers must have a byte bound")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+    }
+
+    func testBarrierRemovalRequiresPayloadFreeIdleState() async throws {
+        let idle = makeBarrier()
+        let removable = GaryxFakeComposerDurabilityStore(
+            initial: .init(barriers: [entryID: idle])
+        )
+        let removed = try await removable.commit(
+            .init(
+                expectedRevision: 0,
+                label: "remove payload-free idle barrier",
+                mutations: [.removeBarrier(entryID)]
+            )
+        )
+        XCTAssertTrue(removed.barriers.isEmpty)
+
+        let ledger = makeLedger(outcome: nil)
+        var sealed = makeBarrier()
+        XCTAssertEqual(
+            sealed.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(text: "sealed"),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: makeEntry().lifecycle.snapshot
+            ),
+            .sealed
+        )
+        let protected = GaryxFakeComposerDurabilityStore(
+            initial: .init(barriers: [entryID: sealed], ledgers: [ledger.key: ledger])
+        )
+        do {
+            _ = try await protected.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject live barrier GC",
+                    mutations: [.removeBarrier(entryID)]
+                )
+            )
+            XCTFail("a sealed barrier must not be removed")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("send barrier GC requires idle phase")
+            )
+        }
+    }
+
+    func testClaimedGenerationHistoryFailsClosedAtItsBound() async throws {
+        let initial = GaryxComposerDurabilitySnapshot(generationHighWatermark: 8_192)
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let mutations = (1...4_097).map {
+            GaryxComposerDurabilityMutation.claimGeneration(UInt64($0))
+        }
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject unbounded claimed-generation history",
+                    mutations: mutations
+                )
+            )
+            XCTFail("claimed-generation replay history must remain bounded")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, initial)
+    }
+
+    func testAdvancingHiLoBlockCompactsExactClaimsBehindPermanentFloor() async throws {
+        let initial = GaryxComposerDurabilitySnapshot(
+            generationHighWatermark: 32,
+            claimedGenerations: [12, 31]
+        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        var snapshot = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "advance generation block and retire old exact claims",
+                mutations: [.setGenerationHighWatermark(64)]
+            )
+        )
+        XCTAssertEqual(snapshot.generationClaimFloor, 32)
+        XCTAssertTrue(snapshot.claimedGenerations.isEmpty)
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: snapshot.revision,
+                    label: "reject a claim behind the permanent floor",
+                    mutations: [.claimGeneration(12)]
+                )
+            )
+            XCTFail("a compacted generation must remain permanently unclaimable")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+
+        snapshot = try await fake.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "claim within current exact replay window",
+                mutations: [.claimGeneration(33)]
+            )
+        )
+        XCTAssertEqual(snapshot.claimedGenerations, [33])
+        let roundTrip = try JSONDecoder().decode(
+            GaryxComposerDurabilitySnapshot.self,
+            from: JSONEncoder().encode(snapshot)
+        )
+        XCTAssertEqual(roundTrip.generationClaimFloor, 32)
+        XCTAssertEqual(roundTrip.claimedGenerations, [33])
+    }
+
+    func testTerminalCreateDeliveryHistorySharesThePersistentTombstoneBudget() async throws {
+        func acknowledgedCreate(_ intentID: String) -> GaryxCreateDeliveryState {
+            var create = GaryxCreateDeliveryState(scope: scope, createIntentID: intentID)
+            create.created(threadID: "thread-\(intentID)")
+            create.chatStartAttempted()
+            create.acknowledged()
+            return create
+        }
+        let first = acknowledgedCreate("create-0001")
+        let second = acknowledgedCreate("create-0002")
+        let nonTerminal = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: "aa-non-terminal-create"
+        )
+        let fake = GaryxFakeComposerDurabilityStore(
+            initial: .init(tombstoneBudget: .init(countLimit: 1, byteLimit: 4 * 1024 * 1024))
+        )
+
+        let compacted = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "bound terminal create-delivery history",
+                mutations: [
+                    .upsertCreateDelivery(nonTerminal),
+                    .upsertCreateDelivery(first),
+                    .upsertCreateDelivery(second),
+                ]
+            )
+        )
+
+        XCTAssertEqual(compacted.createDeliveries[nonTerminal.key], nonTerminal)
+        XCTAssertNil(compacted.createDeliveries[first.key])
+        XCTAssertEqual(compacted.createDeliveries[second.key], second)
+        XCTAssertEqual(compacted.persistentTombstoneUsage.count, 1)
+
+        let byteBounded = GaryxFakeComposerDurabilityStore(
+            initial: .init(
+                tombstoneBudget: .init(countLimit: 2, byteLimit: second.estimatedBytes)
+            )
+        )
+        let byteCompacted = try await byteBounded.commit(
+            .init(
+                expectedRevision: 0,
+                label: "bound terminal create-delivery bytes",
+                mutations: [.upsertCreateDelivery(first), .upsertCreateDelivery(second)]
+            )
+        )
+        XCTAssertNil(byteCompacted.createDeliveries[first.key])
+        XCTAssertEqual(byteCompacted.createDeliveries[second.key], second)
+        XCTAssertEqual(byteCompacted.persistentTombstoneUsage.bytes, second.estimatedBytes)
+    }
+
+    func testNonTerminalCreateDeliveryBudgetIsFailClosed() async throws {
+        let fake = GaryxFakeComposerDurabilityStore()
+        let mutations = (0...GaryxCreateDeliveryState.nonTerminalGlobalLimit).map { index in
+            GaryxComposerDurabilityMutation.upsertCreateDelivery(
+                .init(
+                    scope: .init(identity: "create-scope-\(index % 5)", epoch: 1),
+                    createIntentID: "create-\(index)"
+                )
+            )
+        }
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject non-terminal create overflow",
+                    mutations: mutations
+                )
+            )
+            XCTFail("non-terminal create delivery state must remain bounded")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        let unchanged = try await fake.load()
+        XCTAssertTrue(unchanged.createDeliveries.isEmpty)
+
+        let perScope = GaryxFakeComposerDurabilityStore()
+        let perScopeMutations = (0...GaryxCreateDeliveryState.nonTerminalPerScopeLimit)
+            .map { index in
+                GaryxComposerDurabilityMutation.upsertCreateDelivery(
+                    .init(scope: scope, createIntentID: "per-scope-create-\(index)")
+                )
+            }
+        do {
+            _ = try await perScope.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject per-scope create overflow",
+                    mutations: perScopeMutations
+                )
+            )
+            XCTFail("non-terminal create state must have a per-scope bound")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+
+        let byteBounded = GaryxFakeComposerDurabilityStore()
+        let oversized = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: String(
+                repeating: "c",
+                count: GaryxCreateDeliveryState.nonTerminalByteLimit
+            )
+        )
+        do {
+            _ = try await byteBounded.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject non-terminal create byte overflow",
+                    mutations: [.upsertCreateDelivery(oversized)]
+                )
+            )
+            XCTFail("non-terminal create state must have a byte bound")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
     }
 
     func testScopePartitionedComposerSurvivesSnapshotRoundTrip() async throws {

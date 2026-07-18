@@ -7,6 +7,10 @@ import Foundation
 /// relaunched allocator starts after the persisted watermark and intentionally
 /// skips unused values from the previous process.
 public struct GaryxDurableHiLoAllocator: Equatable, Codable, Sendable {
+    /// Bounds the exact replay-fence window retained for the current block.
+    /// Older blocks are fenced by the durable generation-claim floor.
+    public static let maximumBlockSize: UInt64 = 4_096
+
     public let blockSize: UInt64
     public private(set) var persistedHighWatermark: UInt64
     public private(set) var nextValue: UInt64
@@ -14,7 +18,7 @@ public struct GaryxDurableHiLoAllocator: Equatable, Codable, Sendable {
     public private(set) var durableReservationCount: UInt64
 
     public init(persistedHighWatermark: UInt64 = 0, blockSize: UInt64 = 32) {
-        precondition(blockSize > 0)
+        precondition(blockSize > 0 && blockSize <= Self.maximumBlockSize)
         self.blockSize = blockSize
         self.persistedHighWatermark = persistedHighWatermark
         nextValue = persistedHighWatermark + 1
@@ -70,6 +74,10 @@ public struct GaryxReservationTargetMapping: Equatable, Codable, Sendable {
 }
 
 public struct GaryxProvisionalReservationLedger: Equatable, Codable, Sendable {
+    public static let unsettledPerScopeLimit = 64
+    public static let unsettledGlobalLimit = 256
+    public static let unsettledByteLimit = 4 * 1024 * 1024
+
     public let key: GaryxReservationLedgerKey
     public let envelopeGeneration: UInt64
     public let followupGeneration: UInt64
@@ -87,6 +95,12 @@ public struct GaryxProvisionalReservationLedger: Equatable, Codable, Sendable {
         self.followupGeneration = followupGeneration
         terminalOutcome = nil
         targetMapping = nil
+    }
+
+    public var estimatedBytes: Int {
+        key.scope.identity.utf8.count
+            + key.entryID.rawValue.utf8.count
+            + 96
     }
 
     @discardableResult
@@ -596,29 +610,41 @@ public struct GaryxPersistentTombstoneBudget: Equatable, Codable, Sendable {
 public struct GaryxPersistentTombstoneUsage: Equatable, Codable, Sendable {
     public let correlationCount: Int
     public let correlationBytes: Int
+    public let createCorrelationCount: Int
+    public let createCorrelationBytes: Int
     public let discardFinalizationCount: Int
     public let discardFinalizationBytes: Int
 
     public init(
         correlationCount: Int = 0,
         correlationBytes: Int = 0,
+        createCorrelationCount: Int = 0,
+        createCorrelationBytes: Int = 0,
         discardFinalizationCount: Int = 0,
         discardFinalizationBytes: Int = 0
     ) {
         precondition(
             correlationCount >= 0
                 && correlationBytes >= 0
+                && createCorrelationCount >= 0
+                && createCorrelationBytes >= 0
                 && discardFinalizationCount >= 0
                 && discardFinalizationBytes >= 0
         )
         self.correlationCount = correlationCount
         self.correlationBytes = correlationBytes
+        self.createCorrelationCount = createCorrelationCount
+        self.createCorrelationBytes = createCorrelationBytes
         self.discardFinalizationCount = discardFinalizationCount
         self.discardFinalizationBytes = discardFinalizationBytes
     }
 
-    public var count: Int { correlationCount + discardFinalizationCount }
-    public var bytes: Int { correlationBytes + discardFinalizationBytes }
+    public var count: Int {
+        correlationCount + createCorrelationCount + discardFinalizationCount
+    }
+    public var bytes: Int {
+        correlationBytes + createCorrelationBytes + discardFinalizationBytes
+    }
 }
 
 public enum GaryxGatewayScopeSettlementKind: Equatable, Sendable {
@@ -891,6 +917,10 @@ public struct GaryxCreateDeliveryKey: Hashable, Codable, Sendable {
 }
 
 public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
+    public static let nonTerminalPerScopeLimit = 64
+    public static let nonTerminalGlobalLimit = 256
+    public static let nonTerminalByteLimit = 4 * 1024 * 1024
+
     public let key: GaryxCreateDeliveryKey
     public private(set) var threadID: String?
     public private(set) var phase: GaryxCreateDeliveryPhase
@@ -907,6 +937,19 @@ public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
 
     public var scope: GaryxGatewayScope { key.scope }
     public var createIntentID: String { key.createIntentID }
+    public var isTerminalCorrelation: Bool {
+        phase == .acknowledged || (phase == .ambiguous && userDisposition != .none)
+    }
+    public var estimatedBytes: Int {
+        key.scope.identity.utf8.count
+            + key.createIntentID.utf8.count
+            + (threadID?.utf8.count ?? 0)
+            + (ambiguousAfter?.rawValue.utf8.count ?? 0)
+            + 64
+    }
+    public var persistentTombstoneEstimatedBytes: Int? {
+        isTerminalCorrelation ? estimatedBytes : nil
+    }
 
     public mutating func created(threadID: String) {
         guard phase == .createPending, !threadID.isEmpty else { return }

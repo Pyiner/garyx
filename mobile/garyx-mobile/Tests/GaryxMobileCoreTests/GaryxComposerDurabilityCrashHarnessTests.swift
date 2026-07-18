@@ -185,7 +185,22 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                         XCTAssertEqual(summary.ledgerOutcomes[Self.reservationID], "revoked", context)
                         XCTAssertGreaterThan(summary.targetGenerations[Self.reservationID] ?? 0, 11, context)
                     default:
-                        XCTAssertEqual(summary.ledgerOutcomes[Self.reservationID], reservation, context)
+                        if summary.ledgerOutcomes[Self.reservationID] == nil {
+                            let operationID = "manifest-\(state.rawValue)"
+                            XCTAssertNil(summary.operationStates[operationID], context)
+                            XCTAssertEqual(summary.manifestCount, 0, context)
+                            XCTAssertEqual(summary.replacementCount, 0, context)
+                            XCTAssertEqual(summary.producerDrainedCount, 0, context)
+                            XCTAssertEqual(summary.recoveredCloseCount, 0, context)
+                            XCTAssertEqual(summary.barrierCount, 0, context)
+                            XCTAssertTrue(summary.deliveryPhases.isEmpty, context)
+                        } else {
+                            XCTAssertEqual(
+                                summary.ledgerOutcomes[Self.reservationID],
+                                reservation,
+                                context
+                            )
+                        }
                     }
                 }
             }
@@ -454,7 +469,10 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                     "terminalEvidence",
                     context
                 )
-                XCTAssertEqual(summary.ledgerOutcomes[Self.reservationID], "revoked", context)
+                XCTAssertNil(
+                    summary.ledgerOutcomes[Self.reservationID],
+                    "descendant-free terminal reservation should be compacted: \(context)"
+                )
             }
         }
     }
@@ -648,8 +666,16 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         XCTAssertEqual(summary.replacementCount, 0, context)
         XCTAssertEqual(summary.feedbackCount, 0, context)
         XCTAssertEqual(summary.producerDrainedCount, 0, context)
+        XCTAssertLessThanOrEqual(summary.ledgerCount, summary.deliveryPhases.count, context)
+        XCTAssertLessThanOrEqual(
+            summary.claimedGenerationCount,
+            Int(GaryxDurableHiLoAllocator.maximumBlockSize),
+            context
+        )
+        XCTAssertEqual(summary.createDeliveryCount, 0, context)
         XCTAssertEqual(summary.recoveredCloseCount, 0, context)
         XCTAssertEqual(summary.closePublicationTotal, 0, context)
+        XCTAssertEqual(summary.barrierCount, 0, context)
         XCTAssertEqual(summary.nonIdleBarrierCount, 0, context)
         XCTAssertEqual(summary.barrierPayloadFieldCount, 0, context)
         XCTAssertEqual(summary.discardCount, 0, context)
@@ -921,6 +947,10 @@ private struct HarnessSummary: Decodable {
     let feedbackCount: Int
     let attachmentLineageCount: Int
     let producerDrainedCount: Int
+    let ledgerCount: Int
+    let claimedGenerationCount: Int
+    let createDeliveryCount: Int
+    let barrierCount: Int
     let nonIdleBarrierCount: Int
     let barrierPayloadFieldCount: Int
     let discardCount: Int

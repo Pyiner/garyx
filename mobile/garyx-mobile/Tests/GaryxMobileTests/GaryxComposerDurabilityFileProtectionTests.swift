@@ -143,7 +143,7 @@ final class GaryxComposerDurabilityFileProtectionTests: XCTestCase {
 
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GaryxProtectionTests-(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("GaryxProtectionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
