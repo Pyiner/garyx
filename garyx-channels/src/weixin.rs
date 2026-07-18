@@ -28,8 +28,7 @@ use garyx_models::provider::{
     StreamEvent, attachments_to_metadata_value,
 };
 use garyx_router::{
-    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, endpoint_key,
-    is_native_command_text,
+    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, is_native_command_text,
 };
 
 use crate::channel_trait::{Channel, ChannelError};
@@ -4186,64 +4185,24 @@ impl WeixinChannel {
             file_paths: file_paths_for_agent,
         };
 
-        let origin_endpoint_identity =
-            endpoint_key("weixin", &runtime.account_id, &request.thread_binding_key);
-        let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
-            runtime.router.clone(),
-            runtime.dispatcher.clone(),
-            request.run_id.clone(),
-            origin_endpoint_identity,
-        );
-        let fanout_consumer = deferred_fanout.consumer(response_callback);
-
-        // Read this run's stream from the durable committed transcript:
-        // subscribe before dispatch and let the replay adapter drive the Weixin
-        // sender. Bound non-origin endpoints attach after route_and_dispatch
-        // resolves the canonical thread id.
-        let replay_subscription = match crate::committed_replay::committed_callback(
-            &runtime.bridge,
-            &request.run_id,
-            fanout_consumer,
-        )
-        .await
-        {
-            Ok(subscription) => subscription,
-            Err(error) => {
-                tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Weixin dispatch");
-                return;
-            }
+        let run_id_for_log = request.run_id.clone();
+        let holder_for_resolved = thread_id_holder.clone();
+        let pipeline = crate::inbound::InboundPipeline {
+            router: &runtime.router,
+            bridge: &runtime.bridge,
+            dispatcher: &runtime.dispatcher,
         };
-
-        let thread_store = {
-            let router_guard = runtime.router.lock().await;
-            router_guard.thread_store()
-        };
-        let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
-            runtime.bridge.as_ref(),
-            deferred_fanout.clone(),
-            thread_store,
-        );
-        let dispatch_callback = replay_subscription.callback();
-
-        let result = {
-            let mut router_guard = runtime.router.lock().await;
-            router_guard
-                .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
-                .await
-        };
+        let result = pipeline
+            .dispatch(request, response_callback, None, move |thread_id| {
+                if let Ok(mut holder) = holder_for_resolved.lock() {
+                    *holder = thread_id.to_owned();
+                }
+            })
+            .await;
 
         match result {
             Ok(result) => {
-                deferred_fanout.attach_thread(&result.thread_id).await;
-                if let Ok(mut holder) = thread_id_holder.lock() {
-                    *holder = result.thread_id.clone();
-                }
                 let local_reply = result.local_reply;
-                if local_reply.is_some() {
-                    replay_subscription.abort();
-                } else {
-                    replay_subscription.detach();
-                }
                 if let Some(local_reply) = local_reply {
                     let token = if message.context_token.trim().is_empty() {
                         get_context_token_for_thread(
@@ -4321,7 +4280,10 @@ impl WeixinChannel {
                     }
                 }
             }
-            Err(error) => {
+            Err(crate::inbound::InboundDispatchFailure::CommittedReplay(error)) => {
+                tracing::error!(run_id = %run_id_for_log, error = %error, "committed replay bus missing for Weixin dispatch");
+            }
+            Err(crate::inbound::InboundDispatchFailure::Dispatch(error)) => {
                 let token = if message.context_token.trim().is_empty() {
                     get_context_token_for_thread(
                         &runtime.account_id,
