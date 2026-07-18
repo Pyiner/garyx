@@ -290,7 +290,7 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
 
     public mutating func recordServerAcknowledgement() {
         evidence = .serverAcknowledged
-        if userDisposition == .none {
+        if userDisposition == .none, phase != .terminalEvidence {
             phase = .acknowledged
         }
         envelope = nil
@@ -1192,9 +1192,18 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
                         ? .closePendingAckConverted
                         : .finalizerTerminated
                 )
-                sessions.removeValue(forKey: session.key)
+                // Retain only the payload-free retired membership until the
+                // resource component runs. Its composerKey is the stable seed
+                // needed to retire this Entry's alias path without deleting a
+                // different Entry that happens to fan in to the same target.
+                sessions[session.key] = GaryxSessionDescendant(
+                    key: session.key,
+                    composerKey: session.composerKey,
+                    phase: .retired,
+                    finalSequence: session.finalSequence
+                )
             case .retired:
-                sessions.removeValue(forKey: session.key)
+                continue
             }
         }
     }

@@ -284,6 +284,380 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         XCTAssertEqual(restored.reservedBytes, 0)
     }
 
+    func testPendingReplacementAbortSettlesLiveAssetOwnerAcrossRelaunch() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let staging = try GaryxComposerStagedAssetStore(
+            applicationSupportDirectory: fixture.applicationSupport,
+            durability: store,
+            quotaLimitBytes: 1_024
+        )
+        var entry = makeEntry(text: "keep pending replacement siblings")
+        let key = operationKey("pending-replacement-owner")
+        let assetID = GaryxStagedAssetID(rawValue: "pending-replacement.bin")
+        let operation = makeOperation(
+            key: key,
+            entry: entry,
+            state: .failedRetryable,
+            assetID: assetID,
+            reservedBytes: 31,
+            attempted: true
+        )
+        entry.addOperation(key)
+        let replacement = GaryxReplacementRecord(
+            id: .init(rawValue: "pending-replacement"),
+            scope: scope,
+            entryID: entryID,
+            oldKey: key,
+            reservationID: nil,
+            branch: .followup,
+            stagedAssetID: assetID,
+            reservedBytes: 31
+        )
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "seed pending replacement with live owner",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertOperation(operation),
+                    .upsertManifest(
+                        .init(
+                            key: key,
+                            stagedPath: assetID.rawValue,
+                            state: .failedRetryable,
+                            uploadAttempted: true
+                        )
+                    ),
+                    .upsertReplacement(replacement),
+                    .reserveStagedAsset(assetID: assetID, owner: key, bytes: 31),
+                ]
+            )
+        )
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            staging: staging,
+            scopes: scopeRegistry(.active)
+        ).recover()
+        let relaunched = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL
+        )
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: relaunched,
+            staging: staging,
+            scopes: scopeRegistry(.active)
+        ).recover()
+        let restored = try await relaunched.load()
+        XCTAssertEqual(
+            restored.payloadStore.entry(entryID, scope: scope)?.currentText,
+            "keep pending replacement siblings"
+        )
+        XCTAssertFalse(
+            try XCTUnwrap(restored.payloadStore.entry(entryID, scope: scope))
+                .operationKeys.contains(key)
+        )
+        XCTAssertNil(restored.operations[key])
+        XCTAssertNil(restored.manifests[key])
+        XCTAssertNil(restored.replacements[replacement.id])
+        XCTAssertTrue(restored.stagedAssetOwners.isEmpty)
+        XCTAssertTrue(restored.pendingFileCleanup.isEmpty)
+        XCTAssertEqual(restored.reservedBytes, 0)
+    }
+
+    func testPendingReplacementAbortPreservesOldOperationWhenProvisionalAssetIsUnowned() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let staging = try GaryxComposerStagedAssetStore(
+            applicationSupportDirectory: fixture.applicationSupport,
+            durability: store,
+            quotaLimitBytes: 1_024
+        )
+        var entry = makeEntry(text: "keep original retry")
+        let key = operationKey("pending-replacement-original")
+        let originalAssetID = GaryxStagedAssetID(rawValue: "original-retry.bin")
+        let provisionalAssetID = GaryxStagedAssetID(rawValue: "new-provisional.bin")
+        let operation = makeOperation(
+            key: key,
+            entry: entry,
+            state: .failedRetryable,
+            assetID: originalAssetID,
+            reservedBytes: 29,
+            attempted: true
+        )
+        entry.addOperation(key)
+        let replacement = GaryxReplacementRecord(
+            id: .init(rawValue: "unowned-pending-replacement"),
+            scope: scope,
+            entryID: entryID,
+            oldKey: key,
+            reservationID: nil,
+            branch: .followup,
+            stagedAssetID: provisionalAssetID,
+            reservedBytes: 31
+        )
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "seed unowned pending replacement provisional",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertOperation(operation),
+                    .upsertManifest(
+                        .init(
+                            key: key,
+                            stagedPath: originalAssetID.rawValue,
+                            state: .failedRetryable,
+                            uploadAttempted: true
+                        )
+                    ),
+                    .upsertReplacement(replacement),
+                    .reserveStagedAsset(assetID: originalAssetID, owner: key, bytes: 29),
+                ]
+            )
+        )
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            staging: staging,
+            scopes: scopeRegistry(.active)
+        ).recover()
+        let restored = try await store.load()
+        XCTAssertEqual(restored.operations[key], operation)
+        XCTAssertNotNil(restored.manifests[key])
+        XCTAssertEqual(restored.stagedAssetOwners[originalAssetID], key)
+        XCTAssertEqual(restored.reservedBytes, 29)
+        XCTAssertNil(restored.replacements[replacement.id])
+        XCTAssertTrue(restored.pendingFileCleanup.isEmpty)
+    }
+
+    func testCommittedReplacementRevocationDelegatesToRetryableSuccessorAndPreservesSiblings() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let staging = try GaryxComposerStagedAssetStore(
+            applicationSupportDirectory: fixture.applicationSupport,
+            durability: store,
+            quotaLimitBytes: 1_024
+        )
+        var entry = makeEntry(text: "keep mixed replacement siblings")
+        let siblingAttachmentID = GaryxAttachmentID(rawValue: "replacement-sibling")
+        entry.addAttachment(
+            .init(
+                id: siblingAttachmentID,
+                stagedAssetID: .init(rawValue: "replacement-sibling.bin"),
+                generation: entry.currentGeneration,
+                byteCount: 9
+            )
+        )
+        let oldKey = operationKey("replacement-old")
+        let successorKey = operationKey("replacement-successor")
+        let assetID = GaryxStagedAssetID(rawValue: "replacement-successor.bin")
+        let old = makeOperation(
+            key: oldKey,
+            entry: entry,
+            state: .superseded,
+            assetID: nil,
+            reservedBytes: 0,
+            attempted: true
+        )
+        let successor = makeOperation(
+            key: successorKey,
+            entry: entry,
+            state: .failedRetryable,
+            assetID: assetID,
+            reservedBytes: 37,
+            attempted: true
+        )
+        entry.addOperation(oldKey)
+        entry.addOperation(successorKey)
+        let feedbackID = GaryxFeedbackID(rawValue: "replacement-feedback")
+        let lineageID = GaryxAttachmentLineageID(rawValue: "replacement-lineage")
+        entry.addFeedbackReference(feedbackID)
+        let feedback = GaryxOperationFeedback(
+            id: feedbackID,
+            scope: scope,
+            entryID: entryID,
+            operationID: successorKey.operationID,
+            lineageID: lineageID,
+            kind: .uploadRetryable
+        )
+        let lineage = GaryxAttachmentLineageTombstone(
+            id: lineageID,
+            scope: scope,
+            entryID: entryID,
+            attachmentSlotID: siblingAttachmentID,
+            failedOperationID: successorKey.operationID,
+            feedbackID: feedbackID,
+            payloadLifecycle: .init(
+                token: entry.lifecycle.token,
+                revision: entry.lifecycle.revision
+            )
+        )
+        var replacement = GaryxReplacementRecord(
+            id: .init(rawValue: "committed-replacement"),
+            scope: scope,
+            entryID: entryID,
+            oldKey: oldKey,
+            reservationID: nil,
+            branch: .followup,
+            stagedAssetID: assetID,
+            reservedBytes: 37
+        )
+        replacement.commit(newKey: successorKey)
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "seed committed replacement for revoked mixed state",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertOperation(old),
+                    .upsertOperation(successor),
+                    .upsertManifest(
+                        .init(
+                            key: oldKey,
+                            stagedPath: "transferred",
+                            state: .superseded,
+                            uploadAttempted: true
+                        )
+                    ),
+                    .upsertManifest(
+                        .init(
+                            key: successorKey,
+                            stagedPath: assetID.rawValue,
+                            state: .failedRetryable,
+                            uploadAttempted: true
+                        )
+                    ),
+                    .upsertReplacement(replacement),
+                    .upsertFeedback(feedback),
+                    .upsertAttachmentLineage(lineage),
+                    .reserveStagedAsset(assetID: assetID, owner: successorKey, bytes: 37),
+                ]
+            )
+        )
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            staging: staging,
+            scopes: scopeRegistry(.revoked)
+        ).recover()
+        let relaunched = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL
+        )
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: relaunched,
+            staging: staging,
+            scopes: scopeRegistry(.revoked)
+        ).recover()
+        let restored = try await relaunched.load()
+        let survivingEntry = try XCTUnwrap(restored.payloadStore.entry(entryID, scope: scope))
+        XCTAssertEqual(survivingEntry.currentText, "keep mixed replacement siblings")
+        XCTAssertNotNil(survivingEntry.attachments[siblingAttachmentID])
+        XCTAssertTrue(survivingEntry.operationKeys.isEmpty)
+        XCTAssertTrue(survivingEntry.feedbackReferences.isEmpty)
+        XCTAssertTrue(restored.operations.isEmpty)
+        XCTAssertTrue(restored.manifests.isEmpty)
+        XCTAssertTrue(restored.replacements.isEmpty)
+        XCTAssertTrue(restored.feedback.isEmpty)
+        XCTAssertTrue(restored.attachmentLineages.isEmpty)
+        XCTAssertTrue(restored.stagedAssetOwners.isEmpty)
+        XCTAssertTrue(restored.pendingFileCleanup.isEmpty)
+        XCTAssertEqual(restored.reservedBytes, 0)
+    }
+
+    func testRevokedEntryAtomicallyClearsReplacementFeedbackAndLineageFamilies() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let staging = try GaryxComposerStagedAssetStore(
+            applicationSupportDirectory: fixture.applicationSupport,
+            durability: store,
+            quotaLimitBytes: 1_024
+        )
+        var entry = makeEntry(text: "erase revoked payload")
+        let key = operationKey("revoked-family-owner")
+        let assetID = GaryxStagedAssetID(rawValue: "revoked-family.bin")
+        let operation = makeOperation(
+            key: key,
+            entry: entry,
+            state: .requested,
+            assetID: assetID,
+            reservedBytes: 41,
+            attempted: false
+        )
+        entry.addOperation(key)
+        let feedbackID = GaryxFeedbackID(rawValue: "revoked-family-feedback")
+        let lineageID = GaryxAttachmentLineageID(rawValue: "revoked-family-lineage")
+        entry.addFeedbackReference(feedbackID)
+        let feedback = GaryxOperationFeedback(
+            id: feedbackID,
+            scope: scope,
+            entryID: entryID,
+            operationID: key.operationID,
+            lineageID: lineageID,
+            kind: .uploadRetryable
+        )
+        let lineage = GaryxAttachmentLineageTombstone(
+            id: lineageID,
+            scope: scope,
+            entryID: entryID,
+            attachmentSlotID: .init(rawValue: "revoked-family-slot"),
+            failedOperationID: key.operationID,
+            feedbackID: feedbackID,
+            payloadLifecycle: .init(
+                token: entry.lifecycle.token,
+                revision: entry.lifecycle.revision
+            )
+        )
+        let replacement = GaryxReplacementRecord(
+            id: .init(rawValue: "revoked-family-replacement"),
+            scope: scope,
+            entryID: entryID,
+            oldKey: key,
+            reservationID: nil,
+            branch: .followup,
+            stagedAssetID: assetID,
+            reservedBytes: 41
+        )
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "seed every revoked Entry record family",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertOperation(operation),
+                    .upsertManifest(
+                        .init(
+                            key: key,
+                            stagedPath: assetID.rawValue,
+                            state: .requested,
+                            uploadAttempted: false
+                        )
+                    ),
+                    .upsertReplacement(replacement),
+                    .upsertFeedback(feedback),
+                    .upsertAttachmentLineage(lineage),
+                    .reserveStagedAsset(assetID: assetID, owner: key, bytes: 41),
+                ]
+            )
+        )
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            staging: staging,
+            scopes: scopeRegistry(.revoked)
+        ).recover()
+        let restored = try await store.load()
+        XCTAssertNil(restored.payloadStore.entry(entryID, scope: scope))
+        XCTAssertTrue(restored.operations.isEmpty)
+        XCTAssertTrue(restored.manifests.isEmpty)
+        XCTAssertTrue(restored.replacements.isEmpty)
+        XCTAssertTrue(restored.feedback.isEmpty)
+        XCTAssertTrue(restored.attachmentLineages.isEmpty)
+        XCTAssertTrue(restored.stagedAssetOwners.isEmpty)
+        XCTAssertTrue(restored.pendingFileCleanup.isEmpty)
+        XCTAssertEqual(restored.reservedBytes, 0)
+    }
+
     func testDiscardSettlementUsesCurrentAcknowledgementInsteadOfCapturedDelivery() async throws {
         let fixture = try makeFixture()
         let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
@@ -374,6 +748,14 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         let restored = try await store.load()
         XCTAssertEqual(restored.deliveries[send.delivery.id]?.phase, .terminalEvidence)
         XCTAssertEqual(restored.deliveries[send.delivery.id]?.evidence, .serverAcknowledged)
+
+        try await gate.acknowledge(deliveryID: send.delivery.id)
+        let idempotentLateFrame = try await store.load()
+        XCTAssertEqual(idempotentLateFrame.deliveries[send.delivery.id]?.phase, .terminalEvidence)
+        XCTAssertEqual(
+            idempotentLateFrame.deliveries[send.delivery.id]?.evidence,
+            .serverAcknowledged
+        )
     }
 
     func testRecoveryFeedbackIdentityIncludesEntryIdentity() async throws {
@@ -477,9 +859,22 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             scope: scope,
             payloadLifecycle: .init(token: entry.lifecycle.token, revision: entry.lifecycle.revision)
         )
+        let sessionKey = GaryxSessionDescendantKey(
+            token: entry.lifecycle.token,
+            sessionID: .init(rawValue: "multi-hop-alias-session"),
+            epoch: 1
+        )
         let convergence = GaryxPayloadDiscardConvergence(
             lifecycle: entry.lifecycle,
-            barrier: barrier
+            barrier: barrier,
+            sessions: [
+                sessionKey: .init(
+                    key: sessionKey,
+                    composerKey: source,
+                    phase: .live,
+                    finalSequence: nil
+                ),
+            ]
         )
         var aliases = GaryxComposerAliasTable()
         XCTAssertEqual(
@@ -520,6 +915,86 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         let restored = try await store.load()
         XCTAssertEqual(restored.aliases.aliasCount, 0)
         XCTAssertTrue(restored.aliases.partitions[scope]?.isEmpty ?? true)
+    }
+
+    func testDiscardRetiresOnlyCapturedBranchAtAliasFanIn() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let discardedSource = GaryxComposerKey.draft("discarded-source")
+        let liveSource = GaryxComposerKey.draft("live-source")
+        let destination = GaryxComposerKey.thread("shared-destination")
+        var entry = makeEntry()
+        entry.promote(to: destination)
+        XCTAssertTrue(entry.beginDiscard(revision: 2))
+        let barrier = GaryxSendCommitBarrier(
+            entryID: entryID,
+            scope: scope,
+            payloadLifecycle: .init(token: entry.lifecycle.token, revision: entry.lifecycle.revision)
+        )
+        let sessionKey = GaryxSessionDescendantKey(
+            token: entry.lifecycle.token,
+            sessionID: .init(rawValue: "discarded-source-session"),
+            epoch: 1
+        )
+        let convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: barrier,
+            sessions: [
+                sessionKey: .init(
+                    key: sessionKey,
+                    composerKey: discardedSource,
+                    phase: .live,
+                    finalSequence: nil
+                ),
+            ]
+        )
+        var aliases = GaryxComposerAliasTable()
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: discardedSource,
+                target: destination,
+                activeOrClosingSessions: 1
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: liveSource,
+                target: destination,
+                activeOrClosingSessions: 1
+            ),
+            .established
+        )
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "seed alias fan-in discard",
+                mutations: [
+                    .upsertEntry(entry),
+                    .replaceAliases(aliases),
+                    .upsertDiscardConvergence(convergence),
+                ]
+            )
+        )
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            scopes: scopeRegistry(.active)
+        ).recover()
+        let restored = try await store.load()
+        XCTAssertNil(restored.aliases.partitions[scope]?[discardedSource])
+        XCTAssertNotNil(restored.aliases.partitions[scope]?[liveSource])
+        XCTAssertEqual(restored.aliases.aliasCount, 1)
+        XCTAssertEqual(
+            restored.aliases.resolve(
+                liveSource,
+                scope: scope,
+                scopes: scopeRegistry(.active)
+            ),
+            .resolved(destination)
+        )
     }
 
     func testOwnerlessManifestRecoveryClearsEntryMembershipAtomically() async throws {

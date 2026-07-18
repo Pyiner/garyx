@@ -464,19 +464,35 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         var mutations: [GaryxComposerDurabilityMutation] = []
         var newlyCondemned: Set<GaryxStagedAssetID> = []
 
+        func appendAssetCleanup(
+            assetID: GaryxStagedAssetID,
+            owner: GaryxOperationCapabilityKey
+        ) {
+            if snapshot.pendingFileCleanup[assetID] == nil,
+               newlyCondemned.insert(assetID).inserted {
+                mutations.append(.registerFileCleanup(assetID: assetID, owner: owner))
+            }
+            if snapshot.stagedAssetOwners[assetID] != nil {
+                mutations.append(.releaseStagedAsset(assetID))
+            }
+        }
+
         for key in keys {
             if let assetID = snapshot.operations[key]?.stagedAssetID {
-                if snapshot.pendingFileCleanup[assetID] == nil,
-                   newlyCondemned.insert(assetID).inserted {
-                    mutations.append(.registerFileCleanup(assetID: assetID, owner: key))
-                }
-                if snapshot.stagedAssetOwners[assetID] != nil {
-                    mutations.append(.releaseStagedAsset(assetID))
-                }
+                appendAssetCleanup(assetID: assetID, owner: key)
             }
             entry.removeOperation(key)
             mutations.append(.removeManifest(key))
             mutations.append(.removeOperation(key))
+        }
+
+        for replacement in snapshot.replacements.values where
+            replacement.scope == scope && replacement.entryID == entryID {
+            let owner = snapshot.stagedAssetOwners[replacement.stagedAssetID]
+                ?? replacement.newKey
+                ?? replacement.oldKey
+            appendAssetCleanup(assetID: replacement.stagedAssetID, owner: owner)
+            mutations.append(.removeReplacement(replacement.id))
         }
 
         let removedFeedback = snapshot.feedback.values.filter {
@@ -512,10 +528,10 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         Set(snapshot.operations.keys).union(snapshot.manifests.keys).contains { key in
             guard key.scope == scope, key.entryID == entryID else { return false }
             switch snapshot.manifests[key]?.state ?? snapshot.operations[key]?.state {
-            case .cancelled, .failedRetryable:
+            case .cancelled, .failedRetryable, .superseded:
                 return false
             case .requested, .preparing, .uploading, .completed,
-                 .failedTerminal, .superseded, .none:
+                 .failedTerminal, .none:
                 return true
             }
         }
@@ -525,37 +541,36 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         let snapshot = try await durability.load()
         for record in snapshot.replacements.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             let lifecycle = scopes.lifecycle(of: record.scope)
+            if lifecycle == .revoked,
+               snapshot.payloadStore.entry(record.entryID, scope: record.scope) != nil {
+                if Self.revokedEntryRequiresPayloadErase(
+                    scope: record.scope,
+                    entryID: record.entryID,
+                    snapshot: snapshot
+                ) {
+                    try await cleanRevokedEntry(
+                        scope: record.scope,
+                        entryID: record.entryID,
+                        snapshot: snapshot
+                    )
+                } else {
+                    try await cleanRevokedOperationChildren(
+                        scope: record.scope,
+                        entryID: record.entryID,
+                        triggerKey: record.newKey ?? record.oldKey,
+                        snapshot: snapshot
+                    )
+                }
+                return true
+            }
             switch GaryxReplacementPlanner.recover(record) {
             case .restoreSuccessor(let key):
-                if lifecycle != .revoked, snapshot.operations[key] != nil {
+                if snapshot.operations[key] != nil {
                     continue
                 }
                 fallthrough
             case .abortReleaseQuotaAndDeleteProvisional:
-                var next = record
-                if next.phase == .pendingReplacement { next.abort() }
-                var mutations: [GaryxComposerDurabilityMutation] = [.upsertReplacement(next)]
-                let owner = snapshot.stagedAssetOwners[record.stagedAssetID]
-                    ?? record.newKey
-                    ?? record.oldKey
-                if snapshot.pendingFileCleanup[record.stagedAssetID] == nil {
-                    mutations.append(
-                        .registerFileCleanup(assetID: record.stagedAssetID, owner: owner)
-                    )
-                }
-                if snapshot.stagedAssetOwners[record.stagedAssetID] != nil {
-                    mutations.append(.releaseStagedAsset(record.stagedAssetID))
-                }
-                next.settle()
-                mutations.append(.upsertReplacement(next))
-                mutations.append(.removeReplacement(record.id))
-                _ = try await durability.commit(
-                    .init(
-                        expectedRevision: snapshot.revision,
-                        label: "abort replacement and retain physical cleanup proof",
-                        mutations: mutations
-                    )
-                )
+                try await abortReplacement(record, snapshot: snapshot)
                 return true
             case .garbageCollect:
                 _ = try await durability.commit(
@@ -569,6 +584,87 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             }
         }
         return false
+    }
+
+    /// Aborting a provisional replacement and condemning its file is one
+    /// terminal transaction. If the provisional asset is still represented by
+    /// a live operation owner, that owner and Entry membership must be settled
+    /// in the same commit; otherwise the cleanup tombstone would violate the
+    /// store's final-state invariant and brick every launch.
+    private func abortReplacement(
+        _ record: GaryxReplacementRecord,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) async throws {
+        let assetID = record.stagedAssetID
+        let stagedOwner = snapshot.stagedAssetOwners[assetID]
+        let cleanupOwner = snapshot.pendingFileCleanup[assetID]
+            ?? Self.replacementCleanupOwner(record, snapshot: snapshot)
+        var next = record
+        if next.phase == .pendingReplacement { next.abort() }
+        next.settle()
+        var mutations: [GaryxComposerDurabilityMutation] = [.upsertReplacement(next)]
+
+        if snapshot.pendingFileCleanup[assetID] == nil {
+            mutations.append(.registerFileCleanup(assetID: assetID, owner: cleanupOwner))
+        }
+        if stagedOwner != nil {
+            mutations.append(.releaseStagedAsset(assetID))
+        }
+        if let stagedOwner,
+           let original = snapshot.operations[stagedOwner],
+           original.stagedAssetID == assetID {
+            guard var entry = snapshot.payloadStore.entry(
+                stagedOwner.entryID,
+                scope: stagedOwner.scope
+            ) else {
+                throw GaryxComposerDurabilityRecoveryError.operationEntryMissing(stagedOwner)
+            }
+            var settled = original
+            settled.settleIdentityDiscard()
+            entry.removeOperation(stagedOwner)
+            mutations.append(.upsertOperation(settled))
+            mutations.append(.removeManifest(stagedOwner))
+            mutations.append(.removeOperation(stagedOwner))
+            mutations.append(.upsertEntry(entry))
+        }
+        mutations.append(.removeReplacement(record.id))
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "abort replacement and settle provisional owner atomically",
+                mutations: mutations
+            )
+        )
+    }
+
+    private static func replacementCleanupOwner(
+        _ record: GaryxReplacementRecord,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) -> GaryxOperationCapabilityKey {
+        if let owner = snapshot.stagedAssetOwners[record.stagedAssetID] {
+            return owner
+        }
+        if let newKey = record.newKey, snapshot.operations[newKey] == nil {
+            return newKey
+        }
+        if snapshot.operations[record.oldKey] == nil {
+            return record.oldKey
+        }
+        var discriminator = 0
+        while true {
+            let candidate = GaryxOperationCapabilityKey(
+                scope: record.oldKey.scope,
+                entryID: record.oldKey.entryID,
+                generation: record.oldKey.generation,
+                reservationID: record.oldKey.reservationID,
+                branch: record.oldKey.branch,
+                operationID: GaryxOperationID(
+                    rawValue: "replacement-cleanup-\(record.id.rawValue)-\(discriminator)"
+                )
+            )
+            if snapshot.operations[candidate] == nil { return candidate }
+            discriminator += 1
+        }
     }
 
     private func recoverOneDiscardStep() async throws -> Bool {
@@ -667,8 +763,14 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             if let destination = snapshot.payloadStore
                 .entry(entryID, scope: convergence.barrier.scope)?.destination {
                 var aliases = snapshot.aliases
-                _ = aliases.retireConnectedLineage(
-                    containing: destination,
+                let lineageSources = Set(convergence.sessions.values.compactMap { session in
+                    session.key.token == convergence.lifecycle.token
+                        ? session.composerKey
+                        : nil
+                })
+                _ = aliases.retireLineage(
+                    startingAt: lineageSources,
+                    endingAt: destination,
                     scope: convergence.barrier.scope
                 )
                 if aliases != snapshot.aliases {

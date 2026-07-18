@@ -1397,6 +1397,125 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(unchanged, initial)
     }
 
+    func testDeliveryUpsertRejectsEnvelopeResurrection() async throws {
+        let ledger = makeLedger(outcome: .committed)
+        let original = makeDelivery()
+        var settled = original
+        settled.settleForDiscard()
+        let resurrected = try mutateDeliveryJSON(settled) { object in
+            object["envelope"] = try encodedJSONObject(original)["envelope"]
+        }
+        let initial = GaryxComposerDurabilitySnapshot(
+            ledgers: [ledger.key: ledger],
+            deliveries: [settled.id: settled]
+        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject delivery envelope resurrection",
+                    mutations: [.upsertDelivery(resurrected)]
+                )
+            )
+            XCTFail("a cleared send envelope must never be reconstructed")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("delivery phase or evidence regressed")
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, initial)
+    }
+
+    func testDeliveryDispositionAllowsOnlyPayloadDiscardedToScopeRevokedAdvance() async throws {
+        let ledger = makeLedger(outcome: .committed)
+        var discarded = makeDelivery()
+        discarded.settleForDiscard()
+        var revoked = discarded
+        revoked.settleForScopeRevoke()
+        let initial = GaryxComposerDurabilitySnapshot(
+            ledgers: [ledger.key: ledger],
+            deliveries: [discarded.id: discarded]
+        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let advanced = try await fake.commit(
+            .init(
+                expectedRevision: 0,
+                label: "advance discard disposition to scope revoke",
+                mutations: [.upsertDelivery(revoked)]
+            )
+        )
+        XCTAssertEqual(
+            advanced.deliveries[revoked.id]?.userDisposition,
+            .scopeRevoked
+        )
+
+        let regressed = try mutateDeliveryJSON(revoked) { object in
+            object["userDisposition"] = GaryxDeliveryUserDisposition.payloadDiscarded.rawValue
+        }
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: advanced.revision,
+                    label: "reject scope revoke disposition regression",
+                    mutations: [.upsertDelivery(regressed)]
+                )
+            )
+            XCTFail("scope-revoked disposition must not regress")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("delivery phase or evidence regressed")
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, advanced)
+    }
+
+    func testDeliveryUpsertRejectsDuplicateRecordIdentityRewrite() async throws {
+        let ledger = makeLedger(outcome: .committed)
+        var duplicate = makeDelivery()
+        XCTAssertTrue(duplicate.markTransportAttempted())
+        XCTAssertTrue(duplicate.markAmbiguous())
+        XCTAssertNotNil(
+            duplicate.resendAsDuplicate(
+                newRecordID: .init(rawValue: "duplicate-record"),
+                newClientIntentID: "duplicate-intent"
+            )
+        )
+        let rewritten = try mutateDeliveryJSON(duplicate) { object in
+            object["duplicateRecordID"] = try encodedJSONValue(
+                GaryxDeliveryRecordID(rawValue: "different-duplicate-record")
+            )
+        }
+        let initial = GaryxComposerDurabilitySnapshot(
+            ledgers: [ledger.key: ledger],
+            deliveries: [duplicate.id: duplicate]
+        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject duplicate delivery identity rewrite",
+                    mutations: [.upsertDelivery(rewritten)]
+                )
+            )
+            XCTFail("duplicate delivery identity must be immutable once assigned")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("delivery phase or evidence regressed")
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, initial)
+    }
+
     func testFailedTerminalFeedbackEntryReferenceAndOperationAreAtomic() async throws {
         var entry = makeEntry()
         let feedback = makeFeedback()
@@ -2132,5 +2251,27 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             stagedAssetIDs: [GaryxStagedAssetID(rawValue: "asset")],
             reservedBytes: 100
         )
+    }
+
+    private func mutateDeliveryJSON(
+        _ record: GaryxDeliveryRecord,
+        mutation: (inout [String: Any]) throws -> Void
+    ) throws -> GaryxDeliveryRecord {
+        var object = try encodedJSONObject(record)
+        try mutation(&object)
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return try JSONDecoder().decode(GaryxDeliveryRecord.self, from: data)
+    }
+
+    private func encodedJSONObject<T: Encodable>(_ value: T) throws -> [String: Any] {
+        let encoded = try JSONEncoder().encode(value)
+        return try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+    }
+
+    private func encodedJSONValue<T: Encodable>(_ value: T) throws -> Any {
+        let encoded = try JSONEncoder().encode(value)
+        return try JSONSerialization.jsonObject(with: encoded, options: [.fragmentsAllowed])
     }
 }
