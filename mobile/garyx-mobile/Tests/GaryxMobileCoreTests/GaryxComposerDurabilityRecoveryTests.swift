@@ -891,7 +891,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                 scope: scope,
                 source: intermediate,
                 target: destination,
-                pendingCloseAcknowledgements: 1
+                activeOrClosingSessions: 1
             ),
             .established
         )
@@ -995,6 +995,114 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             ),
             .resolved(destination)
         )
+    }
+
+    func testDiscardDecrementsSharedAliasSuffixWithoutBreakingSiblingAcrossRelaunches() async throws {
+        let fixture = try makeFixture()
+        let discardedSource = GaryxComposerKey.draft("discarded-shared-suffix-source")
+        let liveSource = GaryxComposerKey.draft("live-shared-suffix-source")
+        let sharedIntermediate = GaryxComposerKey.thread("shared-suffix-intermediate")
+        let destination = GaryxComposerKey.thread("shared-suffix-destination")
+        var entry = makeEntry()
+        entry.promote(to: destination)
+        XCTAssertTrue(entry.beginDiscard(revision: 2))
+        let barrier = GaryxSendCommitBarrier(
+            entryID: entryID,
+            scope: scope,
+            payloadLifecycle: .init(token: entry.lifecycle.token, revision: entry.lifecycle.revision)
+        )
+        let sessionKey = GaryxSessionDescendantKey(
+            token: entry.lifecycle.token,
+            sessionID: .init(rawValue: "discarded-shared-suffix-session"),
+            epoch: 1
+        )
+        let convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: barrier,
+            sessions: [
+                sessionKey: .init(
+                    key: sessionKey,
+                    composerKey: discardedSource,
+                    phase: .live,
+                    finalSequence: nil
+                ),
+            ]
+        )
+        var aliases = GaryxComposerAliasTable()
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: discardedSource,
+                target: sharedIntermediate,
+                activeOrClosingSessions: 1
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: liveSource,
+                target: sharedIntermediate,
+                activeOrClosingSessions: 1
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: sharedIntermediate,
+                target: destination,
+                activeOrClosingSessions: 2
+            ),
+            .established
+        )
+        do {
+            let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+            _ = try await store.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "seed alias shared-suffix discard",
+                    mutations: [
+                        .upsertEntry(entry),
+                        .replaceAliases(aliases),
+                        .upsertDiscardConvergence(convergence),
+                    ]
+                )
+            )
+        }
+
+        for relaunch in 1...2 {
+            let relaunchedStore = try GaryxSQLiteComposerDurabilityStore(
+                databaseURL: fixture.databaseURL
+            )
+            _ = try await GaryxComposerDurabilityLaunchRecovery(
+                durability: relaunchedStore,
+                scopes: scopeRegistry(.active)
+            ).recover()
+            let restored = try await relaunchedStore.load()
+            XCTAssertNil(
+                restored.aliases.partitions[scope]?[discardedSource],
+                "discarded source survived relaunch \(relaunch)"
+            )
+            XCTAssertEqual(
+                restored.aliases.partitions[scope]?[liveSource]?.activeOrClosingSessions,
+                1
+            )
+            XCTAssertEqual(
+                restored.aliases.partitions[scope]?[sharedIntermediate]?
+                    .activeOrClosingSessions,
+                1,
+                "shared suffix lost the live sibling reference on relaunch \(relaunch)"
+            )
+            XCTAssertEqual(
+                restored.aliases.resolve(
+                    liveSource,
+                    scope: scope,
+                    scopes: scopeRegistry(.active)
+                ),
+                .resolved(destination)
+            )
+        }
     }
 
     func testOwnerlessManifestRecoveryClearsEntryMembershipAtomically() async throws {

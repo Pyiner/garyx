@@ -903,6 +903,124 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         XCTAssertLessThanOrEqual(aliases.estimatedBytes, 64 * 1024)
     }
 
+    func testAliasLineageReleaseDecrementsEverySharedSuffixOccupancyCounter() {
+        let discardedSource = GaryxComposerKey.draft("discarded")
+        let liveSource = GaryxComposerKey.draft("live")
+        let sharedIntermediate = GaryxComposerKey.thread("shared")
+        let destination = GaryxComposerKey.thread("destination")
+        var aliases = GaryxComposerAliasTable()
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: discardedSource,
+                target: sharedIntermediate,
+                activeOrClosingSessions: 1,
+                pendingCloseAcknowledgements: 1,
+                promotionsInFlight: 1
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: liveSource,
+                target: sharedIntermediate,
+                activeOrClosingSessions: 2
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: sharedIntermediate,
+                target: destination,
+                activeOrClosingSessions: 3,
+                pendingCloseAcknowledgements: 1,
+                promotionsInFlight: 1
+            ),
+            .established
+        )
+
+        XCTAssertEqual(
+            aliases.retireLineage(
+                startingAt: [discardedSource],
+                endingAt: destination,
+                scope: scope
+            ),
+            1
+        )
+        XCTAssertNil(aliases.partitions[scope]?[discardedSource])
+        XCTAssertEqual(
+            aliases.partitions[scope]?[sharedIntermediate]?.activeOrClosingSessions,
+            2
+        )
+        XCTAssertEqual(
+            aliases.partitions[scope]?[sharedIntermediate]?.pendingCloseAcknowledgements,
+            0
+        )
+        XCTAssertEqual(aliases.partitions[scope]?[sharedIntermediate]?.promotionsInFlight, 0)
+        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope)
+        XCTAssertEqual(
+            aliases.resolve(liveSource, scope: scope, scopes: scopes),
+            .resolved(destination)
+        )
+        XCTAssertTrue(aliases.invariantHolds)
+    }
+
+    func testAliasLineageReleaseCountsNestedCapturedOriginsOnlyOnce() {
+        let earliestSource = GaryxComposerKey.draft("earliest")
+        let liveSource = GaryxComposerKey.draft("live-nested")
+        let laterCapturedSource = GaryxComposerKey.thread("later-captured")
+        let destination = GaryxComposerKey.thread("nested-destination")
+        var aliases = GaryxComposerAliasTable()
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: earliestSource,
+                target: laterCapturedSource,
+                activeOrClosingSessions: 2
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: liveSource,
+                target: laterCapturedSource,
+                activeOrClosingSessions: 1
+            ),
+            .established
+        )
+        XCTAssertEqual(
+            aliases.establishPromotion(
+                scope: scope,
+                source: laterCapturedSource,
+                target: destination,
+                activeOrClosingSessions: 3
+            ),
+            .established
+        )
+
+        XCTAssertEqual(
+            aliases.retireLineage(
+                startingAt: [earliestSource, laterCapturedSource],
+                endingAt: destination,
+                scope: scope
+            ),
+            1
+        )
+        XCTAssertNil(aliases.partitions[scope]?[earliestSource])
+        XCTAssertEqual(
+            aliases.partitions[scope]?[laterCapturedSource]?.activeOrClosingSessions,
+            1
+        )
+        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope)
+        XCTAssertEqual(
+            aliases.resolve(liveSource, scope: scope, scopes: scopes),
+            .resolved(destination)
+        )
+    }
+
     private func makeState(
         text: String,
         session: String = "session",
