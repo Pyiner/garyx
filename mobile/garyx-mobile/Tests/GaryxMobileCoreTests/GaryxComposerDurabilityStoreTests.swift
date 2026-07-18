@@ -151,6 +151,43 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(committed.producerDrained.count, 1)
     }
 
+    func testProducerDrainedKeyMustMatchItsPayloadIdentity() async throws {
+        let ledger = makeLedger(outcome: nil)
+        let drained = makeDurableProducerDrained(reservationID: reservation)
+        let mismatched = GaryxDurableProducerDrainedRecord(
+            scope: drained.value.scope,
+            entryID: drained.value.entryID,
+            reservationID: drained.value.reservationID,
+            record: .init(
+                sessionID: .init(rawValue: "different-session"),
+                epoch: drained.key.epoch,
+                finalSequence: drained.value.record.finalSequence,
+                bufferedText: drained.value.record.bufferedText
+            )
+        )
+        let fake = GaryxFakeComposerDurabilityStore()
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "reject mismatched producerDrained identity",
+                    mutations: [
+                        .upsertLedger(ledger),
+                        .upsertProducerDrained(drained.key, mismatched),
+                    ]
+                )
+            )
+            XCTFail("producerDrained key must match its payload identity")
+        } catch let error as GaryxComposerDurabilityError {
+            guard case .invariantViolation = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, GaryxComposerDurabilitySnapshot())
+    }
+
     func testSyntheticReservationRecoveryExecutesAllFiveStepsAtomically() async throws {
         var entry = makeEntry(text: "T")
         entry.setText("U", generation: 11)
@@ -1879,34 +1916,94 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         var delivery = makeDelivery()
         XCTAssertTrue(delivery.markTransportAttempted())
         delivery.recordServerAcknowledgement()
+        let nonTerminal = GaryxDeliveryRecord(
+            id: .init(rawValue: "non-terminal-delivery"),
+            scope: scope,
+            entryID: entryID,
+            reservationID: reservation,
+            correlationID: "non-terminal-correlation",
+            envelope: makeEnvelope(text: "still pending")
+        )
         let ledger = makeLedger(outcome: .committed)
         let expectedBytes = try XCTUnwrap(delivery.persistentTombstoneEstimatedBytes)
             + convergence.persistentTombstoneBytes
 
-        let insufficient = GaryxComposerDurabilitySnapshot(
+        let compacting = GaryxComposerDurabilitySnapshot(
             ledgers: [ledger.key: ledger],
             tombstoneBudget: .init(countLimit: 1, byteLimit: expectedBytes)
         )
-        let rejected = GaryxFakeComposerDurabilityStore(initial: insufficient)
+        let compactedStore = GaryxFakeComposerDurabilityStore(initial: compacting)
+        let compacted = try await compactedStore.commit(
+            .init(
+                expectedRevision: 0,
+                label: "compact correlation for finalization tombstone",
+                mutations: [
+                    .upsertDelivery(delivery),
+                    .upsertDelivery(nonTerminal),
+                    .upsertDiscardConvergence(convergence),
+                ]
+            )
+        )
+        XCTAssertNil(compacted.deliveries[delivery.id])
+        XCTAssertEqual(compacted.deliveries[nonTerminal.id], nonTerminal)
+        XCTAssertEqual(compacted.discardConvergence[entryID], convergence)
+        XCTAssertEqual(
+            compacted.persistentTombstoneUsage,
+            .init(
+                discardFinalizationCount: 1,
+                discardFinalizationBytes: convergence.persistentTombstoneBytes
+            )
+        )
+
+        let byteCompacting = GaryxComposerDurabilitySnapshot(
+            ledgers: [ledger.key: ledger],
+            tombstoneBudget: .init(
+                countLimit: 2,
+                byteLimit: convergence.persistentTombstoneBytes
+            )
+        )
+        let byteCompactedStore = GaryxFakeComposerDurabilityStore(initial: byteCompacting)
+        let byteCompacted = try await byteCompactedStore.commit(
+            .init(
+                expectedRevision: 0,
+                label: "compact correlation for tombstone byte budget",
+                mutations: [
+                    .upsertDelivery(delivery),
+                    .upsertDiscardConvergence(convergence),
+                ]
+            )
+        )
+        XCTAssertNil(byteCompacted.deliveries[delivery.id])
+        XCTAssertEqual(byteCompacted.discardConvergence[entryID], convergence)
+        XCTAssertEqual(
+            byteCompacted.persistentTombstoneUsage,
+            .init(
+                discardFinalizationCount: 1,
+                discardFinalizationBytes: convergence.persistentTombstoneBytes
+            )
+        )
+
+        let finalizationOnlyOverBudget = GaryxComposerDurabilitySnapshot(
+            ledgers: [ledger.key: ledger],
+            tombstoneBudget: .init(countLimit: 0, byteLimit: expectedBytes)
+        )
+        let rejected = GaryxFakeComposerDurabilityStore(initial: finalizationOnlyOverBudget)
         do {
             _ = try await rejected.commit(
                 .init(
                     expectedRevision: 0,
-                    label: "over tombstone pool budget",
-                    mutations: [
-                        .upsertDelivery(delivery),
-                        .upsertDiscardConvergence(convergence),
-                    ]
+                    label: "unprunable finalization tombstone over budget",
+                    mutations: [.upsertDiscardConvergence(convergence)]
                 )
             )
-            XCTFail("shared tombstone pool must fail closed")
+            XCTFail("discard finalization tombstones must never be silently evicted")
         } catch let error as GaryxComposerDurabilityError {
             guard case .invariantViolation = error else {
                 return XCTFail("unexpected error \(error)")
             }
         }
         let unchanged = try await rejected.load()
-        XCTAssertEqual(unchanged, insufficient)
+        XCTAssertEqual(unchanged, finalizationOnlyOverBudget)
 
         let admitted = GaryxFakeComposerDurabilityStore(
             initial: GaryxComposerDurabilitySnapshot(

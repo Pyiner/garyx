@@ -98,6 +98,8 @@ private enum GaryxComposerDurabilityCrashHarness {
                 try await seedDiscardSessions(store: store)
             case "seed-discard-mixed":
                 try await seedDiscardMixed(store: store)
+            case "seed-correlation-capacity-discard":
+                try await seedCorrelationCapacityDiscard(store: store)
             case "stage":
                 let staging = try makeStaging(
                     arguments: arguments,
@@ -126,6 +128,13 @@ private enum GaryxComposerDurabilityCrashHarness {
                 try printSummary(snapshot: try await store.load(), report: report)
             case "inspect":
                 try printSummary(snapshot: try await store.load(), report: nil)
+            case "recover-correlation-capacity":
+                let recovery = GaryxComposerDurabilityLaunchRecovery(
+                    durability: store,
+                    scopes: scopeRegistry("active")
+                )
+                _ = try await recovery.recover()
+                try printCorrelationCapacitySummary(snapshot: try await store.load())
             case "churn-discard":
                 let count = Int(arguments.optional("count") ?? "500") ?? 500
                 try await churnDiscard(
@@ -683,6 +692,17 @@ private enum GaryxComposerDurabilityCrashHarness {
         ) == .established else {
             throw HarnessError.actionRejected("seed session alias")
         }
+        let producerDrained = GaryxDurableProducerDrainedRecord(
+            scope: scope,
+            entryID: localEntryID,
+            reservationID: nil,
+            record: .init(
+                sessionID: first.key.sessionID,
+                epoch: first.key.epoch,
+                finalSequence: 4,
+                bufferedText: "discarded-drain-buffer-\(suffix)"
+            )
+        )
         _ = try await store.commit(
             .init(
                 expectedRevision: snapshot.revision,
@@ -690,6 +710,7 @@ private enum GaryxComposerDurabilityCrashHarness {
                 mutations: [
                     .replaceAliases(aliases),
                     .upsertEntry(entry),
+                    .upsertProducerDrained(first.key, producerDrained),
                     .upsertDiscardConvergence(convergence),
                 ]
             )
@@ -856,6 +877,92 @@ private enum GaryxComposerDurabilityCrashHarness {
         )
     }
 
+    private static func seedCorrelationCapacityDiscard(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let historicalEntryID = GaryxComposerPayloadEntryID(
+            rawValue: "crash-correlation-history"
+        )
+        let historicalReservationID = GaryxSendReservationID(rawValue: 8)
+        var historicalLedger = GaryxProvisionalReservationLedger(
+            key: .init(
+                scope: scope,
+                entryID: historicalEntryID,
+                reservationID: historicalReservationID
+            ),
+            envelopeGeneration: 1,
+            followupGeneration: 2
+        )
+        var targetLedger = GaryxProvisionalReservationLedger(
+            key: .init(scope: scope, entryID: entryID, reservationID: reservationID),
+            envelopeGeneration: 10,
+            followupGeneration: 11
+        )
+        guard historicalLedger.settle(.committed, targetGeneration: 2),
+              targetLedger.settle(.committed, targetGeneration: 11) else {
+            throw HarnessError.actionRejected("seed correlation capacity ledgers")
+        }
+
+        var entry = makeEntry(text: "discard-at-correlation-capacity")
+        guard entry.beginDiscard(revision: 2) else {
+            throw HarnessError.actionRejected("seed correlation capacity discard")
+        }
+        let historicalEnvelope = GaryxDeliveryEnvelope(
+            text: "historical",
+            attachmentIDs: [],
+            generation: 1,
+            clientIntentID: "historical-capacity-intent"
+        )
+        var target = GaryxDeliveryRecord(
+            id: .init(rawValue: "zz-capacity-target"),
+            scope: scope,
+            entryID: entryID,
+            reservationID: reservationID,
+            correlationID: "capacity-target-correlation",
+            envelope: .init(
+                text: "target",
+                attachmentIDs: [],
+                generation: 10,
+                clientIntentID: "capacity-target-intent"
+            )
+        )
+        guard target.markTransportAttempted() else {
+            throw HarnessError.actionRejected("seed correlation capacity target")
+        }
+        let convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: makeBarrier(entry: entry),
+            deliveries: [target.id: target]
+        )
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .upsertLedger(historicalLedger),
+            .upsertLedger(targetLedger),
+            .upsertEntry(entry),
+        ]
+        mutations.reserveCapacity(GaryxPersistentTombstoneBudget().countLimit + 5)
+        for index in 0..<GaryxPersistentTombstoneBudget().countLimit {
+            var record = GaryxDeliveryRecord(
+                id: .init(rawValue: String(format: "historical-%04d", index)),
+                scope: scope,
+                entryID: historicalEntryID,
+                reservationID: historicalReservationID,
+                correlationID: String(format: "historical-correlation-%04d", index),
+                envelope: historicalEnvelope
+            )
+            record.recordServerAcknowledgement()
+            mutations.append(.upsertDelivery(record))
+        }
+        mutations.append(.upsertDelivery(target))
+        mutations.append(.upsertDiscardConvergence(convergence))
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "harness seed full correlation pool discard",
+                mutations: mutations
+            )
+        )
+    }
+
     private static func churnDiscard(
         count: Int,
         arguments: HarnessArguments,
@@ -1010,6 +1117,36 @@ private enum GaryxComposerDurabilityCrashHarness {
         FileHandle.standardOutput.write(try encoder.encode(summary))
         FileHandle.standardOutput.write(Data("\n".utf8))
     }
+
+    private static func printCorrelationCapacitySummary(
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) throws {
+        let summary = CorrelationCapacitySummary(snapshot: snapshot)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        FileHandle.standardOutput.write(try encoder.encode(summary))
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+}
+
+private struct CorrelationCapacitySummary: Codable {
+    let correlationTombstoneCount: Int
+    let oldestHistoricalPresent: Bool
+    let targetPhase: String?
+    let entryPresent: Bool
+    let discardCount: Int
+
+    init(snapshot: GaryxComposerDurabilitySnapshot) {
+        correlationTombstoneCount = snapshot.persistentTombstoneUsage.correlationCount
+        oldestHistoricalPresent = snapshot.deliveries[
+            .init(rawValue: "historical-0000")
+        ] != nil
+        targetPhase = snapshot.deliveries[
+            .init(rawValue: "zz-capacity-target")
+        ]?.phase.rawValue
+        entryPresent = snapshot.payloadStore.entry(entryID, scope: scope) != nil
+        discardCount = snapshot.discardConvergence.count
+    }
 }
 
 private struct HarnessSummary: Codable {
@@ -1030,6 +1167,9 @@ private struct HarnessSummary: Codable {
     let replacementCount: Int
     let feedbackCount: Int
     let attachmentLineageCount: Int
+    let producerDrainedCount: Int
+    let nonIdleBarrierCount: Int
+    let barrierPayloadFieldCount: Int
     let discardCount: Int
     let discardTombstoneCount: Int
     let reservedBytes: Int
@@ -1075,6 +1215,16 @@ private struct HarnessSummary: Codable {
         replacementCount = snapshot.replacements.count
         feedbackCount = snapshot.feedback.count
         attachmentLineageCount = snapshot.attachmentLineages.count
+        producerDrainedCount = snapshot.producerDrained.count
+        nonIdleBarrierCount = snapshot.barriers.values.filter { $0.phase != .idle }.count
+        barrierPayloadFieldCount = snapshot.barriers.values.reduce(0) { count, barrier in
+            count
+                + (barrier.envelopeText == nil ? 0 : 1)
+                + barrier.envelopeAttachmentIDs.count
+                + (barrier.envelopeClientIntentID == nil ? 0 : 1)
+                + (barrier.provisionalFollowupText.isEmpty ? 0 : 1)
+                + barrier.provisionalFollowupAttachmentIDs.count
+        }
         discardCount = snapshot.discardConvergence.count
         discardTombstoneCount = snapshot.discardConvergence.values.reduce(0) {
             $0 + $1.persistentTombstoneCount

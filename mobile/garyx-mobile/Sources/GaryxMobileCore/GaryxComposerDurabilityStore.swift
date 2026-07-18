@@ -896,6 +896,7 @@ enum GaryxComposerDurabilityTransactionEngine {
             try apply(mutation, to: &candidate)
             try afterApplyingMutation?(index)
         }
+        compactCorrelationTombstonesToBudget(in: &candidate)
         try validate(candidate)
         candidate.revision &+= 1
         return candidate
@@ -996,6 +997,11 @@ enum GaryxComposerDurabilityTransactionEngine {
             }
             state.ledgers[key] = ledger
         case .upsertProducerDrained(let key, let drained):
+            guard key.token.entryID == drained.entryID,
+                  key.sessionID == drained.record.sessionID,
+                  key.epoch == drained.record.epoch else {
+                throw invariant("producerDrained identity is inconsistent")
+            }
             try requireLedgerIfNeeded(
                 scope: drained.scope,
                 entryID: drained.entryID,
@@ -1204,6 +1210,42 @@ enum GaryxComposerDurabilityTransactionEngine {
             if lineage.phase == .released, !feedback.isTerminal {
                 throw invariant("released attachment lineage requires terminal feedback")
             }
+        }
+    }
+
+    /// Terminal delivery rows are bounded correlation evidence, not immortal
+    /// outbox entries. Every write deterministically evicts the oldest such
+    /// rows in the same transaction until the shared tombstone budget fits.
+    /// Non-terminal deliveries and discard-finalization tombstones are never
+    /// selected; if those records alone exceed the budget, validation remains
+    /// fail-closed.
+    private static func compactCorrelationTombstonesToBudget(
+        in state: inout GaryxComposerDurabilitySnapshot
+    ) {
+        var usage = state.persistentTombstoneUsage
+        guard !state.tombstoneBudget.admits(count: usage.count, bytes: usage.bytes) else {
+            return
+        }
+        let candidates = state.deliveries.values.compactMap { record -> (GaryxDeliveryRecord, Int)? in
+            guard let bytes = record.persistentTombstoneEstimatedBytes else { return nil }
+            return (record, bytes)
+        }.sorted { lhs, rhs in
+            if lhs.0.reservationID != rhs.0.reservationID {
+                return lhs.0.reservationID.rawValue < rhs.0.reservationID.rawValue
+            }
+            return lhs.0.id.rawValue < rhs.0.id.rawValue
+        }
+        for (record, bytes) in candidates {
+            guard !state.tombstoneBudget.admits(count: usage.count, bytes: usage.bytes) else {
+                break
+            }
+            state.deliveries.removeValue(forKey: record.id)
+            usage = GaryxPersistentTombstoneUsage(
+                correlationCount: usage.correlationCount - 1,
+                correlationBytes: usage.correlationBytes - bytes,
+                discardFinalizationCount: usage.discardFinalizationCount,
+                discardFinalizationBytes: usage.discardFinalizationBytes
+            )
         }
     }
 

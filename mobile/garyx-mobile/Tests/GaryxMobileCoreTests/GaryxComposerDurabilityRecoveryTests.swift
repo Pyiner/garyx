@@ -708,6 +708,198 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         )
     }
 
+    func testFullCorrelationPoolCannotBrickDiscardRecoveryAcrossRelaunches() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let historicalEntryID = GaryxComposerPayloadEntryID(rawValue: "correlation-history-entry")
+        let historicalReservationID = GaryxSendReservationID(rawValue: 8)
+        var historicalLedger = GaryxProvisionalReservationLedger(
+            key: .init(
+                scope: scope,
+                entryID: historicalEntryID,
+                reservationID: historicalReservationID
+            ),
+            envelopeGeneration: 1,
+            followupGeneration: 2
+        )
+        XCTAssertTrue(historicalLedger.settle(.committed, targetGeneration: 2))
+        var targetLedger = GaryxProvisionalReservationLedger(
+            key: .init(scope: scope, entryID: entryID, reservationID: reservationID),
+            envelopeGeneration: 10,
+            followupGeneration: 11
+        )
+        XCTAssertTrue(targetLedger.settle(.committed, targetGeneration: 11))
+
+        var entry = makeEntry(text: "discard-at-capacity")
+        XCTAssertTrue(entry.beginDiscard(revision: 2))
+        let barrier = GaryxSendCommitBarrier(
+            entryID: entryID,
+            scope: scope,
+            payloadLifecycle: .init(
+                token: entry.lifecycle.token,
+                revision: entry.lifecycle.revision
+            )
+        )
+        let targetEnvelope = GaryxDeliveryEnvelope(
+            text: "target",
+            attachmentIDs: [],
+            generation: 10,
+            clientIntentID: "target-intent"
+        )
+        var target = GaryxDeliveryRecord(
+            id: .init(rawValue: "zz-discard-target"),
+            scope: scope,
+            entryID: entryID,
+            reservationID: reservationID,
+            correlationID: "target-correlation",
+            envelope: targetEnvelope
+        )
+        XCTAssertTrue(target.markTransportAttempted())
+        let convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: barrier,
+            deliveries: [target.id: target]
+        )
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .upsertLedger(historicalLedger),
+            .upsertLedger(targetLedger),
+            .upsertEntry(entry),
+        ]
+        let historicalEnvelope = GaryxDeliveryEnvelope(
+            text: "historical",
+            attachmentIDs: [],
+            generation: 1,
+            clientIntentID: "historical-intent"
+        )
+        for index in 0..<GaryxPersistentTombstoneBudget().countLimit {
+            var record = GaryxDeliveryRecord(
+                id: .init(rawValue: String(format: "historical-%04d", index)),
+                scope: scope,
+                entryID: historicalEntryID,
+                reservationID: historicalReservationID,
+                correlationID: String(format: "historical-correlation-%04d", index),
+                envelope: historicalEnvelope
+            )
+            record.recordServerAcknowledgement()
+            mutations.append(.upsertDelivery(record))
+        }
+        mutations.append(.upsertDelivery(target))
+        mutations.append(.upsertDiscardConvergence(convergence))
+        let admitted = try await store.commit(
+            .init(expectedRevision: 0, label: "fill correlation pool", mutations: mutations)
+        )
+        XCTAssertEqual(
+            admitted.persistentTombstoneUsage.correlationCount,
+            GaryxPersistentTombstoneBudget().countLimit
+        )
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            scopes: scopeRegistry(.active)
+        ).recover()
+        for relaunch in 1...2 {
+            let relaunched = try GaryxSQLiteComposerDurabilityStore(
+                databaseURL: fixture.databaseURL
+            )
+            _ = try await GaryxComposerDurabilityLaunchRecovery(
+                durability: relaunched,
+                scopes: scopeRegistry(.active)
+            ).recover()
+            let restored = try await relaunched.load()
+            XCTAssertNil(
+                restored.deliveries[.init(rawValue: "historical-0000")],
+                "oldest correlation tombstone survived relaunch \(relaunch)"
+            )
+            XCTAssertEqual(restored.deliveries[target.id]?.phase, .evidence)
+            XCTAssertEqual(
+                restored.persistentTombstoneUsage.correlationCount,
+                restored.tombstoneBudget.countLimit
+            )
+            XCTAssertNil(restored.discardConvergence[entryID])
+        }
+    }
+
+    func testDiscardRemovesProducerAndRecoveredClosePayloadAcrossRelaunches() async throws {
+        let fixture = try makeFixture()
+        let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
+        let send = try makeCommitSend(includeProducerDrained: true)
+        var snapshot = try await store.commitSend(send)
+        let producerKey = try XCTUnwrap(snapshot.producerDrained.keys.first)
+        var entry = try XCTUnwrap(snapshot.payloadStore.entry(entryID, scope: scope))
+        XCTAssertTrue(entry.beginDiscard(revision: 2))
+
+        let closeReservationID = GaryxSendReservationID(rawValue: 10)
+        var closeLedger = GaryxProvisionalReservationLedger(
+            key: .init(
+                scope: scope,
+                entryID: entryID,
+                reservationID: closeReservationID
+            ),
+            envelopeGeneration: 11,
+            followupGeneration: 12
+        )
+        XCTAssertTrue(closeLedger.settle(.revoked, targetGeneration: 13))
+        let closeKey = GaryxSessionDescendantKey(
+            token: entry.lifecycle.token,
+            sessionID: .init(rawValue: "discarded-recovered-close"),
+            epoch: 2
+        )
+        let close = GaryxRecoveredInputCloseRecord(
+            key: closeKey,
+            scope: scope,
+            entryID: entryID,
+            reservationID: closeReservationID,
+            targetGeneration: 13,
+            finalSequence: 5,
+            finalText: "discarded-final-text"
+        )
+        let convergence = GaryxPayloadDiscardConvergence(
+            lifecycle: entry.lifecycle,
+            barrier: send.barrier,
+            deliveries: [send.delivery.id: send.delivery]
+        )
+        snapshot = try await store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "admit payload-bearing discard descendants",
+                mutations: [
+                    .upsertLedger(closeLedger),
+                    .upsertRecoveredInputClose(close),
+                    .upsertEntry(entry),
+                    .upsertDiscardConvergence(convergence),
+                ]
+            )
+        )
+        XCTAssertNotNil(snapshot.producerDrained[producerKey])
+        XCTAssertNotNil(snapshot.recoveredInputClosures[closeKey])
+
+        _ = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: store,
+            scopes: scopeRegistry(.active)
+        ).recover()
+        for _ in 0..<2 {
+            let relaunched = try GaryxSQLiteComposerDurabilityStore(
+                databaseURL: fixture.databaseURL
+            )
+            _ = try await GaryxComposerDurabilityLaunchRecovery(
+                durability: relaunched,
+                scopes: scopeRegistry(.active)
+            ).recover()
+            let restored = try await relaunched.load()
+            XCTAssertTrue(restored.producerDrained.isEmpty)
+            XCTAssertTrue(restored.recoveredInputClosures.isEmpty)
+            let restoredBarrier = try XCTUnwrap(restored.barriers[entryID])
+            XCTAssertEqual(restoredBarrier.phase, .idle)
+            XCTAssertNil(restoredBarrier.envelopeText)
+            XCTAssertTrue(restoredBarrier.envelopeAttachmentIDs.isEmpty)
+            XCTAssertNil(restoredBarrier.envelopeClientIntentID)
+            XCTAssertTrue(restoredBarrier.provisionalFollowupText.isEmpty)
+            XCTAssertTrue(restoredBarrier.provisionalFollowupAttachmentIDs.isEmpty)
+            XCTAssertNil(restored.payloadStore.entry(entryID, scope: scope))
+            XCTAssertNil(restored.discardConvergence[entryID])
+        }
+    }
+
     func testDiscardAdmissionWithOnlyAcknowledgedDeliveryStillPublishesTerminalEvidence() async throws {
         let fixture = try makeFixture()
         let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
@@ -1130,6 +1322,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             let destination: GaryxComposerKey
             let promotions: [PromotionSeed]
             let discardedSessionCount: Int
+            let preRetiredSessionCount: Int
         }
         let firstOrigin = GaryxComposerKey.draft("occupancy-only-origin")
         let intermediate = GaryxComposerKey.thread("occupancy-only-intermediate")
@@ -1154,7 +1347,8 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                         activeOrClosingSessions: 2
                     ),
                 ],
-                discardedSessionCount: 1
+                discardedSessionCount: 1,
+                preRetiredSessionCount: 0
             ),
             Shape(
                 name: "same-source follow-up occupancy",
@@ -1168,7 +1362,8 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                         activeOrClosingSessions: 2
                     ),
                 ],
-                discardedSessionCount: 1
+                discardedSessionCount: 1,
+                preRetiredSessionCount: 1
             ),
             Shape(
                 name: "same-origin session multiplicity",
@@ -1182,7 +1377,8 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                         activeOrClosingSessions: 3
                     ),
                 ],
-                discardedSessionCount: 2
+                discardedSessionCount: 2,
+                preRetiredSessionCount: 0
             ),
         ]
 
@@ -1199,7 +1395,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                     revision: entry.lifecycle.revision
                 )
             )
-            let sessions = Dictionary(uniqueKeysWithValues: (0..<shape.discardedSessionCount).map {
+            var sessions = Dictionary(uniqueKeysWithValues: (0..<shape.discardedSessionCount).map {
                 index in
                 let key = GaryxSessionDescendantKey(
                     token: entry.lifecycle.token,
@@ -1216,6 +1412,19 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                     )
                 )
             })
+            for index in 0..<shape.preRetiredSessionCount {
+                let key = GaryxSessionDescendantKey(
+                    token: entry.lifecycle.token,
+                    sessionID: .init(rawValue: "already-retired-\(shape.name)-\(index)"),
+                    epoch: UInt64(shape.discardedSessionCount + index + 1)
+                )
+                sessions[key] = GaryxSessionDescendant(
+                    key: key,
+                    composerKey: shape.origin,
+                    phase: .retired,
+                    finalSequence: nil
+                )
+            }
             let convergence = GaryxPayloadDiscardConvergence(
                 lifecycle: entry.lifecycle,
                 barrier: barrier,
@@ -1584,7 +1793,9 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         )
     }
 
-    private func makeCommitSend() throws -> GaryxComposerCommitSend {
+    private func makeCommitSend(
+        includeProducerDrained: Bool = false
+    ) throws -> GaryxComposerCommitSend {
         var entry = makeEntry(text: "message")
         entry.setText("next", generation: 11)
         var barrier = GaryxSendCommitBarrier(
@@ -1628,12 +1839,34 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             followupGeneration: 11
         )
         XCTAssertTrue(ledger.settle(.committed, targetGeneration: 11))
+        var producerDrained: [
+            GaryxSessionDescendantKey: GaryxDurableProducerDrainedRecord
+        ] = [:]
+        if includeProducerDrained {
+            let key = GaryxSessionDescendantKey(
+                token: entry.lifecycle.token,
+                sessionID: .init(rawValue: "committed-producer-drained"),
+                epoch: 1
+            )
+            producerDrained[key] = GaryxDurableProducerDrainedRecord(
+                scope: scope,
+                entryID: entryID,
+                reservationID: reservationID,
+                record: .init(
+                    sessionID: key.sessionID,
+                    epoch: key.epoch,
+                    finalSequence: 4,
+                    bufferedText: "discarded-buffered-text"
+                )
+            )
+        }
         return try GaryxComposerCommitSend(
             expectedRevision: 0,
             ledger: ledger,
             sealedPayloadEntry: entry,
             barrier: barrier,
-            settlement: settlement
+            settlement: settlement,
+            producerDrained: producerDrained
         )
     }
 

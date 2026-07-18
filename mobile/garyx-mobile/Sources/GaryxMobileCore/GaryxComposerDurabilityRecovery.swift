@@ -808,6 +808,21 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 lineage.entryID == entryID && lineage.scope == convergence.barrier.scope {
                 mutations.append(.removeAttachmentLineage(lineage.id))
             }
+            for (key, drained) in snapshot.producerDrained where
+                key.token == convergence.lifecycle.token
+                    && drained.scope == convergence.barrier.scope {
+                mutations.append(.removeProducerDrained(key))
+            }
+            for (key, close) in snapshot.recoveredInputClosures where
+                key.token == convergence.lifecycle.token
+                    && close.scope == convergence.barrier.scope {
+                mutations.append(.removeRecoveredInputClose(key))
+            }
+            if snapshot.barriers[entryID] != nil {
+                var idleBarrier = convergence.barrier
+                idleBarrier.returnToIdle()
+                mutations.append(.upsertBarrier(idleBarrier))
+            }
             mutations.append(
                 .removeEntry(scope: convergence.barrier.scope, entryID: entryID)
             )

@@ -505,6 +505,26 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         assertDiscardedAndResourceFree(summary, context: "churn relaunch")
     }
 
+    func testFullCorrelationPoolCannotBrickProcessRelaunchDiscardRecovery() throws {
+        let fixture = try makeFixture(label: "correlation-capacity-discard")
+        _ = try run(
+            "seed-correlation-capacity-discard",
+            fixture: fixture,
+            extra: ["--kill", "afterCommit"],
+            expecting: .killed
+        )
+
+        for relaunch in 1...2 {
+            let result = try run("recover-correlation-capacity", fixture: fixture)
+            let summary = try decodeCorrelationCapacitySummary(result.standardOutput)
+            XCTAssertEqual(summary.correlationTombstoneCount, 4_096, "relaunch \(relaunch)")
+            XCTAssertFalse(summary.oldestHistoricalPresent, "relaunch \(relaunch)")
+            XCTAssertEqual(summary.targetPhase, "evidence", "relaunch \(relaunch)")
+            XCTAssertFalse(summary.entryPresent, "relaunch \(relaunch)")
+            XCTAssertEqual(summary.discardCount, 0, "relaunch \(relaunch)")
+        }
+    }
+
     // MARK: - Assertions
 
     private func assertSendRecovery(
@@ -627,6 +647,11 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         XCTAssertEqual(summary.manifestCount, 0, context)
         XCTAssertEqual(summary.replacementCount, 0, context)
         XCTAssertEqual(summary.feedbackCount, 0, context)
+        XCTAssertEqual(summary.producerDrainedCount, 0, context)
+        XCTAssertEqual(summary.recoveredCloseCount, 0, context)
+        XCTAssertEqual(summary.closePublicationTotal, 0, context)
+        XCTAssertEqual(summary.nonIdleBarrierCount, 0, context)
+        XCTAssertEqual(summary.barrierPayloadFieldCount, 0, context)
         XCTAssertEqual(summary.discardCount, 0, context)
         XCTAssertEqual(summary.discardTombstoneCount, 0, context)
         XCTAssertEqual(summary.reservedBytes, 0, context)
@@ -844,6 +869,19 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
             )
         }
     }
+
+    private func decodeCorrelationCapacitySummary(
+        _ data: Data
+    ) throws -> CorrelationCapacitySummary {
+        do {
+            return try JSONDecoder().decode(CorrelationCapacitySummary.self, from: data)
+        } catch {
+            throw HarnessTestError.invalidSummary(
+                String(data: data, encoding: .utf8) ?? "<non-UTF8>",
+                String(describing: error)
+            )
+        }
+    }
 }
 
 private struct Fixture {
@@ -882,6 +920,9 @@ private struct HarnessSummary: Decodable {
     let replacementCount: Int
     let feedbackCount: Int
     let attachmentLineageCount: Int
+    let producerDrainedCount: Int
+    let nonIdleBarrierCount: Int
+    let barrierPayloadFieldCount: Int
     let discardCount: Int
     let discardTombstoneCount: Int
     let reservedBytes: Int
@@ -889,6 +930,14 @@ private struct HarnessSummary: Decodable {
     let pendingCleanupCount: Int
     let recoveredCloseCount: Int
     let closePublicationTotal: Int
+}
+
+private struct CorrelationCapacitySummary: Decodable {
+    let correlationTombstoneCount: Int
+    let oldestHistoricalPresent: Bool
+    let targetPhase: String?
+    let entryPresent: Bool
+    let discardCount: Int
 }
 
 private struct TransportCrashCase {
