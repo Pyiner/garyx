@@ -312,6 +312,19 @@ A1/A2 **已合 main**；**A3** = 路由模型 + intent 准入 + 事务 coordinat
 
 **范围边界（v23）**：**P0-G 收缩为纯 gateway 侧**——服务端幂等账本、原子 create+dispatch 命令、`prompt-attachments` TTL/删除所有权、**`(scope, createIntentID) → threadID` 唯一索引 + 查询接口（r20-F5：恢复"无幽灵/重复 thread"保证的启用条件）**；落地后客户端按 §1.6 声明升级（ambiguous 自动重试、多段写折叠）。**Mac 对齐跟进任务**：DurableDeliveryState canonical spec 双端 fixtures 本批先行定义（iOS 实现），Mac 消费为独立任务。
 
+## 8a. 旧逻辑清理义务（无残留铁律）
+
+**原则：同片替换、同片删除**——每个切片接线新路径的同一批提交内，删除被替换的旧实现；不允许"先并行、以后再删"跨片存活（A3/A4a 的并行期是唯一例外：新代码未接线前旧路径是唯一真相）。每片完成标准含**零残留 grep 清单**（老符号全仓出现点 = 0，测试与注释同查）。
+
+| 切片 | 接线内容 | 同片必删（grep 清单） |
+|---|---|---|
+| **A4b** | conversation/composer 迁入容器 | 全局 `composerAttachments` 数组及其全部读写点；`clearAllComposerDrafts`（switch 清空行为）；`gatewayRuntimeGeneration` guard（被 scope 生命周期/token 取代）；composer `onChange/onDisappear` 全局 draft 写点（`:205,:226,:267`）；`GaryxComposerDraftStore` 空文本删 key 行为 |
+| **A4c** | 其余 route 迁入容器 | `NavigationStack(path:)` 内容层与 `GaryxRootNavigationPathStore`/`rootPathBinding`/`applyRootNavigationPath`；`GaryxMobileLeadingEdgeAction` 旧语义（`.popToHome/.mainPanelBack/.settingsOverview`，死语义 `.workspaceBotsOverview` 一并）；`mainPanelBackStack` 与 `goBackInMainPanel`；`performMainPanelLeadingEdgeAction`；sidebar 视图 `onDisappear` 写路由点（`:1598`） |
+| **A5** | 抽屉/task tree/row swipe 迁移 | `openingSidebarGesture`/`closingSidebarGesture` 及返回分支、`decideSidebarAxis`（旧 app 层实现，Core 化后删）；`GaryxMobileTaskTreeSidebarViews` 旧 drag 状态机（`:188-294`）；`GaryxSwipeActionRow` 固定 spring settle 路径；旧取消自愈注释与 workaround（`GaryxMobileViews.swift:531` 等——新状态机显式建模取消后删） |
+| **A6（新增收官切片）** | — | **全仓清理审计**：上述全部清单复扫归零；未被任何片消费的旧 motion token/辅助函数 dead-code 扫描（含低版本 `#available` 分支——政策仅 iOS 26）；xcodebuild warnings 零新增；设计文档内"现状锚点"段落改写为历史注记 |
+
+每片 reviewer 必须把删除清单作为独立验收面（不删 = FAIL），并 grep 断言零残留。
+
 ## 9. 开放问题
 
 过渡曲线参数实现期校准；深栈 -N 单次过渡视觉实现期定。
