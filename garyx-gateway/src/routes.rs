@@ -72,22 +72,38 @@ use std::time::Duration;
 use tokio_stream;
 use tokio_stream::wrappers::BroadcastStream;
 
+mod bot_bindings;
 mod bot_consoles;
 mod channel_endpoints;
+mod cron_api;
+mod custom_agents;
+mod diagnostics;
+mod history;
 mod lifecycle;
 mod pins_favorites;
+mod restart;
 mod runtime;
+mod send;
+mod settings;
 mod skills;
 mod stream;
 mod thread_summaries;
 mod threads;
 mod workspace_git;
 
+pub use bot_bindings::*;
 pub use bot_consoles::*;
 pub use channel_endpoints::*;
+pub use cron_api::*;
+pub use custom_agents::*;
+pub use diagnostics::*;
+pub use history::*;
 pub use lifecycle::*;
 pub use pins_favorites::*;
+pub use restart::*;
 pub use runtime::*;
+pub use send::*;
+pub use settings::*;
 pub use skills::*;
 pub use stream::*;
 pub use thread_summaries::*;
@@ -148,3 +164,6 @@ fn thread_store_error_response(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod api_tests;

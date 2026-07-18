@@ -6,9 +6,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::server::AppState;
 use crate::{
-    api, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
-    mcp_config, meetings, provider_auth, restart_wake, routes, tasks, tool_image, workspace_files,
-    workspaces,
+    automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp, mcp_config,
+    meetings, provider_auth, restart_wake, routes, tasks, tool_image, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -82,7 +81,7 @@ fn thread_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/threads/history",
-            axum::routing::get(api::thread_history),
+            axum::routing::get(routes::thread_history),
         )
         .route(
             "/api/thread-pins",
@@ -242,25 +241,25 @@ fn thread_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/custom-agents",
-            axum::routing::get(api::list_custom_agents).post(api::create_custom_agent),
+            axum::routing::get(routes::list_custom_agents).post(routes::create_custom_agent),
         )
         .route(
             "/api/provider-models/{provider_type}",
-            axum::routing::get(api::list_provider_models),
+            axum::routing::get(routes::list_provider_models),
         )
         .route(
             "/api/custom-agents/{agent_id}",
-            axum::routing::get(api::get_custom_agent)
-                .put(api::update_custom_agent)
-                .delete(api::delete_custom_agent),
+            axum::routing::get(routes::get_custom_agent)
+                .put(routes::update_custom_agent)
+                .delete(routes::delete_custom_agent),
         )
         .route(
             "/api/custom-agents/{agent_id}/toggle",
-            axum::routing::patch(api::toggle_custom_agent),
+            axum::routing::patch(routes::toggle_custom_agent),
         )
         .route(
             "/api/custom-agents/{agent_id}/default",
-            axum::routing::patch(api::set_default_custom_agent),
+            axum::routing::patch(routes::set_default_custom_agent),
         )
         .route(
             "/api/skills",
@@ -354,39 +353,39 @@ fn observability_routes() -> Router<Arc<AppState>> {
         .route("/api/logs/tail", axum::routing::get(dashboard::logs_tail))
         .route(
             "/api/threads/diagnostics",
-            axum::routing::get(api::thread_diagnostics),
+            axum::routing::get(routes::thread_diagnostics),
         )
-        .route("/api/bot/status", axum::routing::get(api::bot_status))
-        .route("/api/bot/bind", axum::routing::post(api::bot_bind))
-        .route("/api/bot/unbind", axum::routing::post(api::bot_unbind))
+        .route("/api/bot/status", axum::routing::get(routes::bot_status))
+        .route("/api/bot/bind", axum::routing::post(routes::bot_bind))
+        .route("/api/bot/unbind", axum::routing::post(routes::bot_unbind))
         .route(
             "/api/settings",
-            axum::routing::get(dashboard::settings).put(api::settings_update),
+            axum::routing::get(dashboard::settings).put(routes::settings_update),
         )
         .route(
             "/api/settings/reload",
-            axum::routing::post(api::settings_reload),
+            axum::routing::post(routes::settings_reload),
         )
 }
 
 fn operations_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/cron/jobs", axum::routing::get(api::cron_jobs))
-        .route("/api/cron/runs", axum::routing::get(api::cron_runs))
+        .route("/api/cron/jobs", axum::routing::get(routes::cron_jobs))
+        .route("/api/cron/runs", axum::routing::get(routes::cron_runs))
         // Debug observability for system-managed cron jobs (AXON-692). Lives in
         // the protected router so `enforce_gateway_auth` gates it: loopback
         // passes, everything else needs a valid gateway token.
         .route(
             "/api/debug/system-cron-jobs",
-            axum::routing::get(api::debug_system_cron_jobs),
+            axum::routing::get(routes::debug_system_cron_jobs),
         )
         .route(
             "/api/debug/system-cron-jobs/{id}/run",
-            axum::routing::post(api::debug_run_system_cron_job),
+            axum::routing::post(routes::debug_run_system_cron_job),
         )
         .route(
             "/api/channels/plugins",
-            axum::routing::get(api::list_channel_plugins),
+            axum::routing::get(routes::list_channel_plugins),
         )
         // Auto-login flow. The desktop UI calls `start` with the
         // current form state, then polls `poll` at the cadence the
@@ -396,15 +395,15 @@ fn operations_routes() -> Router<Arc<AppState>> {
         // `AuthFlowExecutor` trait on the gateway side.
         .route(
             "/api/channels/plugins/{plugin_id}/auth_flow/start",
-            axum::routing::post(api::channel_auth_flow_start),
+            axum::routing::post(routes::channel_auth_flow_start),
         )
         .route(
             "/api/channels/plugins/{plugin_id}/auth_flow/poll",
-            axum::routing::post(api::channel_auth_flow_poll),
+            axum::routing::post(routes::channel_auth_flow_poll),
         )
         .route(
             "/api/channels/plugins/{plugin_id}/validate_account",
-            axum::routing::post(api::channel_account_validate),
+            axum::routing::post(routes::channel_account_validate),
         )
         .route(
             "/api/providers/claude_code/auth/start",
@@ -418,8 +417,8 @@ fn operations_routes() -> Router<Arc<AppState>> {
             "/api/providers/claude_code/auth/{login_id}/submit",
             axum::routing::post(provider_auth::submit_claude_code_auth),
         )
-        .route("/api/restart", axum::routing::post(api::restart))
-        .route("/api/send", axum::routing::post(api::send_message))
+        .route("/api/restart", axum::routing::post(routes::restart))
+        .route("/api/send", axum::routing::post(routes::send_message))
 }
 
 fn mcp_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {

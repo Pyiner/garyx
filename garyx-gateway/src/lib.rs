@@ -1,5 +1,4 @@
 mod agent_identity;
-pub mod api;
 mod application;
 mod atomic_write;
 pub mod automation;

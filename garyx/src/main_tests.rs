@@ -2400,7 +2400,7 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
     use axum::extract::State;
     use axum::http::HeaderMap;
     use axum::response::IntoResponse;
-    use garyx_gateway::api;
+    use garyx_gateway::routes as api;
     use garyx_models::config::{CronAction, CronJobConfig, CronSchedule, GaryxConfig};
 
     let tmp = tempfile::TempDir::new().unwrap();

@@ -19,7 +19,6 @@ use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::warn;
 
 use crate::agent_identity::GatewayThreadCreator;
-use crate::api::RestartTracker;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
@@ -32,6 +31,7 @@ use crate::meetings::MeetingService;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::recent_thread_reader::SqlRecentThreadPageReader;
+use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::thread_lifecycle::LifecycleService;

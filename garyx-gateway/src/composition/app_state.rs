@@ -18,7 +18,6 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-use crate::api::RestartTracker;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
@@ -28,6 +27,7 @@ use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::meetings::MeetingService;
 use crate::provider_auth::ClaudeAuthSessionStore;
+use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::thread_lifecycle::LifecycleService;

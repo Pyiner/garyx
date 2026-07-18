@@ -7,13 +7,13 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
-use garyx_gateway::api::thread_history;
 use garyx_gateway::automation::{
     automation_activity, create_automation, delete_automation, get_automation, list_automations,
     run_automation_now, update_automation,
 };
 use garyx_gateway::chat::{chat_health, chat_ws};
 use garyx_gateway::garyx_db::GaryxDbService;
+use garyx_gateway::routes::thread_history;
 use garyx_gateway::routes::{
     bind_channel_endpoint, create_thread, delete_thread, detach_channel_endpoint, get_thread,
     list_channel_endpoints, list_threads, update_thread,

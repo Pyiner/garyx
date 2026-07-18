@@ -5,6 +5,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use garyx_models::config::GaryxConfig;
+use std::time::Instant;
 use tempfile::tempdir;
 use tower::ServiceExt;
 

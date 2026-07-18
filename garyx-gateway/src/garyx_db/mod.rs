@@ -62,7 +62,7 @@ pub(crate) use schema::*;
 pub use store_incarnation::*;
 pub use summaries::*;
 #[cfg(any(test, feature = "test-seams"))]
-pub use test_support::*;
+pub(crate) use test_support::*;
 pub use workspaces::*;
 
 mod meetings;
