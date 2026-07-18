@@ -61,17 +61,24 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
     public init(
         databaseURL: URL,
         allocationBlockSize: UInt64 = 32,
-        boundaryHook: @escaping BoundaryHook = { _ in }
+        boundaryHook: @escaping BoundaryHook = { _ in },
+        fileProtectionPolicy: GaryxComposerFileProtectionPolicy = .system
     ) throws {
         guard databaseURL.isFileURL, !databaseURL.path.isEmpty else {
             throw GaryxSQLiteComposerDurabilityError.invalidDatabasePath
         }
         let directory = databaseURL.deletingLastPathComponent()
-        try Self.preparePrivateDirectory(directory)
+        try Self.preparePrivateDirectory(
+            directory,
+            fileProtectionPolicy: fileProtectionPolicy
+        )
         let connection = try GaryxSQLiteConnection(path: databaseURL.path)
         try Self.configure(connection)
         try Self.createSchemaIfNeeded(connection)
-        try Self.protectDatabaseFiles(databaseURL)
+        try Self.protectDatabaseFiles(
+            databaseURL,
+            fileProtectionPolicy: fileProtectionPolicy
+        )
         let snapshot = try Self.readSnapshot(connection)
 
         self.connection = connection
@@ -440,7 +447,10 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         }
     }
 
-    private static func preparePrivateDirectory(_ directory: URL) throws {
+    private static func preparePrivateDirectory(
+        _ directory: URL,
+        fileProtectionPolicy: GaryxComposerFileProtectionPolicy
+    ) throws {
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
@@ -450,16 +460,18 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         values.isExcludedFromBackup = true
         var mutableDirectory = directory
         try mutableDirectory.setResourceValues(values)
-        #if os(iOS)
-        try FileManager.default.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-            ofItemAtPath: directory.path
-        )
-        #endif
+        try fileProtectionPolicy.apply(to: directory)
     }
 
-    private static func protectDatabaseFiles(_ databaseURL: URL) throws {
-        let paths = [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
+    private static func protectDatabaseFiles(
+        _ databaseURL: URL,
+        fileProtectionPolicy: GaryxComposerFileProtectionPolicy
+    ) throws {
+        let paths = [
+            databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-wal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm"),
+        ]
         for path in paths where FileManager.default.fileExists(atPath: path.path) {
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
@@ -469,12 +481,7 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             values.isExcludedFromBackup = true
             var mutablePath = path
             try mutablePath.setResourceValues(values)
-            #if os(iOS)
-            try FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-                ofItemAtPath: path.path
-            )
-            #endif
+            try fileProtectionPolicy.apply(to: path)
         }
     }
 }

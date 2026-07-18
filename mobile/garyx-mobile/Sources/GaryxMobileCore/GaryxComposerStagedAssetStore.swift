@@ -51,6 +51,31 @@ public struct GaryxComposerStagedAssetResult: Sendable {
     public let snapshot: GaryxComposerDurabilitySnapshot
 }
 
+/// Fixed application-data protection policy with an audit seam used by the
+/// app-hosted iOS tests. The audit fires only after Foundation accepts the
+/// required protection attribute for that path.
+public struct GaryxComposerFileProtectionPolicy: Sendable {
+    public typealias Audit = @Sendable (URL, FileProtectionType) -> Void
+
+    public static let system = Self()
+    private let audit: Audit
+
+    public init(audit: @escaping Audit = { _, _ in }) {
+        self.audit = audit
+    }
+
+    func apply(to url: URL) throws {
+        let protection = FileProtectionType.completeUntilFirstUserAuthentication
+        #if os(iOS)
+        try FileManager.default.setAttributes(
+            [.protectionKey: protection],
+            ofItemAtPath: url.path
+        )
+        #endif
+        audit(url, protection)
+    }
+}
+
 /// Protected, app-private payload staging. Quota/owner metadata is committed
 /// before a source byte is copied. A process death in the reservation→rename
 /// interval is recovered from the durable manifest and owner ledger.
@@ -62,12 +87,14 @@ public actor GaryxComposerStagedAssetStore {
 
     private let durability: any GaryxComposerDurabilityStore
     private let boundaryHook: BoundaryHook
+    private let fileProtectionPolicy: GaryxComposerFileProtectionPolicy
 
     public init(
         applicationSupportDirectory: URL,
         durability: any GaryxComposerDurabilityStore,
         quotaLimitBytes: Int,
-        boundaryHook: @escaping BoundaryHook = { _ in }
+        boundaryHook: @escaping BoundaryHook = { _ in },
+        fileProtectionPolicy: GaryxComposerFileProtectionPolicy = .system
     ) throws {
         precondition(quotaLimitBytes >= 0)
         rootURL = applicationSupportDirectory
@@ -76,7 +103,8 @@ public actor GaryxComposerStagedAssetStore {
         self.durability = durability
         self.quotaLimitBytes = quotaLimitBytes
         self.boundaryHook = boundaryHook
-        try Self.preparePrivateDirectory(rootURL)
+        self.fileProtectionPolicy = fileProtectionPolicy
+        try Self.preparePrivateDirectory(rootURL, fileProtectionPolicy: fileProtectionPolicy)
     }
 
     public func stage(
@@ -235,13 +263,35 @@ public actor GaryxComposerStagedAssetStore {
             ".\(destinationURL.lastPathComponent).partial-\(UUID().uuidString)"
         )
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        let descriptor = Darwin.open(
+            temporaryURL.path,
+            O_WRONLY | O_CREAT | O_EXCL,
+            S_IRUSR | S_IWUSR
+        )
+        guard descriptor >= 0 else {
+            throw GaryxComposerStagingError.filesystem(
+                code: errno,
+                operation: "create protected staging temporary"
+            )
+        }
+        Darwin.close(descriptor)
+        try protectFile(temporaryURL)
         do {
-            try FileManager.default.copyItem(at: sourceURL, to: temporaryURL)
+            let source = try FileHandle(forReadingFrom: sourceURL)
+            let destination = try FileHandle(forWritingTo: temporaryURL)
+            defer {
+                try? source.close()
+                try? destination.close()
+            }
+            while let chunk = try source.read(upToCount: 1_048_576), !chunk.isEmpty {
+                try destination.write(contentsOf: chunk)
+            }
+            try source.close()
+            try destination.close()
         } catch let error as NSError {
             throw Self.filesystemError(error, operation: "copy staged payload")
         }
         try boundaryHook(.copiedToTemporaryFile)
-        try Self.protectFile(temporaryURL)
         let copiedValues = try temporaryURL.resourceValues(forKeys: [.fileSizeKey])
         let actualBytes = copiedValues.fileSize ?? -1
         guard actualBytes == expectedBytes else {
@@ -265,6 +315,7 @@ public actor GaryxComposerStagedAssetStore {
         } catch let error as NSError {
             throw Self.filesystemError(error, operation: "rename staged payload")
         }
+        try protectFile(destinationURL)
         try boundaryHook(.atomicallyRenamed)
         try Self.synchronizeDirectory(rootURL)
         try boundaryHook(.directorySynced)
@@ -324,7 +375,10 @@ public actor GaryxComposerStagedAssetStore {
         }
     }
 
-    private static func preparePrivateDirectory(_ directory: URL) throws {
+    private static func preparePrivateDirectory(
+        _ directory: URL,
+        fileProtectionPolicy: GaryxComposerFileProtectionPolicy
+    ) throws {
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
@@ -334,15 +388,10 @@ public actor GaryxComposerStagedAssetStore {
         values.isExcludedFromBackup = true
         var mutableDirectory = directory
         try mutableDirectory.setResourceValues(values)
-        #if os(iOS)
-        try FileManager.default.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-            ofItemAtPath: directory.path
-        )
-        #endif
+        try fileProtectionPolicy.apply(to: directory)
     }
 
-    private static func protectFile(_ fileURL: URL) throws {
+    private func protectFile(_ fileURL: URL) throws {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: fileURL.path
@@ -351,12 +400,7 @@ public actor GaryxComposerStagedAssetStore {
         values.isExcludedFromBackup = true
         var mutableURL = fileURL
         try mutableURL.setResourceValues(values)
-        #if os(iOS)
-        try FileManager.default.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-            ofItemAtPath: fileURL.path
-        )
-        #endif
+        try fileProtectionPolicy.apply(to: fileURL)
     }
 
     private static func synchronizeDirectory(_ directory: URL) throws {
