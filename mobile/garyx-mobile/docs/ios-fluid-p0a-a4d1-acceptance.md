@@ -78,7 +78,10 @@ independent acceptance surfaces:
   stable-token origins to its destination, including `D -> T1 -> T2`. Each
   highest captured branch contributes its active/closing-session, pending-ack,
   and promotion-in-flight reference counts to downstream edges; a shared edge
-  is removed only when all three counts reach zero. Direct fan-in
+  is removed only when all three counts reach zero. An exclusively owned
+  suffix still drains all heterogeneous counter classes, while a suffix with
+  a surviving external predecessor keeps that predecessor's conservative
+  occupancy floor. Direct fan-in
   `D1 -> T <- D2` and shared-suffix `A -> X <- B, X -> D` fixtures prove that
   discarding A/D1 does not break the live sibling path. The shared-suffix case
   reopens the same SQLite/WAL database twice and remains idempotent; nested
@@ -197,7 +200,7 @@ xcodebuild test -project GaryxMobile.xcodeproj \
 ```
 
 The final clean SwiftPM run passed 1,367 of 1,367 tests with zero failures in
-229.589 seconds; its 16 real-process durability suites passed in 221.048
+221.846 seconds; its 16 real-process durability suites passed in 214.442
 seconds. The generated Xcode project passed Debug and Release generic
 iOS Simulator builds, and the `GaryxMobile` app-hosted suite passed 91 of 91
 tests on iPhone 17 Pro / iOS 26.5. Build warnings were pre-existing app-source
