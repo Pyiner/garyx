@@ -1188,47 +1188,36 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
                 lifecycle: entry.lifecycle.snapshot
             )
         )
-        var followupEntry = entry
-        followupEntry.setText(settlement.followupText, generation: settlement.followupGeneration)
-        let delivery = try XCTUnwrap(settlement.deliveryRecord)
+        let send = try GaryxComposerCommitSend(
+            expectedRevision: 0,
+            ledger: ledger,
+            sealedPayloadEntry: entry,
+            barrier: barrier,
+            settlement: settlement
+        )
+        let delivery = send.delivery
 
         let fake = GaryxFakeComposerDurabilityStore()
-        for failpoint in 0..<4 {
+        for failpoint in send.transaction.mutations.indices {
             let isolated = GaryxFakeComposerDurabilityStore()
             await isolated.injectFailure(atMutationIndex: failpoint)
             do {
-                _ = try await isolated.commit(
-                    .init(
-                        expectedRevision: 0,
-                        label: "commitSend failpoint",
-                        mutations: [
-                            .upsertLedger(ledger),
-                            .upsertEntry(followupEntry),
-                            .upsertBarrier(barrier),
-                            .upsertDelivery(delivery),
-                        ]
-                    )
-                )
+                _ = try await isolated.commitSend(send)
                 XCTFail("expected failure")
             } catch {}
             let unchanged = try await isolated.load()
             XCTAssertEqual(unchanged, GaryxComposerDurabilitySnapshot())
         }
 
-        let snapshot = try await fake.commit(
-            .init(
-                expectedRevision: 0,
-                label: "commitSend",
-                mutations: [
-                    .upsertLedger(ledger),
-                    .upsertEntry(followupEntry),
-                    .upsertBarrier(barrier),
-                    .upsertDelivery(delivery),
-                ]
-            )
-        )
+        let snapshot = try await fake.commitSend(send)
         XCTAssertEqual(snapshot.ledgers[ledger.key]?.terminalOutcome, .committed)
         XCTAssertEqual(snapshot.payloadStore.entry(entry.id, scope: scope)?.currentText, "U")
+        XCTAssertNil(snapshot.payloadStore.entry(entry.id, scope: scope)?.textByGeneration[10])
+        XCTAssertEqual(snapshot.payloadStore.entry(entry.id, scope: scope)?.currentGeneration, 11)
+        XCTAssertTrue(
+            snapshot.payloadStore.entry(entry.id, scope: scope)?.deliveryReferences.contains(delivery.id)
+                == true
+        )
         XCTAssertEqual(snapshot.barriers[entry.id]?.phase, .durableCommitted)
         XCTAssertEqual(snapshot.deliveries[delivery.id], delivery)
     }
@@ -1631,6 +1620,8 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.stagedAssetOwners[replacement.stagedAssetID], successor.context.key)
         XCTAssertEqual(snapshot.reservedBytes, replacement.reservedBytes)
         XCTAssertEqual(snapshot.feedback[feedback.id]?.phase, .acknowledged)
+        XCTAssertNil(snapshot.operations[old.context.key]?.stagedAssetID)
+        XCTAssertEqual(snapshot.operations[old.context.key]?.reservedBytes, 0)
     }
 
     func testWatermarksAreMonotonicAndPersistAcrossFakeRelaunch() async throws {
@@ -1724,7 +1715,17 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
 
     func testCorrelationAndDiscardTombstonesSharePersistentCountAndByteBudget() async throws {
         var convergence = makeDiscardConvergence()
+        convergence.settleReservation()
+        convergence.settleDeliveries()
         convergence.settleSessions()
+        convergence.settleResources()
+        XCTAssertTrue(convergence.finishToken())
+        let convergenceRoundTrip = try JSONDecoder().decode(
+            GaryxPayloadDiscardConvergence.self,
+            from: JSONEncoder().encode(convergence)
+        )
+        XCTAssertEqual(convergenceRoundTrip, convergence)
+        XCTAssertEqual(convergenceRoundTrip.persistentTombstoneCount, 1)
         var delivery = makeDelivery()
         XCTAssertTrue(delivery.markTransportAttempted())
         delivery.recordServerAcknowledgement()
@@ -1794,6 +1795,32 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             )
         )
         XCTAssertEqual(snapshot.persistentTombstoneUsage, .init())
+    }
+
+    func testDiscardConvergenceCannotBeGarbageCollectedBeforeDiscarded() async throws {
+        let convergence = makeDiscardConvergence()
+        let initial = GaryxComposerDurabilitySnapshot(
+            discardConvergence: [entryID: convergence]
+        )
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+
+        do {
+            _ = try await fake.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "premature discard GC",
+                    mutations: [.removeDiscardConvergence(entryID)]
+                )
+            )
+            XCTFail("discarding convergence must remain durable")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("discard convergence GC requires discarded lifecycle")
+            )
+        }
+        let unchanged = try await fake.load()
+        XCTAssertEqual(unchanged, initial)
     }
 
     func testScopePartitionedComposerSurvivesSnapshotRoundTrip() async throws {

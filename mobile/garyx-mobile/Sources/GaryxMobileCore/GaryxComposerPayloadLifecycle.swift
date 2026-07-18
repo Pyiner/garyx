@@ -215,6 +215,41 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
         deliveryReferences.insert(id)
     }
 
+    /// Publishes the payload side of `commitSend`: the sealed generation is
+    /// removed from composer state, the provisional follow-up becomes the
+    /// current generation, and the immutable outbox record keeps the Entry
+    /// alive. The caller must persist this value in the same transaction as
+    /// the committed reservation ledger and DeliveryRecord.
+    @discardableResult
+    mutating func settleCommittedSend(
+        envelopeGeneration: UInt64,
+        followupGeneration: UInt64,
+        followupText: String,
+        followupAttachmentIDs: [GaryxAttachmentID],
+        deliveryID: GaryxDeliveryRecordID
+    ) -> Bool {
+        guard lifecycle.phase == .active,
+              followupGeneration > envelopeGeneration,
+              currentGeneration == envelopeGeneration
+                || currentGeneration == followupGeneration else {
+            return false
+        }
+
+        textByGeneration.removeValue(forKey: envelopeGeneration)
+        textByGeneration.removeValue(forKey: followupGeneration)
+        if !followupText.isEmpty {
+            textByGeneration[followupGeneration] = followupText
+        }
+        let followupIDs = Set(followupAttachmentIDs)
+        attachments = attachments.filter { id, attachment in
+            attachment.generation != envelopeGeneration
+                && (attachment.generation != followupGeneration || followupIDs.contains(id))
+        }
+        currentGeneration = followupGeneration
+        deliveryReferences.insert(deliveryID)
+        return true
+    }
+
     public mutating func addFeedbackReference(_ id: GaryxFeedbackID) {
         feedbackReferences.insert(id)
     }
@@ -591,7 +626,14 @@ public struct GaryxOperationCapability: Equatable, Codable, Sendable {
         guard identityValid else { return .archivedIdentityInvalid }
         guard Self.allows(from: state, to: next) else { return .rejectedState }
         state = next
-        if next == .superseded { self.supersededBy = supersededBy }
+        if next == .superseded {
+            self.supersededBy = supersededBy
+            // The swap transaction has already transferred physical-file and
+            // quota ownership to O2. O1 remains as lineage only and therefore
+            // must not retain the condemned-owner shape.
+            stagedAssetID = nil
+            reservedBytes = 0
+        }
         return .applied
     }
 

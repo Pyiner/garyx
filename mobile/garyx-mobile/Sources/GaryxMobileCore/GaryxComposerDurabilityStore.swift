@@ -682,6 +682,101 @@ public enum GaryxComposerDurabilityError: Error, Equatable, Sendable {
     case injectedFailure(mutationIndex: Int)
 }
 
+/// Typed input for the only durable send linearization operation. It derives
+/// the payload mutation from the committed barrier instead of accepting an
+/// arbitrary caller-built mutation list, so envelope removal, generation
+/// advancement, outbox insertion, and ledger settlement cannot diverge.
+public struct GaryxComposerCommitSend: Equatable, Sendable {
+    public let expectedRevision: UInt64
+    public let ledger: GaryxProvisionalReservationLedger
+    public let payloadEntry: GaryxComposerPayloadEntry
+    public let barrier: GaryxSendCommitBarrier
+    public let delivery: GaryxDeliveryRecord
+    public let producerDrained: [
+        GaryxSessionDescendantKey: GaryxDurableProducerDrainedRecord
+    ]
+
+    public init(
+        expectedRevision: UInt64,
+        ledger: GaryxProvisionalReservationLedger,
+        sealedPayloadEntry: GaryxComposerPayloadEntry,
+        barrier: GaryxSendCommitBarrier,
+        settlement: GaryxSendBarrierSettlement,
+        producerDrained: [
+            GaryxSessionDescendantKey: GaryxDurableProducerDrainedRecord
+        ] = [:]
+    ) throws {
+        guard ledger.terminalOutcome == .committed,
+              let target = ledger.targetMapping,
+              target.entryID == ledger.key.entryID,
+              target.generation == ledger.followupGeneration,
+              settlement.terminalOutcome == .committed,
+              settlement.followupGeneration == ledger.followupGeneration,
+              let delivery = settlement.deliveryRecord,
+              delivery.scope == ledger.key.scope,
+              delivery.entryID == ledger.key.entryID,
+              delivery.reservationID == ledger.key.reservationID,
+              delivery.phase == .notDispatched,
+              delivery.envelope?.generation == ledger.envelopeGeneration,
+              barrier.scope == ledger.key.scope,
+              barrier.entryID == ledger.key.entryID,
+              barrier.reservationID == ledger.key.reservationID,
+              barrier.phase == .durableCommitted,
+              sealedPayloadEntry.scope == ledger.key.scope,
+              sealedPayloadEntry.id == ledger.key.entryID,
+              barrier.payloadLifecycle.token == sealedPayloadEntry.lifecycle.token,
+              producerDrained.allSatisfy({ key, value in
+                  key.token == sealedPayloadEntry.lifecycle.token
+                      && value.scope == ledger.key.scope
+                      && value.entryID == ledger.key.entryID
+                      && value.reservationID == ledger.key.reservationID
+              }) else {
+            throw GaryxComposerDurabilityError.invariantViolation(
+                "commitSend identities or committed reservation outcome do not match"
+            )
+        }
+
+        var payloadEntry = sealedPayloadEntry
+        guard payloadEntry.settleCommittedSend(
+            envelopeGeneration: ledger.envelopeGeneration,
+            followupGeneration: ledger.followupGeneration,
+            followupText: settlement.followupText,
+            followupAttachmentIDs: settlement.followupAttachmentIDs,
+            deliveryID: delivery.id
+        ) else {
+            throw GaryxComposerDurabilityError.invariantViolation(
+                "commitSend payload cannot advance from the sealed generation"
+            )
+        }
+        self.expectedRevision = expectedRevision
+        self.ledger = ledger
+        self.payloadEntry = payloadEntry
+        self.barrier = barrier
+        self.delivery = delivery
+        self.producerDrained = producerDrained
+    }
+
+    public var transaction: GaryxComposerDurabilityTransaction {
+        let drainedMutations = producerDrained
+            .sorted { lhs, rhs in
+                if lhs.key.epoch != rhs.key.epoch { return lhs.key.epoch < rhs.key.epoch }
+                return lhs.key.sessionID.rawValue < rhs.key.sessionID.rawValue
+            }
+            .map(GaryxComposerDurabilityMutation.upsertProducerDrained)
+        return GaryxComposerDurabilityTransaction(
+            expectedRevision: expectedRevision,
+            label: "commitSend",
+            mutations: [
+                .upsertLedger(ledger),
+            ] + drainedMutations + [
+                .upsertEntry(payloadEntry),
+                .upsertBarrier(barrier),
+                .upsertDelivery(delivery),
+            ]
+        )
+    }
+}
+
 /// Single durability seam for composer, payload, operation, reservation, and
 /// delivery records. The concrete DB implementation is intentionally deferred
 /// to A4d-1.
@@ -689,6 +784,9 @@ public protocol GaryxComposerDurabilityStore: Sendable {
     func load() async throws -> GaryxComposerDurabilitySnapshot
     func commit(
         _ transaction: GaryxComposerDurabilityTransaction
+    ) async throws -> GaryxComposerDurabilitySnapshot
+    func commitSend(
+        _ send: GaryxComposerCommitSend
     ) async throws -> GaryxComposerDurabilitySnapshot
 }
 
@@ -733,6 +831,12 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         state = candidate
         failAtMutationIndex = nil
         return state
+    }
+
+    public func commitSend(
+        _ send: GaryxComposerCommitSend
+    ) async throws -> GaryxComposerDurabilitySnapshot {
+        try await commit(send.transaction)
     }
 
     private func apply(
@@ -863,6 +967,9 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         case .upsertDiscardConvergence(let convergence):
             state.discardConvergence[convergence.lifecycle.token.entryID] = convergence
         case .removeDiscardConvergence(let entryID):
+            guard state.discardConvergence[entryID]?.lifecycle.phase == .discarded else {
+                throw invariant("discard convergence GC requires discarded lifecycle")
+            }
             state.discardConvergence.removeValue(forKey: entryID)
         case .upsertCreateDelivery(let create):
             state.createDeliveries[create.key] = create
