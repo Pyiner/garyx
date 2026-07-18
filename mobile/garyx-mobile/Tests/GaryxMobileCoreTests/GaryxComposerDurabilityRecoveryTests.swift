@@ -859,20 +859,31 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             scope: scope,
             payloadLifecycle: .init(token: entry.lifecycle.token, revision: entry.lifecycle.revision)
         )
-        let sessionKey = GaryxSessionDescendantKey(
+        let liveSessionKey = GaryxSessionDescendantKey(
             token: entry.lifecycle.token,
-            sessionID: .init(rawValue: "multi-hop-alias-session"),
+            sessionID: .init(rawValue: "multi-hop-live-session"),
             epoch: 1
+        )
+        let pendingAckSessionKey = GaryxSessionDescendantKey(
+            token: entry.lifecycle.token,
+            sessionID: .init(rawValue: "multi-hop-pending-ack-session"),
+            epoch: 2
         )
         let convergence = GaryxPayloadDiscardConvergence(
             lifecycle: entry.lifecycle,
             barrier: barrier,
             sessions: [
-                sessionKey: .init(
-                    key: sessionKey,
+                liveSessionKey: .init(
+                    key: liveSessionKey,
                     composerKey: source,
                     phase: .live,
                     finalSequence: nil
+                ),
+                pendingAckSessionKey: .init(
+                    key: pendingAckSessionKey,
+                    composerKey: intermediate,
+                    phase: .closePendingAck,
+                    finalSequence: 7
                 ),
             ]
         )
@@ -891,6 +902,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                 scope: scope,
                 source: intermediate,
                 target: destination,
+                activeOrClosingSessions: 2,
                 pendingCloseAcknowledgements: 1
             ),
             .established
@@ -1102,6 +1114,168 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                 ),
                 .resolved(destination)
             )
+        }
+    }
+
+    func testDiscardSubtractsSessionContributionWithoutTopologyOwnershipAcrossRelaunches() async throws {
+        struct PromotionSeed {
+            let source: GaryxComposerKey
+            let target: GaryxComposerKey
+            let activeOrClosingSessions: Int
+        }
+        struct Shape {
+            let name: String
+            let origin: GaryxComposerKey
+            let residualSource: GaryxComposerKey
+            let destination: GaryxComposerKey
+            let promotions: [PromotionSeed]
+            let discardedSessionCount: Int
+        }
+        let firstOrigin = GaryxComposerKey.draft("occupancy-only-origin")
+        let intermediate = GaryxComposerKey.thread("occupancy-only-intermediate")
+        let firstDestination = GaryxComposerKey.thread("occupancy-only-destination")
+        let followUpSource = GaryxComposerKey.draft("same-source-follow-up")
+        let followUpDestination = GaryxComposerKey.thread("same-source-destination")
+        let shapes = [
+            Shape(
+                name: "shared suffix without a predecessor edge",
+                origin: firstOrigin,
+                residualSource: intermediate,
+                destination: firstDestination,
+                promotions: [
+                    .init(
+                        source: firstOrigin,
+                        target: intermediate,
+                        activeOrClosingSessions: 1
+                    ),
+                    .init(
+                        source: intermediate,
+                        target: firstDestination,
+                        activeOrClosingSessions: 2
+                    ),
+                ],
+                discardedSessionCount: 1
+            ),
+            Shape(
+                name: "same-source follow-up occupancy",
+                origin: followUpSource,
+                residualSource: followUpSource,
+                destination: followUpDestination,
+                promotions: [
+                    .init(
+                        source: followUpSource,
+                        target: followUpDestination,
+                        activeOrClosingSessions: 2
+                    ),
+                ],
+                discardedSessionCount: 1
+            ),
+            Shape(
+                name: "same-origin session multiplicity",
+                origin: .draft("duplicate-session-origin"),
+                residualSource: .draft("duplicate-session-origin"),
+                destination: .thread("duplicate-session-destination"),
+                promotions: [
+                    .init(
+                        source: .draft("duplicate-session-origin"),
+                        target: .thread("duplicate-session-destination"),
+                        activeOrClosingSessions: 3
+                    ),
+                ],
+                discardedSessionCount: 2
+            ),
+        ]
+
+        for shape in shapes {
+            let fixture = try makeFixture()
+            var entry = makeEntry()
+            entry.promote(to: shape.destination)
+            XCTAssertTrue(entry.beginDiscard(revision: 2), shape.name)
+            let barrier = GaryxSendCommitBarrier(
+                entryID: entryID,
+                scope: scope,
+                payloadLifecycle: .init(
+                    token: entry.lifecycle.token,
+                    revision: entry.lifecycle.revision
+                )
+            )
+            let sessions = Dictionary(uniqueKeysWithValues: (0..<shape.discardedSessionCount).map {
+                index in
+                let key = GaryxSessionDescendantKey(
+                    token: entry.lifecycle.token,
+                    sessionID: .init(rawValue: "occupancy-session-\(shape.name)-\(index)"),
+                    epoch: UInt64(index + 1)
+                )
+                return (
+                    key,
+                    GaryxSessionDescendant(
+                        key: key,
+                        composerKey: shape.origin,
+                        phase: .live,
+                        finalSequence: nil
+                    )
+                )
+            })
+            let convergence = GaryxPayloadDiscardConvergence(
+                lifecycle: entry.lifecycle,
+                barrier: barrier,
+                sessions: sessions
+            )
+            var aliases = GaryxComposerAliasTable()
+            for promotion in shape.promotions {
+                XCTAssertEqual(
+                    aliases.establishPromotion(
+                        scope: scope,
+                        source: promotion.source,
+                        target: promotion.target,
+                        activeOrClosingSessions: promotion.activeOrClosingSessions
+                    ),
+                    .established,
+                    shape.name
+                )
+            }
+            do {
+                let store = try GaryxSQLiteComposerDurabilityStore(
+                    databaseURL: fixture.databaseURL
+                )
+                _ = try await store.commit(
+                    .init(
+                        expectedRevision: 0,
+                        label: "seed occupancy-only alias discard",
+                        mutations: [
+                            .upsertEntry(entry),
+                            .replaceAliases(aliases),
+                            .upsertDiscardConvergence(convergence),
+                        ]
+                    )
+                )
+            }
+
+            for relaunch in 1...2 {
+                let relaunchedStore = try GaryxSQLiteComposerDurabilityStore(
+                    databaseURL: fixture.databaseURL
+                )
+                _ = try await GaryxComposerDurabilityLaunchRecovery(
+                    durability: relaunchedStore,
+                    scopes: scopeRegistry(.active)
+                ).recover()
+                let restored = try await relaunchedStore.load()
+                XCTAssertEqual(
+                    restored.aliases.partitions[scope]?[shape.residualSource]?
+                        .activeOrClosingSessions,
+                    1,
+                    "\(shape.name), relaunch \(relaunch)"
+                )
+                XCTAssertEqual(
+                    restored.aliases.resolve(
+                        shape.residualSource,
+                        scope: scope,
+                        scopes: scopeRegistry(.active)
+                    ),
+                    .resolved(shape.destination),
+                    "\(shape.name), relaunch \(relaunch)"
+                )
+            }
         }
     }
 

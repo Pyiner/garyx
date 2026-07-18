@@ -721,7 +721,7 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
                 scope: scope,
                 source: .draft("D"),
                 target: .thread("T"),
-                activeOrClosingSessions: 2,
+                activeOrClosingSessions: 1,
                 pendingCloseAcknowledgements: 1
             ),
             .established

@@ -943,7 +943,14 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
 
         XCTAssertEqual(
             aliases.retireLineage(
-                startingAt: [discardedSource],
+                releasing: [
+                    .init(
+                        origin: discardedSource,
+                        activeOrClosingSessions: 1,
+                        pendingCloseAcknowledgements: 1,
+                        promotionsInFlight: 1
+                    ),
+                ],
                 endingAt: destination,
                 scope: scope
             ),
@@ -967,17 +974,19 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
         XCTAssertTrue(aliases.invariantHolds)
         XCTAssertEqual(
             aliases.retireLineage(
-                startingAt: [liveSource],
+                releasing: [
+                    .init(origin: liveSource, activeOrClosingSessions: 2),
+                ],
                 endingAt: destination,
                 scope: scope
             ),
             2,
-            "the final predecessor must own full cleanup of the shared suffix"
+            "the final sessions must release the remaining shared suffix occupancy"
         )
         XCTAssertEqual(aliases.aliasCount, 0)
     }
 
-    func testAliasLineageReleaseCountsNestedCapturedOriginsOnlyOnce() {
+    func testAliasLineageReleaseCountsEveryNestedAndDuplicateSessionContribution() {
         let earliestSource = GaryxComposerKey.draft("earliest")
         let liveSource = GaryxComposerKey.draft("live-nested")
         let laterCapturedSource = GaryxComposerKey.thread("later-captured")
@@ -1006,14 +1015,18 @@ final class GaryxComposerInputProtocolTests: XCTestCase {
                 scope: scope,
                 source: laterCapturedSource,
                 target: destination,
-                activeOrClosingSessions: 2
+                activeOrClosingSessions: 4
             ),
             .established
         )
 
         XCTAssertEqual(
             aliases.retireLineage(
-                startingAt: [earliestSource, laterCapturedSource],
+                releasing: [
+                    .init(origin: earliestSource, activeOrClosingSessions: 1),
+                    .init(origin: earliestSource, activeOrClosingSessions: 1),
+                    .init(origin: laterCapturedSource, activeOrClosingSessions: 1),
+                ],
                 endingAt: destination,
                 scope: scope
             ),

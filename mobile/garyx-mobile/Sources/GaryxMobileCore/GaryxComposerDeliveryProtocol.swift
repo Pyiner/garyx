@@ -1128,6 +1128,28 @@ public struct GaryxPayloadDiscardConvergence: Equatable, Codable, Sendable {
     public var persistentTombstoneBytes: Int {
         tombstones.values.reduce(0) { $0 + $1.estimatedBytes }
     }
+    /// Reconstructs the exact alias occupancy owned by the sessions settled
+    /// for this discard. Retired sessions without a tombstone were already
+    /// drained before admission and contribute nothing.
+    public var aliasReleases: [GaryxComposerAliasRelease] {
+        guard let discardRevision = lifecycle.discardRevision else { return [] }
+        return sessions.values.compactMap { session in
+            guard session.key.token == lifecycle.token else { return nil }
+            let tombstoneKey = GaryxDiscardFinalizationTombstoneKey(
+                token: lifecycle.token,
+                discardRevision: discardRevision,
+                sessionID: session.key.sessionID,
+                epoch: session.key.epoch
+            )
+            guard let tombstone = tombstones[tombstoneKey] else { return nil }
+            return GaryxComposerAliasRelease(
+                origin: session.composerKey,
+                activeOrClosingSessions: 1,
+                pendingCloseAcknowledgements: tombstone.disposition
+                    == .closePendingAckConverted ? 1 : 0
+            )
+        }
+    }
 
     /// Orthogonal component 1: every record uses its own phase CAS.
     public mutating func settleDeliveries() {

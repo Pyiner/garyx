@@ -763,13 +763,8 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             if let destination = snapshot.payloadStore
                 .entry(entryID, scope: convergence.barrier.scope)?.destination {
                 var aliases = snapshot.aliases
-                let lineageSources = Set(convergence.sessions.values.compactMap { session in
-                    session.key.token == convergence.lifecycle.token
-                        ? session.composerKey
-                        : nil
-                })
                 _ = aliases.retireLineage(
-                    startingAt: lineageSources,
+                    releasing: convergence.aliasReleases,
                     endingAt: destination,
                     scope: convergence.barrier.scope
                 )

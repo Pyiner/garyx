@@ -905,6 +905,31 @@ public struct GaryxComposerAliasRecord: Equatable, Codable, Sendable {
     }
 }
 
+/// One retiring session's durable contribution to every alias edge on its
+/// forward path. This value is intentionally not persisted independently: the
+/// discard convergence record reconstructs it from stable session tombstones.
+public struct GaryxComposerAliasRelease: Equatable, Sendable {
+    public let origin: GaryxComposerKey
+    public let activeOrClosingSessions: Int
+    public let pendingCloseAcknowledgements: Int
+    public let promotionsInFlight: Int
+
+    public init(
+        origin: GaryxComposerKey,
+        activeOrClosingSessions: Int,
+        pendingCloseAcknowledgements: Int = 0,
+        promotionsInFlight: Int = 0
+    ) {
+        precondition(activeOrClosingSessions >= 0)
+        precondition(pendingCloseAcknowledgements >= 0)
+        precondition(promotionsInFlight >= 0)
+        self.origin = origin
+        self.activeOrClosingSessions = activeOrClosingSessions
+        self.pendingCloseAcknowledgements = pendingCloseAcknowledgements
+        self.promotionsInFlight = promotionsInFlight
+    }
+}
+
 public enum GaryxComposerAliasResolution: Equatable, Sendable {
     case resolved(GaryxComposerKey)
     case rejectedRevokedScope
@@ -988,21 +1013,25 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
         return retired
     }
 
-    /// Releases only forward promotion paths captured by the discarded Entry's
-    /// sessions. The highest captured source on each branch owns that branch's
-    /// occupancy contribution; the same contribution is subtracted from every
-    /// downstream edge. A shared suffix therefore remains routable until all
-    /// of its incoming branches have released their references.
+    /// Releases each retiring session's exact contribution from every alias
+    /// edge on its forward path. Contributions remain an array so two sessions
+    /// with the same origin retain their multiplicity. An edge is removed only
+    /// when its durable counters actually reach zero; graph topology never
+    /// implies ownership of occupancy recorded for another session.
     @discardableResult
     public mutating func retireLineage(
-        startingAt origins: Set<GaryxComposerKey>,
+        releasing contributions: [GaryxComposerAliasRelease],
         endingAt destination: GaryxComposerKey,
         scope: GaryxGatewayScope
     ) -> Int {
-        guard let records = partitions[scope], !records.isEmpty else { return 0 }
-        var paths: [GaryxComposerKey: [GaryxComposerKey]] = [:]
-        for origin in origins {
-            var current = origin
+        guard let records = partitions[scope],
+              !records.isEmpty,
+              !contributions.isEmpty else {
+            return 0
+        }
+        var releases: [GaryxComposerKey: AliasOccupancy] = [:]
+        for contribution in contributions {
+            var current = contribution.origin
             var path: [GaryxComposerKey] = []
             var visited: Set<GaryxComposerKey> = []
             while current != destination,
@@ -1011,63 +1040,16 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
                 path.append(record.source)
                 current = record.target
             }
-            if current == destination {
-                paths[origin] = path
-            }
-        }
-
-        // A later captured session can start on an interior key of an earlier
-        // promotion path. Its occupancy is already represented by that
-        // highest source edge, so treating it as another root would double
-        // release every shared suffix below it.
-        let validOrigins = Set(paths.keys)
-        var nestedOrigins: Set<GaryxComposerKey> = []
-        for path in paths.values {
-            nestedOrigins.formUnion(path.dropFirst().filter(validOrigins.contains))
-        }
-
-        var releases: [GaryxComposerKey: AliasOccupancy] = [:]
-        for origin in validOrigins.subtracting(nestedOrigins) {
-            guard let path = paths[origin],
-                  !path.isEmpty,
-                  let root = records[origin] else {
-                continue
-            }
-            let contribution = AliasOccupancy(root)
+            guard current == destination, !path.isEmpty else { continue }
+            let occupancy = AliasOccupancy(contribution)
             for source in path {
-                releases[source, default: .zero].formUnion(contribution)
-            }
-        }
-
-        let lineageSources = Set(releases.keys)
-        var incoming: [GaryxComposerKey: [GaryxComposerAliasRecord]] = [:]
-        for record in records.values {
-            incoming[record.target, default: []].append(record)
-        }
-        var sharedSources = Set(lineageSources.filter { source in
-            incoming[source]?.contains(where: { !lineageSources.contains($0.source) }) == true
-        })
-        var sharedFrontier = Array(sharedSources)
-        while let source = sharedFrontier.popLast() {
-            guard let target = records[source]?.target,
-                  lineageSources.contains(target) else {
-                continue
-            }
-            if sharedSources.insert(target).inserted {
-                sharedFrontier.append(target)
+                releases[source, default: .zero].add(occupancy)
             }
         }
 
         var retired = 0
         for (source, contribution) in releases {
-            guard sharedSources.contains(source) else {
-                if markDrained(source: source, scope: scope) {
-                    retired += 1
-                }
-                continue
-            }
             guard var record = partitions[scope]?[source] else { continue }
-            let previous = record
             record.activeOrClosingSessions = Self.releasing(
                 contribution.activeOrClosingSessions,
                 from: record.activeOrClosingSessions
@@ -1080,40 +1062,6 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
                 contribution.promotionsInFlight,
                 from: record.promotionsInFlight
             )
-            let survivingPredecessors = incoming[source, default: []].filter {
-                !lineageSources.contains($0.source) || sharedSources.contains($0.source)
-            }
-            var occupancyFloor = AliasOccupancy.zero
-            for predecessor in survivingPredecessors {
-                occupancyFloor.formUnion(AliasOccupancy(predecessor))
-            }
-            record.activeOrClosingSessions = max(
-                record.activeOrClosingSessions,
-                min(previous.activeOrClosingSessions, occupancyFloor.activeOrClosingSessions)
-            )
-            record.pendingCloseAcknowledgements = max(
-                record.pendingCloseAcknowledgements,
-                min(
-                    previous.pendingCloseAcknowledgements,
-                    occupancyFloor.pendingCloseAcknowledgements
-                )
-            )
-            record.promotionsInFlight = max(
-                record.promotionsInFlight,
-                min(previous.promotionsInFlight, occupancyFloor.promotionsInFlight)
-            )
-            if record.canRetire, !survivingPredecessors.isEmpty {
-                // The aggregate counters may predate fan-in accounting. Keep
-                // one existing counter as a conservative routing reference;
-                // the final predecessor's discard will own the full drain.
-                if previous.activeOrClosingSessions > 0 {
-                    record.activeOrClosingSessions = 1
-                } else if previous.pendingCloseAcknowledgements > 0 {
-                    record.pendingCloseAcknowledgements = 1
-                } else if previous.promotionsInFlight > 0 {
-                    record.promotionsInFlight = 1
-                }
-            }
             partitions[scope]?[source] = record
             if retireIfDrained(source: source, scope: scope) {
                 retired += 1
@@ -1167,15 +1115,15 @@ public struct GaryxComposerAliasTable: Equatable, Codable, Sendable {
             self.promotionsInFlight = promotionsInFlight
         }
 
-        init(_ record: GaryxComposerAliasRecord) {
+        init(_ release: GaryxComposerAliasRelease) {
             self.init(
-                activeOrClosingSessions: max(0, record.activeOrClosingSessions),
-                pendingCloseAcknowledgements: max(0, record.pendingCloseAcknowledgements),
-                promotionsInFlight: max(0, record.promotionsInFlight)
+                activeOrClosingSessions: release.activeOrClosingSessions,
+                pendingCloseAcknowledgements: release.pendingCloseAcknowledgements,
+                promotionsInFlight: release.promotionsInFlight
             )
         }
 
-        mutating func formUnion(_ other: Self) {
+        mutating func add(_ other: Self) {
             activeOrClosingSessions = Self.saturatingSum(
                 activeOrClosingSessions,
                 other.activeOrClosingSessions

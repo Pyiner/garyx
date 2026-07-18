@@ -671,14 +671,15 @@ private enum GaryxComposerDurabilityCrashHarness {
             scope: scope,
             source: .draft("D-\(suffix)"),
             target: intermediate,
-            activeOrClosingSessions: 2,
+            activeOrClosingSessions: 1,
             pendingCloseAcknowledgements: 1
         ) == .established,
         aliases.establishPromotion(
             scope: scope,
             source: intermediate,
             target: destination,
-            activeOrClosingSessions: 1
+            activeOrClosingSessions: 1,
+            pendingCloseAcknowledgements: 1
         ) == .established else {
             throw HarnessError.actionRejected("seed session alias")
         }
@@ -825,14 +826,15 @@ private enum GaryxComposerDurabilityCrashHarness {
             scope: scope,
             source: .draft("D-mixed"),
             target: intermediate,
-            activeOrClosingSessions: 2,
+            activeOrClosingSessions: 1,
             pendingCloseAcknowledgements: 1
         ) == .established,
         aliases.establishPromotion(
             scope: scope,
             source: intermediate,
             target: destination,
-            activeOrClosingSessions: 1
+            activeOrClosingSessions: 1,
+            pendingCloseAcknowledgements: 1
         ) == .established else {
             throw HarnessError.actionRejected("seed mixed alias")
         }
