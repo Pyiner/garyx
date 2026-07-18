@@ -121,14 +121,23 @@ independent acceptance surfaces:
   delivery or discard-finalization tombstone, and remains fail-closed when the
   unprunable set alone exceeds the budget. A full 4,096-row SQLite fixture
   proves discard recovery can make room without a permanent launch failure.
+- Durable history is bounded across the remaining record families: advancing
+  a generation hi-lo block moves a persistent no-reuse floor and drops the
+  prior block's exact claims; unsettled ledgers and non-terminal create rows
+  are fail-closed at per-scope/global/byte quotas; terminal ledgers retire in
+  the same transaction that removes their last durable descendant; and
+  terminal create correlations share the count/byte tombstone pool. Focused
+  tests discriminate every count/byte/per-scope gate and a SQLite double
+  relaunch proves that a compacted generation remains unclaimable.
 - Discard resource settlement removes `producerDrained` and recovered-close
   payload records for the stable lifecycle token, returns any persisted send
-  barrier to idle with all envelope/follow-up fields cleared, and removes the
-  Entry in the same transaction. The fixture uses a real `commitSend` drained
-  descendant plus a revoked-ledger recovered close, then reopens SQLite twice
-  and proves that buffered/final/barrier text cannot survive identity discard.
-  The process harness counts all three surfaces in every zero-resource
-  assertion.
+  barrier to idle with all envelope/follow-up fields cleared and then removes
+  that row, and removes the Entry in the same transaction. The fixture uses a
+  real `commitSend` drained descendant plus a revoked-ledger recovered close,
+  then reopens SQLite twice and proves that buffered/final/barrier text and the
+  descendant-free revoked ledger cannot survive identity discard. The process
+  harness now reports total barriers, ledgers, create rows, and exact
+  generation claims in every zero-resource assertion.
 - A pre-admission retired session without a discard tombstone contributes no
   alias release. Its discriminating same-source fixture would consume a live
   sibling reference if the tombstone-presence guard were removed.
@@ -192,6 +201,9 @@ The retained matrix covers:
   processes reopen the same SQLite/WAL files, deterministically evict the
   oldest correlation row, preserve the 4,096 cap, and finish the discard with
   no Entry or convergence residue.
+- reservation-history and generation-claim regression fixtures prove that a
+  terminal ledger remains while rooted, retires with its last child, and that
+  the claim replay fence stays bounded and survives SQLite relaunch.
 
 ## Deletion and wiring checklist
 
@@ -226,8 +238,8 @@ xcodebuild test -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,372 of 1,372 tests with zero failures in
-215.420 seconds; its 17 real-process durability suites passed in 207.257
+The final clean SwiftPM run passed 1,382 of 1,382 tests with zero failures in
+224.052 seconds; its 17 real-process durability suites passed in 215.534
 seconds. The generated Xcode project had zero drift and passed Debug and
 Release generic iOS Simulator builds, and the `GaryxMobile` app-hosted suite
 passed 91 of 91 tests on iPhone 17 Pro / iOS 26.5. Build warnings were
