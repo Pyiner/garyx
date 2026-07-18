@@ -11,7 +11,7 @@ use garyx_models::provider::{
     StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
 };
 use garyx_models::{MessageLedgerEvent, MessageLifecycleStatus, MessageTerminalReason};
-use garyx_router::{InboundRequest, MessageRouter, endpoint_key};
+use garyx_router::{InboundRequest, MessageRouter};
 use prost::Message as ProstMessage;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -1444,88 +1444,50 @@ pub(super) async fn handle_im_message_event(
         file_paths,
     };
 
-    let origin_endpoint_identity =
-        endpoint_key("feishu", runtime.account_id, &request.thread_binding_key);
-    let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
-        runtime.router.clone(),
-        runtime.dispatcher.clone(),
-        request.run_id.clone(),
-        origin_endpoint_identity,
-    );
-    let fanout_consumer = deferred_fanout.consumer(response_callback);
-
-    // Read this run's stream from the durable committed transcript: subscribe
-    // before dispatch and let the replay adapter drive the Feishu sender.
-    // Bound non-origin endpoints attach after route_and_dispatch resolves the
-    // canonical thread id.
-    let replay_subscription = match crate::committed_replay::committed_callback(
-        runtime.bridge,
-        &request.run_id,
-        fanout_consumer,
-    )
-    .await
-    {
-        Ok(subscription) => subscription,
-        Err(error) => {
-            tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Feishu dispatch");
-            return;
-        }
+    let ledger_event = MessageLedgerEvent {
+        ledger_id: format!(
+            "feishu:{}:{}:{}",
+            runtime.account_id, message.chat_id, message.message_id
+        ),
+        bot_id: format!("feishu:{}", runtime.account_id),
+        status: MessageLifecycleStatus::Received,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        thread_id: Some(request.thread_binding_key.clone()),
+        run_id: Some(request.run_id.clone()),
+        channel: Some(request.channel.clone()),
+        account_id: Some(request.account_id.clone()),
+        chat_id: Some(message.chat_id.clone()),
+        from_id: Some(request.from_id.clone()),
+        native_message_id: Some(message.message_id.clone()),
+        text_excerpt: Some(request.message.chars().take(200).collect()),
+        terminal_reason: None,
+        reply_message_id: None,
+        metadata: serde_json::json!({
+            "source": "feishu_inbound",
+            "is_group": is_group,
+            "message_type": message.message_type,
+        }),
     };
-
-    let thread_store = {
-        let router_guard = runtime.router.lock().await;
-        router_guard.thread_store()
+    let run_id_for_log = request.run_id.clone();
+    let pipeline = crate::inbound::InboundPipeline {
+        router: runtime.router,
+        bridge: runtime.bridge,
+        dispatcher: runtime.dispatcher,
     };
-    let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
-        runtime.bridge.as_ref(),
-        deferred_fanout.clone(),
-        thread_store,
-    );
-    let dispatch_callback = replay_subscription.callback();
-
-    let dispatch_result = {
-        let mut router_guard = runtime.router.lock().await;
-        router_guard
-            .record_message_ledger_event(MessageLedgerEvent {
-                ledger_id: format!(
-                    "feishu:{}:{}:{}",
-                    runtime.account_id, message.chat_id, message.message_id
-                ),
-                bot_id: format!("feishu:{}", runtime.account_id),
-                status: MessageLifecycleStatus::Received,
-                created_at: chrono::Utc::now().to_rfc3339(),
-                thread_id: Some(request.thread_binding_key.clone()),
-                run_id: Some(request.run_id.clone()),
-                channel: Some(request.channel.clone()),
-                account_id: Some(request.account_id.clone()),
-                chat_id: Some(message.chat_id.clone()),
-                from_id: Some(request.from_id.clone()),
-                native_message_id: Some(message.message_id.clone()),
-                text_excerpt: Some(request.message.chars().take(200).collect()),
-                terminal_reason: None,
-                reply_message_id: None,
-                metadata: serde_json::json!({
-                    "source": "feishu_inbound",
-                    "is_group": is_group,
-                    "message_type": message.message_type,
-                }),
-            })
-            .await;
-        router_guard
-            .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
-            .await
-    };
+    let dispatch_result = pipeline
+        .dispatch(
+            request,
+            response_callback,
+            Some(ledger_event),
+            |thread_id| {
+                let _ = thread_id_tx.send(thread_id.to_owned());
+            },
+        )
+        .await;
 
     match dispatch_result {
         Ok(result) => {
-            deferred_fanout.attach_thread(&result.thread_id).await;
-            let _ = thread_id_tx.send(result.thread_id.clone());
             let local_reply = result.local_reply;
-            if local_reply.is_some() {
-                replay_subscription.abort();
-            } else {
-                replay_subscription.detach();
-            }
             if let Some(local_reply) = local_reply {
                 match send_native_command_reply(runtime.client, &message.message_id, &local_reply)
                     .await
@@ -1568,8 +1530,10 @@ pub(super) async fn handle_im_message_event(
                 );
             }
         }
-        Err(e) => {
-            replay_subscription.abort();
+        Err(crate::inbound::InboundDispatchFailure::CommittedReplay(error)) => {
+            tracing::error!(run_id = %run_id_for_log, error = %error, "committed replay bus missing for Feishu dispatch");
+        }
+        Err(crate::inbound::InboundDispatchFailure::Dispatch(e)) => {
             error!(
                 account_id = %runtime.account_id,
                 chat_id = %message.chat_id,
