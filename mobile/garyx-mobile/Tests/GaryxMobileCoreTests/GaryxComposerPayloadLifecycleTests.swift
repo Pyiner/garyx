@@ -140,7 +140,9 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
 
     func testOperationCapabilityHappyPathAndIllegalTransitions() {
         var operation = makeOperation("op")
-        let context = activeContext(entry: makeEntry())
+        var entry = makeEntry()
+        entry.addOperation(operation.context.key)
+        let context = activeContext(entry: entry)
         XCTAssertEqual(
             operation.transition(
                 expectedKey: operation.context.key,
@@ -171,6 +173,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertEqual(
             operation.markUploadAttempted(
                 expectedKey: operation.context.key,
+                authoritativeEntry: entry,
                 lifecycle: context.lifecycle,
                 scopes: context.scopes
             ),
@@ -180,6 +183,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertEqual(
             operation.complete(
                 expectedKey: operation.context.key,
+                authoritativeEntry: entry,
                 lifecycle: context.lifecycle,
                 scopes: context.scopes
             ),
@@ -193,9 +197,11 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         let context = activeContext(entry: entry)
 
         var wrongKey = makeOperation("op", state: .uploading)
+        let wrongKeyEntry = entryOwning(wrongKey)
         XCTAssertEqual(
             wrongKey.complete(
                 expectedKey: operationKey("different"),
+                authoritativeEntry: wrongKeyEntry,
                 lifecycle: context.lifecycle,
                 scopes: context.scopes
             ),
@@ -203,6 +209,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         )
 
         var wrongLifecycle = makeOperation("op", state: .uploading)
+        let wrongLifecycleEntry = entryOwning(wrongLifecycle)
         let discarding = GaryxPayloadLifecycleSnapshot(
             token: context.lifecycle.token,
             revision: context.lifecycle.revision + 1,
@@ -211,6 +218,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertEqual(
             wrongLifecycle.complete(
                 expectedKey: wrongLifecycle.context.key,
+                authoritativeEntry: wrongLifecycleEntry,
                 lifecycle: discarding,
                 scopes: context.scopes
             ),
@@ -219,6 +227,7 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertEqual(
             wrongLifecycle.markUploadAttempted(
                 expectedKey: wrongLifecycle.context.key,
+                authoritativeEntry: wrongLifecycleEntry,
                 lifecycle: discarding,
                 scopes: context.scopes
             ),
@@ -229,9 +238,11 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         var revokedScopes = context.scopes
         _ = revokedScopes.revoke(scope)
         var revoked = makeOperation("op", state: .uploading)
+        let revokedEntry = entryOwning(revoked)
         XCTAssertEqual(
             revoked.complete(
                 expectedKey: revoked.context.key,
+                authoritativeEntry: revokedEntry,
                 lifecycle: context.lifecycle,
                 scopes: revokedScopes
             ),
@@ -245,9 +256,11 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             reservedBytes: 100
         )
         invalidIdentity.invalidateIdentity()
+        let invalidIdentityEntry = entryOwning(invalidIdentity)
         XCTAssertEqual(
             invalidIdentity.complete(
                 expectedKey: invalidIdentity.context.key,
+                authoritativeEntry: invalidIdentityEntry,
                 lifecycle: discarding,
                 scopes: context.scopes
             ),
@@ -584,6 +597,90 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
         XCTAssertEqual(rejectedLineage, before.2)
     }
 
+    func testOperationRemovalAcknowledgesFeedbackAndCleansCapabilityAtomically() {
+        for failedTerminal in [false, true] {
+            let state: GaryxOperationCapabilityState = failedTerminal
+                ? .failedTerminal
+                : .failedRetryable
+            var operation = makeOperation(
+                failedTerminal ? "terminal-remove" : "retryable-remove",
+                state: state,
+                stagedAssetID: GaryxStagedAssetID(rawValue: "remove-asset-\(failedTerminal)"),
+                reservedBytes: 48
+            )
+            let entry = makeEntry()
+            let context = activeContext(entry: entry)
+            let lineageID = failedTerminal
+                ? GaryxAttachmentLineageID(rawValue: "remove-lineage")
+                : nil
+            var feedback = GaryxOperationFeedback(
+                id: GaryxFeedbackID(rawValue: "remove-feedback-\(failedTerminal)"),
+                scope: scope,
+                entryID: entry.id,
+                operationID: operation.context.key.operationID,
+                lineageID: lineageID,
+                kind: failedTerminal ? .uploadTerminal : .uploadRetryable
+            )
+            var lineage: GaryxAttachmentLineageTombstone? = lineageID.map {
+                GaryxAttachmentLineageTombstone(
+                    id: $0,
+                    scope: scope,
+                    entryID: entry.id,
+                    attachmentSlotID: GaryxAttachmentID(rawValue: "remove-slot"),
+                    failedOperationID: operation.context.key.operationID,
+                    feedbackID: feedback.id,
+                    payloadLifecycle: operation.context.payloadLifecycle
+                )
+            }
+
+            XCTAssertEqual(
+                GaryxOperationRemovalFeedbackReducer.commit(
+                    operation: &operation,
+                    feedback: &feedback,
+                    lineage: &lineage,
+                    lifecycle: context.lifecycle,
+                    scopes: context.scopes
+                ),
+                .committed
+            )
+            XCTAssertEqual(operation.state, failedTerminal ? .failedTerminal : .cancelled)
+            XCTAssertFalse(operation.identityValid)
+            XCTAssertNil(operation.stagedAssetID)
+            XCTAssertEqual(operation.reservedBytes, 0)
+            XCTAssertEqual(feedback.phase, .acknowledged)
+            if failedTerminal {
+                XCTAssertEqual(lineage?.phase, .released)
+            } else {
+                XCTAssertNil(lineage)
+            }
+        }
+
+        var rejectedOperation = makeOperation("rejected-remove", state: .failedRetryable)
+        var rejectedFeedback = GaryxOperationFeedback(
+            id: GaryxFeedbackID(rawValue: "rejected-remove-feedback"),
+            scope: scope,
+            entryID: entryID,
+            operationID: rejectedOperation.context.key.operationID,
+            kind: .uploadTerminal
+        )
+        var noLineage: GaryxAttachmentLineageTombstone?
+        let beforeOperation = rejectedOperation
+        let beforeFeedback = rejectedFeedback
+        let context = activeContext(entry: makeEntry())
+        XCTAssertEqual(
+            GaryxOperationRemovalFeedbackReducer.commit(
+                operation: &rejectedOperation,
+                feedback: &rejectedFeedback,
+                lineage: &noLineage,
+                lifecycle: context.lifecycle,
+                scopes: context.scopes
+            ),
+            .rejectedFeedback
+        )
+        XCTAssertEqual(rejectedOperation, beforeOperation)
+        XCTAssertEqual(rejectedFeedback, beforeFeedback)
+    }
+
     func testContinuousReplacementChainReclaimsEachPriorJournalRing() {
         let entry = makeEntry()
         let context = activeContext(entry: entry)
@@ -866,8 +963,9 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
                 scope: scope,
                 store: &store
             ),
-            .generationReset
+            .requiresDurableGenerationReset([])
         )
+        XCTAssertEqual(store.entry(entry.id, scope: scope)?.currentText, "draft")
         XCTAssertEqual(store.entry(entry.id, scope: scope)?.lifecycle.phase, .active)
 
         XCTAssertEqual(
@@ -892,6 +990,38 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             .beganDiscard([second.id])
         )
         XCTAssertEqual(secondStore.entry(second.id, scope: scope)?.lifecycle.phase, .discarding)
+    }
+
+    func testStoreOnlyGenerationResetRoutesOperationDescendantsToDurableSettlement() throws {
+        var entry = makeEntry(text: "draft")
+        let operation = makeOperation(
+            "reset-operation",
+            state: .uploading,
+            stagedAssetID: GaryxStagedAssetID(rawValue: "reset-asset"),
+            reservedBytes: 64
+        )
+        entry.addOperation(operation.context.key)
+        var store = GaryxComposerPayloadStore()
+        XCTAssertTrue(store.insert(entry))
+
+        XCTAssertEqual(
+            GaryxPayloadIdentityReducer.apply(
+                .payloadGenerationReset(
+                    entryID: entry.id,
+                    generation: 1,
+                    allocatedGeneration: 2,
+                    barrierIdle: true,
+                    producerLive: true
+                ),
+                scope: scope,
+                store: &store
+            ),
+            .requiresDurableGenerationReset([operation.context.key]),
+            "operation descendants route reset to the atomic durability planner"
+        )
+        let unchanged = try XCTUnwrap(store.entry(entry.id, scope: scope))
+        XCTAssertEqual(unchanged.currentGeneration, 1)
+        XCTAssertTrue(unchanged.operationKeys.contains(operation.context.key))
     }
 
     func testDestinationAndEntryDiscardRejectAllAdmissionKindsWhileAliasAndOccurrenceDoNot() throws {
@@ -997,6 +1127,14 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             entry.lifecycle.snapshot,
             GaryxGatewayScopeRegistry(initialActiveScope: scope)
         )
+    }
+
+    private func entryOwning(
+        _ operation: GaryxOperationCapability
+    ) -> GaryxComposerPayloadEntry {
+        var entry = makeEntry(id: operation.context.key.entryID.rawValue)
+        entry.addOperation(operation.context.key)
+        return entry
     }
 
     private func replacement(

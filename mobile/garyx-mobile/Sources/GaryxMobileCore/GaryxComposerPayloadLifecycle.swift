@@ -234,7 +234,7 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
     }
 
     @discardableResult
-    public mutating func resetGeneration(
+    mutating func resetGeneration(
         _ generation: UInt64,
         to allocatedGeneration: UInt64,
         barrierIdle: Bool,
@@ -244,7 +244,8 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
               barrierIdle,
               producerLive,
               generation == currentGeneration,
-              allocatedGeneration > generation else {
+              allocatedGeneration > generation,
+              !operationKeys.contains(where: { $0.generation == generation }) else {
             return false
         }
         textByGeneration.removeValue(forKey: generation)
@@ -538,15 +539,23 @@ public struct GaryxOperationCapability: Equatable, Codable, Sendable {
     @discardableResult
     public mutating func markUploadAttempted(
         expectedKey: GaryxOperationCapabilityKey,
+        authoritativeEntry: GaryxComposerPayloadEntry,
         lifecycle: GaryxPayloadLifecycleSnapshot,
         scopes: GaryxGatewayScopeRegistry
     ) -> GaryxOperationTransitionDisposition {
         guard expectedKey == context.key else { return .rejectedKey }
+        guard identityValid,
+              authoritativeEntry.id == context.key.entryID,
+              authoritativeEntry.scope == context.key.scope,
+              authoritativeEntry.lifecycle.token == context.payloadLifecycle.token,
+              authoritativeEntry.operationKeys.contains(context.key) else {
+            settleIdentityDiscard()
+            return .archivedIdentityInvalid
+        }
         guard context.payloadLifecycle.isAdmitted(by: lifecycle) else { return .rejectedLifecycle }
         guard scopes.admitDomainEvent(from: context.key.scope) != .rejectedRevoked else {
             return .rejectedScope
         }
-        guard identityValid else { return .archivedIdentityInvalid }
         guard state == .uploading, !uploadAttempted else { return .rejectedState }
         uploadAttempted = true
         return .applied
@@ -590,11 +599,16 @@ public struct GaryxOperationCapability: Equatable, Codable, Sendable {
     @discardableResult
     public mutating func complete(
         expectedKey: GaryxOperationCapabilityKey,
+        authoritativeEntry: GaryxComposerPayloadEntry,
         lifecycle: GaryxPayloadLifecycleSnapshot,
         scopes: GaryxGatewayScopeRegistry
     ) -> GaryxOperationTransitionDisposition {
         guard expectedKey == context.key else { return .rejectedKey }
-        guard identityValid else {
+        guard identityValid,
+              authoritativeEntry.id == context.key.entryID,
+              authoritativeEntry.scope == context.key.scope,
+              authoritativeEntry.lifecycle.token == context.payloadLifecycle.token,
+              authoritativeEntry.operationKeys.contains(context.key) else {
             settleIdentityDiscard()
             return .archivedIdentityInvalid
         }
@@ -1158,6 +1172,78 @@ public enum GaryxReplacementFeedbackSwapReducer {
     }
 }
 
+public enum GaryxOperationRemovalFeedbackDisposition: Equatable, Sendable {
+    case committed
+    case rejectedLifecycle
+    case rejectedScope
+    case rejectedOperation
+    case rejectedFeedback
+    case rejectedLineage
+}
+
+/// Explicit remove is one value transaction: capability cancellation and
+/// resource cleanup cannot publish before the durable feedback acknowledgement
+/// (and failed-terminal lineage release), or vice versa.
+public enum GaryxOperationRemovalFeedbackReducer {
+    public static func commit(
+        operation: inout GaryxOperationCapability,
+        feedback: inout GaryxOperationFeedback,
+        lineage: inout GaryxAttachmentLineageTombstone?,
+        lifecycle: GaryxPayloadLifecycleSnapshot,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> GaryxOperationRemovalFeedbackDisposition {
+        guard operation.context.payloadLifecycle.isAdmitted(by: lifecycle) else {
+            return .rejectedLifecycle
+        }
+        guard scopes.admitDomainEvent(from: operation.context.key.scope) != .rejectedRevoked else {
+            return .rejectedScope
+        }
+        let expectedFeedbackKind: GaryxOperationFeedbackKind
+        switch operation.state {
+        case .failedRetryable:
+            expectedFeedbackKind = .uploadRetryable
+        case .failedTerminal:
+            expectedFeedbackKind = .uploadTerminal
+        case .requested, .preparing, .uploading, .completed, .cancelled, .superseded:
+            return .rejectedOperation
+        }
+        guard !feedback.isTerminal,
+              feedback.scope == operation.context.key.scope,
+              feedback.entryID == operation.context.key.entryID,
+              feedback.operationID == operation.context.key.operationID,
+              feedback.kind == expectedFeedbackKind else {
+            return .rejectedFeedback
+        }
+        if let lineageID = feedback.lineageID {
+            guard let currentLineage = lineage,
+                  currentLineage.id == lineageID,
+                  currentLineage.scope == feedback.scope,
+                  currentLineage.entryID == feedback.entryID,
+                  currentLineage.failedOperationID == operation.context.key.operationID else {
+                return .rejectedLineage
+            }
+        } else if lineage != nil {
+            return .rejectedLineage
+        }
+
+        var nextOperation = operation
+        var nextFeedback = feedback
+        var nextLineage = lineage
+        nextOperation.settleIdentityDiscard()
+        nextFeedback.acknowledge()
+        guard nextFeedback.phase == .acknowledged else { return .rejectedFeedback }
+        if feedback.lineageID != nil {
+            guard nextLineage?.release(after: nextFeedback) == true else {
+                return .rejectedLineage
+            }
+        }
+        operation = nextOperation
+        feedback = nextFeedback
+        lineage = nextLineage
+        return .committed
+    }
+}
+
 public enum GaryxFailedTerminalReattachDisposition: Equatable, Sendable {
     case committed
     case rejectedLineage
@@ -1345,7 +1431,7 @@ public enum GaryxPayloadIdentityEventDisposition: Equatable, Sendable {
     case aliasOnly
     case occurrenceOnly
     case beganDiscard([GaryxComposerPayloadEntryID])
-    case generationReset
+    case requiresDurableGenerationReset([GaryxOperationCapabilityKey])
     case rejected
 }
 
@@ -1380,15 +1466,21 @@ public enum GaryxPayloadIdentityReducer {
             let barrierIdle,
             let producerLive
         ):
-            guard var entry = store.entriesByScope[scope]?[entryID],
-                  entry.resetGeneration(
-                      generation,
-                      to: allocatedGeneration,
-                      barrierIdle: barrierIdle,
-                      producerLive: producerLive
-                  ) else { return .rejected }
-            store.entriesByScope[scope]?[entryID] = entry
-            return .generationReset
+            guard let entry = store.entriesByScope[scope]?[entryID],
+                  entry.lifecycle.phase == .active,
+                  barrierIdle,
+                  producerLive,
+                  generation == entry.currentGeneration,
+                  allocatedGeneration > generation else {
+                return .rejected
+            }
+            let operationKeys = entry.operationKeys
+                .filter { $0.generation == generation }
+                .sorted { $0.operationID.rawValue < $1.operationID.rawValue }
+            // Reset always crosses payload, operation, resource, and hi-lo
+            // durability authorities. Classify it here; only the durability
+            // planner may publish the generation change.
+            return .requiresDurableGenerationReset(operationKeys)
         case .payloadEntryDiscarded(let entryID, let revision):
             guard var entry = store.entriesByScope[scope]?[entryID],
                   entry.beginDiscard(revision: revision) else { return .rejected }

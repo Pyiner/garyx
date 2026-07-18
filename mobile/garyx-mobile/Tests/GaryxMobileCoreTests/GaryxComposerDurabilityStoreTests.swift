@@ -271,6 +271,52 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         )
     }
 
+    func testSyntheticRecoveryBeforeProducerDrainedCommitFallsBackToSealedEnvelope() async throws {
+        let entry = makeEntry(text: "T")
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(entry))
+        let ledger = makeLedger(outcome: nil)
+        var barrier = makeBarrier()
+        XCTAssertEqual(
+            barrier.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(text: "T"),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: entry.lifecycle.snapshot
+            ),
+            .sealed
+        )
+        let initial = GaryxComposerDurabilitySnapshot(
+            payloadStore: payloadStore,
+            barriers: [entry.id: barrier],
+            ledgers: [ledger.key: ledger],
+            generationHighWatermark: 32,
+            reservationHighWatermark: 32
+        )
+        let plan = try XCTUnwrap(
+            GaryxSyntheticReservationRecoveryPlanner.plan(
+                snapshot: initial,
+                ledgerKey: ledger.key,
+                mergeGeneration: 12
+            )
+        )
+
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let recovered = try await fake.commit(plan.transaction)
+        XCTAssertEqual(recovered.payloadStore.entry(entry.id, scope: scope)?.currentText, "T")
+        XCTAssertEqual(recovered.payloadStore.entry(entry.id, scope: scope)?.currentGeneration, 12)
+        XCTAssertEqual(recovered.ledgers[ledger.key]?.terminalOutcome, .revoked)
+        XCTAssertEqual(recovered.ledgers[ledger.key]?.targetMapping?.generation, 12)
+        XCTAssertTrue(recovered.producerDrained.isEmpty)
+        XCTAssertTrue(
+            recovered.recoveredInputClosures.isEmpty,
+            "without a durable producerDrained record the provisional follow-up may be lost"
+        )
+    }
+
     func testNilReservationReplacementDoesNotRequireSendLedger() async throws {
         let fake = GaryxFakeComposerDurabilityStore()
         let replacement = makeReplacement(reservationID: nil)
@@ -282,6 +328,306 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
             )
         )
         XCTAssertEqual(snapshot.replacements[replacement.id], replacement)
+    }
+
+    func testGenerationResetAtomicallyCancelsOperationAndRejectsLateCompletion() async throws {
+        var entry = makeEntry(text: "draft")
+        let assetID = GaryxStagedAssetID(rawValue: "reset-asset")
+        let attachmentID = GaryxAttachmentID(rawValue: "reset-attachment")
+        entry.addAttachment(
+            GaryxComposerAttachment(
+                id: attachmentID,
+                stagedAssetID: assetID,
+                generation: 10,
+                byteCount: 64
+            )
+        )
+        let key = GaryxOperationCapabilityKey(
+            scope: scope,
+            entryID: entry.id,
+            generation: 10,
+            reservationID: nil,
+            branch: .followup,
+            operationID: GaryxOperationID(rawValue: "reset-operation")
+        )
+        entry.addOperation(key)
+        let operation = GaryxOperationCapability(
+            context: GaryxScopeBoundOperationContext(
+                key: key,
+                clientIdentity: "client",
+                configurationFingerprint: "configuration",
+                payloadLifecycle: GaryxPayloadLifecycleCapture(
+                    token: entry.lifecycle.token,
+                    revision: entry.lifecycle.revision
+                )
+            ),
+            state: .uploading,
+            stagedAssetID: assetID,
+            reservedBytes: 64
+        )
+        let manifest = GaryxOperationManifest(
+            key: key,
+            stagedPath: "staging/reset-asset.bin",
+            state: .uploading,
+            uploadAttempted: false
+        )
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(entry))
+        let initial = GaryxComposerDurabilitySnapshot(
+            payloadStore: payloadStore,
+            operations: [key: operation],
+            manifests: [key: manifest],
+            stagedAssetOwners: [assetID: key],
+            stagedAssetReservedBytes: [assetID: 64],
+            reservedBytes: 64,
+            generationHighWatermark: 32
+        )
+        let plan = try XCTUnwrap(
+            GaryxPayloadGenerationResetPlanner.plan(
+                snapshot: initial,
+                scope: scope,
+                entryID: entry.id,
+                generation: 10,
+                allocatedGeneration: 12,
+                producerLive: true
+            )
+        )
+        XCTAssertEqual(plan.cancelledOperationKeys, [key])
+
+        for failpoint in plan.transaction.mutations.indices {
+            let isolated = GaryxFakeComposerDurabilityStore(initial: initial)
+            await isolated.injectFailure(atMutationIndex: failpoint)
+            do {
+                _ = try await isolated.commit(plan.transaction)
+                XCTFail("expected reset failpoint \(failpoint)")
+            } catch {
+                XCTAssertEqual(
+                    error as? GaryxComposerDurabilityError,
+                    .injectedFailure(mutationIndex: failpoint)
+                )
+            }
+            let unchanged = try await isolated.load()
+            XCTAssertEqual(unchanged, initial)
+        }
+
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let reset = try await fake.commit(plan.transaction)
+        let resetEntry = try XCTUnwrap(reset.payloadStore.entry(entry.id, scope: scope))
+        XCTAssertEqual(resetEntry.currentGeneration, 12)
+        XCTAssertEqual(resetEntry.currentText, "")
+        XCTAssertNil(resetEntry.attachments[attachmentID])
+        XCTAssertFalse(resetEntry.operationKeys.contains(key))
+        XCTAssertNil(reset.operations[key])
+        XCTAssertNil(reset.manifests[key])
+        XCTAssertNil(reset.stagedAssetOwners[assetID])
+        XCTAssertEqual(reset.reservedBytes, 0)
+        XCTAssertEqual(reset.claimedGenerations, [12])
+
+        let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope)
+        var lateCompletion = operation
+        XCTAssertEqual(
+            lateCompletion.complete(
+                expectedKey: key,
+                authoritativeEntry: resetEntry,
+                lifecycle: resetEntry.lifecycle.snapshot,
+                scopes: scopes
+            ),
+            .archivedIdentityInvalid
+        )
+        XCTAssertEqual(lateCompletion.state, .cancelled)
+        XCTAssertNil(lateCompletion.stagedAssetID)
+        XCTAssertEqual(lateCompletion.reservedBytes, 0)
+
+        var lateTransportAttempt = operation
+        XCTAssertEqual(
+            lateTransportAttempt.markUploadAttempted(
+                expectedKey: key,
+                authoritativeEntry: resetEntry,
+                lifecycle: resetEntry.lifecycle.snapshot,
+                scopes: scopes
+            ),
+            .archivedIdentityInvalid
+        )
+        XCTAssertFalse(lateTransportAttempt.uploadAttempted)
+    }
+
+    func testGenerationResetWithoutOperationsStillClaimsDurableHiLoIdentity() async throws {
+        let entry = makeEntry(text: "draft")
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(entry))
+        let initial = GaryxComposerDurabilitySnapshot(
+            payloadStore: payloadStore,
+            generationHighWatermark: 32
+        )
+        let plan = try XCTUnwrap(
+            GaryxPayloadGenerationResetPlanner.plan(
+                snapshot: initial,
+                scope: scope,
+                entryID: entry.id,
+                generation: 10,
+                allocatedGeneration: 11,
+                producerLive: true
+            )
+        )
+        XCTAssertTrue(plan.cancelledOperationKeys.isEmpty)
+
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let reset = try await fake.commit(plan.transaction)
+        let resetEntry = try XCTUnwrap(reset.payloadStore.entry(entry.id, scope: scope))
+        XCTAssertEqual(resetEntry.currentGeneration, 11)
+        XCTAssertEqual(resetEntry.currentText, "")
+        XCTAssertEqual(resetEntry.lifecycle.token, entry.lifecycle.token)
+        XCTAssertEqual(reset.claimedGenerations, [11])
+    }
+
+    func testOperationRemovalAndFeedbackAcknowledgementPublishAsOneTransaction() async throws {
+        var entry = makeEntry(text: "surviving text")
+        let key = GaryxOperationCapabilityKey(
+            scope: scope,
+            entryID: entry.id,
+            generation: 10,
+            reservationID: nil,
+            branch: .followup,
+            operationID: GaryxOperationID(rawValue: "terminal-remove")
+        )
+        let assetID = GaryxStagedAssetID(rawValue: "terminal-remove-asset")
+        let feedbackID = GaryxFeedbackID(rawValue: "terminal-remove-feedback")
+        let lineageID = GaryxAttachmentLineageID(rawValue: "terminal-remove-lineage")
+        entry.addOperation(key)
+        entry.addFeedbackReference(feedbackID)
+        let operation = GaryxOperationCapability(
+            context: GaryxScopeBoundOperationContext(
+                key: key,
+                clientIdentity: "client",
+                configurationFingerprint: "configuration",
+                payloadLifecycle: GaryxPayloadLifecycleCapture(
+                    token: entry.lifecycle.token,
+                    revision: entry.lifecycle.revision
+                )
+            ),
+            state: .failedTerminal,
+            stagedAssetID: assetID,
+            reservedBytes: 48
+        )
+        let manifest = GaryxOperationManifest(
+            key: key,
+            stagedPath: "staging/terminal-remove.bin",
+            state: .failedTerminal,
+            uploadAttempted: true
+        )
+        let feedback = GaryxOperationFeedback(
+            id: feedbackID,
+            scope: scope,
+            entryID: entry.id,
+            operationID: key.operationID,
+            lineageID: lineageID,
+            kind: .uploadTerminal
+        )
+        let lineage = GaryxAttachmentLineageTombstone(
+            id: lineageID,
+            scope: scope,
+            entryID: entry.id,
+            attachmentSlotID: GaryxAttachmentID(rawValue: "terminal-remove-slot"),
+            failedOperationID: key.operationID,
+            feedbackID: feedbackID,
+            payloadLifecycle: operation.context.payloadLifecycle
+        )
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(entry))
+        let initial = GaryxComposerDurabilitySnapshot(
+            payloadStore: payloadStore,
+            operations: [key: operation],
+            manifests: [key: manifest],
+            feedback: [feedbackID: feedback],
+            attachmentLineages: [lineageID: lineage],
+            stagedAssetOwners: [assetID: key],
+            stagedAssetReservedBytes: [assetID: 48],
+            pendingFileCleanup: [assetID: key],
+            reservedBytes: 48
+        )
+        let plan = try XCTUnwrap(
+            GaryxOperationRemovalFeedbackPlanner.plan(
+                snapshot: initial,
+                operationKey: key,
+                feedbackID: feedbackID,
+                scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
+            )
+        )
+
+        for failpoint in plan.transaction.mutations.indices {
+            let isolated = GaryxFakeComposerDurabilityStore(initial: initial)
+            await isolated.injectFailure(atMutationIndex: failpoint)
+            do {
+                _ = try await isolated.commit(plan.transaction)
+                XCTFail("expected remove-action failpoint \(failpoint)")
+            } catch {
+                XCTAssertEqual(
+                    error as? GaryxComposerDurabilityError,
+                    .injectedFailure(mutationIndex: failpoint)
+                )
+            }
+            let unchanged = try await isolated.load()
+            XCTAssertEqual(unchanged, initial)
+        }
+
+        let fake = GaryxFakeComposerDurabilityStore(initial: initial)
+        let removed = try await fake.commit(plan.transaction)
+        let survivingEntry = try XCTUnwrap(removed.payloadStore.entry(entry.id, scope: scope))
+        XCTAssertEqual(survivingEntry.currentText, "surviving text")
+        XCTAssertFalse(survivingEntry.operationKeys.contains(key))
+        XCTAssertFalse(survivingEntry.feedbackReferences.contains(feedbackID))
+        XCTAssertNil(removed.operations[key])
+        XCTAssertNil(removed.manifests[key])
+        XCTAssertNil(removed.stagedAssetOwners[assetID])
+        XCTAssertNil(removed.pendingFileCleanup[assetID])
+        XCTAssertEqual(removed.reservedBytes, 0)
+        XCTAssertEqual(removed.feedback[feedbackID]?.phase, .acknowledged)
+        XCTAssertEqual(removed.attachmentLineages[lineageID]?.phase, .released)
+    }
+
+    func testSealedBarrierRequiresMatchingReservationLedgerFirst() async throws {
+        let entry = makeEntry(text: "draft")
+        var barrier = makeBarrier()
+        XCTAssertEqual(
+            barrier.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(text: "draft"),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: entry.lifecycle.snapshot
+            ),
+            .sealed
+        )
+        let missingLedger = GaryxFakeComposerDurabilityStore()
+        do {
+            _ = try await missingLedger.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "barrier without ledger",
+                    mutations: [.upsertBarrier(barrier)]
+                )
+            )
+            XCTFail("expected ledger-first rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? GaryxComposerDurabilityError,
+                .invariantViolation("send barrier requires reservation ledger first")
+            )
+        }
+        let unchanged = try await missingLedger.load()
+        XCTAssertEqual(unchanged, GaryxComposerDurabilitySnapshot())
+
+        let ordered = GaryxFakeComposerDurabilityStore()
+        let committed = try await ordered.commit(
+            .init(
+                expectedRevision: 0,
+                label: "ledger then barrier",
+                mutations: [.upsertLedger(makeLedger(outcome: nil)), .upsertBarrier(barrier)]
+            )
+        )
+        XCTAssertEqual(committed.barriers[entry.id], barrier)
     }
 
     func testCommitSendThreeInOneTransactionPublishesLedgerPayloadAndDeliveryTogether() async throws {

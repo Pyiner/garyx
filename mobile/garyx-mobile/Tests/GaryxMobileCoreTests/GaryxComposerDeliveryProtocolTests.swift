@@ -407,6 +407,52 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         XCTAssertNil(records[id]?.envelope, "ingress keeps only bounded evidence")
     }
 
+    func testEvidenceIngressRemainsOrthogonalAfterAmbiguousUserDisposition() throws {
+        for restoredToDraft in [false, true] {
+            let suffix = restoredToDraft ? "restored" : "duplicate"
+            let id = deliveryID(suffix)
+            let correlationID = "correlation-\(suffix)"
+            var record = makeDelivery(suffix, correlationID: correlationID)
+            XCTAssertTrue(record.markTransportAttempted())
+            XCTAssertTrue(record.markAmbiguous())
+
+            if restoredToDraft {
+                var conflict = makeConflictSet(suffix)
+                guard case .restored = GaryxDeliveryDraftRecoveryReducer.restore(
+                    record: &record,
+                    conflictSet: &conflict,
+                    candidate: conflictCandidate(suffix),
+                    membershipDurabilityAvailable: true
+                ) else {
+                    return XCTFail("expected restored-to-draft disposition")
+                }
+            } else {
+                XCTAssertNotNil(
+                    record.resendAsDuplicate(
+                        newRecordID: deliveryID("new-\(suffix)"),
+                        newClientIntentID: "intent-\(suffix)"
+                    )
+                )
+            }
+            let terminalPhase = record.phase
+            let terminalDisposition = record.userDisposition
+            var records = [id: record]
+
+            XCTAssertEqual(
+                GaryxDeliveryEvidenceIngress.acknowledge(
+                    correlationID: correlationID,
+                    authenticatedScope: scope,
+                    records: &records
+                ),
+                .updated(id),
+                "late evidence must remain orthogonal after user disposition"
+            )
+            XCTAssertEqual(records[id]?.phase, terminalPhase)
+            XCTAssertEqual(records[id]?.userDisposition, terminalDisposition)
+            XCTAssertEqual(records[id]?.evidence, .serverAcknowledged)
+        }
+    }
+
     func testQuotaBoundariesAreInclusiveAndNeverRequireEviction() {
         let envelope = makeEnvelope(text: "1234")
         let within = GaryxDeliveryQuota(

@@ -427,11 +427,11 @@ public enum GaryxDeliveryEvidenceIngress {
             return .ambiguousCorrelation
         }
         switch record.phase {
-        case .transportAttempted, .ambiguous, .evidence:
+        case .transportAttempted, .ambiguous, .evidence, .abandoned, .supersededByDuplicate:
             break
         case .acknowledged, .terminalEvidence:
             return .updated(id)
-        case .notDispatched, .cancelledByDiscard, .abandoned, .supersededByDuplicate:
+        case .notDispatched, .cancelledByDiscard:
             return .rejectedPhase
         }
         records[id]?.recordServerAcknowledgement()

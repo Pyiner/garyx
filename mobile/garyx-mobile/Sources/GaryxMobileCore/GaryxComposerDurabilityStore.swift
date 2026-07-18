@@ -386,6 +386,238 @@ public enum GaryxSyntheticReservationRecoveryPlanner {
     }
 }
 
+public struct GaryxPayloadGenerationResetPlan: Equatable, Sendable {
+    public let entryID: GaryxComposerPayloadEntryID
+    public let clearedGeneration: UInt64
+    public let allocatedGeneration: UInt64
+    public let cancelledOperationKeys: [GaryxOperationCapabilityKey]
+    public let transaction: GaryxComposerDurabilityTransaction
+
+    public init(
+        entryID: GaryxComposerPayloadEntryID,
+        clearedGeneration: UInt64,
+        allocatedGeneration: UInt64,
+        cancelledOperationKeys: [GaryxOperationCapabilityKey],
+        transaction: GaryxComposerDurabilityTransaction
+    ) {
+        self.entryID = entryID
+        self.clearedGeneration = clearedGeneration
+        self.allocatedGeneration = allocatedGeneration
+        self.cancelledOperationKeys = cancelledOperationKeys
+        self.transaction = transaction
+    }
+}
+
+/// Plans PayloadGenerationReset as one durability transaction. The lightweight
+/// identity reducer rejects entries with operation descendants; this planner is
+/// the only reset path that may clear them because it cancels capability state,
+/// manifest ownership, staged files/quota, feedback references, and the Entry
+/// generation before publishing any part of the result.
+public enum GaryxPayloadGenerationResetPlanner {
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        scope: GaryxGatewayScope,
+        entryID: GaryxComposerPayloadEntryID,
+        generation: UInt64,
+        allocatedGeneration: UInt64,
+        producerLive: Bool
+    ) -> GaryxPayloadGenerationResetPlan? {
+        guard producerLive,
+              allocatedGeneration > generation,
+              allocatedGeneration <= snapshot.generationHighWatermark,
+              !snapshot.claimedGenerations.contains(allocatedGeneration),
+              snapshot.barriers[entryID].map({ $0.phase == .idle }) ?? true,
+              var entry = snapshot.payloadStore.entry(entryID, scope: scope),
+              entry.lifecycle.phase == .active,
+              entry.currentGeneration == generation else {
+            return nil
+        }
+
+        let affectedKeys = Set(entry.operationKeys)
+            .union(snapshot.operations.keys)
+            .union(snapshot.manifests.keys)
+            .filter {
+                $0.scope == scope
+                    && $0.entryID == entryID
+                    && $0.generation == generation
+            }
+            .sorted { lhs, rhs in
+                lhs.operationID.rawValue < rhs.operationID.rawValue
+            }
+        let affectedKeySet = Set(affectedKeys)
+        let affectedOperationIDs = Set(affectedKeys.map(\.operationID))
+        let affectedReplacementIDs = snapshot.replacements.values
+            .filter {
+                $0.scope == scope
+                    && $0.entryID == entryID
+                    && (affectedKeySet.contains($0.oldKey)
+                        || $0.newKey.map(affectedKeySet.contains) == true)
+            }
+            .map(\.id)
+            .sorted { $0.rawValue < $1.rawValue }
+
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .claimGeneration(allocatedGeneration),
+        ]
+        for key in affectedKeys {
+            if var operation = snapshot.operations[key] {
+                operation.settleIdentityDiscard()
+                mutations.append(.upsertOperation(operation))
+            }
+        }
+
+        var affectedAssets = Set(
+            snapshot.stagedAssetOwners.compactMap { assetID, owner in
+                affectedKeySet.contains(owner) ? assetID : nil
+            }
+        )
+        for replacementID in affectedReplacementIDs {
+            if let replacement = snapshot.replacements[replacementID] {
+                affectedAssets.insert(replacement.stagedAssetID)
+            }
+        }
+        for assetID in affectedAssets.sorted(by: { $0.rawValue < $1.rawValue }) {
+            if snapshot.pendingFileCleanup[assetID] != nil {
+                mutations.append(.completeFileCleanup(assetID))
+            }
+            if snapshot.stagedAssetOwners[assetID] != nil {
+                mutations.append(.releaseStagedAsset(assetID))
+            }
+        }
+
+        for key in affectedKeys {
+            mutations.append(.removeManifest(key))
+            mutations.append(.removeOperation(key))
+            entry.removeOperation(key)
+        }
+        for replacementID in affectedReplacementIDs {
+            mutations.append(.removeReplacement(replacementID))
+        }
+
+        let affectedFeedback = snapshot.feedback.values
+            .filter {
+                $0.scope == scope
+                    && $0.entryID == entryID
+                    && $0.operationID.map(affectedOperationIDs.contains) == true
+            }
+            .sorted { $0.id.rawValue < $1.id.rawValue }
+        for originalFeedback in affectedFeedback {
+            var feedback = originalFeedback
+            feedback.archive()
+            mutations.append(.upsertFeedback(feedback))
+            entry.removeFeedbackReference(feedback.id)
+            if let lineageID = feedback.lineageID,
+               var lineage = snapshot.attachmentLineages[lineageID],
+               lineage.release(after: feedback) {
+                mutations.append(.upsertAttachmentLineage(lineage))
+            }
+        }
+
+        guard entry.resetGeneration(
+            generation,
+            to: allocatedGeneration,
+            barrierIdle: true,
+            producerLive: true
+        ) else {
+            return nil
+        }
+        mutations.append(.upsertEntry(entry))
+
+        return GaryxPayloadGenerationResetPlan(
+            entryID: entryID,
+            clearedGeneration: generation,
+            allocatedGeneration: allocatedGeneration,
+            cancelledOperationKeys: affectedKeys,
+            transaction: GaryxComposerDurabilityTransaction(
+                expectedRevision: snapshot.revision,
+                label: "payload generation reset",
+                mutations: mutations
+            )
+        )
+    }
+}
+
+public struct GaryxOperationRemovalFeedbackPlan: Equatable, Sendable {
+    public let operationKey: GaryxOperationCapabilityKey
+    public let feedbackID: GaryxFeedbackID
+    public let transaction: GaryxComposerDurabilityTransaction
+
+    public init(
+        operationKey: GaryxOperationCapabilityKey,
+        feedbackID: GaryxFeedbackID,
+        transaction: GaryxComposerDurabilityTransaction
+    ) {
+        self.operationKey = operationKey
+        self.feedbackID = feedbackID
+        self.transaction = transaction
+    }
+}
+
+/// Plans the explicit remove action as one durability transaction. The failure
+/// chip is acknowledged only in the same publication that cancels and removes
+/// its operation child, releases staged-file quota, clears the Entry reference,
+/// and releases any failed-terminal attachment lineage.
+public enum GaryxOperationRemovalFeedbackPlanner {
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        operationKey: GaryxOperationCapabilityKey,
+        feedbackID: GaryxFeedbackID,
+        scopes: GaryxGatewayScopeRegistry
+    ) -> GaryxOperationRemovalFeedbackPlan? {
+        guard var entry = snapshot.payloadStore.entry(
+                  operationKey.entryID,
+                  scope: operationKey.scope
+              ),
+              entry.operationKeys.contains(operationKey),
+              entry.feedbackReferences.contains(feedbackID),
+              var operation = snapshot.operations[operationKey],
+              var feedback = snapshot.feedback[feedbackID] else {
+            return nil
+        }
+        var lineage = feedback.lineageID.flatMap { snapshot.attachmentLineages[$0] }
+        guard GaryxOperationRemovalFeedbackReducer.commit(
+            operation: &operation,
+            feedback: &feedback,
+            lineage: &lineage,
+            lifecycle: entry.lifecycle.snapshot,
+            scopes: scopes
+        ) == .committed else {
+            return nil
+        }
+
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .upsertOperation(operation),
+        ]
+        if let assetID = snapshot.operations[operationKey]?.stagedAssetID {
+            if snapshot.pendingFileCleanup[assetID] == operationKey {
+                mutations.append(.completeFileCleanup(assetID))
+            }
+            if snapshot.stagedAssetOwners[assetID] == operationKey {
+                mutations.append(.releaseStagedAsset(assetID))
+            }
+        }
+        mutations.append(.removeManifest(operationKey))
+        mutations.append(.removeOperation(operationKey))
+        mutations.append(.upsertFeedback(feedback))
+        if let lineage {
+            mutations.append(.upsertAttachmentLineage(lineage))
+        }
+        entry.removeOperation(operationKey)
+        entry.removeFeedbackReference(feedbackID)
+        mutations.append(.upsertEntry(entry))
+
+        return GaryxOperationRemovalFeedbackPlan(
+            operationKey: operationKey,
+            feedbackID: feedbackID,
+            transaction: GaryxComposerDurabilityTransaction(
+                expectedRevision: snapshot.revision,
+                label: "remove failed operation and acknowledge feedback",
+                mutations: mutations
+            )
+        )
+    }
+}
+
 public enum GaryxComposerDurabilityError: Error, Equatable, Sendable {
     case revisionConflict(expected: UInt64, actual: UInt64)
     case invariantViolation(String)
@@ -501,6 +733,13 @@ public actor GaryxFakeComposerDurabilityStore: GaryxComposerDurabilityStore {
         case .removeAttachmentLineage(let id):
             state.attachmentLineages.removeValue(forKey: id)
         case .upsertBarrier(let barrier):
+            try requireLedgerIfNeeded(
+                scope: barrier.scope,
+                entryID: barrier.entryID,
+                reservationID: barrier.reservationID,
+                state: state,
+                descendant: "send barrier"
+            )
             state.barriers[barrier.entryID] = barrier
         case .upsertLedger(let ledger):
             state.ledgers[ledger.key] = ledger
