@@ -30,10 +30,13 @@ A4b and A4d-2 consume this layer later.
 - Payload generations and send reservation IDs use a durable hi-lo allocator:
   block refill pre-raises the persisted high watermark, in-block allocations
   perform no database commit, and relaunch skips every unused prior-process ID.
-- Protected staging reserves owner and bytes before copying, uses a protected
-  app-private/excluded-from-backup directory, file fsync + atomic rename +
-  directory fsync, durable condemned-file cleanup, and launch removal of
-  interrupted `.partial-*` copies.
+- Protected staging reserves owner and bytes before copying, creates each
+  `.partial-*` file with mode `0600`, and applies the iOS protection class plus
+  backup exclusion before writing its first byte. It then streams the source,
+  performs file fsync + atomic rename + final-path protection + directory
+  fsync, records durable condemned-file cleanup, and removes interrupted
+  partial copies at launch. The SQLite main, WAL, and SHM files receive the
+  same app-private protection and backup policy.
 
 ## Reviewer pins
 
@@ -50,9 +53,9 @@ A4b and A4d-2 consume this layer later.
 
 ## Adversarial recovery remediation
 
-The first cross-model adversarial pass found five compound-state shapes that
-the original single-operation fixtures did not exercise. They are now closed
-as independent acceptance surfaces:
+Two cross-model adversarial passes found compound-state shapes that the
+original single-operation fixtures did not exercise. They are now closed as
+independent acceptance surfaces:
 
 - Scope revoke settles every operation, manifest, staged owner, replacement,
   feedback, and lineage for an Entry before removing that shared Entry in one
@@ -71,13 +74,38 @@ as independent acceptance surfaces:
 - Launch feedback IDs encode the complete scope/Entry/generation/reservation/
   branch/operation identity with length-delimited components. Two Entries may
   use the same local operation ID without sharing a feedback record.
-- Discard retires the complete connected alias lineage, including
-  `D -> T1 -> T2`; cross-promotion and 500-churn fixtures now use this
-  multi-hop shape and finish with zero aliases.
+- Discard retires only the captured forward alias paths from that Entry's
+  stable-token origins to its destination, including `D -> T1 -> T2`.
+  Cross-promotion and 500-churn fixtures use the multi-hop shape and finish
+  with zero owned aliases, while a `D1 -> T <- D2` fan-in fixture proves that
+  discarding D1 does not retire D2's still-live path.
 - Ownerless-manifest recovery removes the corresponding Entry operation
   membership in the same transaction. Concrete double-relaunch and real
   pre-/post-commit process-kill tests prove the recovery branch cannot reject
   its own result on every subsequent launch.
+- Replacement abort now settles any provisional staged-file owner operation,
+  manifest, and Entry membership in the same transaction as condemned-file
+  registration. An unowned provisional file uses a non-live cleanup identity,
+  preserving the old operation and its canonical asset. Revoked replacement
+  recovery delegates to the same whole-Entry or child-only settlement vote as
+  operation recovery, so the replacement loop cannot create a transaction
+  that violates the store's cleanup-owner invariant.
+- A superseded O1 is lineage, not an independent payload-erase vote. The mixed
+  `{O1 superseded, O2 failedRetryable} x revoked` fixture removes O2 and its
+  descendants while preserving sibling text/attachments and O1's lineage-only
+  audit shape.
+- Scope-revoke fixtures now seed replacement, feedback, and attachment-lineage
+  records in both child-only and whole-Entry paths, and assert that every
+  record family is removed without disturbing unrelated siblings.
+- Delivery monotonicity tests independently reject record-identity rewrites,
+  envelope resurrection/regression, and illegal user-disposition transitions;
+  the one allowed `payloadDiscarded -> scopeRevoked` transition remains
+  covered. A server acknowledgement received after terminal evidence is an
+  idempotent no-op rather than a phase regression.
+- An app-hosted iOS 26.5 suite observes the required protection class after
+  Foundation accepts it at the temporary copied boundary and final staged
+  path. It also tampers and reopens the SQLite sidecars, then proves that the
+  main database, WAL, and SHM are all re-protected and excluded from backup.
 
 ## Fifth-layer process harness
 
@@ -102,6 +130,14 @@ The retained matrix covers:
 - one shared Entry with two durable operation/manifests under all three scope
   lifecycles, killed both before and after recovery commit, then relaunched
   twice with operation membership, owners, quota, and cleanup all settled;
+- pending, aborted, and committed replacement records x active, suspended, and
+  revoked scope x kill before/after the recovery commit (18 cells), each
+  relaunched twice against the same SQLite/WAL files. Active/suspended
+  committed replacements restore O2; every abort path atomically settles its
+  provisional owner without deleting sibling text or attachments;
+- a separate whole-Entry revoked replacement case, killed before and after
+  recovery commit and relaunched twice, that proves replacement, feedback,
+  lineage, manifest, owner, quota, membership, and physical asset cleanup;
 - every operation state × destination discard, each killed after durable
   admission and again during convergence, ending with zero owner, manifest,
   replacement, feedback, quota, cleanup, or payload residue;
@@ -155,9 +191,9 @@ xcodebuild test -project GaryxMobile.xcodeproj \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The final clean SwiftPM run passed 1,354 of 1,354 tests with zero failures in
-214.077 seconds; its 14 real-process durability suites passed in 206.893
+The final clean SwiftPM run passed 1,364 of 1,364 tests with zero failures in
+238.911 seconds; its 16 real-process durability suites passed in 222.880
 seconds. The generated Xcode project passed Debug and Release generic
-iOS Simulator builds, and the `GaryxMobile` app-hosted suite passed 89 of 89
+iOS Simulator builds, and the `GaryxMobile` app-hosted suite passed 91 of 91
 tests on iPhone 17 Pro / iOS 26.5. Build warnings were pre-existing app-source
 deprecations; the A4d-1 files emitted no warnings.
