@@ -1,6 +1,6 @@
 # Tool Projection: File Change Bodies (Write / Edit)
 
-Status: v4 for review (v3 FAIL findings addressed)
+Status: v5 for review (v4 FAIL findings addressed)
 Date: 2026-07-18
 
 ## Problem
@@ -142,14 +142,29 @@ pub struct RenderToolFieldProjection {
 }
 ```
 
-**Structural invariants** (encoded, not advisory): a recipe is present only
-if it has at least one segment, and a `Pair` carries at least one side.
-Derivations that would violate this (empty `edits`, empty `changes`, a pair
-with both sides missing) produce `None`, so the merge rule sees them as "no
-recipe". On decode, a recipe violating these invariants is a malformed
-projection and takes the lossy boundary (below). Invariants constrain
-selector *presence* only — a present selector may still resolve to an empty
-string at render time (composition semantics cover that).
+**Structural invariants** (unrepresentable, not advisory): a recipe holds
+at least one segment, and a `Pair` carries at least one side. These are
+enforced by construction — private fields with checked constructors (a
+non-empty segments wrapper; `Pair` construction requires a side) — so the
+server *cannot* build or serialize an illegal recipe, and by a custom
+`Deserialize` (decode into a raw shadow shape, then validate via the same
+constructors) that keeps the wire shape given above, so an illegal recipe
+*fails decode*. On the client, a failing recipe decode is a malformed
+projection and takes the lossy boundary (below). Plain derive would accept
+empty `Vec`s and double-`None` pairs; that is explicitly not sufficient.
+
+**Zero-contribution pruning (derive time).** The deriver holds the
+committed raw values, so visual emptiness is decided where the values are
+known, not at merge time. A segment side whose raw value is an empty
+string, missing, or not a string contributes nothing; whitespace-only
+values still contribute. Segments with no contributing side are dropped at
+derivation; a derivation whose segments all drop yields `None` (empty
+`edits`/`changes` fall out of this rule too). This closes the call-wins
+hole where a structurally valid but visually empty call recipe (`Write`
+with `content: ""`, `Edit` with both strings empty) would suppress a valid
+result-side recipe and render nothing. Render-time composition semantics
+below still cover values that later resolve empty on the client (e.g. the
+source body is not loaded).
 
 **Raw resolution path.** Clients resolve diff operands with a dedicated
 raw-string resolution: recipe `source` body + value selector → the exact
@@ -223,24 +238,34 @@ none behind.
    enumerate into `Unified` segments with value selectors pointing at the
    exact strings. Non-composable values produce no segments and remain
    available to scalar selection as ordinary values.
-2. **Scalar selection is independent and loses nothing else.** The
-   `changes`/`diff` entries leave the scalar key lists; scalar call/result
-   selection excludes only the values the diff scan consumed. `{output,
-   diff}` therefore projects `output` as the result *and* a diff recipe;
-   a Generic call `{diff: "+x"}` gets a diff recipe instead of degrading
-   to a whole-arguments JSON parameters selector (suppress the JSON
-   fallback for values fully consumed by the scan; other keys still
-   project as today).
+2. **Scalar selection is independent, loses nothing else, and never
+   re-renders consumed values.** The `changes`/`diff` entries leave the
+   scalar key lists; scalar call/result selection excludes the values the
+   diff scan consumed. `{output, diff}` therefore projects `output` as the
+   result *and* a diff recipe. Because a location-only selector cannot
+   express "this object minus its consumed keys", **the whole-object JSON
+   fallback is suppressed whenever the pass consumed a value**: only
+   precisely selectable scalars (the ordinary key lists) remain eligible.
+   A Generic call `{diff: "+x"}` gets a diff recipe and an empty call —
+   not a whole-arguments JSON selector that would repeat the diff; a
+   Generic call `{foo: 1, bar: 2, diff: "+x"}` gets the recipe plus
+   whatever single key the ordinary lists select (here: nothing), never
+   the enclosing object.
 3. **Structured pair shapes — file kinds only.** For `FileWrite`/`FileEdit`
    call passes, in preference order after pre-rendered diffs:
    `old_string`/`new_string` on the input → one `Pair`; `edits` array
    (`MultiEdit`) → one `Pair` per element; `content`/`new_source`
    (`Write`, `NotebookEdit`) → one `Pair` with `old` absent. A `content`
    key outside these kinds keeps its existing output/text meaning.
-4. **Summary slot — file path.** When the call pass derived a recipe,
-   select the path (`file_path`, `filePath`, `AbsolutePath`, `TargetFile`,
-   `notebook_path`, `path`, `file`) into `summary` with `label: file`,
-   `format: path`. If no path key exists, keep the existing
+4. **Summary owns the path; `call` is forced empty.** When the call pass
+   derived a recipe for a file-kind tool, the path (`file_path`,
+   `filePath`, `AbsolutePath`, `TargetFile`, `notebook_path`, `path`,
+   `file`) belongs exclusively to `summary` (`label: file`,
+   `format: path`) and **`call` is `None`** — scalar call selection does
+   not run for these rows. Without this rule the path-first key list would
+   re-select `file_path` into `call` after `content` was consumed, and the
+   existing "summary equals call" filter would then drop the summary,
+   recreating today's bug shape. If no path key exists, keep the existing
    `CALL_SUMMARY_KEYS` behavior.
 5. **Classification sweep.** `NotebookEdit` currently classifies as
    `Generic` (its compacted name matches no rule); add it to `FileEdit`.
@@ -367,15 +392,30 @@ after the implementation**, at every layer that changes.
    - Codex `fileChange` → indexed Unified segments; merge rule: call-side
      recipe retained, result-side recipe ignored; result-only derivation
      (no call pass) adopts the `tool_result` recipe.
-   - Orthogonal scan: Generic call `{diff: "+x"}` → recipe (no JSON
-     degradation); Generic result `{output, diff}` → `output` result
-     selector *and* a `tool_result` recipe; `{diff: {diff: "…"}}` object
-     shape → selector into the inner key; non-composable `diff` values
-     produce no recipe and stay available to scalar selection. No
-     `Format::Diff`/`Label::Diff` production remains (grep-pinned).
-   - Structural invariants: empty `edits`/`changes` derive `None`; the
-     merge test "empty call derivation + valid result recipe → result
-     adopted". All four merge-table cases.
+   - Slot exclusivity: for all four structured tools (`Write`, `Edit`,
+     `MultiEdit`, `NotebookEdit`) assert `summary == path selector` **and**
+     `call == None`.
+   - Orthogonal scan: Generic call `{diff: "+x"}` → recipe with empty
+     call (no JSON degradation); `{foo, bar, diff}` on the call side and
+     on the result side → recipe plus only precisely selectable scalars,
+     never the enclosing object (consumed-value fallback suppression);
+     Generic result `{output, diff}` → `output` result selector *and* a
+     `tool_result` recipe; `{diff: {diff: "…"}}` object shape → selector
+     into the inner key; non-composable `diff` values produce no recipe
+     and stay available to scalar selection. No `Format::Diff`/
+     `Label::Diff` production remains (grep-pinned).
+   - Invariants and pruning: empty `edits`/`changes` derive `None`;
+     `Write` `content: ""` and `Edit` with both strings empty derive
+     `None` (zero-contribution pruning), and the merge tests "empty call
+     derivation + valid result recipe → result adopted" and "empty-string
+     call body + valid result recipe → result adopted" pass;
+     whitespace-only values still derive segments. All four merge-table
+     cases.
+   - Enforcement: illegal raw JSON (empty `segments`, double-`None` pair)
+     fails recipe decode in Rust; the checked constructors make illegal
+     recipes unrepresentable, pinned by a compile-visible API (no public
+     field construction) plus a serializer test that only legal recipes
+     exist on the wire.
    - Scalar selector wire shape unchanged by the `RenderToolValueSelector`
      flatten refactor (serde round-trip byte-equality on existing
      fixtures).
