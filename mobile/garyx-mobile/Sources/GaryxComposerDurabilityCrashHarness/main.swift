@@ -53,6 +53,11 @@ private enum GaryxComposerDurabilityCrashHarness {
             case "ack":
                 try await GaryxComposerDeliveryTransportGate(durability: store)
                     .acknowledge(deliveryID: deliveryID)
+            case "ack-delivery":
+                try await GaryxComposerDeliveryTransportGate(durability: store)
+                    .acknowledge(
+                        deliveryID: .init(rawValue: try arguments.required("delivery"))
+                    )
             case "seed-operation":
                 guard let state = GaryxOperationCapabilityState(
                     rawValue: try arguments.required("state")
@@ -65,6 +70,10 @@ private enum GaryxComposerDurabilityCrashHarness {
                     attempted: arguments.flag("attempted"),
                     reservationOutcome: arguments.optional("reservation")
                 )
+            case "seed-multi-operation":
+                try await seedMultipleOperations(store: store)
+            case "seed-ownerless-manifest":
+                try await seedOwnerlessManifest(store: store)
             case "seed-discard-operation":
                 guard let state = GaryxOperationCapabilityState(
                     rawValue: try arguments.required("state")
@@ -349,6 +358,88 @@ private enum GaryxComposerDurabilityCrashHarness {
         )
     }
 
+    private static func seedMultipleOperations(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        var entry = makeEntry(text: "multi-operation")
+        let firstKey = operationKey("multi-first")
+        let secondKey = operationKey("multi-second")
+        let firstAssetID = GaryxStagedAssetID(rawValue: "multi-first.bin")
+        let secondAssetID = GaryxStagedAssetID(rawValue: "multi-second.bin")
+        let first = makeOperation(
+            key: firstKey,
+            entry: entry,
+            state: .preparing,
+            assetID: firstAssetID,
+            bytes: 17,
+            attempted: false
+        )
+        let second = makeOperation(
+            key: secondKey,
+            entry: entry,
+            state: .preparing,
+            assetID: secondAssetID,
+            bytes: 19,
+            attempted: false
+        )
+        entry.addOperation(firstKey)
+        entry.addOperation(secondKey)
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "harness seed shared Entry operations",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertOperation(first),
+                    .upsertManifest(
+                        .init(
+                            key: firstKey,
+                            stagedPath: firstAssetID.rawValue,
+                            state: .preparing,
+                            uploadAttempted: false
+                        )
+                    ),
+                    .reserveStagedAsset(assetID: firstAssetID, owner: firstKey, bytes: 17),
+                    .upsertOperation(second),
+                    .upsertManifest(
+                        .init(
+                            key: secondKey,
+                            stagedPath: secondAssetID.rawValue,
+                            state: .preparing,
+                            uploadAttempted: false
+                        )
+                    ),
+                    .reserveStagedAsset(assetID: secondAssetID, owner: secondKey, bytes: 19),
+                ]
+            )
+        )
+    }
+
+    private static func seedOwnerlessManifest(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        var entry = makeEntry(text: "ownerless")
+        let key = operationKey("ownerless-manifest")
+        entry.addOperation(key)
+        _ = try await store.commit(
+            .init(
+                expectedRevision: 0,
+                label: "harness seed ownerless manifest",
+                mutations: [
+                    .upsertEntry(entry),
+                    .upsertManifest(
+                        .init(
+                            key: key,
+                            stagedPath: "ownerless.bin",
+                            state: .preparing,
+                            uploadAttempted: false
+                        )
+                    ),
+                ]
+            )
+        )
+    }
+
     private static func seedDiscardSessions(
         store: GaryxSQLiteComposerDurabilityStore,
         suffix: String = ""
@@ -374,14 +465,17 @@ private enum GaryxComposerDurabilityCrashHarness {
             phase: .closePendingAck,
             finalSequence: 4
         )
-        entry.promote(to: .thread("T-\(suffix)"))
+        let intermediate = GaryxComposerKey.thread("T1-\(suffix)")
+        let destination = GaryxComposerKey.thread("T2-\(suffix)")
+        entry.promote(to: intermediate)
+        entry.promote(to: destination)
         let second = GaryxSessionDescendant(
             key: .init(
                 token: entry.lifecycle.token,
                 sessionID: .init(rawValue: "S2-\(suffix)"),
                 epoch: 2
             ),
-            composerKey: .thread("T-\(suffix)"),
+            composerKey: destination,
             phase: .live,
             finalSequence: nil
         )
@@ -405,9 +499,15 @@ private enum GaryxComposerDurabilityCrashHarness {
         guard aliases.establishPromotion(
             scope: scope,
             source: .draft("D-\(suffix)"),
-            target: .thread("T-\(suffix)"),
+            target: intermediate,
             activeOrClosingSessions: 2,
             pendingCloseAcknowledgements: 1
+        ) == .established,
+        aliases.establishPromotion(
+            scope: scope,
+            source: intermediate,
+            target: destination,
+            activeOrClosingSessions: 1
         ) == .established else {
             throw HarnessError.actionRejected("seed session alias")
         }
@@ -447,14 +547,17 @@ private enum GaryxComposerDurabilityCrashHarness {
             phase: .closePendingAck,
             finalSequence: 4
         )
-        entry.promote(to: .thread("T-mixed"))
+        let intermediate = GaryxComposerKey.thread("T1-mixed")
+        let destination = GaryxComposerKey.thread("T2-mixed")
+        entry.promote(to: intermediate)
+        entry.promote(to: destination)
         let second = GaryxSessionDescendant(
             key: .init(
                 token: entry.lifecycle.token,
                 sessionID: .init(rawValue: "S2-mixed"),
                 epoch: 2
             ),
-            composerKey: .thread("T-mixed"),
+            composerKey: destination,
             phase: .finalizing,
             finalSequence: nil
         )
@@ -550,9 +653,15 @@ private enum GaryxComposerDurabilityCrashHarness {
         guard aliases.establishPromotion(
             scope: scope,
             source: .draft("D-mixed"),
-            target: .thread("T-mixed"),
+            target: intermediate,
             activeOrClosingSessions: 2,
             pendingCloseAcknowledgements: 1
+        ) == .established,
+        aliases.establishPromotion(
+            scope: scope,
+            source: intermediate,
+            target: destination,
+            activeOrClosingSessions: 1
         ) == .established else {
             throw HarnessError.actionRejected("seed mixed alias")
         }
@@ -736,10 +845,13 @@ private struct HarnessSummary: Codable {
     let currentGeneration: UInt64?
     let aliasCount: Int
     let deliveryPhases: [String: String]
+    let deliveryEvidence: [String: String]
+    let deliveryUserDispositions: [String: String]
     let deliveryDispositions: [String: String]
     let ledgerOutcomes: [String: String]
     let targetGenerations: [String: UInt64]
     let operationStates: [String: String]
+    let entryOperationMembershipCount: Int
     let manifestCount: Int
     let replacementCount: Int
     let feedbackCount: Int
@@ -763,6 +875,12 @@ private struct HarnessSummary: Codable {
         deliveryPhases = Dictionary(uniqueKeysWithValues: snapshot.deliveries.map {
             ($0.key.rawValue, $0.value.phase.rawValue)
         })
+        deliveryEvidence = Dictionary(uniqueKeysWithValues: snapshot.deliveries.map {
+            ($0.key.rawValue, $0.value.evidence.rawValue)
+        })
+        deliveryUserDispositions = Dictionary(uniqueKeysWithValues: snapshot.deliveries.map {
+            ($0.key.rawValue, $0.value.userDisposition.rawValue)
+        })
         deliveryDispositions = Dictionary(uniqueKeysWithValues: (report?.deliveryDispositions ?? [:]).map {
             ($0.key.rawValue, $0.value.rawValue)
         })
@@ -776,6 +894,7 @@ private struct HarnessSummary: Codable {
         operationStates = Dictionary(uniqueKeysWithValues: snapshot.operations.map {
             ($0.key.operationID.rawValue, $0.value.state.rawValue)
         })
+        entryOperationMembershipCount = entry?.operationKeys.count ?? 0
         manifestCount = snapshot.manifests.count
         replacementCount = snapshot.replacements.count
         feedbackCount = snapshot.feedback.count

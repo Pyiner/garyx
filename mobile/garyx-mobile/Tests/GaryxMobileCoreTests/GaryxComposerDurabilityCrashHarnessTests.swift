@@ -192,6 +192,67 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         }
     }
 
+    func testSharedEntryMultipleOperationsResumeAcrossScopeAndKillBoundaries() throws {
+        for scope in ["active", "suspended", "revoked"] {
+            for boundary in ["beforeCommit", "afterCommit"] {
+                let context = "\(scope):\(boundary)"
+                let fixture = try makeFixture(label: "multi-operation-\(context)")
+                _ = try run(
+                    "seed-multi-operation",
+                    fixture: fixture,
+                    extra: ["--kill", "afterCommit"],
+                    expecting: .killed
+                )
+                _ = try run(
+                    "recover",
+                    fixture: fixture,
+                    extra: [
+                        "--scope", scope,
+                        "--kill", boundary,
+                    ],
+                    expecting: .killed
+                )
+                var summary = try recover(fixture, scope: scope)
+                XCTAssertTrue(summary.operationStates.isEmpty, context)
+                XCTAssertEqual(summary.entryOperationMembershipCount, 0, context)
+                XCTAssertEqual(summary.manifestCount, 0, context)
+                XCTAssertEqual(summary.feedbackCount, 0, context)
+                XCTAssertEqual(summary.reservedBytes, 0, context)
+                XCTAssertEqual(summary.stagedOwnerCount, 0, context)
+                XCTAssertEqual(summary.pendingCleanupCount, 0, context)
+                XCTAssertEqual(summary.currentText, scope == "revoked" ? nil : "multi-operation", context)
+
+                summary = try recover(fixture, scope: scope)
+                XCTAssertTrue(summary.operationStates.isEmpty, "second relaunch \(context)")
+                XCTAssertEqual(summary.entryOperationMembershipCount, 0, "second relaunch \(context)")
+            }
+        }
+    }
+
+    func testOwnerlessManifestRecoveryResumesAcrossKillBoundaries() throws {
+        for boundary in ["beforeCommit", "afterCommit"] {
+            let fixture = try makeFixture(label: "ownerless-manifest-\(boundary)")
+            _ = try run(
+                "seed-ownerless-manifest",
+                fixture: fixture,
+                extra: ["--kill", "afterCommit"],
+                expecting: .killed
+            )
+            _ = try run(
+                "recover",
+                fixture: fixture,
+                extra: ["--kill", boundary],
+                expecting: .killed
+            )
+            var summary = try recover(fixture)
+            XCTAssertEqual(summary.manifestCount, 0, boundary)
+            XCTAssertEqual(summary.entryOperationMembershipCount, 0, boundary)
+            summary = try recover(fixture)
+            XCTAssertEqual(summary.manifestCount, 0, "second relaunch \(boundary)")
+            XCTAssertEqual(summary.entryOperationMembershipCount, 0, "second relaunch \(boundary)")
+        }
+    }
+
     func testEveryOperationStateDestinationDiscardCrashRelaunchReleasesAllResources() throws {
         for state in GaryxOperationCapabilityState.allCases {
             let fixture = try makeFixture(label: "discard-operation-\(state.rawValue)")
@@ -260,6 +321,18 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                     expecting: .killed
                 )
                 _ = try run(
+                    "ack-delivery",
+                    fixture: fixture,
+                    extra: ["--delivery", "mixed-attempted"]
+                )
+                let acknowledged = try inspect(fixture)
+                XCTAssertEqual(acknowledged.deliveryPhases["mixed-attempted"], "acknowledged", context)
+                XCTAssertEqual(
+                    acknowledged.deliveryEvidence["mixed-attempted"],
+                    "serverAcknowledged",
+                    context
+                )
+                _ = try run(
                     "recover",
                     fixture: fixture,
                     extra: [
@@ -279,7 +352,21 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                     "cancelledByDiscard",
                     context
                 )
-                XCTAssertEqual(summary.deliveryPhases["mixed-attempted"], "evidence", context)
+                XCTAssertEqual(
+                    summary.deliveryPhases["mixed-attempted"],
+                    "terminalEvidence",
+                    context
+                )
+                XCTAssertEqual(
+                    summary.deliveryEvidence["mixed-attempted"],
+                    "serverAcknowledged",
+                    context
+                )
+                XCTAssertEqual(
+                    summary.deliveryUserDispositions["mixed-attempted"],
+                    "none",
+                    context
+                )
                 XCTAssertEqual(
                     summary.deliveryPhases["mixed-acknowledged"],
                     "terminalEvidence",
@@ -406,6 +493,10 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         let operationID = "manifest-\(state.rawValue)"
         if scope == "revoked" {
             XCTAssertNil(summary.operationStates[operationID], context)
+            if state == .cancelled || state == .failedRetryable {
+                XCTAssertNotNil(summary.currentText, context)
+            }
+            XCTAssertEqual(summary.entryOperationMembershipCount, 0, context)
             XCTAssertEqual(summary.manifestCount, 0, context)
             XCTAssertEqual(summary.feedbackCount, 0, context)
             XCTAssertEqual(summary.reservedBytes, 0, context)
@@ -644,10 +735,13 @@ private struct HarnessSummary: Decodable {
     let currentGeneration: UInt64?
     let aliasCount: Int
     let deliveryPhases: [String: String]
+    let deliveryEvidence: [String: String]
+    let deliveryUserDispositions: [String: String]
     let deliveryDispositions: [String: String]
     let ledgerOutcomes: [String: String]
     let targetGenerations: [String: UInt64]
     let operationStates: [String: String]
+    let entryOperationMembershipCount: Int
     let manifestCount: Int
     let replacementCount: Int
     let feedbackCount: Int
