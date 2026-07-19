@@ -187,24 +187,64 @@ public struct GaryxReservationAdmissionTracker: Equatable, Sendable {
 public struct GaryxDeliveryEnvelope: Equatable, Codable, Sendable {
     public let text: String
     public let attachmentIDs: [GaryxAttachmentID]
+    /// Immutable transport-ready attachment snapshots. Older durable rows may
+    /// contain only `attachmentIDs`; new sends always populate this field so
+    /// both ambiguous exits survive process death without consulting mutable
+    /// composer state.
+    public let attachments: [GaryxComposerAttachment]
     public let generation: UInt64
     public let clientIntentID: String
 
     public init(
         text: String,
         attachmentIDs: [GaryxAttachmentID],
+        attachments: [GaryxComposerAttachment] = [],
         generation: UInt64,
         clientIntentID: String
     ) {
         precondition(!clientIntentID.isEmpty)
+        precondition(
+            attachments.isEmpty || Set(attachments.map(\.id)) == Set(attachmentIDs),
+            "delivery attachment snapshots must match their immutable IDs"
+        )
         self.text = text
         self.attachmentIDs = attachmentIDs
+        self.attachments = attachments
         self.generation = generation
         self.clientIntentID = clientIntentID
     }
 
     public var estimatedBytes: Int {
-        text.utf8.count + attachmentIDs.reduce(0) { $0 + $1.rawValue.utf8.count }
+        text.utf8.count
+            + attachmentIDs.reduce(0) { $0 + $1.rawValue.utf8.count }
+            + attachments.reduce(0) { partial, attachment in
+                partial
+                    + (attachment.kind?.utf8.count ?? 0)
+                    + (attachment.name?.utf8.count ?? 0)
+                    + (attachment.mediaType?.utf8.count ?? 0)
+                    + (attachment.uploadedPath?.utf8.count ?? 0)
+                    + (attachment.previewDataURL?.utf8.count ?? 0)
+            }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case attachmentIDs
+        case attachments
+        case generation
+        case clientIntentID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decode(String.self, forKey: .text)
+        attachmentIDs = try container.decode([GaryxAttachmentID].self, forKey: .attachmentIDs)
+        attachments = try container.decodeIfPresent(
+            [GaryxComposerAttachment].self,
+            forKey: .attachments
+        ) ?? []
+        generation = try container.decode(UInt64.self, forKey: .generation)
+        clientIntentID = try container.decode(String.self, forKey: .clientIntentID)
     }
 }
 
@@ -336,6 +376,7 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
         let duplicate = GaryxDeliveryEnvelope(
             text: envelope.text,
             attachmentIDs: envelope.attachmentIDs,
+            attachments: envelope.attachments,
             generation: envelope.generation,
             clientIntentID: newClientIntentID
         )
@@ -922,13 +963,19 @@ public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
     public static let nonTerminalByteLimit = 4 * 1024 * 1024
 
     public let key: GaryxCreateDeliveryKey
+    public let entryID: GaryxComposerPayloadEntryID?
     public private(set) var threadID: String?
     public private(set) var phase: GaryxCreateDeliveryPhase
     public private(set) var ambiguousAfter: GaryxCreateDeliveryPhase?
     public private(set) var userDisposition: GaryxCreateAmbiguousDisposition
 
-    public init(scope: GaryxGatewayScope, createIntentID: String) {
+    public init(
+        scope: GaryxGatewayScope,
+        createIntentID: String,
+        entryID: GaryxComposerPayloadEntryID? = nil
+    ) {
         key = GaryxCreateDeliveryKey(scope: scope, createIntentID: createIntentID)
+        self.entryID = entryID
         threadID = nil
         phase = .createPending
         ambiguousAfter = nil
@@ -943,6 +990,7 @@ public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
     public var estimatedBytes: Int {
         key.scope.identity.utf8.count
             + key.createIntentID.utf8.count
+            + (entryID?.rawValue.utf8.count ?? 0)
             + (threadID?.utf8.count ?? 0)
             + (ambiguousAfter?.rawValue.utf8.count ?? 0)
             + 64
@@ -999,7 +1047,20 @@ public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
             return nil
         }
         userDisposition = .rebuildMayCreateDuplicateThread
-        return GaryxCreateDeliveryState(scope: scope, createIntentID: newCreateIntentID)
+        return GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: newCreateIntentID,
+            entryID: entryID
+        )
+    }
+
+    public mutating func settleForScopeRevoke() {
+        guard !isTerminalCorrelation else { return }
+        if phase != .ambiguous {
+            ambiguousAfter = phase
+            phase = .ambiguous
+        }
+        userDisposition = .scopeRevoked
     }
 }
 
@@ -1007,6 +1068,7 @@ public enum GaryxCreateAmbiguousDisposition: String, Codable, Sendable {
     case none
     case restoredToDraft
     case rebuildMayCreateDuplicateThread
+    case scopeRevoked
 }
 
 // MARK: - Discard convergence

@@ -237,6 +237,41 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
         attachments.removeValue(forKey: id)
     }
 
+    /// Explicit conflict resolution may replace the currently edited payload,
+    /// but only after the caller has durably admitted both candidates. Keeping
+    /// this as one Entry mutation prevents a recovered send from partially
+    /// overwriting a live follow-up draft.
+    @discardableResult
+    public mutating func replaceCurrentPayload(
+        text: String,
+        attachments: [GaryxComposerAttachment],
+        generation: UInt64
+    ) -> Bool {
+        guard lifecycle.phase == .active, generation > currentGeneration else {
+            return false
+        }
+        textByGeneration.removeAll()
+        self.attachments.removeAll()
+        currentGeneration = generation
+        if !text.isEmpty {
+            textByGeneration[generation] = text
+        }
+        for attachment in attachments {
+            self.attachments[attachment.id] = GaryxComposerAttachment(
+                id: attachment.id,
+                stagedAssetID: attachment.stagedAssetID,
+                generation: generation,
+                byteCount: attachment.byteCount,
+                kind: attachment.kind,
+                name: attachment.name,
+                mediaType: attachment.mediaType,
+                uploadedPath: attachment.uploadedPath,
+                previewDataURL: attachment.previewDataURL
+            )
+        }
+        return true
+    }
+
     /// Starts the next editable generation after the previous payload has been
     /// handed to the delivery transaction. The Entry identity remains stable;
     /// empty text therefore never deletes the key or loses its per-key slot.

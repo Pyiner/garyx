@@ -74,6 +74,7 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
     public fileprivate(set) var deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord]
     public fileprivate(set) var discardConvergence: [GaryxComposerPayloadEntryID: GaryxPayloadDiscardConvergence]
     public fileprivate(set) var createDeliveries: [GaryxCreateDeliveryKey: GaryxCreateDeliveryState]
+    public fileprivate(set) var scopeRegistry: GaryxGatewayScopeRegistry
     public fileprivate(set) var stagedAssetOwners: [GaryxStagedAssetID: GaryxOperationCapabilityKey]
     public fileprivate(set) var stagedAssetReservedBytes: [GaryxStagedAssetID: Int]
     /// Durable condemned-file tombstones. An entry may outlive its former
@@ -111,6 +112,7 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
         deliveries: [GaryxDeliveryRecordID: GaryxDeliveryRecord] = [:],
         discardConvergence: [GaryxComposerPayloadEntryID: GaryxPayloadDiscardConvergence] = [:],
         createDeliveries: [GaryxCreateDeliveryKey: GaryxCreateDeliveryState] = [:],
+        scopeRegistry: GaryxGatewayScopeRegistry = .init(),
         stagedAssetOwners: [GaryxStagedAssetID: GaryxOperationCapabilityKey] = [:],
         stagedAssetReservedBytes: [GaryxStagedAssetID: Int] = [:],
         pendingFileCleanup: [GaryxStagedAssetID: GaryxOperationCapabilityKey] = [:],
@@ -138,6 +140,7 @@ public struct GaryxComposerDurabilitySnapshot: Equatable, Codable, Sendable {
         self.deliveries = deliveries
         self.discardConvergence = discardConvergence
         self.createDeliveries = createDeliveries
+        self.scopeRegistry = scopeRegistry
         self.stagedAssetOwners = stagedAssetOwners
         self.stagedAssetReservedBytes = stagedAssetReservedBytes
         self.pendingFileCleanup = pendingFileCleanup
@@ -199,6 +202,7 @@ public enum GaryxComposerDurabilityMutation: Equatable, Sendable {
     case removeDiscardConvergence(GaryxComposerPayloadEntryID)
     case upsertCreateDelivery(GaryxCreateDeliveryState)
     case removeCreateDelivery(GaryxCreateDeliveryKey)
+    case replaceScopeRegistry(GaryxGatewayScopeRegistry)
     case reserveStagedAsset(
         assetID: GaryxStagedAssetID,
         owner: GaryxOperationCapabilityKey,
@@ -1188,6 +1192,8 @@ enum GaryxComposerDurabilityTransactionEngine {
                 throw invariant("create delivery GC requires terminal correlation")
             }
             state.createDeliveries.removeValue(forKey: key)
+        case .replaceScopeRegistry(let registry):
+            state.scopeRegistry = registry
         case .reserveStagedAsset(let assetID, let owner, let bytes):
             guard bytes >= 0 else { throw invariant("negative asset reservation") }
             if let existing = state.stagedAssetOwners[assetID], existing != owner {
@@ -1348,6 +1354,19 @@ enum GaryxComposerDurabilityTransactionEngine {
               }),
               state.createDeliveries.allSatisfy({ $0.key == $0.value.key }) else {
             throw invariant("non-terminal create delivery budget or identity exceeded")
+        }
+        if let active = state.scopeRegistry.activeScope {
+            guard state.scopeRegistry.lifecycle(of: active) == .active,
+                  state.scopeRegistry.lifecycles.values.filter({ $0 == .active }).count == 1 else {
+                throw invariant("scope registry active identity is inconsistent")
+            }
+        } else if state.scopeRegistry.lifecycles.values.contains(.active) {
+            throw invariant("scope registry has an ownerless active partition")
+        }
+        guard state.scopeRegistry.lifecycles.keys.allSatisfy({ scope in
+            scope.epoch > (state.scopeRegistry.revokedThroughEpoch[scope.identity] ?? 0)
+        }) else {
+            throw invariant("scope registry retained an epoch at or below its revoke watermark")
         }
         for close in state.recoveredInputClosures.values {
             let ledgerKey = GaryxReservationLedgerKey(

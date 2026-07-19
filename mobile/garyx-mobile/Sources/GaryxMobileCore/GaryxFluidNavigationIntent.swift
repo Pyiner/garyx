@@ -43,7 +43,7 @@ public enum GaryxGatewayScopeEventAdmission: Equatable, Sendable {
 
 /// Bounded scope registry. Revoked epochs collapse into one monotonic watermark
 /// per gateway identity rather than accumulating epoch tombstones.
-public struct GaryxGatewayScopeRegistry: Equatable, Sendable {
+public struct GaryxGatewayScopeRegistry: Equatable, Codable, Sendable {
     public private(set) var lifecycles: [GaryxGatewayScope: GaryxGatewayScopeLifecycle]
     public private(set) var activeScope: GaryxGatewayScope?
     public private(set) var revokedThroughEpoch: [String: UInt64]

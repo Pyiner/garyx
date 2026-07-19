@@ -17,6 +17,7 @@ public enum GaryxComposerDurabilityRecordFamily: String, CaseIterable, Sendable 
     case deliveryOutbox = "composer_delivery_outbox"
     case discardConvergence = "composer_discard_convergence"
     case createDeliveries = "composer_create_deliveries"
+    case scopes = "composer_gateway_scopes"
     case stagedAssets = "composer_staged_asset_ledger"
 }
 
@@ -48,7 +49,7 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         GaryxComposerDurabilityStorageBoundary
     ) throws -> Void
 
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
     public static let metadataTableName = "composer_durability_metadata"
     public static let schemaTableNames = [metadataTableName]
         + GaryxComposerDurabilityRecordFamily.allCases.map(\.rawValue)
@@ -238,9 +239,23 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             )
         }
         let existingVersion = try connection.scalarInt64("PRAGMA user_version") ?? 0
-        guard existingVersion == 0 || existingVersion == Int64(schemaVersion) else {
+        guard existingVersion == 0 || existingVersion == 1
+                || existingVersion == Int64(schemaVersion) else {
             throw GaryxSQLiteComposerDurabilityError.invalidMetadata(
                 "unsupported composer durability schema version \(existingVersion)"
+            )
+        }
+        if existingVersion == 1 {
+            if try connection.scalarInt64(
+                "SELECT COUNT(*) FROM \(GaryxComposerDurabilityRecordFamily.scopes.rawValue) WHERE singleton = 1"
+            ) == 0 {
+                try connection.replaceSingletonBlob(
+                    table: GaryxComposerDurabilityRecordFamily.scopes.rawValue,
+                    data: try encode(GaryxGatewayScopeRegistry())
+                )
+            }
+            try connection.execute(
+                "UPDATE \(metadataTableName) SET schema_version = \(schemaVersion) WHERE singleton = 1"
             )
         }
         try connection.execute("PRAGMA user_version=\(schemaVersion)")
@@ -353,6 +368,7 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         ] = try decodeFamily(.discardConvergence, connection)
         let createDeliveries: [GaryxCreateDeliveryKey: GaryxCreateDeliveryState] =
             try decodeFamily(.createDeliveries, connection)
+        let scopeRegistry: GaryxGatewayScopeRegistry = try decodeFamily(.scopes, connection)
         let staged: GaryxStagedAssetDurabilityState =
             try decodeFamily(.stagedAssets, connection)
         let generationClaims = try decodeGenerationClaims(metadata.claimedGenerations)
@@ -378,6 +394,7 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
             deliveries: deliveries,
             discardConvergence: discardConvergence,
             createDeliveries: createDeliveries,
+            scopeRegistry: scopeRegistry,
             stagedAssetOwners: staged.owners,
             stagedAssetReservedBytes: staged.reservedBytesByAsset,
             pendingFileCleanup: staged.pendingFileCleanup,
@@ -420,6 +437,7 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         case .deliveryOutbox: snapshot.deliveries
         case .discardConvergence: snapshot.discardConvergence
         case .createDeliveries: snapshot.createDeliveries
+        case .scopes: snapshot.scopeRegistry
         case .stagedAssets:
             GaryxStagedAssetDurabilityState(
                 owners: snapshot.stagedAssetOwners,
