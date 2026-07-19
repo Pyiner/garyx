@@ -147,6 +147,25 @@ final class GaryxRouteRendererStateTests: XCTestCase {
             modalBarrierActive: false,
             actionEligible: true
         ))
+
+        XCTAssertTrue(GaryxRouteEdgeGestureArbitrator.shouldBegin(
+            touch: movedIntoEdge,
+            translation: CGSize(width: -20, height: 0),
+            velocity: CGSize(width: -300, height: 0),
+            modalBarrierActive: false,
+            actionEligible: true,
+            requiresEdgeZone: false,
+            direction: .negative
+        ), "an already-open edge surface can close from outside the opening zone")
+
+        XCTAssertTrue(GaryxRouteEdgeGestureArbitrator.shouldBegin(
+            touch: ltrLeading,
+            translation: CGSize(width: -20, height: 0),
+            velocity: CGSize(width: -300, height: 0),
+            modalBarrierActive: false,
+            actionEligible: true,
+            direction: .either
+        ), "a settling surface accepts a reverse-direction interrupt")
     }
 
     func testGestureCompetitionAndAxisTable() {
@@ -187,6 +206,22 @@ final class GaryxRouteRendererStateTests: XCTestCase {
                 actionEligible: true
             ),
             .taskTree
+        )
+        XCTAssertEqual(
+            GaryxRouteEdgeGestureArbitrator.winner(
+                surface: .taskTree,
+                touchStartedInEdgeZone: true,
+                actionEligible: false
+            ),
+            .descendant
+        )
+        XCTAssertEqual(
+            GaryxRouteEdgeGestureArbitrator.winner(
+                surface: .rowSwipe,
+                touchStartedInEdgeZone: true,
+                actionEligible: false
+            ),
+            .descendant
         )
         XCTAssertEqual(
             GaryxRouteEdgeGestureArbitrator.axis(

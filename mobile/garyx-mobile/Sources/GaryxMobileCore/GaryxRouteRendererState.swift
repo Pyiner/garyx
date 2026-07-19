@@ -234,6 +234,23 @@ public enum GaryxRouteGestureWinner: Equatable, Sendable {
     case undecided
 }
 
+public enum GaryxRouteGestureDirection: Equatable, Sendable {
+    case positive
+    case negative
+    case either
+
+    fileprivate func accepts(_ logicalValue: CGFloat) -> Bool {
+        switch self {
+        case .positive:
+            logicalValue > 0
+        case .negative:
+            logicalValue < 0
+        case .either:
+            logicalValue != 0
+        }
+    }
+}
+
 public enum GaryxRouteEdgeGestureArbitrator {
     public static func axis(
         translation: CGSize,
@@ -264,16 +281,20 @@ public enum GaryxRouteEdgeGestureArbitrator {
         translation: CGSize,
         velocity: CGSize,
         modalBarrierActive: Bool,
-        actionEligible: Bool
+        actionEligible: Bool,
+        requiresEdgeZone: Bool = true,
+        direction: GaryxRouteGestureDirection = .positive
     ) -> Bool {
-        guard actionEligible, !modalBarrierActive, touch.isInsideEdgeZone() else { return false }
+        guard actionEligible, !modalBarrierActive else { return false }
+        if requiresEdgeZone, !touch.isInsideEdgeZone() { return false }
         guard axis(translation: translation, velocity: velocity) == .horizontal else { return false }
         let intent = velocity == .zero ? translation.width : velocity.width
-        return logicalTranslation(
+        let logicalIntent = logicalTranslation(
             physicalTranslationX: intent,
             edge: touch.logicalEdge,
             layoutDirection: touch.layoutDirection
-        ) > 0
+        )
+        return direction.accepts(logicalIntent)
     }
 
     public static func winner(
@@ -285,7 +306,7 @@ public enum GaryxRouteEdgeGestureArbitrator {
         case .modalPresentation:
             return .modal
         case .taskTree:
-            return .taskTree
+            return actionEligible ? .taskTree : .descendant
         case .verticalScroll:
             return .descendant
         case .horizontalScroll, .composerKeyboardDismiss, .rowSwipe:
