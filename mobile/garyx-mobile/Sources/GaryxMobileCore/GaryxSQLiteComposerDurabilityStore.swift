@@ -172,6 +172,24 @@ public actor GaryxSQLiteComposerDurabilityStore: GaryxComposerDurabilityStore {
         try commitSynchronously(send.transaction)
     }
 
+    /// Test-only disk-capacity control used by the process crash harness. The
+    /// next transaction that needs a new database page receives SQLite's real
+    /// `SQLITE_FULL` result from the pager; no Garyx failpoint is involved.
+    @discardableResult
+    public func constrainMaximumPageCountToCurrentSizeForTesting() throws -> Int64 {
+        guard let current = try connection.scalarInt64("PRAGMA page_count"),
+              current > 0,
+              let constrained = try connection.scalarInt64(
+                "PRAGMA max_page_count = \(current)"
+              ),
+              constrained == current else {
+            throw GaryxSQLiteComposerDurabilityError.invalidMetadata(
+                "could not constrain SQLite page count for the full-disk harness"
+            )
+        }
+        return constrained
+    }
+
     private func commitSynchronously(
         _ transaction: GaryxComposerDurabilityTransaction
     ) throws -> GaryxComposerDurabilitySnapshot {

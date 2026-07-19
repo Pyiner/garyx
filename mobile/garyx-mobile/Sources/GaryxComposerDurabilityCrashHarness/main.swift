@@ -36,6 +36,8 @@ private enum GaryxComposerDurabilityCrashHarness {
                 try await seedSealed(store: store, includeProducerDrained: true)
             case "commit-send":
                 try await commitSealedSend(store: store)
+            case "true-sqlite-full":
+                try await exerciseTrueSQLiteFull(store: store)
             case "attempt":
                 let gate = GaryxComposerDeliveryTransportGate(durability: store)
                 guard try await gate.prepareAttempt(deliveryID: deliveryID) != nil else {
@@ -53,6 +55,26 @@ private enum GaryxComposerDurabilityCrashHarness {
             case "ack":
                 try await GaryxComposerDeliveryTransportGate(durability: store)
                     .acknowledge(deliveryID: deliveryID)
+            case "restore-delivery":
+                try await restoreAmbiguousDelivery(store: store)
+            case "resend-delivery":
+                try await resendAmbiguousDelivery(store: store)
+            case "evidence":
+                try await ingestDeliveryEvidence(store: store)
+            case "revoke-scope":
+                try await revokeScope(store: store)
+            case "assert-revoked-gate":
+                try await assertRevokedDomainGate(store: store)
+            case "create-server-commit-then-kill":
+                try await seedCreateServerCommit(
+                    store: store,
+                    stage: try arguments.required("stage")
+                )
+                killNow()
+            case "restore-create":
+                try await restoreAmbiguousCreate(store: store)
+            case "rebuild-create":
+                try await rebuildAmbiguousCreate(store: store)
             case "ack-delivery":
                 try await GaryxComposerDeliveryTransportGate(durability: store)
                     .acknowledge(
@@ -239,6 +261,208 @@ private enum GaryxComposerDurabilityCrashHarness {
             settlement: settlement
         )
         _ = try await store.commitSend(send)
+    }
+
+    private static func exerciseTrueSQLiteFull(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let before = try await store.load()
+        let maximumPageCount = try await store
+            .constrainMaximumPageCountToCurrentSizeForTesting()
+        let oversizedEntry = makeEntry(
+            text: String(repeating: "full-disk-payload-", count: 131_072)
+        )
+        let sqliteCode: Int32
+        do {
+            _ = try await store.commit(
+                .init(
+                    expectedRevision: before.revision,
+                    label: "force real SQLite pager exhaustion",
+                    mutations: [
+                        .setGenerationHighWatermark(32),
+                        .upsertEntry(oversizedEntry),
+                    ]
+                )
+            )
+            throw HarnessError.actionRejected("true SQLITE_FULL was not raised")
+        } catch let error as GaryxSQLiteComposerDurabilityError {
+            guard case .sqlite(let code, _) = error,
+                  code & 0xff == 13 else {
+                throw error
+            }
+            sqliteCode = code
+        }
+        let after = try await store.load()
+        guard after == before else {
+            throw HarnessError.actionRejected("SQLITE_FULL published a partial transaction")
+        }
+        let summary = TrueSQLiteFullSummary(
+            sqliteCode: sqliteCode,
+            maximumPageCount: maximumPageCount,
+            revision: after.revision,
+            entryPresent: after.payloadStore.entry(entryID, scope: scope) != nil
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        FileHandle.standardOutput.write(try encoder.encode(summary))
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+
+    private static func restoreAmbiguousDelivery(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        guard let plan = GaryxDeliveryDraftRecoveryPlanner.plan(
+            snapshot: snapshot,
+            deliveryID: deliveryID,
+            recoveredEntryID: .init(rawValue: "crash-recovered-entry"),
+            recoveredLifecycleNonce: "crash-recovered-token",
+            recoveredGeneration: 12,
+            conflictSetID: .init(rawValue: "crash-delivery-conflict")
+        ) else {
+            throw HarnessError.actionRejected("restore-delivery")
+        }
+        _ = try await store.commit(plan.transaction)
+    }
+
+    private static func resendAmbiguousDelivery(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        guard let plan = GaryxDeliveryDuplicateResendPlanner.plan(
+            snapshot: snapshot,
+            deliveryID: deliveryID,
+            newDeliveryID: .init(rawValue: "crash-delivery-copy"),
+            newClientIntentID: "crash-copy-intent"
+        ) else {
+            throw HarnessError.actionRejected("resend-delivery")
+        }
+        _ = try await store.commit(plan.transaction)
+    }
+
+    private static func ingestDeliveryEvidence(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        let plan = GaryxDeliveryEvidencePlanner.plan(
+            snapshot: snapshot,
+            correlationID: "crash-correlation",
+            authenticatedScope: scope
+        )
+        guard case .updated = plan.disposition else {
+            throw HarnessError.actionRejected("evidence")
+        }
+        if let transaction = plan.transaction {
+            _ = try await store.commit(transaction)
+        }
+    }
+
+    private static func revokeScope(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        guard let plan = GaryxGatewayScopeSettlementPlanner.revoke(
+            snapshot: snapshot,
+            scope: scope
+        ) else {
+            throw HarnessError.actionRejected("revoke-scope")
+        }
+        _ = try await store.commit(plan.transaction)
+    }
+
+    private static func assertRevokedDomainGate(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        var registry = snapshot.scopeRegistry
+        guard registry.admitDomainEvent(from: scope) == .rejectedRevoked,
+              !registry.switchActive(to: scope),
+              registry.revokedThroughEpoch[scope.identity] == scope.epoch else {
+            throw HarnessError.actionRejected("revokedThroughEpoch gate")
+        }
+    }
+
+    private static func seedCreateServerCommit(
+        store: GaryxSQLiteComposerDurabilityStore,
+        stage: String
+    ) async throws {
+        let snapshot = try await store.load()
+        guard var delivery = snapshot.deliveries[deliveryID] else {
+            throw HarnessError.actionRejected("create stage requires committed message")
+        }
+        var create = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: "crash-correlation",
+            entryID: entryID
+        )
+        var mutations: [GaryxComposerDurabilityMutation]
+        switch stage {
+        case "create":
+            mutations = [.upsertCreateDelivery(create)]
+        case "binding":
+            create.created(threadID: "crash-thread")
+            mutations = [.upsertCreateDelivery(create)]
+        case "chat":
+            create.created(threadID: "crash-thread")
+            create.bound()
+            create.chatStartAttempted()
+            guard delivery.markTransportAttempted() else {
+                throw HarnessError.actionRejected("chat create delivery attempt")
+            }
+            mutations = [
+                .upsertDelivery(delivery),
+                .upsertCreateDelivery(create),
+            ]
+        default:
+            throw HarnessError.invalidArgument("stage")
+        }
+        _ = try await store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "seed server-committed multi-stage create before client response",
+                mutations: mutations
+            )
+        )
+    }
+
+    private static func restoreAmbiguousCreate(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        let key = GaryxCreateDeliveryKey(
+            scope: scope,
+            createIntentID: "crash-correlation"
+        )
+        guard let plan = GaryxCreateDraftRecoveryPlanner.plan(
+            snapshot: snapshot,
+            key: key,
+            recoveredEntryID: .init(rawValue: "crash-create-recovered-entry"),
+            recoveredLifecycleNonce: "crash-create-recovered-token",
+            recoveredGeneration: 12,
+            conflictSetID: .init(rawValue: "crash-create-conflict")
+        ) else {
+            throw HarnessError.actionRejected("restore-create")
+        }
+        _ = try await store.commit(plan.transaction)
+    }
+
+    private static func rebuildAmbiguousCreate(
+        store: GaryxSQLiteComposerDurabilityStore
+    ) async throws {
+        let snapshot = try await store.load()
+        let key = GaryxCreateDeliveryKey(
+            scope: scope,
+            createIntentID: "crash-correlation"
+        )
+        guard let plan = GaryxCreateDuplicateRebuildPlanner.plan(
+            snapshot: snapshot,
+            key: key,
+            newCreateIntentID: "crash-create-copy-intent",
+            newDeliveryID: .init(rawValue: "crash-create-delivery-copy")
+        ) else {
+            throw HarnessError.actionRejected("rebuild-create")
+        }
+        _ = try await store.commit(plan.transaction)
     }
 
     private static func seedOperation(
@@ -1149,10 +1373,18 @@ private struct CorrelationCapacitySummary: Codable {
     }
 }
 
+private struct TrueSQLiteFullSummary: Codable {
+    let sqliteCode: Int32
+    let maximumPageCount: Int64
+    let revision: UInt64
+    let entryPresent: Bool
+}
+
 private struct HarnessSummary: Codable {
     let revision: UInt64
     let currentText: String?
     let currentGeneration: UInt64?
+    let entryCount: Int
     let aliasCount: Int
     let deliveryPhases: [String: String]
     let deliveryEvidence: [String: String]
@@ -1171,6 +1403,11 @@ private struct HarnessSummary: Codable {
     let ledgerCount: Int
     let claimedGenerationCount: Int
     let createDeliveryCount: Int
+    let createDeliveryPhases: [String: String]
+    let createDeliveryAmbiguousAfter: [String: String]
+    let createDeliveryDispositions: [String: String]
+    let conflictCount: Int
+    let revokedThroughEpoch: UInt64
     let barrierCount: Int
     let nonIdleBarrierCount: Int
     let barrierPayloadFieldCount: Int
@@ -1190,6 +1427,9 @@ private struct HarnessSummary: Codable {
         let entry = snapshot.payloadStore.entry(entryID, scope: scope)
         currentText = entry?.currentText
         currentGeneration = entry?.currentGeneration
+        entryCount = snapshot.payloadStore.entriesByScope.values.reduce(0) {
+            $0 + $1.count
+        }
         aliasCount = snapshot.aliases.aliasCount
         deliveryPhases = Dictionary(uniqueKeysWithValues: snapshot.deliveries.map {
             ($0.key.rawValue, $0.value.phase.rawValue)
@@ -1223,6 +1463,22 @@ private struct HarnessSummary: Codable {
         ledgerCount = snapshot.ledgers.count
         claimedGenerationCount = snapshot.claimedGenerations.count
         createDeliveryCount = snapshot.createDeliveries.count
+        createDeliveryPhases = Dictionary(uniqueKeysWithValues: snapshot.createDeliveries.map {
+            ($0.key.createIntentID, $0.value.phase.rawValue)
+        })
+        createDeliveryAmbiguousAfter = Dictionary(
+            uniqueKeysWithValues: snapshot.createDeliveries.compactMap {
+                guard let phase = $0.value.ambiguousAfter else { return nil }
+                return ($0.key.createIntentID, phase.rawValue)
+            }
+        )
+        createDeliveryDispositions = Dictionary(
+            uniqueKeysWithValues: snapshot.createDeliveries.map {
+                ($0.key.createIntentID, $0.value.userDisposition.rawValue)
+            }
+        )
+        conflictCount = snapshot.conflicts.count
+        revokedThroughEpoch = snapshot.scopeRegistry.revokedThroughEpoch[scope.identity] ?? 0
         barrierCount = snapshot.barriers.count
         nonIdleBarrierCount = snapshot.barriers.values.filter { $0.phase != .idle }.count
         barrierPayloadFieldCount = snapshot.barriers.values.reduce(0) { count, barrier in

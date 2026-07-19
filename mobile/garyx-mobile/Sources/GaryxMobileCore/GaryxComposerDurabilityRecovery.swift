@@ -85,6 +85,9 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 if let staging { _ = try await staging.settleCondemnedFiles() }
                 continue
             }
+            if try await recoverOneTransportAttemptedDelivery() {
+                continue
+            }
             if try await recoverOneCreateDelivery() {
                 report.createSettlements += 1
                 continue
@@ -108,6 +111,28 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             return report
         }
         throw GaryxComposerDurabilityRecoveryError.recoveryDidNotConverge
+    }
+
+    /// Crossing the durable attempt gate proves only that transport may have
+    /// started. A process boundary destroys the in-memory response outcome, so
+    /// the persisted record must become an actionable ambiguous delivery.
+    private func recoverOneTransportAttemptedDelivery() async throws -> Bool {
+        let snapshot = try await durability.load()
+        guard var delivery = snapshot.deliveries.values
+            .filter({ $0.phase == .transportAttempted })
+            .sorted(by: { $0.id.rawValue < $1.id.rawValue })
+            .first,
+              delivery.markAmbiguous() else {
+            return false
+        }
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "recover attempted delivery as user-terminable ambiguous",
+                mutations: [.upsertDelivery(delivery)]
+            )
+        )
+        return true
     }
 
     /// A process boundary destroys the only in-memory proof that a multi-stage

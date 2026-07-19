@@ -47,6 +47,24 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         }
     }
 
+    func testRealSQLiteFullRollsBackAndRelaunchesWithoutPartialState() throws {
+        let fixture = try makeFixture(label: "true-sqlite-full")
+        let result = try run("true-sqlite-full", fixture: fixture)
+        let full = try JSONDecoder().decode(
+            TrueSQLiteFullSummary.self,
+            from: result.standardOutput
+        )
+        XCTAssertEqual(full.sqliteCode & 0xff, 13, "must be SQLite's real SQLITE_FULL")
+        XCTAssertGreaterThan(full.maximumPageCount, 0)
+        XCTAssertEqual(full.revision, 0)
+        XCTAssertFalse(full.entryPresent)
+
+        let relaunched = try inspect(fixture)
+        XCTAssertEqual(relaunched.revision, 0)
+        XCTAssertNil(relaunched.currentText)
+        XCTAssertTrue(relaunched.deliveryPhases.isEmpty)
+    }
+
     func testAttemptAmbiguousAndAcknowledgementCrashBoundariesHaveOnlySafeExits() throws {
         let cases: [TransportCrashCase] = [
             .init(
@@ -60,21 +78,21 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                 setupActions: [],
                 action: "attempt",
                 extra: ["--kill", "afterCommit"],
-                expectedPhase: "transportAttempted",
+                expectedPhase: "ambiguous",
                 expectedDisposition: "userTerminable"
             ),
             .init(
                 setupActions: [],
                 action: "attempt-then-kill",
                 extra: [],
-                expectedPhase: "transportAttempted",
+                expectedPhase: "ambiguous",
                 expectedDisposition: "userTerminable"
             ),
             .init(
                 setupActions: ["attempt"],
                 action: "ambiguous",
                 extra: ["--kill", "beforeCommit"],
-                expectedPhase: "transportAttempted",
+                expectedPhase: "ambiguous",
                 expectedDisposition: "userTerminable"
             ),
             .init(
@@ -88,7 +106,7 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                 setupActions: ["attempt"],
                 action: "ack",
                 extra: ["--kill", "beforeCommit"],
-                expectedPhase: "transportAttempted",
+                expectedPhase: "ambiguous",
                 expectedDisposition: "userTerminable"
             ),
             .init(
@@ -123,6 +141,198 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                 crashCase.expectedDisposition,
                 "case \(index)"
             )
+        }
+    }
+
+    func testAmbiguousExitTransactionsAndLateEvidenceRacesConverge() throws {
+        for action in ["restore-delivery", "resend-delivery"] {
+            for boundary in ["beforeCommit", "afterCommit"] {
+                let fixture = try makeFixture(label: "\(action)-\(boundary)")
+                try seedAmbiguousDelivery(fixture)
+                _ = try run(
+                    action,
+                    fixture: fixture,
+                    extra: ["--kill", boundary],
+                    expecting: .killed
+                )
+                let summary = try recover(fixture)
+                if boundary == "beforeCommit" {
+                    XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], "ambiguous")
+                    XCTAssertEqual(summary.deliveryUserDispositions[Self.deliveryID], "none")
+                    XCTAssertEqual(summary.conflictCount, 0)
+                    XCTAssertEqual(summary.entryCount, 1)
+                } else if action == "restore-delivery" {
+                    XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], "abandoned")
+                    XCTAssertEqual(
+                        summary.deliveryUserDispositions[Self.deliveryID],
+                        "restoredToDraft"
+                    )
+                    XCTAssertEqual(summary.conflictCount, 1)
+                    XCTAssertEqual(summary.entryCount, 2)
+                } else {
+                    XCTAssertEqual(
+                        summary.deliveryPhases[Self.deliveryID],
+                        "supersededByDuplicate"
+                    )
+                    XCTAssertEqual(
+                        summary.deliveryUserDispositions[Self.deliveryID],
+                        "resentAsDuplicate"
+                    )
+                    XCTAssertEqual(summary.deliveryPhases["crash-delivery-copy"], "notDispatched")
+                    XCTAssertEqual(summary.conflictCount, 0)
+                }
+            }
+
+            let exitFirst = try makeFixture(label: "\(action)-then-evidence")
+            try seedAmbiguousDelivery(exitFirst)
+            _ = try run(
+                action,
+                fixture: exitFirst,
+                extra: ["--kill", "afterCommit"],
+                expecting: .killed
+            )
+            _ = try run("evidence", fixture: exitFirst)
+            let exitFirstSummary = try inspect(exitFirst)
+            XCTAssertEqual(
+                exitFirstSummary.deliveryEvidence[Self.deliveryID],
+                "serverAcknowledged"
+            )
+            XCTAssertEqual(
+                exitFirstSummary.deliveryPhases[Self.deliveryID],
+                action == "restore-delivery" ? "abandoned" : "supersededByDuplicate"
+            )
+
+            let evidenceFirst = try makeFixture(label: "evidence-then-\(action)")
+            try seedAmbiguousDelivery(evidenceFirst)
+            _ = try run("evidence", fixture: evidenceFirst)
+            _ = try run(action, fixture: evidenceFirst, expecting: .failed)
+            let evidenceFirstSummary = try inspect(evidenceFirst)
+            XCTAssertEqual(evidenceFirstSummary.deliveryPhases[Self.deliveryID], "acknowledged")
+            XCTAssertEqual(
+                evidenceFirstSummary.deliveryEvidence[Self.deliveryID],
+                "serverAcknowledged"
+            )
+            XCTAssertEqual(evidenceFirstSummary.deliveryUserDispositions[Self.deliveryID], "none")
+        }
+    }
+
+    func testEveryMultiStageCreateServerCommitDeathHasAtomicUserExits() throws {
+        let stages = [
+            (name: "create", ambiguousAfter: "createPending", deliveryPhase: "notDispatched"),
+            (name: "binding", ambiguousAfter: "threadCreated", deliveryPhase: "notDispatched"),
+            (name: "chat", ambiguousAfter: "chatStartAttempted", deliveryPhase: "ambiguous"),
+        ]
+
+        for stage in stages {
+            let death = try makeFixture(label: "create-death-\(stage.name)")
+            try seedCreateDeath(death, stage: stage.name)
+            let deathSummary = try recover(death)
+            XCTAssertEqual(deathSummary.createDeliveryPhases["crash-correlation"], "ambiguous")
+            XCTAssertEqual(
+                deathSummary.createDeliveryAmbiguousAfter["crash-correlation"],
+                stage.ambiguousAfter
+            )
+            XCTAssertEqual(deathSummary.createDeliveryDispositions["crash-correlation"], "none")
+            XCTAssertEqual(deathSummary.deliveryPhases[Self.deliveryID], stage.deliveryPhase)
+
+            let restore = try makeFixture(label: "create-restore-\(stage.name)")
+            try seedCreateDeath(restore, stage: stage.name)
+            _ = try recover(restore)
+            _ = try run(
+                "restore-create",
+                fixture: restore,
+                extra: ["--kill", "afterCommit"],
+                expecting: .killed
+            )
+            let restored = try recover(restore)
+            XCTAssertEqual(restored.deliveryPhases[Self.deliveryID], "abandoned")
+            XCTAssertEqual(
+                restored.createDeliveryDispositions["crash-correlation"],
+                "restoredToDraft"
+            )
+            XCTAssertEqual(restored.conflictCount, 1)
+            XCTAssertEqual(restored.entryCount, 2)
+
+            let rebuild = try makeFixture(label: "create-rebuild-\(stage.name)")
+            try seedCreateDeath(rebuild, stage: stage.name)
+            _ = try recover(rebuild)
+            _ = try run(
+                "rebuild-create",
+                fixture: rebuild,
+                extra: ["--kill", "afterCommit"],
+                expecting: .killed
+            )
+            let rebuilt = try recover(rebuild)
+            XCTAssertEqual(
+                rebuilt.deliveryPhases[Self.deliveryID],
+                "supersededByDuplicate"
+            )
+            XCTAssertEqual(
+                rebuilt.deliveryPhases["crash-create-delivery-copy"],
+                "notDispatched"
+            )
+            XCTAssertEqual(
+                rebuilt.createDeliveryDispositions["crash-correlation"],
+                "rebuildMayCreateDuplicateThread"
+            )
+            XCTAssertEqual(rebuilt.createDeliveryCount, stage.name == "create" ? 2 : 1)
+            if stage.name == "create" {
+                XCTAssertEqual(
+                    rebuilt.createDeliveryPhases["crash-create-copy-intent"],
+                    "ambiguous",
+                    "a crash before duplicate-risk create dispatch remains user-terminable"
+                )
+            }
+        }
+    }
+
+    func testScopeRevokeCASCrashAndEvidenceIngressRemainOrthogonal() throws {
+        let phases: [(name: String, setup: [String], before: String, after: String, evidence: Bool)] = [
+            ("not", [], "notDispatched", "cancelledByDiscard", false),
+            ("attempted", ["attempt"], "transportAttempted", "evidence", true),
+            ("ambiguous", ["attempt", "ambiguous"], "ambiguous", "evidence", true),
+            ("acknowledged", ["attempt", "ack"], "acknowledged", "terminalEvidence", true),
+        ]
+
+        for phase in phases {
+            for boundary in ["beforeCommit", "afterCommit"] {
+                let fixture = try makeFixture(label: "revoke-\(phase.name)-\(boundary)")
+                try seedCommitted(fixture)
+                for action in phase.setup {
+                    _ = try run(action, fixture: fixture)
+                }
+                _ = try run(
+                    "revoke-scope",
+                    fixture: fixture,
+                    extra: ["--kill", boundary],
+                    expecting: .killed
+                )
+                var summary = try inspect(fixture)
+                if boundary == "beforeCommit" {
+                    XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], phase.before)
+                    XCTAssertEqual(summary.revokedThroughEpoch, 0)
+                    continue
+                }
+
+                XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], phase.after)
+                XCTAssertEqual(summary.deliveryUserDispositions[Self.deliveryID], "scopeRevoked")
+                XCTAssertEqual(summary.revokedThroughEpoch, 1)
+                _ = try run("assert-revoked-gate", fixture: fixture)
+                _ = try run(
+                    "evidence",
+                    fixture: fixture,
+                    expecting: phase.evidence ? .success : .failed
+                )
+                summary = try recover(fixture, scope: "revoked")
+                XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], phase.after)
+                if phase.evidence {
+                    XCTAssertEqual(
+                        summary.deliveryEvidence[Self.deliveryID],
+                        "serverAcknowledged"
+                    )
+                }
+                XCTAssertEqual(summary.revokedThroughEpoch, 1)
+            }
         }
     }
 
@@ -784,6 +994,22 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         _ = try run("commit-send", fixture: fixture)
     }
 
+    private func seedAmbiguousDelivery(_ fixture: Fixture) throws {
+        try seedCommitted(fixture)
+        _ = try run("attempt", fixture: fixture)
+        _ = try run("ambiguous", fixture: fixture)
+    }
+
+    private func seedCreateDeath(_ fixture: Fixture, stage: String) throws {
+        try seedCommitted(fixture)
+        _ = try run(
+            "create-server-commit-then-kill",
+            fixture: fixture,
+            extra: ["--stage", stage],
+            expecting: .killed
+        )
+    }
+
     private func recover(_ fixture: Fixture, scope: String = "active") throws -> HarnessSummary {
         try decodeSummary(
             run(
@@ -932,6 +1158,7 @@ private struct HarnessSummary: Decodable {
     let revision: UInt64
     let currentText: String?
     let currentGeneration: UInt64?
+    let entryCount: Int
     let aliasCount: Int
     let deliveryPhases: [String: String]
     let deliveryEvidence: [String: String]
@@ -950,6 +1177,11 @@ private struct HarnessSummary: Decodable {
     let ledgerCount: Int
     let claimedGenerationCount: Int
     let createDeliveryCount: Int
+    let createDeliveryPhases: [String: String]
+    let createDeliveryAmbiguousAfter: [String: String]
+    let createDeliveryDispositions: [String: String]
+    let conflictCount: Int
+    let revokedThroughEpoch: UInt64
     let barrierCount: Int
     let nonIdleBarrierCount: Int
     let barrierPayloadFieldCount: Int
@@ -968,6 +1200,13 @@ private struct CorrelationCapacitySummary: Decodable {
     let targetPhase: String?
     let entryPresent: Bool
     let discardCount: Int
+}
+
+private struct TrueSQLiteFullSummary: Decodable {
+    let sqliteCode: Int32
+    let maximumPageCount: Int64
+    let revision: UInt64
+    let entryPresent: Bool
 }
 
 private struct TransportCrashCase {
