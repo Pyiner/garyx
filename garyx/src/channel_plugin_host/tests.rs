@@ -5,8 +5,9 @@ use garyx_channels::dispatcher::{
     StreamDispatchEnvelope, StreamingDispatchTarget,
 };
 use garyx_channels::plugin_host::{
-    CapabilitiesResponse, DispatchOutbound, DispatchOutboundResult, PluginRpcClient,
-    PluginSenderHandle, Transport, TransportConfig,
+    CapabilitiesResponse, DispatchOutbound, DispatchOutboundResult, DispatchStreamEvent,
+    DispatchStreamEventResult, PluginRpcClient, PluginSenderHandle, StreamEventFrame, Transport,
+    TransportConfig,
 };
 use garyx_router::recent_threads::{
     RecentThreadFilter, RecentThreadListEntry, RecentThreadPage, RecentThreadPageReader,
@@ -534,6 +535,258 @@ async fn deliver_inbound_ignores_deprecated_reply_id_and_uses_current_binding() 
         .expect("local command reply should be outbound text");
     assert!(reply.contains("Recent threads · page 2/2 (11 total)"));
     assert!(reply.contains("11. Recent thread 11"));
+}
+
+/// Records every host → plugin RPC of a `dispatch_stream_event`-capable
+/// plugin peer so tests can assert the native origin stream contents.
+struct RecordingStreamEventPlugin {
+    stream_events: Arc<StdMutex<Vec<DispatchStreamEvent>>>,
+}
+
+#[async_trait::async_trait]
+impl InboundHandler for RecordingStreamEventPlugin {
+    async fn on_request(&self, method: String, params: Value) -> Result<Value, (i32, String)> {
+        match method.as_str() {
+            "dispatch_stream_event" => {
+                let request: DispatchStreamEvent = serde_json::from_value(params)
+                    .map_err(|error| (-32602, format!("invalid stream event: {error}")))?;
+                self.stream_events
+                    .lock()
+                    .expect("recording stream event plugin lock poisoned")
+                    .push(request);
+                serde_json::to_value(DispatchStreamEventResult::default())
+                    .map_err(|error| (-32603, error.to_string()))
+            }
+            other => Err((-32601, format!("unexpected request: {other}"))),
+        }
+    }
+
+    async fn on_notification(&self, _method: String, _params: Value) {}
+}
+
+fn recording_stream_event_plugin_sender() -> (
+    PluginSenderHandle,
+    Arc<StdMutex<Vec<DispatchStreamEvent>>>,
+    PluginRpcClient,
+) {
+    let (host_io, plugin_io) = tokio::io::duplex(64 * 1024);
+    let (host_reader, host_writer) = tokio::io::split(host_io);
+    let (plugin_reader, plugin_writer) = tokio::io::split(plugin_io);
+    let (host_rpc, _host_handles) = Transport::spawn(
+        host_reader,
+        host_writer,
+        TransportConfig {
+            plugin_id: "test-plugin".to_owned(),
+            ..Default::default()
+        },
+        Arc::new(RejectInbound),
+    );
+    let stream_events = Arc::new(StdMutex::new(Vec::new()));
+    let (plugin_keep_alive, _plugin_handles) = Transport::spawn(
+        plugin_reader,
+        plugin_writer,
+        TransportConfig {
+            plugin_id: "test-plugin-peer".to_owned(),
+            ..Default::default()
+        },
+        Arc::new(RecordingStreamEventPlugin {
+            stream_events: stream_events.clone(),
+        }),
+    );
+    let sender = PluginSenderHandle::new(
+        "test-plugin".to_owned(),
+        host_rpc,
+        CapabilitiesResponse {
+            outbound: true,
+            inbound: true,
+            streaming: false,
+            dispatch_stream_event: true,
+            images: false,
+            files: false,
+            survives_respawn: false,
+        },
+    );
+    (sender, stream_events, plugin_keep_alive)
+}
+
+/// Minimal in-crate echo provider (the garyx-channels test helpers are
+/// `cfg(test)`-gated and not visible across crates).
+struct EchoProvider;
+
+#[async_trait::async_trait]
+impl garyx_bridge::ProviderRuntime for EchoProvider {
+    fn provider_type(&self) -> garyx_models::provider::ProviderType {
+        garyx_models::provider::ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), garyx_bridge::BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), garyx_bridge::BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &garyx_models::provider::ProviderRunOptions,
+        on_chunk: garyx_bridge::provider_trait::StreamCallback,
+    ) -> Result<garyx_models::provider::ProviderRunResult, garyx_bridge::BridgeError> {
+        let response = format!("echo: {}", options.message);
+        on_chunk(StreamEvent::Delta {
+            text: response.clone(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(garyx_models::provider::ProviderRunResult {
+            run_id: "test-run".into(),
+            thread_id: options.thread_id.clone(),
+            response,
+            session_messages: Vec::new(),
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 10,
+            output_tokens: 5,
+            cost: 0.001,
+            duration_ms: 42,
+        })
+    }
+
+    async fn get_or_create_session(
+        &self,
+        session_key: &str,
+    ) -> Result<String, garyx_bridge::BridgeError> {
+        Ok(format!("sdk-{session_key}"))
+    }
+}
+
+/// End-to-end probe for the pipeline rewire's attach-order flip: the
+/// shared `InboundPipeline` attaches the bound-endpoint fanout first
+/// and the deferred origin native stream second (inside the async
+/// resolve hook), where the hand-rolled sequence attached the origin
+/// stream first. Both are buffer-until-attach deferrals, so the plugin
+/// must still observe the full ordered stream tagged with the routed
+/// thread id — no dropped frames, no reordering, Done last.
+#[tokio::test]
+async fn deliver_inbound_native_stream_reaches_plugin_ordered_with_routed_thread() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let bound_thread_id = "thread::native-stream";
+    store
+        .set(
+            bound_thread_id,
+            json!({
+                "thread_id": bound_thread_id,
+                "label": "Native stream thread",
+            }),
+        )
+        .await
+        .unwrap();
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    router.switch_to_thread(
+        &MessageRouter::build_binding_context_key("test-plugin", "main", "chat-native"),
+        bound_thread_id,
+    );
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(Arc::new(ThreadHistoryRepository::new(
+        store,
+        Arc::new(ThreadTranscriptStore::memory()),
+    )));
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(128);
+    bridge.set_event_tx(event_tx).await;
+    bridge
+        .register_provider("test-provider", Arc::new(EchoProvider))
+        .await;
+    bridge.set_default_provider_key("test-provider").await;
+
+    let (plugin_sender, stream_events, _plugin_keep_alive) =
+        recording_stream_event_plugin_sender();
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher
+        .register_plugin(plugin_sender)
+        .expect("test plugin sender should register");
+    let handler = HostInboundHandler::new(
+        "test-plugin".to_owned(),
+        Arc::new(Mutex::new(router)),
+        bridge,
+        Arc::new(SwappableDispatcher::new(dispatcher)),
+        std::sync::Weak::new(),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+
+    let result = handler
+        .on_request(
+            "deliver_inbound".to_owned(),
+            json!({
+                "account_id": "main",
+                "from_id": "user-1",
+                "thread_binding_key": "chat-native",
+                "message": "hello native stream",
+                "run_id": "run-native-e2e",
+            }),
+        )
+        .await
+        .expect("deliver_inbound should dispatch through the shared pipeline");
+    assert_eq!(result["thread_id"], bound_thread_id);
+    assert!(result["local_reply"].is_null());
+
+    // The agent run streams asynchronously after deliver_inbound
+    // returns; wait until the plugin peer has observed the Done frame.
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let events = stream_events
+                .lock()
+                .expect("recording stream event plugin lock poisoned")
+                .clone();
+            if events
+                .iter()
+                .any(|event| matches!(event.event, StreamEventFrame::Done))
+            {
+                break events;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("plugin peer should observe the native stream through Done");
+
+    for event in &recorded {
+        assert_eq!(
+            event.thread_id, bound_thread_id,
+            "every native stream frame must carry the routed thread id"
+        );
+        assert_eq!(event.run_id, "run-native-e2e");
+        assert_eq!(event.account_id, "main");
+        assert_eq!(event.chat_id, "chat-native");
+    }
+    let delta_index = recorded
+        .iter()
+        .position(
+            |event| matches!(&event.event, StreamEventFrame::Delta { text } if text.contains("echo: hello native stream")),
+        )
+        .expect("assistant delta must reach the plugin");
+    let done_index = recorded
+        .iter()
+        .position(|event| matches!(event.event, StreamEventFrame::Done))
+        .expect("Done frame must reach the plugin");
+    assert!(
+        delta_index < done_index,
+        "assistant text must arrive before Done (no reordering across the attach flip)"
+    );
+    assert!(
+        matches!(
+            recorded.last().map(|event| &event.event),
+            Some(StreamEventFrame::Done)
+        ),
+        "Done must be the final frame"
+    );
 }
 
 /// Source guard: the subprocess plugin host must route inbound
