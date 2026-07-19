@@ -830,12 +830,23 @@ mod tests {
             ),
             "handlers must hold the process-wide switch, not a snapshot"
         );
+        // PluginsConfig::default() ships auto_update=true, so a REAL
+        // flip is true -> false -> true, asserted through the handler
+        // side each time.
+        assert!(deps.plugin_auto_update_enabled.load(Ordering::Acquire));
+        state
+            .plugin_auto_update_enabled()
+            .store(false, Ordering::Release);
+        assert!(
+            !deps.plugin_auto_update_enabled.load(Ordering::Acquire),
+            "disabling on the AppState switch must be visible through HostDeps"
+        );
         state
             .plugin_auto_update_enabled()
             .store(true, Ordering::Release);
         assert!(
             deps.plugin_auto_update_enabled.load(Ordering::Acquire),
-            "a flip on the AppState switch must be visible through HostDeps"
+            "re-enabling must be visible through HostDeps"
         );
     }
 

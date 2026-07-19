@@ -152,9 +152,9 @@ impl AppState {
     /// URL baked into each subprocess plugin's HostContext. Everything
     /// else is either hot (dispatcher/bridge/meeting knobs, the plugin
     /// auto-update switch, per-account reload_accounts) or explicitly
-    /// restart-required (e.g. plugins.auto_update_check_interval,
-    /// which only feeds the plugin-side self-update scheduling read at
-    /// registration time).
+    /// restart-required or currently unconsumed at runtime
+    /// (e.g. plugins.auto_update_check_interval, which today has no
+    /// runtime consumer beyond configuration display).
     fn channel_plugin_rebuild_inputs(config: &GaryxConfig) -> serde_json::Value {
         serde_json::json!({
             "channels": serde_json::to_value(&config.channels).ok(),
@@ -433,11 +433,13 @@ impl AppState {
                 .await;
         }
         self.mark_provider_runtime_ready();
-        // Phase-7 single derivation point: when the channels section
-        // actually changed, run the boot-installed plugin-manager
-        // rebuild (built-in runtime restart + subprocess
-        // discovery/respawn). Both the HTTP settings path and the
-        // file watcher reach it through this one hook; failures are
+        // Phase-7 single derivation point: when the rebuild-inputs
+        // projection (channels section + gateway.public_url, see
+        // channel_plugin_rebuild_inputs) actually changed, run the
+        // assembly-installed plugin-manager rebuild (built-in runtime
+        // restart + subprocess discovery/respawn). Both the HTTP
+        // settings path and the file watcher reach it through this
+        // one hook; failures are
         // logged, matching the historical watcher-path semantics —
         // the applied dispatcher/bridge state above is already live.
         if rebuild_inputs_changed
