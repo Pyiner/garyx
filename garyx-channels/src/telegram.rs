@@ -522,5 +522,6 @@ fn command_menu_fingerprint(revision: &str, commands: &[TelegramBotCommand]) -> 
 // Tests
 // ---------------------------------------------------------------------------
 
+pub mod outbound;
 #[cfg(test)]
 mod tests;

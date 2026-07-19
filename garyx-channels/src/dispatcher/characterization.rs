@@ -524,3 +524,100 @@ async fn build_stream_dispatch_callback_composes_the_matrix() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// B2b source guard
+// ---------------------------------------------------------------------------
+
+/// Strip line and (nested) block comments while KEEPING string
+/// literals, so the guard below can detect channel-name string
+/// literals in real code without tripping on doc comments.
+fn strip_comments_keeping_strings(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            let mut depth = 1;
+            i += 2;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if bytes[i] == b'"' {
+            out.push('"');
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i] as char);
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                    continue;
+                }
+                out.push(bytes[i] as char);
+                if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// B2b acceptance guard: the production dispatcher is channel-blind —
+/// no built-in channel name may appear as a STRING LITERAL in
+/// dispatcher.rs code (match arms, error text, running-handle keys).
+/// Channel-name strings live only in
+/// `builtin_catalog::RESERVED_CHANNEL_NAMES` and each channel's own
+/// module (`channel_id()` / `aliases()` in `<channel>/outbound.rs`).
+/// Typed composition (`TelegramChannelSender` fields, re-export
+/// paths) is legitimate and deliberately not restricted.
+#[test]
+fn dispatcher_contains_no_builtin_channel_name_literals() {
+    let production = include_str!("../dispatcher.rs");
+    let code_with_strings = strip_comments_keeping_strings(production);
+    for name in crate::builtin_catalog::RESERVED_CHANNEL_NAMES {
+        let quoted = format!("\"{name}\"");
+        assert!(
+            !code_with_strings.contains(&quoted),
+            "dispatcher.rs must be channel-blind; found channel-name string literal {quoted} in code"
+        );
+    }
+}
+
+/// The stripper must remove comments but keep string literals, or the
+/// guard above silently degrades in either direction.
+#[test]
+fn b2b_guard_stripper_strips_comments_and_keeps_strings() {
+    let source = "// \"telegram\" in comment\n/* \"weixin\" */\nlet a = \"feishu\";";
+    let stripped = strip_comments_keeping_strings(source);
+    assert!(!stripped.contains("telegram"), "comments must be stripped");
+    assert!(
+        !stripped.contains("weixin"),
+        "block comments must be stripped"
+    );
+    assert!(
+        stripped.contains("\"feishu\""),
+        "string literals must be kept"
+    );
+}

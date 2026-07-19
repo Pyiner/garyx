@@ -4400,5 +4400,6 @@ impl Channel for WeixinChannel {
     }
 }
 
+pub mod outbound;
 #[cfg(test)]
 mod tests;

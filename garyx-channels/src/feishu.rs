@@ -627,5 +627,6 @@ pub enum FeishuError {
 // Tests
 // ---------------------------------------------------------------------------
 
+pub mod outbound;
 #[cfg(test)]
 mod tests;

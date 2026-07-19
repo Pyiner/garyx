@@ -26,14 +26,15 @@ use garyx_models::provider::{
 use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY};
 
 use crate::channel_trait::{Channel, ChannelError};
-use crate::dispatcher::{
-    ChannelDispatcher, DISCORD_MAX_MESSAGE_LENGTH, DiscordSender, split_discord_message,
-};
+use crate::dispatcher::{ChannelDispatcher, DiscordSender};
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
+
+pub mod outbound;
 use crate::plugin_tools::{
     PluginStreamSendDecision, PluginStreamSendPolicy, PluginStreamSendState,
     should_hide_tool_call_display,
 };
+use outbound::{DISCORD_MAX_MESSAGE_LENGTH, split_discord_message};
 
 const DISCORD_GATEWAY_INTENTS: u64 = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 const DISCORD_RECONNECT_DELAY: Duration = Duration::from_secs(5);
