@@ -50,10 +50,10 @@ struct GaryxSkillsView: View {
                 showsCreateSkill = true
             }
         }
-        .fullScreenCover(isPresented: $showsCreateSkill) {
+        .garyxFullScreenCover(isPresented: $showsCreateSkill) {
             GaryxCreateSkillCard()
         }
-        .fullScreenCover(isPresented: skillEditorPresented) {
+        .garyxFullScreenCover(isPresented: skillEditorPresented) {
             GaryxFormSheet(title: "Skill Detail", onDone: closeSkillEditor) {
                 GaryxSkillDetailCard()
             }
@@ -173,7 +173,7 @@ struct GaryxSkillCard: View {
                 optimisticEnabled = nil
             }
         }
-        .fullScreenCover(isPresented: $showsEditForm) {
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit Skill Info",
                 canSave: canSaveSkill,
@@ -187,7 +187,7 @@ struct GaryxSkillCard: View {
                 )
             }
         }
-        .confirmationDialog("Delete skill?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete skill?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await model.deleteSkill(skill) }
             }

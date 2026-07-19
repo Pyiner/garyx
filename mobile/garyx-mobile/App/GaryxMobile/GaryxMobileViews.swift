@@ -132,7 +132,7 @@ struct GaryxRootView: View {
             #endif
             Task { await model.handleOpenURL(url) }
         }
-        .sheet(
+        .garyxSheet(
             isPresented: Binding(
                 get: { homeObservationStore.showsSettings },
                 set: { model.showsSettings = $0 }
@@ -142,6 +142,10 @@ struct GaryxRootView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .environment(
+            \.garyxPresentationLeaseCoordinator,
+            model.productionRouteStore.presentationCoordinator
+        )
     }
 }
 
@@ -329,7 +333,7 @@ struct GaryxGatewaySetupView: View {
 
             Spacer(minLength: 24)
         }
-        .fullScreenCover(isPresented: $showsAddGateway) {
+        .garyxFullScreenCover(isPresented: $showsAddGateway) {
             GaryxGatewaySetupView(isSheet: true, startsEmpty: true)
         }
     }
@@ -727,7 +731,7 @@ struct GaryxShellView: View, Equatable {
             }
             .onChanged { value in
                 guard !shellStore.snapshot.sidebarVisible else { return }
-                guard case .openSidebar = shellStore.snapshot.leadingEdgeAction else {
+                guard routeStore.path.isEmpty else {
                     // A pushed route's leading edge belongs exclusively to
                     // GaryxRouteStackContainer's UIKit edge recognizer.
                     sidebarDragAxis = .vertical
@@ -757,7 +761,7 @@ struct GaryxShellView: View, Equatable {
                 }
                 let shouldOpen = value.translation.width > sidebarWidth * 0.22
                     || value.predictedEndTranslation.width > sidebarWidth * 0.35
-                guard case .openSidebar = shellStore.snapshot.leadingEdgeAction else {
+                guard routeStore.path.isEmpty else {
                     resetSidebarDrag()
                     return
                 }

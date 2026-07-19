@@ -317,55 +317,11 @@ public struct GaryxMobileThreadOpenState: Equatable, Sendable {
     }
 }
 
-public enum GaryxMobileLeadingEdgeAction: Equatable, Sendable {
-    case openSidebar
-    case popToHome
-    case mainPanelBack
-    case settingsOverview
-    case workspaceBotsOverview
-}
-
-/// Top-level pushed route over the home thread list. Routes are stable
-/// tokens; pushed pages read their detail state (settings tab, drilldowns)
-/// from the navigation state so in-page navigation never re-pushes.
-public enum GaryxMobileRootRoute: Hashable, Sendable {
-    case conversation
-    case panel(GaryxMobilePanel)
-}
-
-@MainActor
-final class GaryxRootNavigationPathStore: ObservableObject {
-    @Published private(set) var path: [GaryxMobileRootRoute]
-    private(set) var publishCount = 0
-
-    init(path: [GaryxMobileRootRoute] = []) {
-        self.path = path
-    }
-
-    @discardableResult
-    func apply(navigationState: GaryxMobileNavigationState) -> Bool {
-        apply(path: navigationState.rootNavigationPath)
-    }
-
-    @discardableResult
-    func apply(path nextPath: [GaryxMobileRootRoute]) -> Bool {
-        guard path != nextPath else { return false }
-        path = nextPath
-        publishCount += 1
-        return true
-    }
-}
-
 struct GaryxShellChromeSnapshot: Equatable, Sendable {
     var sidebarVisible: Bool
-    var leadingEdgeAction: GaryxMobileLeadingEdgeAction
 
-    init(
-        sidebarVisible: Bool = false,
-        leadingEdgeAction: GaryxMobileLeadingEdgeAction = .openSidebar
-    ) {
+    init(sidebarVisible: Bool = false) {
         self.sidebarVisible = sidebarVisible
-        self.leadingEdgeAction = leadingEdgeAction
     }
 }
 
@@ -443,6 +399,9 @@ public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
     case current
     case sidebar
     case replace
+    /// External links replace the complete occurrence chain without an
+    /// animated intermediate route, including when home is currently visible.
+    case deepLink
     /// Present a focused detail above the current conversation and dismiss back
     /// to it, instead of switching to that detail's management panel. Used by
     /// in-transcript capsule cards so opening a capsule never lands the user on
@@ -458,167 +417,52 @@ public enum GaryxWorkspaceBotsDrilldown: Equatable, Sendable {
     case automationThreads(String)
 }
 
-public struct GaryxMobilePanelRoute: Equatable, Sendable {
-    public let panel: GaryxMobilePanel
-    public let settingsTab: GaryxMobileSettingsTab
-    public let workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown?
-
-    public init(
-        panel: GaryxMobilePanel,
-        settingsTab: GaryxMobileSettingsTab,
-        workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? = nil
-    ) {
-        self.panel = panel
-        self.settingsTab = settingsTab
-        self.workspaceBotsDrilldown = workspaceBotsDrilldown
-    }
-}
-
+/// Read-only product projection of the canonical route stack.
+///
+/// The occurrence path is the only navigation truth. This projection exists
+/// solely for feature code that needs to react to the currently visible
+/// module (stream ownership, drawer selection, and restoration policy); it
+/// never stores predecessors and cannot mutate navigation.
 public struct GaryxMobileNavigationState: Equatable, Sendable {
     public private(set) var activePanel: GaryxMobilePanel
-    public var activeSettingsTab: GaryxMobileSettingsTab
-    public var workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown?
-    public private(set) var mainPanelBackStack: [GaryxMobilePanelRoute]
-    /// False while the home thread list is the visible root; true while a
-    /// conversation or panel page is pushed above it.
+    public private(set) var activeSettingsTab: GaryxMobileSettingsTab
+    public private(set) var workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown?
     public private(set) var presentsContent: Bool
 
     public init(
         activePanel: GaryxMobilePanel = .chat,
         activeSettingsTab: GaryxMobileSettingsTab = .manage,
         workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? = nil,
-        mainPanelBackStack: [GaryxMobilePanelRoute] = [],
         presentsContent: Bool = false
     ) {
         self.activePanel = activePanel
         self.activeSettingsTab = activeSettingsTab
         self.workspaceBotsDrilldown = workspaceBotsDrilldown
-        self.mainPanelBackStack = mainPanelBackStack
         self.presentsContent = presentsContent
     }
 
-    /// NavigationStack path over the home thread list.
-    public var rootNavigationPath: [GaryxMobileRootRoute] {
-        guard presentsContent else { return [] }
-        return activePanel == .chat ? [.conversation] : [.panel(activePanel)]
-    }
-
-    public mutating func popToHome() {
-        presentsContent = false
-        mainPanelBackStack.removeAll()
-        workspaceBotsDrilldown = nil
-        activeSettingsTab = .manage
-    }
-
-    public var currentRoute: GaryxMobilePanelRoute {
-        GaryxMobilePanelRoute(
-            panel: activePanel,
-            settingsTab: activeSettingsTab,
-            workspaceBotsDrilldown: activePanel == .workspaceBots ? workspaceBotsDrilldown : nil
-        )
-    }
-
-    public var leadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        if activePanel == .settings, activeSettingsTab != .manage {
-            return .settingsOverview
-        }
-        // Bot/workspace drilldowns open directly from the drawer or from a
-        // page on the back stack; back follows that stack (or pops home)
-        // instead of surfacing the overview list as an extra level.
-        if !mainPanelBackStack.isEmpty {
-            return .mainPanelBack
-        }
-        return presentsContent ? .popToHome : .openSidebar
-    }
-
-    public mutating func setActivePanel(_ panel: GaryxMobilePanel) {
-        guard activePanel != panel else {
-            presentsContent = true
-            return
-        }
-        activePanel = panel
+    public init(projecting path: [GaryxRouteEntry]) {
+        self.init()
+        guard let destination = path.last?.destination else { return }
         presentsContent = true
-        mainPanelBackStack.removeAll()
-        if panel != .workspaceBots {
-            workspaceBotsDrilldown = nil
-        }
-    }
-
-    public mutating func setWorkspaceBotsDrilldown(_ drilldown: GaryxWorkspaceBotsDrilldown?) {
-        workspaceBotsDrilldown = drilldown
-    }
-
-    public mutating func openConversation(source: GaryxMobilePanelOpenSource) {
-        openRoute(GaryxMobilePanelRoute(panel: .chat, settingsTab: .manage), source: source)
-    }
-
-    public mutating func openPanel(
-        _ panel: GaryxMobilePanel,
-        source: GaryxMobilePanelOpenSource
-    ) {
-        let targetPanel = resolvedPanel(panel)
-        let route = GaryxMobilePanelRoute(
-            panel: targetPanel,
-            settingsTab: targetPanel == .settings ? activeSettingsTab : .manage
-        )
-        openRoute(route, source: source)
-    }
-
-    public mutating func openSettings(
-        tab: GaryxMobileSettingsTab = .manage,
-        source: GaryxMobilePanelOpenSource
-    ) {
-        openRoute(GaryxMobilePanelRoute(panel: .settings, settingsTab: tab), source: source)
-    }
-
-    public mutating func openRoute(_ route: GaryxMobilePanelRoute, source: GaryxMobilePanelOpenSource) {
-        let previousRoute = currentRoute
-        switch source {
-        case .current:
-            // Only an already-presented page can be a back target; opening
-            // from the home list starts a fresh content stack.
-            if presentsContent, previousRoute != route, mainPanelBackStack.last != previousRoute {
-                mainPanelBackStack.append(previousRoute)
+        switch destination {
+        case .conversation, .conversationDraft:
+            activePanel = .chat
+        case .panel(let rawPanel):
+            activePanel = GaryxMobilePanel(rawValue: rawPanel) ?? .chat
+        case .settingsDetail(let rawTab):
+            activePanel = .settings
+            activeSettingsTab = GaryxMobileSettingsTab(rawValue: rawTab) ?? .manage
+        case .workspaceDrilldown(let identity):
+            activePanel = .workspaceBots
+            switch identity {
+            case .workspace(let path):
+                workspaceBotsDrilldown = .workspace(path)
+            case .bot(let accountID):
+                workspaceBotsDrilldown = .bot(accountID)
+            case .automationThreads(let automationID):
+                workspaceBotsDrilldown = .automationThreads(automationID)
             }
-        case .sidebar, .replace, .conversation:
-            mainPanelBackStack.removeAll()
-        }
-
-        presentsContent = true
-        apply(route)
-    }
-
-    public mutating func showSettingsOverview() {
-        activeSettingsTab = .manage
-    }
-
-    @discardableResult
-    public mutating func goBackInMainPanel() -> Bool {
-        guard let previousRoute = mainPanelBackStack.popLast() else {
-            return false
-        }
-        apply(previousRoute)
-        return true
-    }
-
-    public mutating func showWorkspaceBotsOverview() {
-        workspaceBotsDrilldown = nil
-    }
-
-    private mutating func apply(_ route: GaryxMobilePanelRoute) {
-        activePanel = route.panel
-        activeSettingsTab = route.panel == .settings ? route.settingsTab : .manage
-        workspaceBotsDrilldown = route.panel == .workspaceBots ? route.workspaceBotsDrilldown : nil
-    }
-
-    private func resolvedPanel(_ panel: GaryxMobilePanel) -> GaryxMobilePanel {
-        switch panel {
-        case .bots:
-            // Bot conversations browse through the workspace-threads page.
-            // `.workspaces` remains the independent file-browser panel.
-            .workspaceBots
-        default:
-            panel
         }
     }
 }

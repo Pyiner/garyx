@@ -13,6 +13,7 @@ protocol GaryxComposerInputAdapter: AnyObject {
     var occurrenceID: GaryxRouteInstanceID { get }
     var composerKey: GaryxComposerKey { get }
     var isLive: Bool { get }
+    var isInputReady: Bool { get }
     func grantLive(_ configuration: GaryxComposerInputConfiguration)
     func makeReadOnly()
     func requestFocus()
@@ -50,6 +51,7 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
     var onSubmit: (() -> Void)?
 
     private(set) var inputConfiguration: GaryxComposerInputConfiguration?
+    var isInputReady: Bool { inputConfiguration?.isReadOnly == false }
     private let producers = GaryxComposerProducerRegistry()
     private var nextSequence: UInt64 = 1
     private var lastPublishedText = ""

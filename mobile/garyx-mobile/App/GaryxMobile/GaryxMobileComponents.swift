@@ -245,7 +245,7 @@ private final class GaryxDataURLImagePredecodeState: @unchecked Sendable {
 
 struct GaryxPanelScaffold<Content: View, Actions: View>: View {
     @Environment(\.garyxOpenSidebar) private var openSidebar
-    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxRouteNavigationActions) private var routeNavigation
 
     let title: String
     let subtitle: String
@@ -316,14 +316,14 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(leadingActionLabel ?? "Back")
-                    } else if model.mainPanelLeadingEdgeAction != .openSidebar {
+                    } else if let dismiss = routeNavigation.dismiss {
                         Button {
-                            model.performMainPanelLeadingEdgeAction()
+                            dismiss()
                         } label: {
                             GaryxToolbarIcon(systemName: "chevron.left")
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(model.mainPanelLeadingEdgeActionLabel)
+                        .accessibilityLabel(routeNavigation.backLabel)
                     } else {
                         GaryxSidebarMenuButton {
                             openSidebar()
@@ -410,6 +410,7 @@ extension GaryxPanelScaffold where Actions == EmptyView {
 /// List nested inside the non-list panel's ScrollView.
 struct GaryxListPanelScaffold<Rows: View, Actions: View>: View {
     @Environment(\.garyxOpenSidebar) private var openSidebar
+    @Environment(\.garyxRouteNavigationActions) private var routeNavigation
 
     let title: String
     let onRefresh: (() async -> Void)?
@@ -458,6 +459,12 @@ struct GaryxListPanelScaffold<Rows: View, Actions: View>: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(leadingActionLabel ?? "Back")
+                    } else if let dismiss = routeNavigation.dismiss {
+                        Button(action: dismiss) {
+                            GaryxToolbarIcon(systemName: "chevron.left")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(routeNavigation.backLabel)
                     } else {
                         GaryxSidebarMenuButton(action: openSidebar)
                     }

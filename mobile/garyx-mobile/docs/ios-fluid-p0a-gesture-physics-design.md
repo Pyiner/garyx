@@ -322,7 +322,7 @@ A1/A2 **已合 main**；**A3** = 路由模型 + intent 准入 + 事务 coordinat
 | 切片 | 接线内容 | 同片必删（grep 清单） |
 |---|---|---|
 | **A4b** | conversation/composer 迁入容器 | 旧全局附件数组及全部读写点；旧 switch 全量清稿函数；旧 runtime-generation equality guard（由 scope 生命周期/token 取代）；composer `onChange/onDisappear` 全局 draft 写点（原 `:205,:226,:267`）；旧文本草稿 store 的空文本删 key 行为 |
-| **A4c** | 其余 route 迁入容器 | `NavigationStack(path:)` 内容层与 `GaryxRootNavigationPathStore`/`rootPathBinding`/`applyRootNavigationPath`；`GaryxMobileLeadingEdgeAction` 旧语义（`.popToHome/.mainPanelBack/.settingsOverview`，死语义 `.workspaceBotsOverview` 一并）；`mainPanelBackStack` 与 `goBackInMainPanel`；`performMainPanelLeadingEdgeAction`；sidebar 视图 `onDisappear` 写路由点（`:1598`） |
+| **A4c** | 其余 route 迁入容器 | 删除内容层的 SwiftUI path owner 及其 path store/binding/apply 三件套；删除旧 leading-edge action 类型和全部 panel/settings/workspace 返回枚举值；删除 main-panel 私有返回栈、返回函数、leading-edge 分发函数；删除 sidebar disappearance 回写路由点。验收脚本在 shell 中分段重组历史标识符，文档本身不得保留它们。 |
 | **A5** | 抽屉/task tree/row swipe 迁移 | `openingSidebarGesture`/`closingSidebarGesture` 及返回分支、`decideSidebarAxis`（旧 app 层实现，Core 化后删）；`GaryxMobileTaskTreeSidebarViews` 旧 drag 状态机（`:188-294`）；`GaryxSwipeActionRow` 固定 spring settle 路径；旧取消自愈注释与 workaround（`GaryxMobileViews.swift:531` 等——新状态机显式建模取消后删） |
 | **A6（新增收官切片）** | — | **全仓清理审计**：上述全部清单复扫归零；未被任何片消费的旧 motion token/辅助函数 dead-code 扫描（含低版本 `#available` 分支——政策仅 iOS 26）；xcodebuild warnings 零新增；设计文档内"现状锚点"段落改写为历史注记 |
 

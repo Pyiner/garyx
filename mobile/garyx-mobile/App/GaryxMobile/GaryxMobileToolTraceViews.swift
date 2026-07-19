@@ -35,7 +35,7 @@ struct GaryxToolTraceGroupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: $showsCallList) {
+        .garyxSheet(isPresented: $showsCallList) {
             GaryxToolCallListSheet(group: group)
                 .presentationDetents([.fraction(0.72), .large])
                 .presentationDragIndicator(.visible)
@@ -344,7 +344,7 @@ private struct GaryxToolImageThumbnailStrip: View {
         .scrollClipDisabled()
         // One shared gallery cover for the whole strip so the fullscreen
         // preview can swipe between this tool group's images.
-        .fullScreenCover(item: $previewSelection) { selection in
+        .garyxFullScreenCover(item: $previewSelection) { selection in
             GaryxFullscreenImageGalleryPreview(
                 sources: refs.map { ref in
                     let loaded = loadedByPath[ref.path]
@@ -455,7 +455,7 @@ private struct GaryxToolImageThumbnail: View {
         .task(id: ref.path) {
             await loadThumbnail()
         }
-        .fullScreenCover(isPresented: $showsPreview) {
+        .garyxFullScreenCover(isPresented: $showsPreview) {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(
                     title: ref.fileName,

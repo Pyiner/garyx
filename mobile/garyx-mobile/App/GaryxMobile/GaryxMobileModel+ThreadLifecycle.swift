@@ -130,6 +130,17 @@ extension GaryxMobileModel {
         ensureSelectedThreadStreamForVisibleConversation()
     }
 
+    /// Completes a deep-link open after the container has committed and made
+    /// the prepared occurrence visible. It intentionally performs no route
+    /// write; the NavigationIntent transaction already owns that mutation.
+    func activatePreparedThread(_ thread: GaryxThreadSummary) async {
+        let resolvedThread = summaryWithCommittedRunState(thread)
+        cacheThreadSummaries([resolvedThread])
+        applySelectedThreadRouteProjection(resolvedThread)
+        await loadSelectedThreadHistory()
+        ensureSelectedThreadStreamForVisibleConversation()
+    }
+
     func showSelectedThread(
         _ thread: GaryxThreadSummary,
         invalidatesPendingThreadOpen: Bool = true,
@@ -260,6 +271,25 @@ extension GaryxMobileModel {
     }
 
     func openNewThreadDraft(agentTargetOverride: String? = nil) {
+        activatePreparedNewThreadDraft(agentTargetOverride: agentTargetOverride)
+        let destination = GaryxRouteDestination.conversationDraft(
+            draftID: newThreadComposerPayloadKey.draftRouteID
+        )
+        if !productionRouteStore.isAttached {
+            activateComposerPayload(for: newThreadComposerPayloadKey)
+        }
+        _ = productionRouteStore.open(destination, source: .replace)
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
+    }
+
+    /// Applies only the content state associated with an already prepared
+    /// draft route. This is also shared by the synchronous direct-open path.
+    func activatePreparedNewThreadDraft(
+        agentTargetOverride: String? = nil,
+        freezesAgentTarget: Bool = false
+    ) {
         invalidatePendingThreadOpen()
         advanceSelectedThreadDraftGeneration()
         selectedThreadColdOpenGeneration &+= 1
@@ -278,18 +308,11 @@ extension GaryxMobileModel {
         resetSelectedThreadHistoryPagination()
         clearPendingBotDraft()
         draftThreadTitle = ""
-        setPendingNewThreadAgentTarget(agentTargetOverride)
-        clearNewThreadModelOverride()
-        let destination = GaryxRouteDestination.conversationDraft(
-            draftID: newThreadComposerPayloadKey.draftRouteID
+        setPendingNewThreadAgentTarget(
+            agentTargetOverride,
+            freezesSelection: freezesAgentTarget
         )
-        if !productionRouteStore.isAttached {
-            activateComposerPayload(for: newThreadComposerPayloadKey)
-        }
-        _ = productionRouteStore.open(destination, source: .replace)
-        if !productionRouteStore.isAttached {
-            applyCanonicalRouteProjection(productionRouteStore.path)
-        }
+        clearNewThreadModelOverride()
         setSidebarVisible(false)
         lastError = nil
     }

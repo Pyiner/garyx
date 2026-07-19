@@ -42,10 +42,10 @@ struct GaryxAutomationsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("New Automation")
         }
-        .fullScreenCover(isPresented: $showsCreateAutomation) {
+        .garyxFullScreenCover(isPresented: $showsCreateAutomation) {
             GaryxCreateAutomationSheet()
         }
-        .fullScreenCover(item: $model.selectedAutomationEditor) { automation in
+        .garyxFullScreenCover(item: $model.selectedAutomationEditor) { automation in
             GaryxEditAutomationSheet(automation: automation)
         }
     }
@@ -154,7 +154,7 @@ struct GaryxAutomationCard: View {
                 }
                 .buttonStyle(GaryxItemActionMenuButtonStyle())
                 .accessibilityLabel("Automation actions")
-                .popover(isPresented: $showsActionPanel, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                .garyxPopover(isPresented: $showsActionPanel, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
                     GaryxAutomationActionPopover(
                         onRun: automation.validationState == .valid
                             ? {
@@ -201,7 +201,7 @@ struct GaryxAutomationCard: View {
                 optimisticEnabled = nil
             }
         }
-        .confirmationDialog("Delete automation?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete automation?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task {
                     await model.deleteAutomation(automation)
@@ -370,7 +370,7 @@ struct GaryxCreateAutomationSheet: View {
         .onChange(of: model.agentTargets) { _, _ in
             ensureAgentSelection()
         }
-        .sheet(isPresented: $showsThreadPicker) {
+        .garyxSheet(isPresented: $showsThreadPicker) {
             GaryxAutomationThreadPickerSheet(
                 model: model,
                 selectedThreadId: effectiveThreadId,
@@ -496,7 +496,7 @@ struct GaryxEditAutomationSheet: View {
         .onChange(of: draft.targetsExistingThread) { _, _ in
             ensureEditTargetSelection()
         }
-        .sheet(isPresented: $showsThreadPicker) {
+        .garyxSheet(isPresented: $showsThreadPicker) {
             GaryxAutomationThreadPickerSheet(
                 model: model,
                 selectedThreadId: draft.effectiveThreadId(threadOptions: editThreadOptions),
@@ -750,7 +750,7 @@ struct GaryxAutomationScheduleEditor: View {
                 GaryxFormRow(title: "Date", onTap: { showsOnceDatePicker = true }) {
                     GaryxFormMenuValueLabel(value: draft.date.formatted(date: .abbreviated, time: .omitted))
                 }
-                .popover(isPresented: $showsOnceDatePicker) {
+                .garyxPopover(isPresented: $showsOnceDatePicker) {
                     DatePicker(
                         "Date",
                         selection: $draft.date,

@@ -397,7 +397,7 @@ struct GaryxFormTextAreaRow: View {
         }
         .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .fullScreenCover(isPresented: $showsFocusedEditor) {
+        .garyxFullScreenCover(isPresented: $showsFocusedEditor) {
             GaryxFocusedTextEditorSheet(
                 title: title,
                 text: $text,
@@ -863,7 +863,7 @@ struct GaryxWorkspacePathSelectionRow: View {
             }
         }
         .accessibilityValue(displayValue)
-        .sheet(isPresented: $showsPicker) {
+        .garyxSheet(isPresented: $showsPicker) {
             GaryxWorkspaceSelectSheet(
                 title: title,
                 path: $path,
@@ -985,7 +985,7 @@ struct GaryxWorkspaceSelectSheet: View {
             .scrollIndicators(.hidden)
         }
         .garyxWorkspacePickerSheetStyle()
-        .sheet(isPresented: $showsAddWorkspace) {
+        .garyxSheet(isPresented: $showsAddWorkspace) {
             GaryxWorkspacePathPickerSheet(
                 title: "Add workspace",
                 path: $addWorkspacePath

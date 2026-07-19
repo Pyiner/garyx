@@ -110,6 +110,299 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         XCTAssertEqual(coordinator.currentText, "gateway two")
     }
 
+    func testPresentationFrozenOperationContextPersistsToItsOriginAfterRouteSwap() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            quotaLimitBytes: 1_024 * 1_024
+        )
+        let scope = GaryxGatewayScope(identity: "route-swap-gateway", epoch: 1)
+        let request = GaryxGatewayRequestToken(scope: scope, activationSequence: 7)
+        let origin = GaryxComposerKey.draft("origin")
+        let replacementRoute = GaryxComposerKey.draft("replacement-route")
+        await coordinator.activate(scope: scope, key: origin)
+        let frozen = try XCTUnwrap(
+            coordinator.makePresentationOperationContext(requestToken: request)
+        )
+        let sourceURL = directory.appendingPathComponent("route-swap.txt")
+        try Data("route-owned".utf8).write(to: sourceURL)
+
+        // The picker lease was accepted on origin, then a queued whole-chain
+        // route replacement became visible before asynchronous staging ran.
+        await coordinator.activate(scope: scope, key: replacementRoute)
+        let staged = try await coordinator.stageAttachment(
+            sourceURL: sourceURL,
+            metadata: .init(
+                kind: "file",
+                name: "route-swap.txt",
+                mediaType: "text/plain",
+                previewDataURL: nil
+            ),
+            requestToken: request,
+            operationContext: frozen
+        )
+
+        XCTAssertEqual(staged.operationKey, frozen.key)
+        XCTAssertEqual(staged.operationKey.entryID, frozen.key.entryID)
+        XCTAssertTrue(coordinator.currentAttachments.isEmpty)
+
+        await coordinator.activate(scope: scope, key: origin)
+        XCTAssertEqual(coordinator.currentAttachments.map(\.name), ["route-swap.txt"])
+        XCTAssertEqual(coordinator.currentAttachments.first?.id, staged.attachmentID)
+    }
+
+    func testRemainingRoutesPreserveActualRetryableOwnerForSwapPlanner() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            quotaLimitBytes: 1_024 * 1_024
+        )
+        let scope = GaryxGatewayScope(identity: "route-planner-gateway", epoch: 1)
+        let request = GaryxGatewayRequestToken(scope: scope, activationSequence: 1)
+        let originKey = GaryxComposerKey.draft("route-planner-origin")
+        await coordinator.activate(scope: scope, key: originKey)
+        let frozen = try XCTUnwrap(
+            coordinator.makePresentationOperationContext(requestToken: request)
+        )
+        let sourceURL = directory.appendingPathComponent("retryable-route-owner.txt")
+        try Data("retryable owner".utf8).write(to: sourceURL)
+        let staged = try await coordinator.stageAttachment(
+            sourceURL: sourceURL,
+            metadata: .init(
+                kind: "file",
+                name: "retryable-route-owner.txt",
+                mediaType: "text/plain",
+                previewDataURL: nil
+            ),
+            requestToken: request,
+            operationContext: frozen
+        )
+        await coordinator.failUpload(staged)
+
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        let actualRetryable = try await durability.load()
+        let old = try XCTUnwrap(actualRetryable.operations[staged.operationKey])
+        let feedback = try XCTUnwrap(
+            actualRetryable.feedback.values.first(where: {
+                $0.operationID == staged.operationKey.operationID
+            })
+        )
+        let assetID = try XCTUnwrap(old.stagedAssetID)
+        XCTAssertEqual(old.state, .failedRetryable)
+        XCTAssertEqual(actualRetryable.manifests[old.context.key]?.state, .failedRetryable)
+        XCTAssertEqual(actualRetryable.stagedAssetOwners[assetID], old.context.key)
+        XCTAssertEqual(actualRetryable.stagedAssetReservedBytes[assetID], old.reservedBytes)
+
+        let routeStore = GaryxProductionRouteStore()
+        let originEntry = entry(
+            "route-planner-origin-occurrence",
+            destination: .conversationDraft(draftID: "route-planner-origin")
+        )
+        routeStore.applyCanonicalPath([originEntry])
+        var callbacks = GaryxRouteStackContainerCallbacks()
+        callbacks.phaseChanged = { [weak routeStore] phase in
+            routeStore?.routePhaseChanged(phase)
+        }
+        callbacks.canonicalPathChanged = { [weak routeStore] path in
+            routeStore?.applyCanonicalPath(path)
+        }
+        callbacks.visibleRouteActivated = { [weak routeStore] node in
+            routeStore?.visibleRouteActivated(node)
+        }
+        callbacks.rendererBecameIdle = { [weak routeStore] in
+            routeStore?.rendererBecameIdle()
+        }
+        let container = GaryxRouteStackContainer(
+            initialPath: [originEntry],
+            callbacks: callbacks,
+            preferencesProvider: {
+                .init(reduceMotion: false, prefersCrossFadeTransitions: false)
+            },
+            hostBuilder: { node in AnyView(Text(String(describing: node))) }
+        )
+        container.loadViewIfNeeded()
+        routeStore.attach(container)
+
+        let remainingRoutes = GaryxMobileSettingsTab.allCases.map(GaryxMobileRoute.settings)
+            + GaryxMobilePanel.allCases
+                .filter { $0 != .chat }
+                .map(GaryxMobileRoute.panel)
+            + [
+                .automation("automation-1"),
+                .automationThreads("automation-1"),
+                .capsule("capsule-1"),
+                .agent("agent-1"),
+                .skill("skill-1"),
+                .skillFile(skillId: "skill-1", path: "SKILL.md"),
+                .workspace("/workspace/test"),
+                .bot(channel: "api", accountId: "1000000001"),
+                .workspaceFile(workspaceDir: "/workspace/test", path: "README.md"),
+            ]
+        for route in remainingRoutes {
+            let destinations = GaryxMobileRoutePlan.destinations(
+                for: route,
+                draftID: "unused-draft",
+                resolvedBotGroupID: "configured-group"
+            )
+            _ = routeStore.open(destinations, source: .deepLink, animated: false)
+            XCTAssertEqual(
+                container.path.map(\.destination),
+                destinations,
+                "wrong visible occurrence chain for \(route)"
+            )
+            XCTAssertFalse(container.hasTerminalResidue)
+
+            var expected = destinations
+            while !expected.isEmpty {
+                expected.removeLast()
+                routeStore.popOne(animated: false)
+                XCTAssertEqual(
+                    container.path.map(\.destination),
+                    expected,
+                    "pop did not expose the predecessor for \(route)"
+                )
+            }
+        }
+
+        let afterRoutes = try await durability.load()
+        XCTAssertEqual(afterRoutes.operations[old.context.key], old)
+        XCTAssertEqual(afterRoutes.manifests[old.context.key], actualRetryable.manifests[old.context.key])
+        XCTAssertEqual(afterRoutes.stagedAssetOwners[assetID], old.context.key)
+        XCTAssertEqual(afterRoutes.stagedAssetReservedBytes[assetID], old.reservedBytes)
+
+        let successorContext = old.context.replacingOperationID(
+            GaryxOperationID(rawValue: "route-planner-successor")
+        )
+        let successor = GaryxOperationCapability(context: successorContext)
+        let replacement = GaryxReplacementRecord(
+            id: GaryxReplacementID(rawValue: "route-planner-replacement"),
+            scope: scope,
+            entryID: old.context.key.entryID,
+            oldKey: old.context.key,
+            reservationID: old.context.key.reservationID,
+            branch: old.context.key.branch,
+            stagedAssetID: assetID,
+            reservedBytes: old.reservedBytes
+        )
+        let withReplacement = try await durability.commit(
+            .init(
+                expectedRevision: afterRoutes.revision,
+                label: "admit route-side retry replacement",
+                mutations: [.upsertReplacement(replacement)]
+            )
+        )
+        let plan = try XCTUnwrap(
+            GaryxReplacementFeedbackSwapPlanner.plan(
+                snapshot: withReplacement,
+                successor: successor,
+                replacementID: replacement.id,
+                feedbackID: feedback.id,
+                scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
+            )
+        )
+        let committed = try await durability.commit(plan.transaction)
+
+        XCTAssertEqual(committed.stagedAssetOwners, [assetID: successorContext.key])
+        XCTAssertEqual(committed.stagedAssetReservedBytes[assetID], old.reservedBytes)
+        XCTAssertNil(committed.manifests[old.context.key])
+        XCTAssertEqual(committed.manifests[successorContext.key], plan.successorManifest)
+        XCTAssertNil(committed.operations[old.context.key]?.stagedAssetID)
+        XCTAssertEqual(committed.operations[old.context.key]?.reservedBytes, 0)
+        XCTAssertEqual(committed.feedback[feedback.id]?.phase, .acknowledged)
+        XCTAssertEqual(committed.replacements[replacement.id]?.phase, .committed)
+    }
+
+    func testPresentationContextKeepsUploadOnOriginGatewayAfterScopeSwitch() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            quotaLimitBytes: 1_024 * 1_024
+        )
+        let requestSeen = expectation(description: "origin gateway received upload")
+        let capturedHost = GaryxLockedStringBox()
+        GaryxComposerDeliveryURLProtocolStub.requestHandler = { request in
+            capturedHost.set(request.url?.host)
+            requestSeen.fulfill()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url ?? URL(string: "http://gateway-one.example.test")!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    """
+                    {"files":[{"kind":"image","path":"/remote/origin.jpg","name":"origin.jpg","mediaType":"image/jpeg"}]}
+                    """.utf8
+                )
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxComposerDeliveryURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxComposerDeliveryURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let suiteName = "GaryxPresentationOriginGateway-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.set(
+            "http://gateway-one.example.test",
+            forKey: GaryxMobileSettingsKeys.gatewayUrl
+        )
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            gatewayClientFactory: { gatewayConfiguration in
+                GaryxGatewayClient(
+                    configuration: gatewayConfiguration,
+                    session: session,
+                    retryPolicy: .disabled
+                )
+            },
+            composerPayloadCoordinator: coordinator
+        )
+        try await waitUntil { coordinator.inputConfiguration() != nil }
+        let originScope = model.gatewayRequestToken.scope
+        let originKey = GaryxComposerKey.draft("presentation-origin")
+        await coordinator.activate(scope: originScope, key: originKey)
+        let frozen = try XCTUnwrap(
+            model.makeComposerPresentationOperationContext(payload: coordinator)
+        )
+
+        model.exitCurrentGatewayScope(.suspend)
+        model.gatewayURL = "http://gateway-two.example.test"
+        model.activateCurrentGatewayScope()
+        await model.attachImages(
+            [
+                GaryxMobileSelectedImage(
+                    name: "origin.jpg",
+                    mediaType: "image/jpeg",
+                    data: Data([0xFF, 0xD8, 0xFF, 0xD9])
+                )
+            ],
+            operationContext: frozen
+        )
+
+        await fulfillment(of: [requestSeen], timeout: 2)
+        XCTAssertEqual(capturedHost.get(), "gateway-one.example.test")
+        XCTAssertNil(model.lastError)
+
+        await coordinator.activate(scope: originScope, key: originKey)
+        XCTAssertEqual(coordinator.currentAttachments.map(\.name), ["origin.jpg"])
+    }
+
     func testPendingUploadHoldsPayloadPreparingSendLockWithoutAdvancingText() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -678,7 +971,7 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
             .settingsDetail(GaryxMobileSettingsTab.manage.rawValue),
             .settingsDetail(GaryxMobileSettingsTab.gateway.rawValue),
         ])
-        model.performMainPanelLeadingEdgeAction()
+        model.dismissCurrentRoute()
         model.applyCanonicalRouteProjection(model.productionRouteStore.path)
         XCTAssertEqual(model.activeSettingsTab, .manage)
     }
@@ -834,4 +1127,21 @@ private final class GaryxComposerDeliveryURLProtocolStub: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private final class GaryxLockedStringBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    func set(_ value: String?) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
+    }
+
+    func get() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
 }

@@ -148,7 +148,7 @@ extension GaryxMobileModel {
         selectedSkillDocument = nil
     }
 
-    private static func preferredSkillFilePath(in entries: [GaryxSkillEntryNode]) -> String? {
+    static func preferredSkillFilePath(in entries: [GaryxSkillEntryNode]) -> String? {
         let filePaths = skillFilePaths(in: entries)
         return filePaths.first { $0 == "SKILL.md" }
             ?? filePaths.first { $0.localizedCaseInsensitiveCompare("SKILL.md") == .orderedSame }

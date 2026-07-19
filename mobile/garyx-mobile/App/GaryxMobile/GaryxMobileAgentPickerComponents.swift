@@ -441,7 +441,7 @@ struct GaryxAgentTargetPickerControl: View {
 
         if showsThreadModelOverride {
             button
-                .sheet(isPresented: showsPicker) {
+                .garyxSheet(isPresented: showsPicker) {
                     GaryxNewThreadAgentSheet(
                         selectedAgentTargetId: $selectedAgentTargetId,
                         onConfigure: onConfigure
@@ -450,7 +450,7 @@ struct GaryxAgentTargetPickerControl: View {
                 }
         } else {
             button
-                .popover(
+                .garyxPopover(
                     isPresented: showsPicker,
                     attachmentAnchor: .rect(.bounds),
                     arrowEdge: .top
@@ -514,7 +514,7 @@ struct GaryxBotAgentPickerControl: View {
             }
         }
         .buttonStyle(.plain)
-        .popover(
+        .garyxPopover(
             isPresented: showsPicker,
             attachmentAnchor: .rect(.bounds),
             arrowEdge: .top

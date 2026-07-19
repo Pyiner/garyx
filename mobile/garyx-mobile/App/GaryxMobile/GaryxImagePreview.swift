@@ -149,7 +149,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .alert(item: $saveAlert, content: saveAlertView)
+        .garyxAlert(item: $saveAlert, content: saveAlertView)
         .onDisappear {
             cancelCurrentSave()
         }

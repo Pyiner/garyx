@@ -18,7 +18,7 @@ extension GaryxWorkspaceBotsDrilldown {
 }
 
 extension GaryxWorkspaceDrilldownIdentity {
-    var legacyDrilldown: GaryxWorkspaceBotsDrilldown {
+    var drilldown: GaryxWorkspaceBotsDrilldown {
         switch self {
         case .workspace(let path):
             .workspace(path)
@@ -31,36 +31,10 @@ extension GaryxWorkspaceDrilldownIdentity {
 }
 
 extension GaryxMobileModel {
-    /// The UIKit route path is the navigation truth. Legacy panel state and
-    /// selectedThread remain compatibility projections for existing feature
-    /// views until their A4c route-value migration.
+    /// The UIKit occurrence path is the navigation truth. Module selection and
+    /// selectedThread are read-only projections for existing feature stores.
     func applyCanonicalRouteProjection(_ path: [GaryxRouteEntry]) {
-        var projectedNavigation = GaryxMobileNavigationState()
-        for (index, entry) in path.enumerated() {
-            let source: GaryxMobilePanelOpenSource = index == 0 ? .replace : .current
-            switch entry.destination {
-            case .conversation, .conversationDraft:
-                projectedNavigation.openConversation(source: source)
-            case .panel(let rawPanel):
-                if let panel = GaryxMobilePanel(rawValue: rawPanel) {
-                    projectedNavigation.openPanel(panel, source: source)
-                }
-            case .settingsDetail(let rawTab):
-                projectedNavigation.openSettings(
-                    tab: GaryxMobileSettingsTab(rawValue: rawTab) ?? .manage,
-                    source: source
-                )
-            case .workspaceDrilldown(let identity):
-                projectedNavigation.openRoute(
-                    GaryxMobilePanelRoute(
-                        panel: .workspaceBots,
-                        settingsTab: .manage,
-                        workspaceBotsDrilldown: identity.legacyDrilldown
-                    ),
-                    source: source
-                )
-            }
-        }
+        let projectedNavigation = GaryxMobileNavigationState(projecting: path)
         if navigationState != projectedNavigation {
             navigationState = projectedNavigation
         }
@@ -109,42 +83,19 @@ extension GaryxMobileModel {
     }
 
     var workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? {
-        get { navigationState.workspaceBotsDrilldown }
-        set {
-            guard navigationState.workspaceBotsDrilldown != newValue else { return }
-            if let newValue {
-                openWorkspaceBotsDrilldown(newValue, source: .current)
-            } else if case .workspaceDrilldown? = productionRouteStore.path.last?.destination {
-                productionRouteStore.popOne()
-            }
-        }
-    }
-
-    var mainPanelBackStack: [GaryxMobilePanelRoute] {
-        navigationState.mainPanelBackStack
-    }
-
-    var rootNavigationPath: [GaryxMobileRootRoute] {
-        navigationState.rootNavigationPath
+        navigationState.workspaceBotsDrilldown
     }
 
     var isHomeVisible: Bool {
-        !navigationState.presentsContent
+        productionRouteStore.path.isEmpty
     }
 
-    /// Receives NavigationStack path writes. The system only pops (back
-    /// swipe / back button); pushes always originate from the model.
-    func applyRootNavigationPath(_ newPath: [GaryxMobileRootRoute]) {
-        guard newPath.isEmpty, navigationState.presentsContent else { return }
-        performMainPanelLeadingEdgeAction()
-    }
-
-    func popToHome() {
+    func returnHome() {
         guard !productionRouteStore.path.isEmpty else { return }
         invalidatePendingThreadOpen()
         stopSelectedThreadStreamForHome()
         cancelSelectedThreadReconcileLoop()
-        productionRouteStore.popToHome()
+        productionRouteStore.resetToHome()
     }
 
     func setSidebarVisible(_ visible: Bool, animated: Bool = true) {
@@ -265,9 +216,6 @@ extension GaryxMobileModel {
 
     func queuePendingMobileRoute(_ route: GaryxMobileRoute) {
         pendingMobileRoute = route
-        if case let .thread(threadId) = route {
-            queuePendingThreadLink(threadId)
-        }
     }
 
     func openPendingMobileRouteIfNeeded() async {
@@ -277,7 +225,7 @@ extension GaryxMobileModel {
         }
         guard case .ready = connectionState else { return }
         pendingMobileRoute = nil
-        await openMobileRoute(route, source: .replace)
+        await openMobileRoute(route, source: .deepLink)
     }
 
     func openMobileRouteFromLink(_ route: GaryxMobileRoute) async {
@@ -295,141 +243,287 @@ extension GaryxMobileModel {
         _ route: GaryxMobileRoute,
         source: GaryxMobilePanelOpenSource = .replace
     ) async {
+        // In-transcript capsule cards present over the conversation and dismiss
+        // back to it, instead of switching to the Capsules overview.
+        if source == .conversation, case .capsule(let id) = route {
+            let capsuleId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !capsuleId.isEmpty else { return }
+            await presentConversationCapsulePreview(capsuleId)
+            return
+        }
+
+        let preparation = productionRouteStore.beginNavigationPreparation(
+            source: source,
+            scopes: gatewayScopeRegistry
+        )
+        let outcome = await prepareMobileRoute(route)
+        let routeOutcome = outcome.map(\.destinations)
+        let prepared = outcome.preparedValue
+        let submission = productionRouteStore.completeNavigationPreparation(
+            preparation,
+            outcome: routeOutcome,
+            scopes: gatewayScopeRegistry,
+            onVisible: { [weak self] in
+                guard let self, let prepared else { return }
+                activatePreparedMobileRoute(prepared)
+            }
+        )
+        handleMobileRouteSubmission(submission.result, requestedRoute: route)
+    }
+
+    private func prepareMobileRoute(
+        _ route: GaryxMobileRoute
+    ) async -> GaryxPrepareOutcome<GaryxPreparedMobileRoute> {
+        guard case .ready = connectionState else { return .authenticationRequired }
+        let currentDraftID = newThreadComposerPayloadKey.draftRouteID
+
+        func prepared(
+            _ activation: GaryxPreparedMobileRouteActivation,
+            botGroupID: String? = nil,
+            draftID: String? = nil
+        ) -> GaryxPrepareOutcome<GaryxPreparedMobileRoute> {
+            .ready(
+                GaryxPreparedMobileRoute(
+                    destinations: GaryxMobileRoutePlan.destinations(
+                        for: route,
+                        draftID: draftID ?? currentDraftID,
+                        resolvedBotGroupID: botGroupID
+                    ),
+                    activation: activation
+                )
+            )
+        }
+
+        do {
+            switch route {
+            case .chat:
+                let targetID = preparedNewThreadAgentTargetID()
+                return prepared(
+                    .newThreadDraft(agentTargetID: targetID),
+                    draftID: newThreadDraftID(agentTargetID: targetID)
+                )
+            case .panel(.chat):
+                let targetID = preparedNewThreadAgentTargetID()
+                return prepared(
+                    .newThreadDraft(agentTargetID: targetID),
+                    draftID: newThreadDraftID(agentTargetID: targetID)
+                )
+            case .settings, .panel:
+                return prepared(.none)
+            case .thread(let requestedID):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return .userVisibleNotFound }
+                let thread: GaryxThreadSummary
+                if let cached = cachedThreadSummary(for: id) {
+                    thread = cached
+                } else {
+                    thread = try await client().getThread(threadId: id)
+                }
+                return prepared(.thread(thread))
+            case .automation(let requestedID):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return .userVisibleNotFound }
+                let catalog = try await client().listAutomations()
+                guard let automation = catalog.first(where: { $0.id == id }) else {
+                    return .userVisibleNotFound
+                }
+                return prepared(.automation(automation))
+            case .automationThreads(let requestedID):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return .userVisibleNotFound }
+                let catalog = try await client().listAutomations()
+                guard let automation = catalog.first(where: { $0.id == id }) else {
+                    return .userVisibleNotFound
+                }
+                return prepared(.automationThreads(automation))
+            case .capsule(let requestedID):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return .userVisibleNotFound }
+                let catalog = try await client().listCapsules()
+                guard let capsule = catalog.first(where: { $0.id == id }) else {
+                    return .userVisibleNotFound
+                }
+                return prepared(.capsule(.init(capsule: capsule)))
+            case .agent(let requestedID):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return .userVisibleNotFound }
+                let agent = try await client().getAgent(agentId: id)
+                return prepared(.agent(agent))
+            case .skill(let requestedID):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return .userVisibleNotFound }
+                let gateway = try client()
+                let editor = try await gateway.skillEditor(skillId: id)
+                let document: GaryxSkillFileDocument?
+                if let preferredPath = Self.preferredSkillFilePath(in: editor.entries) {
+                    do {
+                        document = try await gateway.readSkillFile(
+                            skillId: id,
+                            path: preferredPath
+                        )
+                    } catch GaryxGatewayError.httpStatus(let status, _, _) where status == 404 {
+                        // The skill itself is a valid target even when its tree
+                        // races a removed preferred file.
+                        document = nil
+                    }
+                } else {
+                    document = nil
+                }
+                return prepared(.skill(editor: editor, document: document))
+            case .skillFile(let requestedID, let requestedPath):
+                let id = requestedID.trimmingCharacters(in: .whitespacesAndNewlines)
+                let path = requestedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty, !path.isEmpty else { return .userVisibleNotFound }
+                let gateway = try client()
+                async let editor = gateway.skillEditor(skillId: id)
+                async let document = gateway.readSkillFile(skillId: id, path: path)
+                let (resolvedEditor, resolvedDocument) = try await (editor, document)
+                return prepared(
+                    .skill(editor: resolvedEditor, document: resolvedDocument)
+                )
+            case .workspace(let requestedPath):
+                let path = requestedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !path.isEmpty else { return .userVisibleNotFound }
+                let catalog = try await client().listWorkspaces()
+                guard catalog.contains(where: { $0.path == path }) else {
+                    return .userVisibleNotFound
+                }
+                return prepared(.none)
+            case .bot(let requestedChannel, let requestedAccountID):
+                let channel = requestedChannel.trimmingCharacters(in: .whitespacesAndNewlines)
+                let accountID = requestedAccountID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !channel.isEmpty, !accountID.isEmpty else {
+                    return .userVisibleNotFound
+                }
+                let catalog = try await client().listConfiguredBots()
+                guard let bot = catalog.first(where: {
+                    $0.channel.caseInsensitiveCompare(channel) == .orderedSame
+                        && $0.accountId.caseInsensitiveCompare(accountID) == .orderedSame
+                }) else {
+                    return .userVisibleNotFound
+                }
+                return prepared(.bot(bot), botGroupID: "\(bot.channel)::\(bot.accountId)")
+            case .workspaceFile(let requestedWorkspace, let requestedPath):
+                let workspace = requestedWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
+                let path = requestedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                let target = GaryxMobileWorkspaceFileTarget(
+                    workspaceDir: workspace,
+                    path: path
+                )
+                guard !target.workspaceDir.isEmpty, !target.path.isEmpty else {
+                    return .userVisibleNotFound
+                }
+                let gateway = try client()
+                async let listing: GaryxWorkspaceFileListing? = try? gateway.listWorkspaceFiles(
+                    workspaceDir: target.workspaceDir,
+                    directoryPath: (target.path as NSString).deletingLastPathComponent
+                )
+                let preview = try await gateway.previewWorkspaceFile(
+                    workspaceDir: target.workspaceDir,
+                    path: target.path
+                )
+                return prepared(
+                    .workspaceFile(
+                        target: target,
+                        preview: preview,
+                        listing: await listing
+                    )
+                )
+            }
+        } catch is CancellationError {
+            return .cancelledOrStale
+        } catch GaryxGatewayError.httpStatus(let status, _, _)
+            where status == 401 || status == 403 {
+            return .authenticationRequired
+        } catch GaryxGatewayError.httpStatus(let status, _, _) where status == 404 {
+            return .userVisibleNotFound
+        } catch {
+            return .retryableFailure(message: displayMessage(for: error))
+        }
+    }
+
+    private func activatePreparedMobileRoute(_ prepared: GaryxPreparedMobileRoute) {
+        invalidatePendingThreadOpen()
         clearRouteDrivenDetailState()
-        switch route {
-        case .chat:
-            openNewThreadDraft()
-        case let .thread(threadId):
-            await openThread(id: threadId, source: source)
-        case let .settings(tab):
-            openSettings(tab: tab, source: source)
-        case let .panel(panel):
-            openPanel(panel, source: source)
-        case let .automation(id):
-            await openAutomationRoute(id, source: source)
-        case let .automationThreads(id):
-            await openAutomationThreadsRoute(id, source: source)
-        case let .capsule(id):
-            await openCapsuleRoute(id, source: source)
-        case let .agent(id):
-            await openAgentRoute(id, source: source)
-        case let .skill(id):
-            await openSkillRoute(id, source: source)
-        case let .skillFile(skillId, path):
-            await openSkillFileRoute(skillId: skillId, path: path, source: source)
-        case let .workspace(path):
-            await openWorkspaceRoute(path, source: source)
-        case let .bot(channel, accountId):
-            await openBotRoute(channel: channel, accountId: accountId, source: source)
-        case let .workspaceFile(workspaceDir, path):
-            await openWorkspaceFilePreview(
-                GaryxMobileWorkspaceFileTarget(workspaceDir: workspaceDir, path: path),
-                source: source
+        switch prepared.activation {
+        case .none:
+            break
+        case .newThreadDraft(let agentTargetID):
+            activatePreparedNewThreadDraft(
+                agentTargetOverride: agentTargetID,
+                freezesAgentTarget: true
+            )
+        case .thread(let thread):
+            Task { @MainActor [weak self] in
+                await self?.activatePreparedThread(thread)
+            }
+        case .automation(let automation):
+            replaceAutomation(automation)
+            selectedAutomationEditor = automation
+        case .automationThreads(let automation):
+            replaceAutomation(automation)
+        case .capsule(let selection):
+            galleryFocusedCapsule = selection
+        case .agent(let agent):
+            selectedAgentDetail = agent
+        case .skill(let editor, let document):
+            skillEditorLoadRequestId = nil
+            skillFileLoadRequestId = nil
+            selectedSkillEditor = editor
+            selectedSkillDocument = document
+        case .bot(let bot):
+            if let index = configuredBots.firstIndex(where: {
+                $0.channel.caseInsensitiveCompare(bot.channel) == .orderedSame
+                    && $0.accountId.caseInsensitiveCompare(bot.accountId) == .orderedSame
+            }) {
+                configuredBots[index] = bot
+            } else {
+                configuredBots.append(bot)
+            }
+        case .workspaceFile(let target, let preview, let listing):
+            activatePreparedWorkspaceFilePreview(
+                target: target,
+                preview: preview,
+                listing: listing
             )
         }
     }
 
-    private func openAutomationRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let automationId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !automationId.isEmpty else { return }
-        openPanel(.automations, source: source)
-        await refreshRemoteState()
-        guard let automation = automations.first(where: { $0.id == automationId }) else {
-            showRouteNotFound(kind: "Automation", id: automationId)
-            return
-        }
-        selectedAutomationEditor = automation
+    /// A new-chat link starts a fresh draft, so it must not inherit the bot or
+    /// one-draft agent selection currently projected by the visible route.
+    /// Freeze the gateway default into the prepared payload so a queued intent
+    /// cannot expose a different composer key when it finally becomes visible.
+    private func preparedNewThreadAgentTargetID() -> String {
+        GaryxNewThreadAgentSelection.agentId(
+            draftOverrideAgentId: nil,
+            effectiveDefaultAgentId: effectiveDefaultAgentId
+        ) ?? ""
     }
 
-    private func openAutomationThreadsRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let automationId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !automationId.isEmpty else { return }
-        openWorkspaceBotsDrilldown(.automationThreads(automationId), source: source)
-        if automations.isEmpty {
-            await refreshRemoteState()
-        }
+    private func newThreadDraftID(agentTargetID: String) -> String {
+        let targetID = agentTargetID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return targetID.isEmpty ? "new-thread" : "new-thread:\(targetID)"
     }
 
-    private func openCapsuleRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let capsuleId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !capsuleId.isEmpty else { return }
-        // In-transcript capsule cards present over the conversation and dismiss
-        // back to it, instead of switching to the Capsules overview.
-        if source == .conversation {
-            await presentConversationCapsulePreview(capsuleId)
-            return
+    private func handleMobileRouteSubmission(
+        _ result: GaryxNavigationQueueResult,
+        requestedRoute: GaryxMobileRoute
+    ) {
+        switch result {
+        case .userVisibleNotFound:
+            let descriptor = requestedRoute.notFoundDescriptor
+            showRouteNotFound(kind: descriptor.kind, id: descriptor.id)
+        case .retryableFailure(let message):
+            lastError = message
+        case .authenticationRequired:
+            pendingMobileRoute = requestedRoute
+        case .internalFault(let code):
+            lastError = "Garyx could not open this destination (\(code))."
+        case .admittedImmediately, .queued, .presentationDismissalRequired,
+             .cancelledOrStale, .stalePreparation, .reprepareRequired,
+             .dependencyDiscarded:
+            break
         }
-        openPanel(.capsules, source: source)
-        await refreshCapsules()
-        guard let capsule = capsules.first(where: { $0.id == capsuleId }) else {
-            showRouteNotFound(kind: "Capsule", id: capsuleId)
-            return
-        }
-        galleryFocusedCapsule = GaryxCapsulePreviewSelection(capsule: capsule)
-    }
-
-    private func openAgentRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let agentId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !agentId.isEmpty else { return }
-        openPanel(.agents, source: source)
-        await refreshRemoteState()
-        guard let agent = agents.first(where: { $0.id == agentId }) else {
-            showRouteNotFound(kind: "Agent", id: agentId)
-            return
-        }
-        selectedAgentDetail = agent
-    }
-
-    private func openSkillRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let skillId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !skillId.isEmpty else { return }
-        openPanel(.skills, source: source)
-        await refreshRemoteState()
-        guard let skill = skills.first(where: { $0.id == skillId }) else {
-            showRouteNotFound(kind: "Skill", id: skillId)
-            return
-        }
-        await openSkillEditor(skill)
-    }
-
-    private func openSkillFileRoute(
-        skillId: String,
-        path: String,
-        source: GaryxMobilePanelOpenSource
-    ) async {
-        let normalizedSkillId = skillId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedSkillId.isEmpty, !normalizedPath.isEmpty else { return }
-        openPanel(.skills, source: source)
-        await refreshRemoteState()
-        guard let skill = skills.first(where: { $0.id == normalizedSkillId }) else {
-            showRouteNotFound(kind: "Skill", id: normalizedSkillId)
-            return
-        }
-        await openSkillEditor(skill, selecting: normalizedPath)
-    }
-
-    private func openWorkspaceRoute(_ path: String, source: GaryxMobilePanelOpenSource) async {
-        let workspacePath = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !workspacePath.isEmpty else { return }
-        await selectWorkspace(workspacePath)
-        openWorkspaceBotsDrilldown(.workspace(workspacePath), source: source)
-    }
-
-    private func openBotRoute(
-        channel: String,
-        accountId: String,
-        source: GaryxMobilePanelOpenSource
-    ) async {
-        let normalizedChannel = channel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedAccountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedChannel.isEmpty, !normalizedAccountId.isEmpty else { return }
-        await refreshRemoteState()
-        let groupId = mobileBotGroups.first { group in
-            group.channel.caseInsensitiveCompare(normalizedChannel) == .orderedSame
-                && group.accountId.caseInsensitiveCompare(normalizedAccountId) == .orderedSame
-        }?.id ?? "\(normalizedChannel)::\(normalizedAccountId)"
-        openWorkspaceBotsDrilldown(.bot(groupId), source: source)
     }
 
     private func clearRouteDrivenDetailState() {
@@ -451,63 +545,9 @@ extension GaryxMobileModel {
         )
     }
 
-    var mainPanelLeadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        if productionRouteStore.path.isEmpty { return .openSidebar }
-        return productionRouteStore.path.count > 1 ? .mainPanelBack : .popToHome
-    }
-
-    var mainPanelLeadingEdgeActionLabel: String {
-        if productionRouteStore.path.count > 1,
-           let predecessor = productionRouteStore.path.dropLast().last {
-            return predecessor.destination.backNavigationLabel
-        }
-        return switch mainPanelLeadingEdgeAction {
-        case .openSidebar:
-            "Open menu"
-        case .popToHome, .mainPanelBack:
-            "Back"
-        case .settingsOverview:
-            "All Settings"
-        case .workspaceBotsOverview:
-            "Threads"
-        }
-    }
-
-    func performMainPanelLeadingEdgeAction() {
-        // While the task-tree sidebar is open, a leading-edge swipe must not
-        // back-navigate underneath the panel; the swipe only closes the
-        // sidebar via its scrim gesture.
+    func dismissCurrentRoute() {
         guard !isTaskTreeSidebarOpen else { return }
-        switch mainPanelLeadingEdgeAction {
-        case .openSidebar:
-            setSidebarVisible(true)
-        case .popToHome:
-            popToHome()
-        case .mainPanelBack:
-            goBackInMainPanel()
-        case .settingsOverview:
-            goBackInMainPanel()
-        case .workspaceBotsOverview:
-            goBackInMainPanel()
-        }
-    }
-
-    func showSettingsOverview() {
         invalidatePendingThreadOpen()
-        if case .settingsDetail? = productionRouteStore.path.last?.destination,
-           productionRouteStore.path.count > 1 {
-            productionRouteStore.popOne()
-        } else {
-            openSettings(tab: .manage, source: .replace)
-        }
-    }
-
-    func goBackInMainPanel() {
-        invalidatePendingThreadOpen()
-        guard productionRouteStore.path.count > 1 else {
-            popToHome()
-            return
-        }
         productionRouteStore.popOne()
         setSidebarVisible(false)
     }
@@ -554,7 +594,7 @@ extension GaryxMobileModel {
         if showSidebar {
             // The thread list is the home root now; the legacy debug sidebar
             // route lands there instead of opening the navigation drawer.
-            popToHome()
+            returnHome()
             setSidebarVisible(false, animated: false)
             return
         }
@@ -945,6 +985,37 @@ extension GaryxComposerKey {
             draftID
         case .thread(let threadID):
             "new-thread:\(threadID)"
+        }
+    }
+}
+
+private extension GaryxMobileRoute {
+    var notFoundDescriptor: (kind: String, id: String) {
+        switch self {
+        case .chat:
+            ("Destination", "chat")
+        case .thread(let id):
+            ("Thread", id)
+        case .settings(let tab):
+            ("Settings Page", tab.rawValue)
+        case .panel(let panel):
+            ("Page", panel.label)
+        case .automation(let id), .automationThreads(let id):
+            ("Automation", id)
+        case .capsule(let id):
+            ("Capsule", id)
+        case .agent(let id):
+            ("Agent", id)
+        case .skill(let id):
+            ("Skill", id)
+        case .skillFile(let skillID, let path):
+            ("Skill File", "\(skillID)/\(path)")
+        case .workspace(let path):
+            ("Workspace", path)
+        case .bot(let channel, let accountID):
+            ("Bot", "\(channel)/\(accountID)")
+        case .workspaceFile(let workspace, let path):
+            ("Workspace File", "\(workspace)/\(path)")
         }
     }
 }

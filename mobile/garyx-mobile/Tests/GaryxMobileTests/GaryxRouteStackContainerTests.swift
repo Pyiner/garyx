@@ -50,6 +50,57 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertTrue(harness.container.children.allSatisfy { $0.view.transform == .identity })
     }
 
+    func testA4cAssistiveTechnologyAcceptanceMatrix() throws {
+        let cases: [(name: String, preferences: GaryxRouteVisualPreferences, policy: GaryxRouteVisualPolicy)] = [
+            ("VoiceOver", .init(reduceMotion: false, prefersCrossFadeTransitions: false), .spatial),
+            ("Switch Control", .init(reduceMotion: false, prefersCrossFadeTransitions: false), .spatial),
+            ("Full Keyboard Access", .init(reduceMotion: false, prefersCrossFadeTransitions: false), .spatial),
+            ("Reduce Motion + Cross-Fade", .init(reduceMotion: true, prefersCrossFadeTransitions: true), .crossFade),
+        ]
+
+        for item in cases {
+            let harness = Harness(path: [entry(1)], preferences: item.preferences)
+            XCTAssertTrue(harness.container.beginInteractivePop(), item.name)
+            let staged = try XCTUnwrap(
+                harness.wrapper(identity: .home),
+                item.name
+            )
+            XCTAssertTrue(staged.accessibilityElementsHidden, item.name)
+            XCTAssertFalse(staged.isUserInteractionEnabled, item.name)
+            XCTAssertEqual(
+                harness.container.visualPolicyForActiveTransaction,
+                item.policy,
+                item.name
+            )
+            XCTAssertEqual(harness.probe.screenChangedArguments.count, 0, item.name)
+
+            harness.container.updateInteractivePop(
+                logicalTranslation: harness.width * 0.8
+            )
+            XCTAssertEqual(
+                harness.container.endInteractivePop(logicalVelocity: harness.width * 2),
+                .committed,
+                item.name
+            )
+            harness.completeDisplayLinkedSettle()
+
+            XCTAssertEqual(harness.probe.screenChangedArguments.count, 1, item.name)
+            let visibleWrapper = try XCTUnwrap(harness.visibleWrapper(), item.name)
+            let screenChangedArgument = harness.probe.screenChangedArguments[0]
+            XCTAssertTrue(
+                screenChangedArgument === visibleWrapper
+                    || screenChangedArgument.isDescendant(of: visibleWrapper),
+                "screenChanged must carry the committed visible host for \(item.name)"
+            )
+            XCTAssertTrue(screenChangedArgument.window === harness.window, item.name)
+            XCTAssertEqual(
+                harness.probe.screenChangedHostWasVisible,
+                [true],
+                "screenChanged must run after the destination becomes interactive for \(item.name)"
+            )
+        }
+    }
+
     func testCancelSettleCanRegrabAndCarryPhysicalProgressIntoCommit() throws {
         let harness = Harness(path: [entry(1)])
         XCTAssertTrue(harness.container.beginInteractivePop())
@@ -306,6 +357,30 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         harness.container.sceneDidBecomeActive()
         harness.container.sceneDidBecomeActive()
         XCTAssertEqual(harness.probe.screenChangedCount, 1)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testHardSnapWhileInactiveDefersVisibleEffectsExactlyOnce() throws {
+        let harness = Harness(path: [entry(1)])
+        harness.container.sceneDidBecomeInactive()
+
+        XCTAssertTrue(harness.container.requestHardSnap(to: [entry(2)]))
+        XCTAssertEqual(harness.container.path, [entry(2)])
+        XCTAssertEqual(
+            harness.probe.terminals,
+            [.init(outcome: .committed, visibility: .inactive)]
+        )
+        XCTAssertEqual(harness.probe.screenChangedCount, 0)
+        let wrapper = try XCTUnwrap(harness.visibleWrapper())
+        XCTAssertFalse(wrapper.isUserInteractionEnabled)
+        XCTAssertTrue(wrapper.accessibilityElementsHidden)
+
+        harness.container.sceneDidBecomeActive()
+        harness.container.sceneDidBecomeActive()
+
+        XCTAssertEqual(harness.probe.screenChangedCount, 1)
+        XCTAssertTrue(wrapper.isUserInteractionEnabled)
+        XCTAssertFalse(wrapper.accessibilityElementsHidden)
         XCTAssertFalse(harness.container.hasTerminalResidue)
     }
 
@@ -568,6 +643,16 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertFalse(harness.container.hasPresentationBarrier)
         XCTAssertEqual(harness.container.path, replacement)
         XCTAssertFalse(harness.container.hasTerminalResidue)
+        XCTAssertEqual(harness.probe.screenChangedCount, 1)
+
+        let secondReplacement = [entry(100)]
+        XCTAssertTrue(harness.container.requestHardSnap(to: secondReplacement))
+        XCTAssertEqual(harness.container.path, secondReplacement)
+        XCTAssertEqual(
+            harness.probe.screenChangedCount,
+            2,
+            "each committed-visible hard snap emits exactly one screen change"
+        )
 
         let failed = GaryxPresentationLeaseToken(rawValue: "synthetic-failure")
         XCTAssertTrue(harness.container.acquirePresentationLease(failed, resultBearing: true))
@@ -628,6 +713,8 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         var paths: [[GaryxRouteEntry]] = []
         var terminals: [GaryxPresentationTerminalState] = []
         var screenChangedCount = 0
+        var screenChangedArguments: [UIView] = []
+        var screenChangedHostWasVisible: [Bool] = []
     }
 
     private final class BodyCounter {
@@ -731,7 +818,21 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             callbacks.phaseChanged = { [probe] in probe.phases.append($0) }
             callbacks.canonicalPathChanged = { [probe] in probe.paths.append($0) }
             callbacks.terminalReached = { [probe] in probe.terminals.append($0) }
-            callbacks.screenChanged = { [probe] _ in probe.screenChangedCount += 1 }
+            callbacks.screenChanged = { [probe] view in
+                probe.screenChangedCount += 1
+                probe.screenChangedArguments.append(view)
+                var ancestor: UIView? = view
+                while ancestor != nil,
+                      !(ancestor is GaryxRouteTransitionWrapperView) {
+                    ancestor = ancestor?.superview
+                }
+                let wrapper = ancestor as? GaryxRouteTransitionWrapperView
+                probe.screenChangedHostWasVisible.append(
+                    wrapper?.isHidden == false
+                        && wrapper?.isUserInteractionEnabled == true
+                        && wrapper?.accessibilityElementsHidden == false
+                )
+            }
 
             container = GaryxRouteStackContainer(
                 initialPath: path,

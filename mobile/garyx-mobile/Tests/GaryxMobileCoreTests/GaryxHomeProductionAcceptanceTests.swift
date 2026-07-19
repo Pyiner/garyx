@@ -210,37 +210,6 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         XCTAssertEqual(publishes, 1)
     }
 
-    @MainActor
-    func testRootNavigationPathStorePublishesOnlyForPathChanges() {
-        let store = GaryxRootNavigationPathStore()
-        var publishes = 0
-        let cancellable = store.objectWillChange.sink { publishes += 1 }
-        defer { cancellable.cancel() }
-
-        var state = GaryxMobileNavigationState()
-        for _ in 0..<300 {
-            XCTAssertFalse(store.apply(navigationState: state))
-        }
-        XCTAssertEqual(publishes, 0)
-        XCTAssertEqual(store.publishCount, 0)
-        XCTAssertEqual(store.path, [])
-
-        state.openConversation(source: .replace)
-        XCTAssertTrue(store.apply(navigationState: state))
-        XCTAssertEqual(store.path, [.conversation])
-        XCTAssertEqual(publishes, 1)
-        XCTAssertEqual(store.publishCount, 1)
-
-        for _ in 0..<300 {
-            XCTAssertFalse(store.apply(navigationState: state))
-        }
-        XCTAssertEqual(
-            publishes,
-            1,
-            "A render-snapshot or run-state storm must not republish the root NavigationStack path."
-        )
-    }
-
     func testCatalogAssignmentGateDoesNotPublishIdenticalCollections() {
         let base = GaryxHomeListFixture.makeInputs(threadCount: 10)
         let model = GaryxHomeCatalogPublicationProbe(
@@ -343,9 +312,9 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
 
         XCTAssertFalse(shellStore.apply(.init()))
         XCTAssertEqual(shellPublishes, 0)
-        XCTAssertTrue(shellStore.apply(.init(sidebarVisible: true, leadingEdgeAction: .openSidebar)))
+        XCTAssertTrue(shellStore.apply(.init(sidebarVisible: true)))
         XCTAssertEqual(shellPublishes, 1)
-        XCTAssertFalse(shellStore.apply(.init(sidebarVisible: true, leadingEdgeAction: .openSidebar)))
+        XCTAssertFalse(shellStore.apply(.init(sidebarVisible: true)))
         XCTAssertEqual(shellPublishes, 1)
 
         let drawerStore = GaryxNavigationDrawerStore()

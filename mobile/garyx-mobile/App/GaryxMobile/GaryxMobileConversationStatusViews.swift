@@ -96,7 +96,7 @@ struct GaryxEmptyConversationView: View {
         .frame(maxWidth: 300)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 28)
-        .sheet(isPresented: $showsWorkspacePicker) {
+        .garyxSheet(isPresented: $showsWorkspacePicker) {
             GaryxWorkspaceSelectSheet(
                 title: "Workspace",
                 path: newThreadWorkspaceBinding,

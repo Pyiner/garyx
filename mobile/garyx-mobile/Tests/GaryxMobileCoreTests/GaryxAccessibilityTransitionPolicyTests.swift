@@ -32,4 +32,38 @@ final class GaryxAccessibilityTransitionPolicyTests: XCTestCase {
             )
         }
     }
+
+    func testEscapeUsesTheTerminalVisibleActiveGate() {
+        for lifecycle in GaryxRouteHostLifecyclePhase.allCases {
+            for isCanonicalTop in [false, true] {
+                for hasModal in [false, true] {
+                    XCTAssertEqual(
+                        GaryxRouteAccessibilityGate.allowsEscape(
+                            isCanonicalTop: isCanonicalTop,
+                            lifecycle: lifecycle,
+                            hasPresentationBarrier: hasModal
+                        ),
+                        isCanonicalTop && lifecycle == .active && !hasModal
+                    )
+                }
+            }
+        }
+    }
+
+    func testComposerFocusRequiresInputReadyVisibleAndActive() {
+        for inputReady in [false, true] {
+            for visible in [false, true] {
+                for active in [false, true] {
+                    XCTAssertEqual(
+                        GaryxRouteAccessibilityGate.allowsComposerFocus(
+                            inputReady: inputReady,
+                            isVisibleRoute: visible,
+                            sceneIsActive: active
+                        ),
+                        inputReady && visible && active
+                    )
+                }
+            }
+        }
+    }
 }

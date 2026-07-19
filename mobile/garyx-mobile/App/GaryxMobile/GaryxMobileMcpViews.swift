@@ -19,7 +19,7 @@ struct GaryxMcpServersView: View {
                 showsCreateMcp = true
             }
         }
-        .fullScreenCover(isPresented: $showsCreateMcp) {
+        .garyxFullScreenCover(isPresented: $showsCreateMcp) {
             GaryxCreateMcpServerCard()
         }
     }
@@ -206,7 +206,7 @@ struct GaryxMcpServerCard: View {
             .contentShape(Rectangle())
         }
         .onAppear(perform: fillDraft)
-        .fullScreenCover(isPresented: $showsEditForm) {
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit MCP Server",
                 canSave: canSaveServer,
@@ -224,7 +224,7 @@ struct GaryxMcpServerCard: View {
                 )
             }
         }
-        .confirmationDialog("Delete MCP server?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete MCP server?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await model.deleteMcpServer(server) }
             }

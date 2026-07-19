@@ -37,11 +37,11 @@
 
 ### P0-A 手势物理：速度交接 + rubber-band + 可中断（核心手感批，收益最大）
 
-> **状态（2026-07-18）**：本节为初版审计描述，**权威规格已移至 `ios-fluid-p0a-gesture-physics-design.md`（**版本以该文档内版本史为准**，此处不再记具体号）**——A0 spike 证伪系统手势路线后改为自有导航容器；手势面修正为五处 + image preview 双通道（补 row swipe 与 UIKit bridge）；返回语义实态为三活一死（`.workspaceBotsOverview` 死语义待删）。**A1/A2 已验收合 main（origin/main 03d999a38）**，A3-A5 等设计 PASS。
+> **状态（2026-07-18）**：本节为初版审计描述，**权威规格已移至 `ios-fluid-p0a-gesture-physics-design.md`（**版本以该文档内版本史为准**，此处不再记具体号）**——A0 spike 证伪系统手势路线后改为自有导航容器；手势面修正为五处 + image preview 双通道（补 row swipe 与 UIKit bridge）；旧返回语义实态曾为三活一死，现已由 occurrence predecessor 统一替代。**A1/A2 已验收合 main（origin/main 03d999a38）**，A3-A5 等设计 PASS。
 
 以 `GaryxCapsuleDragDismiss` 的投影模型为蓝本：
 
-0. **返回上一页（本批最高优先，违反最严重的路径）**：所有 push 页 `.toolbar(.hidden, for: .navigationBar)` 杀掉了原生 swipe-back；自定义 leading-edge 返回手势（`GaryxMobileViews.swift:741,762`）在返回类分支里 `sidebarDragOffset = 0` —— 滑动全程页面纹丝不动，松手过阈值后播 0.16s ease（`sidebarDrilldown`）硬切页。零跟手、零速度交接、零可中断。改为自定义交互式返回过渡：当前页 1:1 跟手滑出 + 上一页视差滑入（对齐 iOS 原生 back swipe 视觉），松手速度投影判定 + 速度注入 settle，中途可反悔。注意"返回"有五种语义（`GaryxMobileLeadingEdgeAction`: popToHome / mainPanelBack / settingsOverview / workspaceBotsOverview / openSidebar），不全是 NavigationStack pop，须自定义过渡统一覆盖而非简单恢复系统手势；过渡状态机落 Core。
+0. **返回上一页（本批最高优先，违反最严重的路径）**：所有 push 页 `.toolbar(.hidden, for: .navigationBar)` 杀掉了原生 swipe-back；旧自定义 leading-edge 返回手势在返回分支里把 drawer offset 直接归零——滑动全程页面纹丝不动，松手过阈值后硬切页。零跟手、零速度交接、零可中断。现改为自定义交互式返回过渡：当前页 1:1 跟手滑出 + 上一页视差滑入（对齐 iOS 原生 back swipe 视觉），松手速度投影判定 + 速度注入 settle，中途可反悔；返回目标一律来自 canonical occurrence predecessor，过渡状态机落 Core。
 
 另统一四处既有 drag：
 

@@ -565,6 +565,24 @@ public struct GaryxScopeBoundOperationContext: Equatable, Codable, Sendable {
         self.payloadLifecycle = payloadLifecycle
     }
 
+    public func replacingOperationID(
+        _ operationID: GaryxOperationID
+    ) -> GaryxScopeBoundOperationContext {
+        GaryxScopeBoundOperationContext(
+            key: GaryxOperationCapabilityKey(
+                scope: key.scope,
+                entryID: key.entryID,
+                generation: key.generation,
+                reservationID: key.reservationID,
+                branch: key.branch,
+                operationID: operationID
+            ),
+            clientIdentity: clientIdentity,
+            configurationFingerprint: configurationFingerprint,
+            payloadLifecycle: payloadLifecycle
+        )
+    }
+
     func remapped(toGeneration generation: UInt64) -> Self {
         Self(
             key: key.remapped(toGeneration: generation),

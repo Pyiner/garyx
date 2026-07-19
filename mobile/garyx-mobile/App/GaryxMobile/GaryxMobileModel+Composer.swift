@@ -4,15 +4,41 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
-    func attachFiles(from urls: [URL]) async {
-        guard !urls.isEmpty else { return }
+    func makeComposerPresentationOperationContext(
+        payload: GaryxComposerPayloadCoordinator
+    ) -> GaryxPresentationOperationContext? {
         let requestToken = gatewayRequestToken
+        guard let capability = payload.makePresentationOperationContext(
+            requestToken: requestToken
+        ), let gatewayClient = try? client() else { return nil }
+        return GaryxPresentationOperationContext(
+            capability: capability,
+            requestToken: requestToken,
+            gatewayClient: gatewayClient
+        )
+    }
+
+    func attachFiles(
+        from urls: [URL],
+        operationContext: GaryxPresentationOperationContext?
+    ) async {
+        guard !urls.isEmpty else { return }
         do {
             // Freeze the destination configuration before the picker result
             // crosses an await. A gateway switch may suspend this scope, but
             // this operation must still upload to and settle in its origin.
-            let uploadClient = try client()
-            for url in urls {
+            guard let frozen = operationContext else {
+                throw GaryxComposerPayloadRuntimeError.unavailable
+            }
+            let requestToken = frozen.requestToken
+            let uploadClient = frozen.gatewayClient
+            let baseContext = frozen.capability
+            for (index, url) in urls.enumerated() {
+                let frozenContext = index == 0
+                    ? baseContext
+                    : baseContext.replacingOperationID(
+                        GaryxOperationID(rawValue: UUID().uuidString)
+                    )
                 let didAccess = url.startAccessingSecurityScopedResource()
                 let metadata: GaryxComposerAttachmentMetadata
                 let staged: GaryxComposerStagedUpload
@@ -21,7 +47,8 @@ extension GaryxMobileModel {
                     staged = try await composerPayloadCoordinator.stageAttachment(
                         sourceURL: url,
                         metadata: metadata,
-                        requestToken: requestToken
+                        requestToken: requestToken,
+                        operationContext: frozenContext
                     )
                 } catch {
                     if didAccess { url.stopAccessingSecurityScopedResource() }
@@ -90,12 +117,24 @@ extension GaryxMobileModel {
         return uploaded
     }
 
-    func attachImages(_ images: [GaryxMobileSelectedImage]) async {
+    func attachImages(
+        _ images: [GaryxMobileSelectedImage],
+        operationContext: GaryxPresentationOperationContext?
+    ) async {
         guard !images.isEmpty else { return }
-        let requestToken = gatewayRequestToken
         do {
-            let uploadClient = try client()
-            for image in images {
+            guard let frozen = operationContext else {
+                throw GaryxComposerPayloadRuntimeError.unavailable
+            }
+            let requestToken = frozen.requestToken
+            let uploadClient = frozen.gatewayClient
+            let baseContext = frozen.capability
+            for (index, image) in images.enumerated() {
+                let frozenContext = index == 0
+                    ? baseContext
+                    : baseContext.replacingOperationID(
+                        GaryxOperationID(rawValue: UUID().uuidString)
+                    )
                 let temporaryURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("garyx-composer-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: temporaryURL) }
@@ -112,7 +151,8 @@ extension GaryxMobileModel {
                         mediaType: image.mediaType,
                         previewDataURL: preview
                     ),
-                    requestToken: requestToken
+                    requestToken: requestToken,
+                    operationContext: frozenContext
                 )
                 do {
                     let uploaded = try await Self.upload(staged, using: uploadClient)
@@ -648,6 +688,7 @@ extension GaryxMobileModel {
     func advanceSelectedThreadDraftGeneration() {
         selectedThreadDraftGeneration = UUID()
         pendingBotDraftGeneration = nil
+        frozenNewThreadAgentTargetGeneration = nil
         clearNewThreadModelOverride()
     }
 

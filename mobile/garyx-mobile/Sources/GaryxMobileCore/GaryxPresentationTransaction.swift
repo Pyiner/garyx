@@ -140,6 +140,27 @@ public struct GaryxPresentationTerminalDisposition: Equatable, Sendable {
     }
 }
 
+/// Shared gate for keyboard/assistive escape and composer focus. Both actions
+/// are terminal-visible behavior and must remain unavailable to staged,
+/// inactive, superseded, or modal-covered route hosts.
+public enum GaryxRouteAccessibilityGate {
+    public static func allowsEscape(
+        isCanonicalTop: Bool,
+        lifecycle: GaryxRouteHostLifecyclePhase,
+        hasPresentationBarrier: Bool
+    ) -> Bool {
+        isCanonicalTop && lifecycle == .active && !hasPresentationBarrier
+    }
+
+    public static func allowsComposerFocus(
+        inputReady: Bool,
+        isVisibleRoute: Bool,
+        sceneIsActive: Bool
+    ) -> Bool {
+        inputReady && isVisibleRoute && sceneIsActive
+    }
+}
+
 public enum GaryxPresentationCoordinatorEvent: Equatable, Sendable {
     case recognizerCancelled
     case sceneInactive
@@ -322,7 +343,7 @@ public struct GaryxPresentationTransactionCoordinator: Equatable, Sendable {
 
 // MARK: - Host lifecycle
 
-public enum GaryxRouteHostLifecyclePhase: String, Codable, Sendable {
+public enum GaryxRouteHostLifecyclePhase: String, CaseIterable, Codable, Sendable {
     case mounted
     case appeared
     case active
@@ -571,7 +592,7 @@ public enum GaryxPathDiffDecision: Equatable, Sendable {
     case replaceTop
     case promoteInPlace
     case inPlacePayloadUpdate
-    case popToHome
+    case resetToHome
     case wholeChainReplacement
     case normalizeIllegalMutationAndLogFault
 }
@@ -583,7 +604,7 @@ public enum GaryxPathDiffPlanner {
         source: GaryxPathMutationSource = .ordinary
     ) -> GaryxPathDiffDecision {
         if old == new { return .noChange }
-        if new.isEmpty, !old.isEmpty { return .popToHome }
+        if new.isEmpty, !old.isEmpty { return .resetToHome }
         if source == .declaredWholeChainReplacement { return .wholeChainReplacement }
 
         if new.count == old.count + 1, Array(new.dropLast()) == old {

@@ -6,9 +6,7 @@ enum GaryxSidebarDragAxis {
     case vertical
 }
 
-/// Root content column owned by the UIKit route stack. Conversation and home
-/// are production route hosts; panels keep one local NavigationStack until
-/// their route-value migration in A4c.
+/// Root content column owned exclusively by the UIKit occurrence stack.
 struct GaryxRootNavigationView: View, Equatable {
     @ObservedObject var routeStore: GaryxProductionRouteStore
     @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
@@ -56,7 +54,7 @@ struct GaryxRootNavigationView: View, Equatable {
             onOpenDrawer: onOpenDrawer
         )
         .garyxPageBackground()
-        .fullScreenCover(item: $routeNotFoundStore.selection) { state in
+        .garyxFullScreenCover(item: $routeNotFoundStore.selection) { state in
             GaryxFormSheet(title: state.title) {
                 GaryxRouteNotFoundCard(state: state)
             }
@@ -97,20 +95,13 @@ private struct GaryxRootRouteContentView: View {
         case .conversation, .conversationDraft:
             GaryxConversationView(destination: destination)
         case .panel(let rawPanel):
-            compatibilityPanelHost(
-                GaryxMobilePanel(rawValue: rawPanel) ?? .chat
+            panelContent(for: GaryxMobilePanel(rawValue: rawPanel) ?? .chat)
+        case .settingsDetail(let rawTab):
+            GaryxMobileSettingsPanel(
+                tab: GaryxMobileSettingsTab(rawValue: rawTab) ?? .manage
             )
-        case .settingsDetail:
-            compatibilityPanelHost(.settings)
-        case .workspaceDrilldown:
-            compatibilityPanelHost(.workspaceBots)
-        }
-    }
-
-    private func compatibilityPanelHost(_ panel: GaryxMobilePanel) -> some View {
-        NavigationStack {
-            panelContent(for: panel)
-                .toolbar(.hidden, for: .navigationBar)
+        case .workspaceDrilldown(let identity):
+            GaryxWorkspaceBotsView(drilldown: identity.drilldown)
         }
     }
 
@@ -136,7 +127,7 @@ private struct GaryxRootRouteContentView: View {
         case .mcp:
             GaryxMcpServersView()
         case .settings:
-            GaryxMobileSettingsPanel()
+            GaryxMobileSettingsPanel(tab: .manage)
         }
     }
 }
@@ -1566,13 +1557,18 @@ struct GaryxSidebarActionPill: View {
 
 struct GaryxWorkspaceBotsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    let drilldown: GaryxWorkspaceBotsDrilldown?
     @State private var showsAddWorkspace = false
     @State private var addWorkspacePath = ""
+
+    init(drilldown: GaryxWorkspaceBotsDrilldown? = nil) {
+        self.drilldown = drilldown
+    }
 
     @ViewBuilder
     var body: some View {
         Group {
-            switch activeDrilldown {
+            switch drilldown {
             case .workspace(let path):
                 GaryxWorkspaceThreadListDrilldown(
                     model: model,
@@ -1626,7 +1622,7 @@ struct GaryxWorkspaceBotsView: View {
                 }
             }
         } actions: {
-            if activeDrilldown == nil {
+            if drilldown == nil {
                 Button {
                     addWorkspacePath = ""
                     showsAddWorkspace = true
@@ -1640,7 +1636,7 @@ struct GaryxWorkspaceBotsView: View {
         .task {
             await model.refreshRemoteState()
         }
-        .sheet(isPresented: $showsAddWorkspace) {
+        .garyxSheet(isPresented: $showsAddWorkspace) {
             GaryxWorkspacePathPickerSheet(
                 title: "Add Workspace",
                 path: $addWorkspacePath
@@ -1651,10 +1647,6 @@ struct GaryxWorkspaceBotsView: View {
             guard garyxIsAbsoluteWorkspacePath(path) else { return }
             Task { await addWorkspace(path) }
         }
-    }
-
-    private var activeDrilldown: GaryxWorkspaceBotsDrilldown? {
-        model.workspaceBotsDrilldown
     }
 
     private var generatedAutomations: [GaryxAutomationSummary] {
@@ -1669,9 +1661,7 @@ struct GaryxWorkspaceBotsView: View {
 
     private func missingDrilldown(title: String, message: String) -> some View {
         GaryxListPanelScaffold(
-            title: title,
-            leadingActionLabel: "Back",
-            leadingAction: { model.performMainPanelLeadingEdgeAction() }
+            title: title
         ) {
             GaryxEmptyPanelView(icon: "magnifyingglass", title: title, text: message)
                 .padding(.horizontal, 16)

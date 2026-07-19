@@ -603,7 +603,7 @@ private struct GaryxMarkdownImageView: View {
             guard !trimmed.isEmpty else { return }
             GaryxClipboard.copyString(trimmed)
         }
-        .fullScreenCover(isPresented: $showsPreview) {
+        .garyxFullScreenCover(isPresented: $showsPreview) {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(
                     title: alt.isEmpty ? "Image" : alt,

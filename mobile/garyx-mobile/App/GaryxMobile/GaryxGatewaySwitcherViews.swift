@@ -24,7 +24,7 @@ struct GaryxSidebarGatewayIdentityControl: View {
             .buttonStyle(.plain)
             .accessibilityLabel(accessibilityText(for: identity))
             .accessibilityHint("Opens the gateway switcher")
-            .sheet(isPresented: $showsSwitcher) {
+            .garyxSheet(isPresented: $showsSwitcher) {
                 GaryxGatewaySwitcherSheet()
             }
             #if DEBUG

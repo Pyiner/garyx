@@ -7,8 +7,7 @@ extension GaryxMobileModel {
     func refreshShellChromeSnapshot() {
         shellChromeStore.apply(
             GaryxShellChromeSnapshot(
-                sidebarVisible: sidebarVisible,
-                leadingEdgeAction: mainPanelLeadingEdgeAction
+                sidebarVisible: sidebarVisible
             )
         )
     }

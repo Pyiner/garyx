@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct GaryxMobileSettingsPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    let tab: GaryxMobileSettingsTab
     @State private var showsGatewaySetup = false
     @State private var showsCreateBot = false
     @State private var showsCreateCommand = false
@@ -13,19 +14,16 @@ struct GaryxMobileSettingsPanel: View {
     var body: some View {
         GaryxPanelScaffold(
             title: settingsTitle,
-            subtitle: model.activeSettingsTab.label,
+            subtitle: tab.label,
             onRefresh: { await model.connectAndRefresh() },
-            leadingActionLabel: settingsLeadingActionLabel,
-            leadingActionSystemName: "chevron.left",
-            leadingAction: settingsLeadingAction,
             background: GaryxTheme.background
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                GaryxSettingsTabContent()
+                GaryxSettingsTabContent(tab: tab)
             }
         } actions: {
             HStack(spacing: 8) {
-                switch model.activeSettingsTab {
+                switch tab {
                 case .gateway:
                     GaryxAddToolbarButton(label: "Add Gateway") {
                         model.gatewaySettingsStatus = nil
@@ -49,41 +47,30 @@ struct GaryxMobileSettingsPanel: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showsGatewaySetup) {
+        .garyxFullScreenCover(isPresented: $showsGatewaySetup) {
             GaryxGatewaySetupView(isSheet: true, startsEmpty: true)
         }
-        .fullScreenCover(isPresented: $showsCreateBot) {
+        .garyxFullScreenCover(isPresented: $showsCreateBot) {
             GaryxBotAccountForm(account: nil)
         }
-        .fullScreenCover(isPresented: $showsCreateCommand) {
+        .garyxFullScreenCover(isPresented: $showsCreateCommand) {
             GaryxCreateSlashCommandCard()
         }
-        .fullScreenCover(isPresented: $showsCreateMcp) {
+        .garyxFullScreenCover(isPresented: $showsCreateMcp) {
             GaryxCreateMcpServerCard()
         }
     }
 
     private var settingsTitle: String {
-        model.activeSettingsTab == .manage ? "Settings" : model.activeSettingsTab.label
-    }
-
-    private var settingsLeadingActionLabel: String? {
-        model.activeSettingsTab == .manage ? nil : model.mainPanelLeadingEdgeActionLabel
-    }
-
-    private var settingsLeadingAction: (() -> Void)? {
-        guard model.activeSettingsTab != .manage else { return nil }
-        return {
-            model.performMainPanelLeadingEdgeAction()
-        }
+        tab == .manage ? "Settings" : tab.label
     }
 }
 
 struct GaryxSettingsTabContent: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    let tab: GaryxMobileSettingsTab
 
     var body: some View {
-        switch model.activeSettingsTab {
+        switch tab {
         case .manage:
             GaryxSettingsOverviewContent()
         case .gateway:
@@ -234,7 +221,7 @@ struct GaryxSettingsTabLinkRow: View {
             subtitle: subtitle,
             systemImage: tab.iconName
         ) {
-            model.activeSettingsTab = tab
+            model.openSettings(tab: tab, source: .current)
         }
     }
 
@@ -356,7 +343,7 @@ struct GaryxSavedGatewayProfileRow: View {
             }
         }
         .onAppear(perform: fillDraft)
-        .fullScreenCover(isPresented: $showsEditForm) {
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit Gateway",
                 canSave: canSaveGateway,
@@ -385,7 +372,7 @@ struct GaryxSavedGatewayProfileRow: View {
                 }
             }
         }
-        .confirmationDialog("Delete gateway?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete gateway?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 model.removeGatewayProfile(profile)
             }

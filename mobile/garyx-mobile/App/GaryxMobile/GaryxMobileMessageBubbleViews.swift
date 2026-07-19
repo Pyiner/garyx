@@ -18,7 +18,7 @@ struct GaryxMessageBubble: View {
                 messageRow
             }
         }
-        .fullScreenCover(item: $filePreviewSheet) { sheet in
+        .garyxFullScreenCover(item: $filePreviewSheet) { sheet in
             GaryxFullscreenWorkspaceFilePreview(preview: sheet.preview) {
                 filePreviewSheet = nil
             }
@@ -438,10 +438,10 @@ private struct GaryxMessageInteractionModifier: ViewModifier {
                     },
                 ]
             }
-            .sheet(isPresented: $showsTextSelection) {
+            .garyxSheet(isPresented: $showsTextSelection) {
                 GaryxMessageTextSelectionSheet(text: text)
             }
-            .sheet(isPresented: $showsShareSheet) {
+            .garyxSheet(isPresented: $showsShareSheet) {
                 GaryxActivityShareSheet(items: [text])
             }
     }
@@ -516,7 +516,7 @@ struct GaryxMessageImageAttachmentView: View {
             }
         }
         .buttonStyle(.plain)
-        .fullScreenCover(isPresented: $showsPreview) {
+        .garyxFullScreenCover(isPresented: $showsPreview) {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(
                     title: attachment.name.isEmpty ? "Image" : attachment.name,

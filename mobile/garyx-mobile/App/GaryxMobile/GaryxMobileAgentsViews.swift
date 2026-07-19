@@ -31,10 +31,10 @@ struct GaryxAgentsView: View {
                 showsCreateAgent = true
             }
         }
-        .fullScreenCover(isPresented: $showsCreateAgent) {
+        .garyxFullScreenCover(isPresented: $showsCreateAgent) {
             GaryxCreateAgentCard()
         }
-        .fullScreenCover(item: $model.selectedAgentDetail) { agent in
+        .garyxFullScreenCover(item: $model.selectedAgentDetail) { agent in
             GaryxFormSheet(title: "Agent Detail") {
                 GaryxAgentDetailCard(agent: agent)
             }
@@ -63,7 +63,7 @@ struct GaryxAgentDetailCard: View {
                 builtIn: displayAgent.builtIn,
                 workspacePaths: model.userWorkspacePaths
             )
-            .fullScreenCover(isPresented: $showsEditForm) {
+            .garyxFullScreenCover(isPresented: $showsEditForm) {
                 GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
                     model.selectedAgentDetail = updatedAgent
                 }
@@ -722,6 +722,7 @@ private struct GaryxAvatarEditorSection: View {
     let onNameValidationFailed: () -> Void
 
     @State private var editorState = GaryxMobileAvatarEditorState()
+    @State private var showsPhotoPicker = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showsStyleSheet = false
     @State private var uploadTask: Task<Void, Never>?
@@ -767,7 +768,7 @@ private struct GaryxAvatarEditorSection: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .sheet(isPresented: $showsStyleSheet) {
+        .garyxSheet(isPresented: $showsStyleSheet) {
             GaryxAvatarStyleSheet(
                 state: $editorState,
                 cancellationToken: model.gatewayRequestToken,
@@ -783,6 +784,11 @@ private struct GaryxAvatarEditorSection: View {
             .presentationDragIndicator(.visible)
             .interactiveDismissDisabled(editorState.isGenerating)
         }
+        .garyxPhotosPicker(
+            isPresented: $showsPhotoPicker,
+            selection: $selectedPhotoItem,
+            matching: .images
+        )
         .onChange(of: selectedPhotoItem) { _, item in
             guard let item else { return }
             startUpload(item)
@@ -801,7 +807,9 @@ private struct GaryxAvatarEditorSection: View {
 
     @ViewBuilder
     private var avatarActions: some View {
-        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+        Button {
+            showsPhotoPicker = true
+        } label: {
             if uploadTask == nil {
                 Label("Upload", systemImage: "photo")
             } else {
@@ -1413,10 +1421,10 @@ struct GaryxAgentCard: View {
                 .contentShape(Rectangle())
             }
         }
-        .fullScreenCover(isPresented: $showsEditForm) {
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
             GaryxAgentEditSheet(agent: agent)
         }
-        .confirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await model.deleteAgent(agent) }
             }
@@ -1533,7 +1541,7 @@ private struct GaryxAgentProviderSelectionRow: View {
         ) {
             showsProviderSheet = true
         }
-        .sheet(isPresented: $showsProviderSheet) {
+        .garyxSheet(isPresented: $showsProviderSheet) {
             GaryxAgentProviderSelectionSheet(
                 selectedProvider: normalizedProvider,
                 options: providerOptionsIncludingCurrent,
@@ -1591,7 +1599,7 @@ private struct GaryxAgentModelSelectionRow: View {
                 ) {
                     showsModelSheet = true
                 }
-                .sheet(isPresented: $showsModelSheet) {
+                .garyxSheet(isPresented: $showsModelSheet) {
                     GaryxAgentModelSelectionSheet(
                         selectedModel: normalizedModel,
                         defaultModel: providerModels?.defaultModel,
@@ -1686,7 +1694,7 @@ private struct GaryxAgentReasoningEffortSelectionRow: View {
             ) {
                 showsEffortSheet = true
             }
-            .sheet(isPresented: $showsEffortSheet) {
+            .garyxSheet(isPresented: $showsEffortSheet) {
                 GaryxAgentReasoningEffortSelectionSheet(
                     selectedEffort: normalizedEffort,
                     choices: effortChoices

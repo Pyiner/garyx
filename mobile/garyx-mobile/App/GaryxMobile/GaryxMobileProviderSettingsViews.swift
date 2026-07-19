@@ -54,7 +54,7 @@ struct GaryxSettingsProviderContent: View {
                 await model.loadProviderModels(providerType: provider.providerType)
             }
         }
-        .fullScreenCover(item: $selectedProvider) { provider in
+        .garyxFullScreenCover(item: $selectedProvider) { provider in
             GaryxModelProviderDefaultsSheet(provider: provider)
         }
     }
@@ -437,7 +437,7 @@ struct GaryxModelProviderDefaultsSheet: View {
             }
         }
         .task { await hydrate() }
-        .sheet(isPresented: $showsClaudeLoginSheet) {
+        .garyxSheet(isPresented: $showsClaudeLoginSheet) {
             GaryxClaudeCodeLoginSheet()
         }
         .onDisappear {

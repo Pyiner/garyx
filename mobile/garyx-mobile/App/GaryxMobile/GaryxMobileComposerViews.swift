@@ -109,6 +109,7 @@ struct GaryxComposer: View {
 
     private var canSendLocalPayload: Bool {
         routeContext.isCanonicalTop
+            && !isAddingAttachments
             && payload.canSend
             && model.canSendComposerPayload(
                 text: routeText,
@@ -153,7 +154,7 @@ struct GaryxComposer: View {
             .spring(response: 0.24, dampingFraction: 0.88),
             value: routePayloadItems
         )
-        .sheet(isPresented: $showsWorkspaceModeSheet) {
+        .garyxSheet(isPresented: $showsWorkspaceModeSheet) {
             GaryxComposerWorkspaceModeSheet(
                 selectedMode: model.newThreadUsesWorktree ? "worktree" : "local",
                 canUseWorktree: model.newThreadWorkspaceCanUseWorktree
@@ -165,39 +166,54 @@ struct GaryxComposer: View {
             .presentationBackground(.ultraThinMaterial)
             .presentationCornerRadius(GaryxComposerLayout.workspaceSheetCornerRadius)
         }
-        .fileImporter(
+        .garyxResultFileImporter(
             isPresented: $isPickingAttachments,
             allowedContentTypes: [.item],
             allowsMultipleSelection: true
-        ) { result in
+        ) { result, operationContext in
             switch result {
             case .success(let urls):
                 Task { @MainActor in
                     isAddingAttachments = true
                     defer { isAddingAttachments = false }
-                    await model.attachFiles(from: urls)
+                    await model.attachFiles(
+                        from: urls,
+                        operationContext: operationContext
+                    )
                 }
             case .failure(let error):
                 model.lastError = error.localizedDescription
             }
         }
-        .photosPicker(
+        .garyxPhotosPicker(
             isPresented: $isPickingPhotos,
             selection: $selectedPhotoItems,
             maxSelectionCount: 10,
-            matching: .images
-        )
-        .fullScreenCover(isPresented: $isPickingCamera) {
-            GaryxCameraPicker(isPresented: $isPickingCamera) { image in
+            matching: .images,
+            onSelection: { items, operationContext in
                 Task { @MainActor in
                     isAddingAttachments = true
                     defer { isAddingAttachments = false }
-                    await attachCameraPhoto(image)
+                    await attachPhotos(items, operationContext: operationContext)
+                    selectedPhotoItems = []
+                }
+            }
+        )
+        .garyxResultFullScreenCover(isPresented: $isPickingCamera) { resultActions in
+            GaryxCameraPicker(isPresented: $isPickingCamera) { image in
+                resultActions.recordResult()
+                Task { @MainActor in
+                    isAddingAttachments = true
+                    defer { isAddingAttachments = false }
+                    await attachCameraPhoto(
+                        image,
+                        operationContext: resultActions.operationContext
+                    )
                 }
             }
             .ignoresSafeArea()
         }
-        .alert(item: $cameraAlert) { alert in
+        .garyxAlert(item: $cameraAlert) { alert in
             switch alert {
             case .permissionDenied:
                 Alert(
@@ -212,15 +228,6 @@ struct GaryxComposer: View {
                     message: Text("This device does not have a camera available right now."),
                     dismissButton: .default(Text("OK"))
                 )
-            }
-        }
-        .onChange(of: selectedPhotoItems) { _, items in
-            guard !items.isEmpty else { return }
-            Task { @MainActor in
-                isAddingAttachments = true
-                defer { isAddingAttachments = false }
-                await attachPhotos(items)
-                selectedPhotoItems = []
             }
         }
         .onAppear {
@@ -256,6 +263,14 @@ struct GaryxComposer: View {
                 showsAddPanel = false
             }
         }
+        .environment(
+            \.garyxPresentationOperationContextProvider,
+            GaryxPresentationOperationContextProvider {
+                model.makeComposerPresentationOperationContext(
+                    payload: payload
+                )
+            }
+        )
         #if DEBUG
         .onChange(of: model.debugShowsWorkspaceModeSheet) { _, _ in
             presentDebugWorkspaceModeSheetIfNeeded()
@@ -572,7 +587,7 @@ struct GaryxComposer: View {
         .accessibilityLabel(isAddingAttachments ? "Adding attachments" : "Add attachment")
         .accessibilityHint("Take a photo, choose photos or files, or insert a saved command")
         .animation(.spring(response: 0.22, dampingFraction: 0.82), value: showsAddPanel)
-        .popover(
+        .garyxPopover(
             isPresented: $showsAddPanel,
             attachmentAnchor: .rect(.bounds),
             arrowEdge: .bottom
@@ -649,7 +664,10 @@ struct GaryxComposer: View {
         _ = await model.sendDraft()
     }
 
-    private func attachPhotos(_ items: [PhotosPickerItem]) async {
+    private func attachPhotos(
+        _ items: [PhotosPickerItem],
+        operationContext: GaryxPresentationOperationContext?
+    ) async {
         var images: [GaryxMobileSelectedImage] = []
         for (index, item) in items.enumerated() {
             do {
@@ -676,10 +694,13 @@ struct GaryxComposer: View {
                 model.lastError = error.localizedDescription
             }
         }
-        await model.attachImages(images)
+        await model.attachImages(images, operationContext: operationContext)
     }
 
-    private func attachCameraPhoto(_ image: UIImage) async {
+    private func attachCameraPhoto(
+        _ image: UIImage,
+        operationContext: GaryxPresentationOperationContext?
+    ) async {
         let capture = GaryxCapturedCameraImage(image: image)
         let prepared = await Task.detached(priority: .userInitiated) {
             guard let data = capture.image.jpegData(compressionQuality: 0.92) else {
@@ -697,7 +718,7 @@ struct GaryxComposer: View {
             model.lastError = "That photo is too large to prepare for upload."
             return
         }
-        await model.attachImages([prepared])
+        await model.attachImages([prepared], operationContext: operationContext)
     }
 
     nonisolated private static func preparedPhotoUpload(

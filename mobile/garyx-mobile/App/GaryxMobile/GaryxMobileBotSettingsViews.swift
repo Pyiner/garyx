@@ -81,10 +81,10 @@ struct GaryxConfiguredBotConfigRow: View {
             .accessibilityLabel("Open \(bot.displayName)")
             .accessibilityHint("Shows bot account details.")
         }
-        .fullScreenCover(isPresented: $showsEditForm) {
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
             GaryxBotAccountForm(account: bot)
         }
-        .confirmationDialog("Delete bot account?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete bot account?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await model.deleteConfiguredBotAccount(bot) }
             }

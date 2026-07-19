@@ -355,7 +355,7 @@ struct GaryxConversationView: View {
         // Capsule card tapped in the transcript: present the focused preview
         // above this conversation and dismiss back to it (never switch to the
         // Capsules overview).
-        .fullScreenCover(item: $model.conversationCapsulePreview) { selection in
+        .garyxFullScreenCover(item: $model.conversationCapsulePreview) { selection in
             GaryxCapsuleFocusedPreviewView(selection: selection)
         }
         // Route-time deletion validation: re-fires when the thread changes and
@@ -1030,7 +1030,7 @@ struct GaryxConversationHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
-        .alert("Rename Thread", isPresented: $showsRenamePrompt) {
+        .garyxAlert("Rename Thread", isPresented: $showsRenamePrompt) {
             TextField("Thread title", text: $renameDraftTitle)
             Button("Cancel", role: .cancel) {}
             Button("Save") {
@@ -1039,7 +1039,7 @@ struct GaryxConversationHeader: View {
                 }
             }
         }
-        .sheet(isPresented: $showsBotBindingSheet, onDismiss: {
+        .garyxSheet(isPresented: $showsBotBindingSheet, onDismiss: {
             botBindingThreadId = nil
         }) {
             if let botBindingThreadId {
@@ -1083,7 +1083,7 @@ struct GaryxConversationHeader: View {
     private func goHome() {
         garyxDismissKeyboard()
         dismissThreadPresentations()
-        model.popToHome()
+        model.returnHome()
     }
 
     private func dismissThreadPresentations() {

@@ -203,7 +203,6 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var navigationState = GaryxMobileNavigationState() {
         didSet {
-            rootNavigationPathStore.apply(navigationState: navigationState)
             refreshShellChromeSnapshot()
             refreshNavigationDrawerSnapshot()
             emitHomeProjectionSnapshot()
@@ -501,7 +500,6 @@ final class GaryxMobileModel: ObservableObject {
     var agentTargetsStateRequestId: UUID?
     var workspaceRefreshRequestId: UUID?
     let productionRouteStore = GaryxProductionRouteStore()
-    let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeObservationStore = GaryxHomeObservationStore()
     let threadSummaryCache: GaryxThreadSummaryCache
@@ -549,6 +547,7 @@ final class GaryxMobileModel: ObservableObject {
     var pendingBotAgentId: String?
     var pendingBotDraftGeneration: UUID?
     var pendingNewThreadAgentTargetGeneration: UUID?
+    var frozenNewThreadAgentTargetGeneration: UUID?
     var selectedThreadDraftGeneration = UUID()
     var threadOpenState = GaryxMobileThreadOpenState()
     var threadRenameMutationIds: [String: GaryxThreadMutationID] = [:]
@@ -637,7 +636,6 @@ final class GaryxMobileModel: ObservableObject {
             )
         }
         #endif
-        rootNavigationPathStore.apply(navigationState: navigationState)
         homeProjectionGateway.setResultHandler { [weak self] result in
             self?.applyHomeProjectionResult(result)
         }

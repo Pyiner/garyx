@@ -16,6 +16,8 @@ struct GaryxRouteStackContainerCallbacks {
     ) -> Void = { _, _ in }
     var canonicalPathChanged: @MainActor ([GaryxRouteEntry]) -> Void = { _ in }
     var terminalReached: @MainActor (GaryxPresentationTerminalState) -> Void = { _ in }
+    var visibleRouteActivated: @MainActor (GaryxRoutePresentationNode) -> Void = { _ in }
+    var rendererBecameIdle: @MainActor () -> Void = {}
     var screenChanged: @MainActor (UIView) -> Void = { view in
         UIAccessibility.post(notification: .screenChanged, argument: view)
     }
@@ -484,16 +486,21 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             let owner = deferredTerminalEffects.outcome == .committed
                 ? canonicalState.topNode
                 : transition?.source ?? canonicalState.topNode
+            var visibleCommittedDestination: HostRecord?
             if let record = host(for: owner) {
                 activate(record)
                 if deferredTerminalEffects.outcome == .committed {
-                    emitScreenChangedOnce(for: record)
+                    visibleCommittedDestination = record
                 }
             }
             self.deferredTerminalEffects = nil
             interactionFrozenAfterTerminal = false
             reconcileHostVisibility()
             refreshGestureAvailability()
+            if let visibleCommittedDestination {
+                callbacks.visibleRouteActivated(owner)
+                emitScreenChangedOnce(for: visibleCommittedDestination)
+            }
         } else if transition == nil, let record = activeHostRecord() {
             activate(record)
             refreshGestureAvailability()
@@ -524,6 +531,11 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         )
         refreshGestureAvailability()
         return acquired
+    }
+
+    @discardableResult
+    func reclaimReleasedPresentationLeases() -> Int {
+        presentationLeases.garbageCollectReleased()
     }
 
     func markPresentationLeasePresented(_ token: GaryxPresentationLeaseToken) {
@@ -954,6 +966,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
         let source = host(for: completedTransition.source)
         let destination = host(for: completedTransition.destination)
+        var visibleCommittedDestination: HostRecord?
         if terminal.outcome == .committed {
             let removedHosts = committedRemovedIdentities.compactMap { hosts[$0] }
             for removedHost in removedHosts {
@@ -961,7 +974,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             }
             if terminal.visibility == .visible, let destination {
                 activate(destination)
-                emitScreenChangedOnce(for: destination)
+                visibleCommittedDestination = destination
             } else if terminal.visibility == .inactive {
                 deferredTerminalEffects = terminal
             }
@@ -983,7 +996,12 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         reconcileHostVisibility()
         trimMountedHosts()
         refreshGestureAvailability()
+        if let visibleCommittedDestination {
+            callbacks.visibleRouteActivated(completedTransition.destination)
+            emitScreenChangedOnce(for: visibleCommittedDestination)
+        }
         assertTerminalHasZeroResidue()
+        callbacks.rendererBecameIdle()
     }
 
     private func commitPendingCanonicalMutation() {
@@ -1346,6 +1364,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         let destinationNode = replacement.last.map(GaryxRoutePresentationNode.entry) ?? .home
         let changesVisibleRoute = sourceNode != destinationNode
         if changesVisibleRoute {
+            screenChangedDelivered = false
             // A root replacement has no animated release callback, so this is
             // its commit boundary. Composer finalization still precedes the
             // canonical path write exactly as it does for push/pop.
@@ -1379,10 +1398,19 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             )
             callbacks.terminalReached(terminal)
             if terminal.visibility == .visible, let active = activeHostRecord() {
+                callbacks.visibleRouteActivated(destinationNode)
                 emitScreenChangedOnce(for: active)
+            } else if terminal.visibility == .inactive,
+                      let active = activeHostRecord() {
+                deactivateIfActive(active)
+                deferredTerminalEffects = terminal
+                interactionFrozenAfterTerminal = true
+                reconcileHostVisibility()
+                refreshGestureAvailability()
             }
         }
         assertTerminalHasZeroResidue()
+        callbacks.rendererBecameIdle()
     }
 
     private func presentationLeaseMayHaveReleased() {

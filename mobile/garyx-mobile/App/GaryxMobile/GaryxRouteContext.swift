@@ -15,6 +15,10 @@ struct GaryxRouteContext: Equatable {
         return entry.destination.composerKey
     }
 
+    var allowsPageInteraction: Bool {
+        isCanonicalTop && lifecycle == .active
+    }
+
     static let unavailable = GaryxRouteContext(
         node: .home,
         isCanonicalTop: false,
@@ -22,14 +26,36 @@ struct GaryxRouteContext: Equatable {
     )
 }
 
+struct GaryxRouteNavigationActions {
+    var dismiss: (() -> Void)?
+    var push: ([GaryxRouteDestination]) -> Void
+    var backLabel: String
+
+    static let unavailable = GaryxRouteNavigationActions(
+        dismiss: nil,
+        push: { _ in },
+        backLabel: "Back"
+    )
+}
+
 private struct GaryxRouteContextKey: EnvironmentKey {
     static let defaultValue = GaryxRouteContext.unavailable
+}
+
+private struct GaryxRouteNavigationActionsKey: EnvironmentKey {
+    static let defaultValue = GaryxRouteNavigationActions.unavailable
 }
 
 extension EnvironmentValues {
     var garyxRouteContext: GaryxRouteContext {
         get { self[GaryxRouteContextKey.self] }
         set { self[GaryxRouteContextKey.self] = newValue }
+    }
+
+
+    var garyxRouteNavigationActions: GaryxRouteNavigationActions {
+        get { self[GaryxRouteNavigationActionsKey.self] }
+        set { self[GaryxRouteNavigationActionsKey.self] = newValue }
     }
 }
 

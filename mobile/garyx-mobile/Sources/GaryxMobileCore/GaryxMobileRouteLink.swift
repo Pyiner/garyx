@@ -16,6 +16,113 @@ public enum GaryxMobileRoute: Equatable, Sendable {
     case workspaceFile(workspaceDir: String, path: String)
 }
 
+/// Route preparation is deliberately split from activation. The former is a
+/// pure, complete container plan that can wait behind a gesture or modal
+/// barrier without exposing partial navigation. The latter is applied only
+/// after the terminal occurrence is both committed and visible.
+public enum GaryxPreparedMobileRouteActivation: Equatable, Sendable {
+    case none
+    case newThreadDraft(agentTargetID: String)
+    case thread(GaryxThreadSummary)
+    case automation(GaryxAutomationSummary)
+    case automationThreads(GaryxAutomationSummary)
+    case capsule(GaryxCapsulePreviewSelection)
+    case agent(GaryxAgentSummary)
+    case skill(
+        editor: GaryxSkillEditorState,
+        document: GaryxSkillFileDocument?
+    )
+    case bot(GaryxConfiguredBot)
+    case workspaceFile(
+        target: GaryxMobileWorkspaceFileTarget,
+        preview: GaryxWorkspaceFilePreview,
+        listing: GaryxWorkspaceFileListing?
+    )
+}
+
+public struct GaryxPreparedMobileRoute: Equatable, Sendable {
+    public let destinations: [GaryxRouteDestination]
+    public let activation: GaryxPreparedMobileRouteActivation
+
+    public init(
+        destinations: [GaryxRouteDestination],
+        activation: GaryxPreparedMobileRouteActivation
+    ) {
+        precondition(!destinations.isEmpty, "prepared mobile route must not be empty")
+        self.destinations = destinations
+        self.activation = activation
+    }
+}
+
+/// Owns the information architecture for every mobile link. Resolvers only
+/// supply looked-up payloads; they never decide which predecessor occurrence a
+/// destination receives.
+public enum GaryxMobileRoutePlan {
+    public static func destinations(
+        for route: GaryxMobileRoute,
+        draftID: String,
+        resolvedBotGroupID: String? = nil
+    ) -> [GaryxRouteDestination] {
+        switch route {
+        case .chat:
+            return [.conversationDraft(draftID: draftID)]
+        case .thread(let threadID):
+            return [.conversation(threadID: normalized(threadID))]
+        case .settings(let tab):
+            let overview = GaryxRouteDestination.settingsDetail(
+                GaryxMobileSettingsTab.manage.rawValue
+            )
+            return tab == .manage
+                ? [overview]
+                : [overview, .settingsDetail(tab.rawValue)]
+        case .panel(let panel):
+            switch panel {
+            case .chat:
+                return [.conversationDraft(draftID: draftID)]
+            case .settings:
+                return [.settingsDetail(GaryxMobileSettingsTab.manage.rawValue)]
+            case .commands:
+                return [
+                    .settingsDetail(GaryxMobileSettingsTab.manage.rawValue),
+                    .settingsDetail(GaryxMobileSettingsTab.commands.rawValue),
+                ]
+            case .mcp:
+                return [
+                    .settingsDetail(GaryxMobileSettingsTab.manage.rawValue),
+                    .settingsDetail(GaryxMobileSettingsTab.mcp.rawValue),
+                ]
+            case .workspaces, .workspaceBots, .bots:
+                return [.panel(GaryxMobilePanel.workspaceBots.rawValue)]
+            default:
+                return [.panel(panel.rawValue)]
+            }
+        case .automation:
+            return [.panel(GaryxMobilePanel.automations.rawValue)]
+        case .automationThreads(let id):
+            return [
+                .workspaceDrilldown(.automationThreads(automationID: normalized(id)))
+            ]
+        case .capsule:
+            return [.panel(GaryxMobilePanel.capsules.rawValue)]
+        case .agent:
+            return [.panel(GaryxMobilePanel.agents.rawValue)]
+        case .skill, .skillFile:
+            return [.panel(GaryxMobilePanel.skills.rawValue)]
+        case .workspace(let path):
+            return [.workspaceDrilldown(.workspace(path: normalized(path)))]
+        case .bot(let channel, let accountID):
+            let fallback = "\(normalized(channel))::\(normalized(accountID))"
+            return [.workspaceDrilldown(.bot(accountID: resolvedBotGroupID ?? fallback))]
+        case .workspaceFile:
+            return [.panel(GaryxMobilePanel.workspaces.rawValue)]
+        }
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 public enum GaryxMobileRouteLink {
     public static func make(_ route: GaryxMobileRoute) -> URL? {
         var components = URLComponents()

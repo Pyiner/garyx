@@ -303,7 +303,7 @@ final class GaryxPresentationTransactionTests: XCTestCase {
             .promoteInPlace,
             "mid-stack promotion changes payload identity without changing topology"
         )
-        XCTAssertEqual(GaryxPathDiffPlanner.decide(from: [a], to: []), .popToHome)
+        XCTAssertEqual(GaryxPathDiffPlanner.decide(from: [a], to: []), .resetToHome)
         XCTAssertEqual(
             GaryxPathDiffPlanner.decide(
                 from: [a, b],

@@ -19,7 +19,7 @@ struct GaryxCommandsView: View {
                 showsCreateCommand = true
             }
         }
-        .fullScreenCover(isPresented: $showsCreateCommand) {
+        .garyxFullScreenCover(isPresented: $showsCreateCommand) {
             GaryxCreateSlashCommandCard()
         }
     }
@@ -140,7 +140,7 @@ struct GaryxSlashCommandCard: View {
             description = command.description
             prompt = command.prompt
         }
-        .fullScreenCover(isPresented: $showsEditForm) {
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit Command",
                 canSave: canSaveCommand,
@@ -168,7 +168,7 @@ struct GaryxSlashCommandCard: View {
                 }
             }
         }
-        .confirmationDialog("Delete command?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+        .garyxConfirmationDialog("Delete command?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await model.deleteSlashCommand(command) }
             }

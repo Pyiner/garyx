@@ -8,6 +8,7 @@ import WebKit
 struct GaryxCapsulesView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxOpenSidebar) private var openSidebar
+    @Environment(\.garyxRouteNavigationActions) private var routeNavigation
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var deletionCandidate: GaryxCapsuleSummary?
     @State private var galleryTab = GaryxCapsuleGalleryTab.all
@@ -56,10 +57,10 @@ struct GaryxCapsulesView: View {
             .refreshable {
                 await model.refreshCapsules()
             }
-            .fullScreenCover(item: $model.galleryFocusedCapsule) { selection in
+            .garyxFullScreenCover(item: $model.galleryFocusedCapsule) { selection in
                 GaryxCapsuleFocusedPreviewView(selection: selection)
             }
-            .confirmationDialog(
+            .garyxConfirmationDialog(
                 "Delete capsule?",
                 isPresented: deleteConfirmationPresented,
                 titleVisibility: .visible
@@ -123,14 +124,12 @@ struct GaryxCapsulesView: View {
 
     @ViewBuilder
     private var leadingButton: some View {
-        if model.mainPanelLeadingEdgeAction != .openSidebar {
-            Button {
-                model.performMainPanelLeadingEdgeAction()
-            } label: {
+        if let dismiss = routeNavigation.dismiss {
+            Button(action: dismiss) {
                 GaryxToolbarIcon(systemName: "chevron.left")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(model.mainPanelLeadingEdgeActionLabel)
+            .accessibilityLabel(routeNavigation.backLabel)
         } else {
             GaryxSidebarMenuButton { openSidebar() }
         }
@@ -448,7 +447,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
             loader.cancelForDismiss(model: model)
             invalidateGestureMotion()
         }
-        .confirmationDialog(
+        .garyxConfirmationDialog(
             "Delete capsule?",
             isPresented: $showsDeleteConfirmation,
             titleVisibility: .visible

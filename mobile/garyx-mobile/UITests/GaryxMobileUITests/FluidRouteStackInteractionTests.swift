@@ -52,7 +52,10 @@ final class FluidRouteStackInteractionTests: XCTestCase {
             in: app,
             fromInset: 5,
             travel: app.frame.width * 0.30,
-            velocity: .slow,
+            // XCTest's symbolic `.slow` velocity varies enough under a full
+            // suite load to cross the commit projection. Pin the same low
+            // physical velocity as the deterministic cancel acceptance case.
+            velocity: XCUIGestureVelocity(rawValue: 40),
             holdAtEnd: 0.12
         )
         dragLeadingEdge(
@@ -211,7 +214,7 @@ final class FluidRouteStackInteractionTests: XCTestCase {
             in: app,
             fromInset: 5,
             travel: app.frame.width * 0.30,
-            velocity: .slow,
+            velocity: XCUIGestureVelocity(rawValue: 40),
             holdAtEnd: 0.12,
             y: app.frame.height * 0.30
         )

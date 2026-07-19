@@ -128,6 +128,30 @@ public enum GaryxPrepareOutcome<Prepared: Equatable & Sendable>: Equatable, Send
     case authenticationRequired
     case cancelledOrStale
     case internalFault(code: String)
+
+    public func map<Mapped: Equatable & Sendable>(
+        _ transform: (Prepared) -> Mapped
+    ) -> GaryxPrepareOutcome<Mapped> {
+        switch self {
+        case .ready(let value):
+            .ready(transform(value))
+        case .userVisibleNotFound:
+            .userVisibleNotFound
+        case .retryableFailure(let message):
+            .retryableFailure(message: message)
+        case .authenticationRequired:
+            .authenticationRequired
+        case .cancelledOrStale:
+            .cancelledOrStale
+        case .internalFault(let code):
+            .internalFault(code: code)
+        }
+    }
+
+    public var preparedValue: Prepared? {
+        guard case .ready(let value) = self else { return nil }
+        return value
+    }
 }
 
 public protocol GaryxNavigationIntentPreparing {
@@ -270,6 +294,12 @@ public enum GaryxNavigationAdmissionAction: Equatable, Sendable {
     case waitForPresentationBarrier
     case requestPresentationDismissal
     case admit
+}
+
+public enum GaryxNavigationDependencyDisposition: Equatable, Sendable {
+    case admit
+    case reprepare
+    case discard
 }
 
 public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
@@ -443,6 +473,23 @@ public struct GaryxNavigationIntentCoordinator: Equatable, Sendable {
         // Ordinary intents rejected behind the barrier are intentionally not
         // retained or automatically reprepared.
         return true
+    }
+
+    /// Revalidates a prepared dependency at the actual admission boundary.
+    /// A relative intent can wait behind a gesture or modal long after its
+    /// resolver completed; the canonical stack may have changed meanwhile.
+    public func dependencyDisposition(
+        for intent: GaryxPreparedNavigationIntent,
+        routeState: GaryxCanonicalRouteState
+    ) -> GaryxNavigationDependencyDisposition {
+        switch validateDependency(intent.dependency, routeState: routeState) {
+        case .valid:
+            .admit
+        case .reprepare:
+            .reprepare
+        case .discard:
+            .discard
+        }
     }
 
     private enum DependencyValidation {

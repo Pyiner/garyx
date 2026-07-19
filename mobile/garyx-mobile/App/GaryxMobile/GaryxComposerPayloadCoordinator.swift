@@ -209,41 +209,36 @@ private actor GaryxComposerPayloadPersistenceQueue {
     }
 
     func stageAttachment(
-        context: GaryxComposerDurableContext,
         sourceURL: URL,
         metadata: GaryxComposerAttachmentMetadata,
-        requestToken: GaryxGatewayRequestToken
+        requestToken: GaryxGatewayRequestToken,
+        operationContext: GaryxScopeBoundOperationContext
     ) async throws -> (GaryxComposerDurableContext, GaryxComposerStagedUpload) {
         await acquireTransactionGate()
         defer { releaseTransactionGate() }
         let snapshot = try await durability.load()
         guard let entry = snapshot.payloadStore.entry(
-            context.entry.id,
-            scope: context.entry.scope
-        ), entry.lifecycle.token == context.entry.lifecycle.token,
-           entry.lifecycle.phase == .active,
-           entry.currentGeneration == context.entry.currentGeneration,
+            operationContext.key.entryID,
+            scope: operationContext.key.scope
+        ), entry.lifecycle.phase == .active,
            requestToken.scope == entry.scope else {
             throw GaryxComposerPayloadRuntimeError.staleActivation
         }
 
-        let operationKey = GaryxOperationCapabilityKey(
-            scope: entry.scope,
-            entryID: entry.id,
-            generation: entry.currentGeneration,
-            reservationID: nil,
-            branch: .followup,
-            operationID: GaryxOperationID(rawValue: UUID().uuidString)
-        )
-        let operationContext = GaryxScopeBoundOperationContext(
-            key: operationKey,
-            clientIdentity: requestToken.scope.identity,
-            configurationFingerprint: String(requestToken.activationSequence),
-            payloadLifecycle: GaryxPayloadLifecycleCapture(
-                token: entry.lifecycle.token,
-                revision: entry.lifecycle.revision
-            )
-        )
+        let operationKey = operationContext.key
+        guard operationKey.scope == entry.scope,
+              operationKey.entryID == entry.id,
+              operationKey.generation == entry.currentGeneration,
+              operationKey.reservationID == nil,
+              operationKey.branch == .followup,
+              operationContext.clientIdentity == requestToken.scope.identity,
+              operationContext.configurationFingerprint == String(requestToken.activationSequence),
+              operationContext.payloadLifecycle == GaryxPayloadLifecycleCapture(
+                  token: entry.lifecycle.token,
+                  revision: entry.lifecycle.revision
+              ) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
         let assetID = GaryxStagedAssetID(rawValue: UUID().uuidString)
         let staged = try await staging.stage(
             .init(
@@ -1416,23 +1411,64 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         metadata: GaryxComposerAttachmentMetadata,
         requestToken: GaryxGatewayRequestToken
     ) async throws -> GaryxComposerStagedUpload {
-        guard let context = durableContext,
-              context.entry.scope == requestToken.scope else {
+        guard let operationContext = makePresentationOperationContext(
+            requestToken: requestToken
+        ) else {
             throw GaryxComposerPayloadRuntimeError.unavailable
         }
-        let (updated, staged) = try await persistence.stageAttachment(
-            context: context,
+        return try await stageAttachment(
             sourceURL: sourceURL,
             metadata: metadata,
-            requestToken: requestToken
+            requestToken: requestToken,
+            operationContext: operationContext
         )
-        guard durableContext?.entry.id == updated.entry.id else {
-            throw GaryxComposerPayloadRuntimeError.staleActivation
+    }
+
+    func stageAttachment(
+        sourceURL: URL,
+        metadata: GaryxComposerAttachmentMetadata,
+        requestToken: GaryxGatewayRequestToken,
+        operationContext: GaryxScopeBoundOperationContext
+    ) async throws -> GaryxComposerStagedUpload {
+        let (updated, staged) = try await persistence.stageAttachment(
+            sourceURL: sourceURL,
+            metadata: metadata,
+            requestToken: requestToken,
+            operationContext: operationContext
+        )
+        if durableContext?.entry.id == updated.entry.id {
+            durableContext = updated
+            publish(context: updated, readOnly: snapshot.isReadOnly)
+            grantCurrentConfigurationToLiveAdapter()
         }
-        durableContext = updated
-        publish(context: updated, readOnly: snapshot.isReadOnly)
-        grantCurrentConfigurationToLiveAdapter()
         return staged
+    }
+
+    /// Frozen synchronously with a result-bearing presentation lease, before
+    /// SwiftUI observes the picker/camera request. The eventual file operation
+    /// must present this exact capability back to the durability boundary.
+    func makePresentationOperationContext(
+        requestToken: GaryxGatewayRequestToken
+    ) -> GaryxScopeBoundOperationContext? {
+        guard let context = durableContext,
+              context.entry.scope == requestToken.scope,
+              context.entry.lifecycle.phase == .active else { return nil }
+        return GaryxScopeBoundOperationContext(
+            key: GaryxOperationCapabilityKey(
+                scope: context.entry.scope,
+                entryID: context.entry.id,
+                generation: context.entry.currentGeneration,
+                reservationID: nil,
+                branch: .followup,
+                operationID: GaryxOperationID(rawValue: UUID().uuidString)
+            ),
+            clientIdentity: requestToken.scope.identity,
+            configurationFingerprint: String(requestToken.activationSequence),
+            payloadLifecycle: GaryxPayloadLifecycleCapture(
+                token: context.entry.lifecycle.token,
+                revision: context.entry.lifecycle.revision
+            )
+        )
     }
 
     func completeUpload(
@@ -1834,7 +1870,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
               let liveOccurrenceID,
               let adapter = adapters[liveOccurrenceID]?.value,
               !snapshot.isReadOnly else { return }
-        focusCoordinator.grantIfReady(to: adapter)
+        focusCoordinator.grantIfReady(to: adapter, sceneIsActive: sceneIsActive)
     }
 
     private func pruneAdapters() {
@@ -1897,8 +1933,16 @@ private final class GaryxRouteFocusCoordinator {
         pendingOccurrenceID = occurrenceID
     }
 
-    func grantIfReady(to adapter: GaryxComposerInputAdapter) {
-        guard pendingOccurrenceID == adapter.occurrenceID, adapter.isLive else { return }
+    func grantIfReady(
+        to adapter: GaryxComposerInputAdapter,
+        sceneIsActive: Bool
+    ) {
+        guard pendingOccurrenceID == adapter.occurrenceID,
+              GaryxRouteAccessibilityGate.allowsComposerFocus(
+                  inputReady: adapter.isInputReady,
+                  isVisibleRoute: adapter.isLive,
+                  sceneIsActive: sceneIsActive
+              ) else { return }
         pendingOccurrenceID = nil
         adapter.requestFocus()
     }

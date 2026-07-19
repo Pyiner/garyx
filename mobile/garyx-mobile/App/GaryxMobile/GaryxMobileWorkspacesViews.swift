@@ -47,7 +47,7 @@ struct GaryxWorkspacesView: View {
         .onChange(of: model.userWorkspacePaths) { _, _ in
             Task { await model.prepareWorkspaceBrowser() }
         }
-        .sheet(isPresented: $showsAddWorkspace) {
+        .garyxSheet(isPresented: $showsAddWorkspace) {
             GaryxWorkspacePathPickerSheet(
                 title: "Add Workspace",
                 path: $addWorkspacePath
@@ -58,7 +58,7 @@ struct GaryxWorkspacesView: View {
             guard garyxIsAbsoluteWorkspacePath(path) else { return }
             Task { await addWorkspace(path) }
         }
-        .fileImporter(
+        .garyxFileImporter(
             isPresented: $isPickingFiles,
             allowedContentTypes: [.item],
             allowsMultipleSelection: true

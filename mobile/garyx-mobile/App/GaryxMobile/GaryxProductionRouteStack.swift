@@ -6,14 +6,58 @@ import UIKit
 /// its observable projection for application state and tests.
 @MainActor
 final class GaryxProductionRouteStore: ObservableObject {
+    struct NavigationPreparation {
+        let ticket: GaryxNavigationPreparationTicket
+        let source: GaryxMobilePanelOpenSource
+        let animated: Bool
+        let dependency: GaryxNavigationIntentDependency
+    }
+
+    struct NavigationSubmission {
+        let result: GaryxNavigationQueueResult
+        let entries: [GaryxRouteEntry]
+    }
+
+    private struct PendingRoutePlan {
+        let intent: GaryxPreparedNavigationIntent
+        let preparedScope: GaryxGatewayScope
+        let entries: [GaryxRouteEntry]
+        let source: GaryxMobilePanelOpenSource
+        let animated: Bool
+        let onVisible: (() -> Void)?
+    }
+
     @Published private(set) var path: [GaryxRouteEntry] = []
+    @Published private(set) var hasPresentationBarrier = false
+    let presentationCoordinator = GaryxPresentationLeaseCoordinator()
 
     private weak var container: GaryxRouteStackContainer?
+    private var canonicalProjection = GaryxCanonicalRouteState()
+    private var intentCoordinator = GaryxNavigationIntentCoordinator()
+    private var pendingPlans: [GaryxNavigationIntentID: PendingRoutePlan] = [:]
+    private var activePlan: PendingRoutePlan?
+    private var navigationScopes: @MainActor () -> GaryxGatewayScopeRegistry = {
+        GaryxGatewayScopeRegistry(
+            initialActiveScope: GaryxGatewayScope(identity: "route-runtime", epoch: 1)
+        )
+    }
+    private var hasNavigationScopeProvider = false
+    private var lastKnownNavigationScopes = GaryxGatewayScopeRegistry(
+        initialActiveScope: GaryxGatewayScope(identity: "route-runtime", epoch: 1)
+    )
 
     var isAttached: Bool { container != nil }
 
+    func configureNavigationScopes(
+        _ provider: @escaping @MainActor () -> GaryxGatewayScopeRegistry
+    ) {
+        navigationScopes = provider
+        hasNavigationScopeProvider = true
+    }
+
     func attach(_ container: GaryxRouteStackContainer) {
         self.container = container
+        presentationCoordinator.attach(container: container, routeStore: self)
         if container.path != path {
             _ = container.requestHardSnap(to: path)
         }
@@ -21,8 +65,103 @@ final class GaryxProductionRouteStore: ObservableObject {
 
     func detach(_ container: GaryxRouteStackContainer) {
         if self.container === container {
+            presentationCoordinator.detach(container: container)
             self.container = nil
         }
+    }
+
+    func beginNavigationPreparation(
+        source: GaryxMobilePanelOpenSource,
+        animated: Bool = true,
+        scopes explicitScopes: GaryxGatewayScopeRegistry? = nil
+    ) -> NavigationPreparation {
+        let scopes = effectiveScopes(explicitScopes)
+        let scope = scopes.activeScope!
+        let id = GaryxNavigationIntentID(rawValue: UUID().uuidString.lowercased())
+        let dependency: GaryxNavigationIntentDependency
+        if source == .current, let top = canonicalProjection.path.last {
+            dependency = .relative(
+                base: top.id,
+                payloadRevision: top.payloadRevision,
+                stackRevision: canonicalProjection.stackRevision,
+                mismatch: .discard
+            )
+        } else {
+            dependency = .absolute
+        }
+        return NavigationPreparation(
+            ticket: intentCoordinator.beginPreparation(
+                intentID: id,
+                key: .ordinaryNavigation,
+                scope: scope
+            ),
+            source: source,
+            animated: animated,
+            dependency: dependency
+        )
+    }
+
+    @discardableResult
+    func completeNavigationPreparation(
+        _ preparation: NavigationPreparation,
+        outcome: GaryxPrepareOutcome<[GaryxRouteDestination]>,
+        scopes explicitScopes: GaryxGatewayScopeRegistry? = nil,
+        onVisible: (() -> Void)? = nil
+    ) -> NavigationSubmission {
+        let scopes = effectiveScopes(explicitScopes)
+        let preparedOutcome: GaryxPrepareOutcome<GaryxPreparedNavigationIntent>
+        var entries: [GaryxRouteEntry] = []
+
+        switch outcome {
+        case .ready(let destinations):
+            guard let terminalDestination = destinations.last else {
+                preparedOutcome = .internalFault(code: "empty_route_plan")
+                break
+            }
+            entries = destinations.map { destination in
+                GaryxRouteEntry(
+                    id: GaryxRouteInstanceID(rawValue: UUID().uuidString.lowercased()),
+                    destination: destination
+                )
+            }
+            let intent = GaryxPreparedNavigationIntent(
+                id: preparation.ticket.intentID,
+                effect: .ordinaryNavigation(terminalDestination),
+                dependency: preparation.dependency
+            )
+            pendingPlans[intent.id] = PendingRoutePlan(
+                intent: intent,
+                preparedScope: preparation.ticket.epoch.scope,
+                entries: entries,
+                source: preparation.source,
+                animated: preparation.animated,
+                onVisible: onVisible
+            )
+            preparedOutcome = .ready(intent)
+        case .userVisibleNotFound:
+            preparedOutcome = .userVisibleNotFound
+        case .retryableFailure(let message):
+            preparedOutcome = .retryableFailure(message: message)
+        case .authenticationRequired:
+            preparedOutcome = .authenticationRequired
+        case .cancelledOrStale:
+            preparedOutcome = .cancelledOrStale
+        case .internalFault(let code):
+            preparedOutcome = .internalFault(code: code)
+        }
+
+        let result = intentCoordinator.completePreparation(
+            preparation.ticket,
+            outcome: preparedOutcome,
+            scopes: scopes,
+            routeState: canonicalProjection,
+            presentationBarrier: container?.hasPresentationBarrier ?? false
+        )
+        discardPlansNoLongerQueued()
+        if result == .admittedImmediately {
+            drainAdmissiblePlans()
+        }
+        return NavigationSubmission(result: result, entries: entries)
     }
 
     @discardableResult
@@ -41,27 +180,18 @@ final class GaryxProductionRouteStore: ObservableObject {
                 if let container {
                     _ = container.pop(count: descendants, animated: animated)
                 } else {
-                    path.removeLast(descendants)
+                    applyCanonicalPath(Array(path.dropLast(descendants)))
                 }
             }
             return existing
         }
 
-        let entry = GaryxRouteEntry(
-            id: GaryxRouteInstanceID(rawValue: UUID().uuidString.lowercased()),
-            destination: destination
+        let preparation = beginNavigationPreparation(source: source, animated: animated)
+        let submission = completeNavigationPreparation(
+            preparation,
+            outcome: .ready([destination])
         )
-        guard let container else {
-            path = source == .current ? path + [entry] : [entry]
-            return entry
-        }
-
-        if path.isEmpty || source == .current {
-            _ = container.push(entry, animated: animated)
-        } else {
-            _ = container.requestHardSnap(to: [entry])
-        }
-        return entry
+        return submission.entries[0]
     }
 
     /// Opens a suffix in one container transaction so no intermediate push
@@ -74,31 +204,19 @@ final class GaryxProductionRouteStore: ObservableObject {
         animated: Bool = true
     ) -> [GaryxRouteEntry] {
         precondition(!destinations.isEmpty, "route suffix must not be empty")
-        let entries = destinations.map { destination in
-            GaryxRouteEntry(
-                id: GaryxRouteInstanceID(rawValue: UUID().uuidString.lowercased()),
-                destination: destination
-            )
-        }
-        guard let container else {
-            path = source == .current ? path + entries : entries
-            return entries
-        }
-
-        if path.isEmpty || source == .current {
-            _ = container.push(entries, animated: animated)
-        } else {
-            _ = container.requestHardSnap(to: entries)
-        }
-        return entries
+        let preparation = beginNavigationPreparation(source: source, animated: animated)
+        return completeNavigationPreparation(
+            preparation,
+            outcome: .ready(destinations)
+        ).entries
     }
 
-    func popToHome(animated: Bool = true) {
+    func resetToHome(animated: Bool = true) {
         guard !path.isEmpty else { return }
         if let container {
             _ = container.pop(count: path.count, animated: animated)
         } else {
-            path.removeAll()
+            applyCanonicalPath([])
         }
     }
 
@@ -107,7 +225,7 @@ final class GaryxProductionRouteStore: ObservableObject {
         if let container {
             _ = container.pop(animated: animated)
         } else {
-            path.removeLast()
+            applyCanonicalPath(Array(path.dropLast()))
         }
     }
 
@@ -126,7 +244,7 @@ final class GaryxProductionRouteStore: ObservableObject {
         }
         var replacement = path
         replacement[index].replacePayload(with: .conversation(threadID: threadID))
-        path = replacement
+        applyCanonicalPath(replacement)
         return true
     }
 
@@ -146,13 +264,53 @@ final class GaryxProductionRouteStore: ObservableObject {
         }
         var replacement = path
         replacement[index].replacePayload(with: .conversationDraft(draftID: newDraftID))
-        path = replacement
+        applyCanonicalPath(replacement)
         return true
     }
 
     func applyCanonicalPath(_ canonicalPath: [GaryxRouteEntry]) {
         guard path != canonicalPath else { return }
+        let topologyChanged = path.map(\.id) != canonicalPath.map(\.id)
+        canonicalProjection = GaryxCanonicalRouteState(
+            path: canonicalPath,
+            stackRevision: topologyChanged
+                ? canonicalProjection.stackRevision &+ 1
+                : canonicalProjection.stackRevision
+        )
         path = canonicalPath
+    }
+
+    func routePhaseChanged(_ phase: GaryxPresentationTransactionPhase) {
+        switch phase {
+        case .active:
+            intentCoordinator.setTransactionStatus(.terminal)
+        case .preCommit, .cancelSettle, .commitSettle, .terminal:
+            intentCoordinator.setTransactionStatus(.nonTerminal)
+        }
+    }
+
+    func visibleRouteActivated(_ node: GaryxRoutePresentationNode) {
+        guard let activePlan,
+              case .entry(let entry) = node,
+              activePlan.entries.last?.id == entry.id else { return }
+        self.activePlan = nil
+        activePlan.onVisible?()
+    }
+
+    func rendererBecameIdle() {
+        intentCoordinator.setTransactionStatus(.terminal)
+        drainAdmissiblePlans()
+    }
+
+    func presentationBarrierDidChange() {
+        hasPresentationBarrier = container?.hasPresentationBarrier ?? false
+        guard container?.hasPresentationBarrier != true else { return }
+        drainAdmissiblePlans()
+    }
+
+    func presentationBarrierStateChanged(_ active: Bool) {
+        guard hasPresentationBarrier != active else { return }
+        hasPresentationBarrier = active
     }
 
     func sceneDidBecomeInactive() {
@@ -161,6 +319,78 @@ final class GaryxProductionRouteStore: ObservableObject {
 
     func sceneDidBecomeActive() {
         container?.sceneDidBecomeActive()
+    }
+
+    private func drainAdmissiblePlans() {
+        let hasBarrier = container?.hasPresentationBarrier ?? false
+        let intents = intentCoordinator.drainAdmissible(presentationBarrier: hasBarrier)
+        guard !intents.isEmpty else { return }
+
+        for intent in intents {
+            guard let plan = pendingPlans.removeValue(forKey: intent.id) else { continue }
+            let scopes = hasNavigationScopeProvider
+                ? navigationScopes()
+                : lastKnownNavigationScopes
+            guard scopes.activeScope == plan.preparedScope,
+                  scopes.lifecycle(of: plan.preparedScope) == .active else {
+                continue
+            }
+            guard intentCoordinator.dependencyDisposition(
+                for: intent,
+                routeState: canonicalProjection
+            ) == .admit else {
+                continue
+            }
+            execute(plan)
+        }
+        discardPlansNoLongerQueued()
+    }
+
+    private func execute(_ plan: PendingRoutePlan) {
+        activePlan = plan
+        guard let container else {
+            let nextPath = plan.source == .current
+                ? path + plan.entries
+                : plan.entries
+            applyCanonicalPath(nextPath)
+            activePlan = nil
+            plan.onVisible?()
+            return
+        }
+
+        let accepted: Bool
+        if plan.source == .current
+            || (plan.source == .sidebar && path.isEmpty)
+            || (plan.source == .replace && path.isEmpty) {
+            accepted = container.push(plan.entries, animated: plan.animated)
+        } else {
+            accepted = container.requestHardSnap(to: plan.entries)
+        }
+        if !accepted {
+            activePlan = nil
+            assertionFailure("terminal navigation plan was rejected by the route renderer")
+        }
+    }
+
+    private func discardPlansNoLongerQueued() {
+        var retained = Set(intentCoordinator.queued.map(\.id))
+        if let activePlan { retained.insert(activePlan.intent.id) }
+        pendingPlans = pendingPlans.filter { retained.contains($0.key) }
+    }
+
+    private func effectiveScopes(
+        _ explicit: GaryxGatewayScopeRegistry?
+    ) -> GaryxGatewayScopeRegistry {
+        var scopes = explicit ?? navigationScopes()
+        if scopes.activeScope == nil {
+            let identity = "route-runtime"
+            let epoch = (scopes.revokedThroughEpoch[identity] ?? 0) &+ 1
+            _ = scopes.switchActive(
+                to: GaryxGatewayScope(identity: identity, epoch: max(1, epoch))
+            )
+        }
+        lastKnownNavigationScopes = scopes
+        return scopes
     }
 }
 
@@ -194,7 +424,8 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         let diagnostics = GaryxProductionRouteDiagnostics.makeIfEnabled()
         #endif
         var callbacks = GaryxRouteStackContainerCallbacks()
-        callbacks.phaseChanged = { phase in
+        callbacks.phaseChanged = { [weak store] phase in
+            store?.routePhaseChanged(phase)
             #if DEBUG
             diagnostics?.transitionPhaseChanged(phase)
             #endif
@@ -220,6 +451,17 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             diagnostics?.terminalReached(terminal)
             #endif
         }
+        callbacks.visibleRouteActivated = { [weak store] node in
+            store?.visibleRouteActivated(node)
+        }
+        callbacks.rendererBecameIdle = { [weak store] in
+            store?.rendererBecameIdle()
+        }
+        store.configureNavigationScopes { [weak model] in
+            model?.gatewayScopeRegistry ?? GaryxGatewayScopeRegistry(
+                initialActiveScope: GaryxGatewayScope(identity: "route-runtime", epoch: 1)
+            )
+        }
         let container = GaryxRouteStackContainer(
             initialPath: store.path,
             callbacks: callbacks,
@@ -237,6 +479,8 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                 return AnyView(
                     GaryxProductionRouteHostEnvironment(
                         model: model,
+                        store: store,
+                        node: node,
                         content: content,
                         onOpenDrawer: onOpenDrawer
                     )
@@ -526,6 +770,9 @@ private final class GaryxProductionRouteDiagnostics {
 
 private struct GaryxProductionRouteHostEnvironment: View {
     @ObservedObject var model: GaryxMobileModel
+    @ObservedObject var store: GaryxProductionRouteStore
+    @Environment(\.garyxRouteContext) private var routeContext
+    let node: GaryxRoutePresentationNode
     let content: AnyView
     let onOpenDrawer: @MainActor () -> Void
 
@@ -536,7 +783,72 @@ private struct GaryxProductionRouteHostEnvironment: View {
             .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
             .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
             .environment(\.garyxOpenSidebar, onOpenDrawer)
+            .environment(\.garyxRouteNavigationActions, navigationActions)
+            .environment(
+                \.garyxPresentationLeaseCoordinator,
+                store.presentationCoordinator
+            )
+            .modifier(
+                GaryxRouteEscapeActionModifier(
+                    isEnabled: GaryxRouteAccessibilityGate.allowsEscape(
+                        isCanonicalTop: routeContext.isCanonicalTop,
+                        lifecycle: routeContext.lifecycle,
+                        hasPresentationBarrier: store.hasPresentationBarrier
+                    ) && navigationActions.dismiss != nil,
+                    action: { navigationActions.dismiss?() }
+                )
+            )
             .garyxAccessibilityPreferences()
+    }
+
+    private var navigationActions: GaryxRouteNavigationActions {
+        let dismiss: (() -> Void)?
+        switch node {
+        case .home:
+            dismiss = nil
+        case .entry:
+            dismiss = {
+                guard GaryxRouteAccessibilityGate.allowsEscape(
+                    isCanonicalTop: routeContext.isCanonicalTop,
+                    lifecycle: routeContext.lifecycle,
+                    hasPresentationBarrier: store.hasPresentationBarrier
+                ) else { return }
+                store.popOne()
+            }
+        }
+        return GaryxRouteNavigationActions(
+            dismiss: dismiss,
+            push: { destinations in
+                guard routeContext.allowsPageInteraction, !destinations.isEmpty else { return }
+                _ = store.open(destinations, source: .current)
+            },
+            backLabel: backLabel
+        )
+    }
+
+    private var backLabel: String {
+        guard case .entry(let entry) = node,
+              let index = store.path.firstIndex(where: { $0.id == entry.id }),
+              index > 0 else {
+            return "Back"
+        }
+        return store.path[index - 1].destination.backNavigationLabel
+    }
+}
+
+private struct GaryxRouteEscapeActionModifier: ViewModifier {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        // Keep the presentation anchor's SwiftUI identity stable when a
+        // lease publishes its modal barrier. Switching between differently
+        // shaped modifier branches here can tear down a sheet/full-screen
+        // cover in the same update that synchronously acquired its lease.
+        content.accessibilityAction(.escape) {
+            guard isEnabled else { return }
+            action()
+        }
     }
 }
 

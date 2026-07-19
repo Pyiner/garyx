@@ -324,6 +324,9 @@ extension GaryxMobileModel {
                 return targetId
             }
         }
+        if frozenNewThreadAgentTargetGeneration == selectedThreadDraftGeneration {
+            return currentPendingNewThreadAgentTargetId()
+        }
         return GaryxNewThreadAgentSelection.agentId(
             draftOverrideAgentId: currentPendingNewThreadAgentTargetId(),
             effectiveDefaultAgentId: effectiveDefaultAgentId
@@ -413,15 +416,22 @@ extension GaryxMobileModel {
         await loadProviderModels(providerType: providerType)
     }
 
-    func setPendingNewThreadAgentTarget(_ id: String?) {
+    func setPendingNewThreadAgentTarget(
+        _ id: String?,
+        freezesSelection: Bool = false
+    ) {
         let targetId = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         selectedAgentTargetId = targetId.isEmpty ? nil : targetId
         pendingNewThreadAgentTargetGeneration = selectedThreadDraftGeneration
+        frozenNewThreadAgentTargetGeneration = freezesSelection
+            ? selectedThreadDraftGeneration
+            : nil
     }
 
     func clearPendingNewThreadAgentTarget() {
         selectedAgentTargetId = nil
         pendingNewThreadAgentTargetGeneration = nil
+        frozenNewThreadAgentTargetGeneration = nil
     }
 
     func currentPendingNewThreadAgentTargetId() -> String {
@@ -999,6 +1009,24 @@ extension GaryxMobileModel {
             ) else { return }
             lastError = displayMessage(for: error)
         }
+    }
+
+    /// Installs resolver output only after its workspace-file occurrence is
+    /// committed and visible. No navigation write is permitted from here.
+    func activatePreparedWorkspaceFilePreview(
+        target: GaryxMobileWorkspaceFileTarget,
+        preview: GaryxWorkspaceFilePreview,
+        listing: GaryxWorkspaceFileListing?
+    ) {
+        let workspace = target.workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filePath = target.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspace.isEmpty, !filePath.isEmpty else { return }
+        selectedWorkspacePath = workspace
+        draftWorkspacePath = workspace
+        selectedWorkspaceDirectory = Self.workspaceDirectory(forFilePath: filePath)
+        workspacePreview = preview
+        workspaceListing = listing
+        workspaceUploadStatus = nil
     }
 
     private func workspaceFilePreview(
