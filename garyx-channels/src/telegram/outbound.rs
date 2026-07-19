@@ -189,18 +189,6 @@ impl TelegramChannelSender {
 
 #[async_trait]
 impl OutboundChannelSender for TelegramChannelSender {
-    fn clone_box(&self) -> Box<dyn OutboundChannelSender> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
     fn channel_id(&self) -> &str {
         "telegram"
     }

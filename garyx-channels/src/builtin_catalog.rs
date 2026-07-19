@@ -275,14 +275,15 @@ pub const RESERVED_CHANNEL_NAMES: &[&str] =
 /// Construction-layer injection point for the dispatcher's
 /// type-erased built-in sender registry. The dispatcher core never
 /// names a concrete channel type; adding a built-in channel means
-/// adding its wrapper here and implementing
+/// registering its wrapper here and implementing
 /// [`crate::dispatcher::OutboundChannelSender`] in the channel's own
-/// module.
-pub(crate) fn builtin_outbound_senders() -> Vec<Box<dyn crate::dispatcher::OutboundChannelSender>> {
-    vec![
-        Box::new(crate::telegram::outbound::TelegramChannelSender::default()),
-        Box::new(crate::discord::outbound::DiscordChannelSender::default()),
-        Box::new(crate::feishu::outbound::FeishuChannelSender::default()),
-        Box::new(crate::weixin::outbound::WeixinChannelSender::default()),
-    ]
+/// module. The downcast capability stays sealed inside
+/// [`crate::outbound_registry::BuiltinSenderRegistry`].
+pub(crate) fn builtin_sender_registry() -> crate::outbound_registry::BuiltinSenderRegistry {
+    let mut registry = crate::outbound_registry::BuiltinSenderRegistry::new();
+    registry.push(crate::telegram::outbound::TelegramChannelSender::default());
+    registry.push(crate::discord::outbound::DiscordChannelSender::default());
+    registry.push(crate::feishu::outbound::FeishuChannelSender::default());
+    registry.push(crate::weixin::outbound::WeixinChannelSender::default());
+    registry
 }

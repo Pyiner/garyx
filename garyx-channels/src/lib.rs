@@ -14,6 +14,7 @@ pub mod feishu;
 pub mod generated_images;
 pub mod inbound;
 pub mod meeting_sink;
+pub(crate) mod outbound_registry;
 pub mod plugin;
 pub mod plugin_host;
 pub mod plugin_tools;
