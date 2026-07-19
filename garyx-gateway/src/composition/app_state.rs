@@ -153,7 +153,8 @@ impl AppState {
     /// else is either hot (dispatcher/bridge/meeting knobs, the plugin
     /// auto-update switch, per-account reload_accounts) or explicitly
     /// restart-required (e.g. plugins.auto_update_check_interval,
-    /// which only feeds the boot-spawned auto-update loop).
+    /// which only feeds the plugin-side self-update scheduling read at
+    /// registration time).
     fn channel_plugin_rebuild_inputs(config: &GaryxConfig) -> serde_json::Value {
         serde_json::json!({
             "channels": serde_json::to_value(&config.channels).ok(),
