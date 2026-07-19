@@ -51,6 +51,26 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
             states["transcriptEntryState"] as? [String]
         )
         XCTAssertEqual(GaryxComposerPhase.allCases.map(\.rawValue), states["composerPhase"] as? [String])
+        XCTAssertEqual(
+            GaryxDurableDeliveryState.allCases.map(\.rawValue),
+            states["durableDeliveryState"] as? [String]
+        )
+        XCTAssertEqual(
+            GaryxDeliveryEvidence.allCases.map(\.rawValue),
+            states["durableDeliveryEvidence"] as? [String]
+        )
+        XCTAssertEqual(
+            GaryxDeliveryUserDisposition.allCases.map(\.rawValue),
+            states["durableDeliveryUserDisposition"] as? [String]
+        )
+        XCTAssertEqual(
+            GaryxCreateDeliveryPhase.allCases.map(\.rawValue),
+            states["durableCreateDeliveryPhase"] as? [String]
+        )
+        XCTAssertEqual(
+            GaryxCreateAmbiguousDisposition.allCases.map(\.rawValue),
+            states["durableCreateUserDisposition"] as? [String]
+        )
     }
 
     // MARK: Machine scenarios
@@ -192,7 +212,225 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
         }
     }
 
+    // MARK: Durable delivery scenarios
+
+    func testDurableDeliveryScenarioFixtures() throws {
+        let fixtures = try loadJSONObject("scenarios/durable-delivery.json")
+        let consumers = try XCTUnwrap(fixtures["platformConsumers"] as? [String: String])
+        XCTAssertEqual(consumers["ios"], "implemented")
+        XCTAssertEqual(consumers["mac"], "p0_g_follow_up")
+        let scenarios = try XCTUnwrap(fixtures["scenarios"] as? [[String: Any]])
+        XCTAssertFalse(scenarios.isEmpty)
+
+        for scenario in scenarios {
+            let name = scenario["name"] as? String ?? "unnamed durable delivery"
+            var records = ["delivery": makeDurableDeliveryRecord()]
+            for action in scenario["actions"] as? [String] ?? [] {
+                try applyDurableDeliveryAction(
+                    action,
+                    records: &records,
+                    label: name
+                )
+            }
+            let expectation = try XCTUnwrap(
+                scenario["expect"] as? [String: Any],
+                "\(name): expectation"
+            )
+            for (recordID, expectedAny) in expectation {
+                let expected = try XCTUnwrap(
+                    expectedAny as? [String: Any],
+                    "\(name): \(recordID) expectation"
+                )
+                let record = try XCTUnwrap(records[recordID], "\(name): \(recordID)")
+                assertDurableDelivery(record, expected: expected, label: "\(name): \(recordID)")
+            }
+        }
+    }
+
+    func testDurableCreateDeliveryScenarioFixtures() throws {
+        let fixtures = try loadJSONObject("scenarios/durable-delivery.json")
+        let scenarios = try XCTUnwrap(fixtures["createScenarios"] as? [[String: Any]])
+        XCTAssertFalse(scenarios.isEmpty)
+        let scope = durableFixtureScope
+
+        for scenario in scenarios {
+            let name = scenario["name"] as? String ?? "unnamed durable create"
+            var state = GaryxCreateDeliveryState(
+                scope: scope,
+                createIntentID: "create-intent",
+                entryID: durableFixtureEntryID
+            )
+            for action in scenario["actions"] as? [String] ?? [] {
+                switch action {
+                case "created": state.created(threadID: "thread-1")
+                case "bound": state.bound()
+                case "chatAttempted": state.chatStartAttempted()
+                case "responseLost": state.responseLost()
+                case "acknowledged": state.acknowledged()
+                case "scopeRevoke": state.settleForScopeRevoke()
+                default: XCTFail("\(name): unsupported create action \(action)")
+                }
+            }
+            let expected = try XCTUnwrap(
+                scenario["expect"] as? [String: Any],
+                "\(name): expectation"
+            )
+            XCTAssertEqual(state.phase.rawValue, expected["phase"] as? String, "\(name): phase")
+            assertNullableString(
+                state.ambiguousAfter?.rawValue,
+                expected["ambiguousAfter"],
+                "\(name): ambiguousAfter"
+            )
+            XCTAssertEqual(
+                state.userDisposition.rawValue,
+                expected["userDisposition"] as? String,
+                "\(name): userDisposition"
+            )
+            assertNullableString(state.threadID, expected["threadID"], "\(name): threadID")
+        }
+    }
+
     // MARK: Fixture decoding helpers
+
+    private var durableFixtureScope: GaryxGatewayScope {
+        GaryxGatewayScope(identity: "fixture-gateway", epoch: 1)
+    }
+
+    private var durableFixtureEntryID: GaryxComposerPayloadEntryID {
+        GaryxComposerPayloadEntryID(rawValue: "fixture-entry")
+    }
+
+    private func makeDurableDeliveryRecord(
+        id: String = "delivery",
+        correlationID: String = "intent-original",
+        envelope: GaryxDeliveryEnvelope? = nil
+    ) -> GaryxDeliveryRecord {
+        GaryxDeliveryRecord(
+            id: .init(rawValue: id),
+            scope: durableFixtureScope,
+            entryID: durableFixtureEntryID,
+            reservationID: .init(rawValue: 1),
+            correlationID: correlationID,
+            envelope: envelope ?? .init(
+                text: "fixture message",
+                attachmentIDs: [],
+                generation: 1,
+                clientIntentID: correlationID
+            )
+        )
+    }
+
+    private func applyDurableDeliveryAction(
+        _ action: String,
+        records: inout [String: GaryxDeliveryRecord],
+        label: String
+    ) throws {
+        guard var delivery = records["delivery"] else {
+            return XCTFail("\(label): original delivery missing")
+        }
+        switch action {
+        case "attempt":
+            XCTAssertTrue(delivery.markTransportAttempted(), label)
+            records["delivery"] = delivery
+        case "ambiguous":
+            XCTAssertTrue(delivery.markAmbiguous(), label)
+            records["delivery"] = delivery
+        case "acknowledge":
+            delivery.recordServerAcknowledgement()
+            records["delivery"] = delivery
+        case "evidence", "evidenceOtherScope":
+            var keyed = Dictionary(uniqueKeysWithValues: records.map {
+                (GaryxDeliveryRecordID(rawValue: $0.key), $0.value)
+            })
+            let source = action == "evidence"
+                ? durableFixtureScope
+                : GaryxGatewayScope(identity: "other-gateway", epoch: 1)
+            let disposition = GaryxDeliveryEvidenceIngress.acknowledge(
+                correlationID: "intent-original",
+                authenticatedScope: source,
+                records: &keyed
+            )
+            if action == "evidenceOtherScope" {
+                XCTAssertEqual(disposition, .rejectedAuthenticationSource, label)
+            } else if case .updated = disposition {
+                // Expected.
+            } else {
+                XCTFail("\(label): evidence was not accepted: \(disposition)")
+            }
+            records = Dictionary(uniqueKeysWithValues: keyed.map {
+                ($0.key.rawValue, $0.value)
+            })
+        case "restoreDraft":
+            var conflict = GaryxPayloadConflictSet(
+                id: .init(rawValue: "fixture-conflict"),
+                scope: durableFixtureScope
+            )
+            let disposition = GaryxDeliveryDraftRecoveryReducer.restore(
+                record: &delivery,
+                conflictSet: &conflict,
+                candidate: .init(
+                    entryID: .init(rawValue: "fixture-recovered-entry"),
+                    label: "Recovered send"
+                ),
+                membershipDurabilityAvailable: true
+            )
+            guard case .restored = disposition else {
+                return XCTFail("\(label): restore was rejected: \(disposition)")
+            }
+            records["delivery"] = delivery
+        case "resendCopy":
+            let copyID = GaryxDeliveryRecordID(rawValue: "delivery-copy")
+            guard let envelope = delivery.resendAsDuplicate(
+                newRecordID: copyID,
+                newClientIntentID: "intent-copy"
+            ) else {
+                return XCTFail("\(label): duplicate resend was rejected")
+            }
+            records["delivery"] = delivery
+            records["delivery-copy"] = makeDurableDeliveryRecord(
+                id: copyID.rawValue,
+                correlationID: "intent-copy",
+                envelope: envelope
+            )
+        case "scopeRevoke":
+            for key in records.keys {
+                var record = records[key]
+                record?.settleForScopeRevoke()
+                records[key] = record
+            }
+        default:
+            XCTFail("\(label): unsupported durable delivery action \(action)")
+        }
+    }
+
+    private func assertDurableDelivery(
+        _ record: GaryxDeliveryRecord,
+        expected: [String: Any],
+        label: String
+    ) {
+        XCTAssertEqual(record.phase.rawValue, expected["state"] as? String, "\(label): state")
+        XCTAssertEqual(record.evidence.rawValue, expected["evidence"] as? String, "\(label): evidence")
+        XCTAssertEqual(
+            record.userDisposition.rawValue,
+            expected["userDisposition"] as? String,
+            "\(label): userDisposition"
+        )
+        XCTAssertEqual(record.envelope != nil, expected["envelopePresent"] as? Bool, "\(label): envelope")
+        if expected.keys.contains("duplicateRecordID") {
+            assertNullableString(
+                record.duplicateRecordID?.rawValue,
+                expected["duplicateRecordID"],
+                "\(label): duplicateRecordID"
+            )
+        }
+        if expected.keys.contains("clientIntentID") {
+            assertNullableString(
+                record.envelope?.clientIntentID,
+                expected["clientIntentID"],
+                "\(label): clientIntentID"
+            )
+        }
+    }
 
     private func machineAction(
         from raw: [String: Any],

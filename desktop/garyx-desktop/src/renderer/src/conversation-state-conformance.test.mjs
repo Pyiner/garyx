@@ -33,6 +33,7 @@ const states = loadSpecJson('states.json');
 const machineFixtures = loadSpecJson('scenarios/machine.json');
 const activityFixtures = loadSpecJson('scenarios/activity.json');
 const functionFixtures = loadSpecJson('scenarios/function-cases.json');
+const durableDeliveryFixtures = loadSpecJson('scenarios/durable-delivery.json');
 
 test('enum vocabularies match the shared schema', () => {
   assert.deepEqual([...INTENT_STATES], states.intentState);
@@ -42,6 +43,14 @@ test('enum vocabularies match the shared schema', () => {
   assert.deepEqual([...LIVE_STREAM_STATUSES], states.liveStreamStatus);
   assert.deepEqual([...TRANSCRIPT_ENTRY_STATES], states.transcriptEntryState);
   assert.deepEqual([...COMPOSER_PHASES], states.composerPhase);
+});
+
+test('durable delivery fixtures reserve the canonical Mac follow-up', () => {
+  assert.equal(durableDeliveryFixtures.platformConsumers.ios, 'implemented');
+  assert.equal(durableDeliveryFixtures.platformConsumers.mac, 'p0_g_follow_up');
+  assert.ok(durableDeliveryFixtures.scenarios.length > 0);
+  assert.ok(durableDeliveryFixtures.createScenarios.length > 0);
+  assert.ok(states.durableDeliveryState.length > 0);
 });
 
 function buildFixtureIntent(raw) {

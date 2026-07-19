@@ -248,7 +248,9 @@ public struct GaryxDeliveryEnvelope: Equatable, Codable, Sendable {
     }
 }
 
-public enum GaryxDeliveryRecordPhase: String, CaseIterable, Codable, Sendable {
+/// Canonical cross-platform durable-send lifecycle. Raw values are persisted
+/// and must match `spec/conversation-state/states.json` exactly.
+public enum GaryxDurableDeliveryState: String, CaseIterable, Codable, Sendable {
     case notDispatched
     case transportAttempted
     case ambiguous
@@ -280,13 +282,17 @@ public enum GaryxDeliveryRecordPhase: String, CaseIterable, Codable, Sendable {
     }
 }
 
-public enum GaryxDeliveryEvidence: String, Codable, Sendable {
+/// Source-compatible name retained for delivery-protocol call sites. New
+/// cross-platform surfaces should use `GaryxDurableDeliveryState`.
+public typealias GaryxDeliveryRecordPhase = GaryxDurableDeliveryState
+
+public enum GaryxDeliveryEvidence: String, CaseIterable, Codable, Sendable {
     case none
     case transportAttempted
     case serverAcknowledged
 }
 
-public enum GaryxDeliveryUserDisposition: String, Codable, Sendable {
+public enum GaryxDeliveryUserDisposition: String, CaseIterable, Codable, Sendable {
     case none
     case restoredToDraft
     case resentAsDuplicate
@@ -950,7 +956,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
 
 // MARK: - Multi-stage create delivery
 
-public enum GaryxCreateDeliveryPhase: String, Codable, Sendable {
+public enum GaryxCreateDeliveryPhase: String, CaseIterable, Codable, Sendable {
     case createPending
     case threadCreated
     case bindingCompleted
@@ -1077,7 +1083,7 @@ public struct GaryxCreateDeliveryState: Equatable, Codable, Sendable {
     }
 }
 
-public enum GaryxCreateAmbiguousDisposition: String, Codable, Sendable {
+public enum GaryxCreateAmbiguousDisposition: String, CaseIterable, Codable, Sendable {
     case none
     case restoredToDraft
     case rebuildMayCreateDuplicateThread

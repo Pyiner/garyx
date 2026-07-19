@@ -15,9 +15,14 @@ without updating this document and the shared fixtures.
   tests assert this.
 - `spec/conversation-state/scenarios/*.json`: shared behavior fixtures
   (action sequences with expected state snapshots). Both platforms run the
-  same fixture files:
+  established message-machine fixture files:
   - Desktop: `desktop/garyx-desktop/src/renderer/src/conversation-state-conformance.test.mjs`
   - iOS: `mobile/garyx-mobile/Tests/GaryxMobileCoreTests/GaryxConversationStateConformanceTests.swift`
+- `spec/conversation-state/scenarios/durable-delivery.json`: the shared
+  durable-send and multi-stage-create fixture definition. iOS consumes it in
+  the conformance suite now. Mac consumption is the explicit P0-G alignment
+  follow-up; the fixture marks that rollout state and Mac must implement the
+  same transitions rather than introduce a second vocabulary.
 - There is no cross-language code generation. Implementations are
   hand-written; the fixtures are the drift guard. When behavior changes,
   change the fixtures first, then make both implementations pass.
@@ -92,6 +97,46 @@ so reconciles do not churn list row identity.
 
 `empty`, `editing`, `ime_composing`, `locked`. Derived purely:
 locked wins, then IME composition, then text presence.
+
+### DurableDeliveryState
+
+`DurableDeliveryState` is the client-side durable outbox lifecycle. It is
+orthogonal to `IntentState`: an intent describes the visible chat/run flow,
+while this state proves what can safely happen after storage failure, process
+death, logout, or a lost transport response.
+
+| State | Meaning |
+| --- | --- |
+| `notDispatched` | Envelope is durable and transport has not crossed its attempt gate. Safe to retry. |
+| `transportAttempted` | The attempt marker committed before transport; the response is not yet known. A relaunch promotes this to `ambiguous`. |
+| `ambiguous` | The gateway may have accepted the send. Only evidence or an explicit user exit may settle it. |
+| `acknowledged` | Authenticated origin evidence claimed the send. |
+| `cancelledByDiscard` | An unattempted send was cancelled by payload/scope discard. |
+| `evidence` | An attempted send lost its payload owner, but bounded correlation evidence remains. |
+| `terminalEvidence` | An acknowledged send was reduced to its bounded evidence tombstone. |
+| `abandoned` | The user restored the ambiguous envelope through a payload conflict set. |
+| `supersededByDuplicate` | The user explicitly created a duplicate-risk copy with a new client intent ID. |
+
+The state carries two independent axes whose raw values are also canonical:
+
+- `DurableDeliveryEvidence`: `none`, `transportAttempted`,
+  `serverAcknowledged`.
+- `DurableDeliveryUserDisposition`: `none`, `restoredToDraft`,
+  `resentAsDuplicate`, `scopeRevoked`, `payloadDiscarded`.
+
+Authenticated delivery evidence accepts only `(scope, correlationID)` and no
+message body. Evidence arriving after a user exit advances the evidence axis
+without undoing the user's disposition. Scope revocation settles every record
+by its own state and preserves only bounded evidence for attempted sends.
+
+Multi-stage conversation creation uses the companion canonical vocabularies
+`durableCreateDeliveryPhase` and `durableCreateUserDisposition` from
+`states.json`. `createPending`, `threadCreated`, optional `bindingCompleted`,
+and `chatStartAttempted` are separately durable. Losing any response is
+honestly `ambiguous`; in particular, a lost create response does not promise
+that no server-side conversation exists. Restoring the payload or rebuilding
+with an explicit duplicate warning are the two user-terminal exits until the
+P0-G gateway uniqueness/query contract exists.
 
 ## Machine Semantics
 
@@ -235,6 +280,11 @@ for the derived activity model. `input.messages` entries are
 
 `scenarios/function-cases.json` — table cases for `findPendingAckIntentIndex`,
 `shouldTrackProviderAckAfterStreamInputResponse`, and `nextComposerPhase`.
+
+`scenarios/durable-delivery.json` — action sequences and exact snapshots for
+the durable delivery record and multi-stage create record. `platformConsumers`
+is rollout metadata, not permission to diverge: iOS is implemented in the
+current slice and Mac is the P0-G consumption follow-up.
 
 When adding behavior: extend the fixtures in the same change, and keep both
 conformance suites green (`npm run test:unit` in `desktop/garyx-desktop`,

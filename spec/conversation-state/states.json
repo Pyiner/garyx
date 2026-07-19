@@ -43,5 +43,42 @@
     "error",
     "interrupted"
   ],
-  "composerPhase": ["empty", "editing", "ime_composing", "locked"]
+  "composerPhase": ["empty", "editing", "ime_composing", "locked"],
+  "durableDeliveryState": [
+    "notDispatched",
+    "transportAttempted",
+    "ambiguous",
+    "acknowledged",
+    "cancelledByDiscard",
+    "evidence",
+    "terminalEvidence",
+    "abandoned",
+    "supersededByDuplicate"
+  ],
+  "durableDeliveryEvidence": [
+    "none",
+    "transportAttempted",
+    "serverAcknowledged"
+  ],
+  "durableDeliveryUserDisposition": [
+    "none",
+    "restoredToDraft",
+    "resentAsDuplicate",
+    "scopeRevoked",
+    "payloadDiscarded"
+  ],
+  "durableCreateDeliveryPhase": [
+    "createPending",
+    "threadCreated",
+    "bindingCompleted",
+    "chatStartAttempted",
+    "acknowledged",
+    "ambiguous"
+  ],
+  "durableCreateUserDisposition": [
+    "none",
+    "restoredToDraft",
+    "rebuildMayCreateDuplicateThread",
+    "scopeRevoked"
+  ]
 }

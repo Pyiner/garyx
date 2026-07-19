@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "platformConsumers": {
+    "ios": "implemented",
+    "mac": "p0_g_follow_up"
+  },
+  "scenarios": [
+    {
+      "name": "sealed delivery remains safe before dispatch",
+      "actions": [],
+      "expect": {
+        "delivery": {
+          "state": "notDispatched",
+          "evidence": "none",
+          "userDisposition": "none",
+          "envelopePresent": true
+        }
+      }
+    },
+    {
+      "name": "lost transport response becomes ambiguous",
+      "actions": ["attempt", "ambiguous"],
+      "expect": {
+        "delivery": {
+          "state": "ambiguous",
+          "evidence": "transportAttempted",
+          "userDisposition": "none",
+          "envelopePresent": true
+        }
+      }
+    },
+    {
+      "name": "late evidence automatically acknowledges ambiguity",
+      "actions": ["attempt", "ambiguous", "evidence"],
+      "expect": {
+        "delivery": {
+          "state": "acknowledged",
+          "evidence": "serverAcknowledged",
+          "userDisposition": "none",
+          "envelopePresent": false
+        }
+      }
+    },
+    {
+      "name": "restored draft keeps its disposition when evidence arrives",
+      "actions": ["attempt", "ambiguous", "restoreDraft", "evidence"],
+      "expect": {
+        "delivery": {
+          "state": "abandoned",
+          "evidence": "serverAcknowledged",
+          "userDisposition": "restoredToDraft",
+          "envelopePresent": false
+        }
+      }
+    },
+    {
+      "name": "duplicate-risk resend has a fresh correlation",
+      "actions": ["attempt", "ambiguous", "resendCopy", "evidence"],
+      "expect": {
+        "delivery": {
+          "state": "supersededByDuplicate",
+          "evidence": "serverAcknowledged",
+          "userDisposition": "resentAsDuplicate",
+          "envelopePresent": false,
+          "duplicateRecordID": "delivery-copy"
+        },
+        "delivery-copy": {
+          "state": "notDispatched",
+          "evidence": "none",
+          "userDisposition": "none",
+          "envelopePresent": true,
+          "clientIntentID": "intent-copy"
+        }
+      }
+    },
+    {
+      "name": "evidence from another authenticated scope is rejected",
+      "actions": ["attempt", "ambiguous", "evidenceOtherScope"],
+      "expect": {
+        "delivery": {
+          "state": "ambiguous",
+          "evidence": "transportAttempted",
+          "userDisposition": "none",
+          "envelopePresent": true
+        }
+      }
+    },
+    {
+      "name": "scope revoke cancels an unattempted delivery",
+      "actions": ["scopeRevoke"],
+      "expect": {
+        "delivery": {
+          "state": "cancelledByDiscard",
+          "evidence": "none",
+          "userDisposition": "scopeRevoked",
+          "envelopePresent": false
+        }
+      }
+    },
+    {
+      "name": "scope revoke retains attempted correlation evidence",
+      "actions": ["attempt", "scopeRevoke", "evidence"],
+      "expect": {
+        "delivery": {
+          "state": "evidence",
+          "evidence": "serverAcknowledged",
+          "userDisposition": "scopeRevoked",
+          "envelopePresent": false
+        }
+      }
+    },
+    {
+      "name": "scope revoke terminals an acknowledged delivery",
+      "actions": ["attempt", "acknowledge", "scopeRevoke"],
+      "expect": {
+        "delivery": {
+          "state": "terminalEvidence",
+          "evidence": "serverAcknowledged",
+          "userDisposition": "scopeRevoked",
+          "envelopePresent": false
+        }
+      }
+    }
+  ],
+  "createScenarios": [
+    {
+      "name": "create response can be lost without a thread identifier",
+      "actions": ["responseLost"],
+      "expect": {
+        "phase": "ambiguous",
+        "ambiguousAfter": "createPending",
+        "userDisposition": "none",
+        "threadID": null
+      }
+    },
+    {
+      "name": "binding response loss retains the known thread",
+      "actions": ["created", "responseLost"],
+      "expect": {
+        "phase": "ambiguous",
+        "ambiguousAfter": "threadCreated",
+        "userDisposition": "none",
+        "threadID": "thread-1"
+      }
+    },
+    {
+      "name": "chat acknowledgement claims a previously ambiguous attempt",
+      "actions": ["created", "bound", "chatAttempted", "responseLost", "acknowledged"],
+      "expect": {
+        "phase": "acknowledged",
+        "ambiguousAfter": null,
+        "userDisposition": "none",
+        "threadID": "thread-1"
+      }
+    },
+    {
+      "name": "scope revoke terminals an unfinished create correlation",
+      "actions": ["created", "bound", "scopeRevoke"],
+      "expect": {
+        "phase": "ambiguous",
+        "ambiguousAfter": "bindingCompleted",
+        "userDisposition": "scopeRevoked",
+        "threadID": "thread-1"
+      }
+    }
+  ]
+}
