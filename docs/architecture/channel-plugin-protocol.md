@@ -198,7 +198,7 @@ Reuses JSON-RPC's reserved range plus our own:
 | -32003 | HostShuttingDown | Host is tearing down. |
 | -32004 | PluginShuttingDown | Plugin is tearing down. |
 | -32005 | ConfigRejected | Lifecycle-time config refusal. Emitted from `initialize` / `describe` when the plugin refuses the entire account config set (protocol version mismatch, schema upgrade required, unsupported manifest capability, etc.). Fatal for that plugin instance until the operator acts. |
-| -32006 | Busy | Retryable: receiver is at capacity (e.g. host at `max_inflight_inbound`, §11.2). Caller should back off and retry. |
+| -32006 | Busy | Retryable: receiver is at capacity. Shipped emitter: the plugin self-replace swap barrier (§9.4) with a `retry_after_ms` hint; `max_inflight_inbound` capacity rejection is reserved (§11.2). Caller should back off and retry. |
 | -32007 | ChannelConfigRejected | Per-message config refusal from `dispatch_outbound` (e.g. `account_id` disabled since initialize, target chat_id no longer valid). Non-fatal; the host surfaces it as `ChannelError::Config` and the caller's retry policy decides. Distinct from `-32005` so the supervisor does not mistake a bad outbound target for a broken plugin. |
 | -32008 | PayloadTooLarge | Fatal, non-retryable: frame exceeds `max_frame_bytes` or inline attachment exceeds its cap (§11.2). Sender MUST split or spill before retrying, never retry verbatim. Kept distinct from `-32006 Busy` because the retry policy is the opposite. |
 
@@ -1448,19 +1448,25 @@ the one place copy needs to be maintained.
 
 ### 11.2 Backpressure and payload limits
 
-Declared at the transport layer, enforced by both sides:
+Declared at the transport layer. **Only the frame-size limit is
+enforced by the shipped host**; the other three rows are reserved
+protocol surface — the manifest fields parse, but no runtime
+enforcement exists yet:
 
-| Limit | Default | Override |
-|---|---|---|
-| Max JSON-RPC frame size | 8 MiB | `[runtime].max_frame_bytes` in manifest; host caps at 64 MiB regardless. |
-| Max concurrent in-flight `deliver_inbound` per plugin | 32 | `[runtime].max_inflight_inbound`. |
-| Max queued `inbound/stream_frame` per stream | 256 | Fixed; drop with `inbound/stream_end` error beyond. |
-| Max inline image bytes per `deliver_inbound` | 4 MiB | Fixed. |
+| Limit | Default | Override | Status |
+|---|---|---|---|
+| Max JSON-RPC frame size | 8 MiB | `[runtime].max_frame_bytes` in manifest; host caps at 64 MiB regardless. | **Enforced** (codec layer, `-32008 PayloadTooLarge`). |
+| Max concurrent in-flight `deliver_inbound` per plugin | 32 | `[runtime].max_inflight_inbound`. | Reserved — parsed from the manifest, not consumed; the shipped host accepts unbounded concurrent inbound. |
+| Max queued `inbound/stream_frame` per stream | 256 | Fixed; drop with `inbound/stream_end` error beyond. | Reserved — the shipped stream callback queue is unbounded and never emits an error terminal (§7.1 Shipped status values). |
+| Max inline image bytes per `deliver_inbound` | 4 MiB | Fixed. | Reserved — inline images are copied through without a size check; only the whole-frame limit above applies. |
 
-When a plugin exceeds in-flight inbound, the host responds to the 33rd
-request with `{ code: -32006, message: "Busy" }`. The plugin should
-queue/retry on its side (most pull channels do this naturally via
-unacked messages).
+Reserved semantics, for when enforcement lands: a plugin exceeding
+in-flight inbound would get `{ code: -32006, message: "Busy" }` on the
+33rd request and should queue/retry on its side (most pull channels do
+this naturally via unacked messages). Plugins MUST already tolerate
+`-32006 Busy` from `deliver_inbound` today: the shipped host emits it
+during a plugin self-replace swap barrier (§9.4 / Architecture C),
+with a `retry_after_ms` hint in the message.
 
 **Normative rule for large media.** The host does not buffer beyond
 the transport pipe. Plugins delivering inbound messages with media
