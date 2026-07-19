@@ -317,6 +317,13 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // A root controller can enter a visible UIWindow without receiving a
+        // synchronous appearance callback (notably during scene restoration
+        // and app-host tests). Keep the public recognizers in the shared
+        // window failure graph as soon as layout proves that host exists.
+        if let window = view.window {
+            installEdgeRecognizers(on: window)
+        }
         updateRecognizerEdges()
         rederiveWrapperGeometry()
     }

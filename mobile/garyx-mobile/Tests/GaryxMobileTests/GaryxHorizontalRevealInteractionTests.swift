@@ -27,6 +27,57 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         )
     }
 
+    func testFullAndShortTravelSettlesMatchEvery120HzAnalyticFrame() throws {
+        let scenarios: [(
+            projection: GaryxMotionPhysics.ProjectionPolicy,
+            extent: CGFloat,
+            reveal: CGFloat,
+            velocity: CGFloat
+        )] = [
+            (.fullScreenNavigation, 330, 60, 300),
+            (.shortTravelDismiss, 106, 18, 220),
+        ]
+        let curve = GaryxRouteTransitionCalibration.settleCurve
+        let frameInterval = 1.0 / 120.0
+
+        for scenario in scenarios {
+            let harness = Harness(projection: scenario.projection)
+            harness.store.configure(extent: scenario.extent, restingPosition: .closed)
+            harness.store.beginGesture()
+            harness.store.updateGesture(logicalTranslation: scenario.reveal)
+            XCTAssertEqual(harness.store.endGesture(logicalVelocity: scenario.velocity), .open)
+
+            let trajectory = GaryxMotionPhysics.SettleTrajectory(
+                initialValue: scenario.reveal,
+                targetValue: scenario.extent,
+                initialVelocity: scenario.velocity,
+                curve: curve
+            )
+            let frameCount = Int(ceil(curve.settlingDuration / frameInterval))
+            for frame in 1...frameCount {
+                harness.advance(by: frameInterval)
+                let elapsed = Double(frame) * frameInterval
+                if elapsed >= curve.settlingDuration {
+                    XCTAssertEqual(harness.store.reveal, scenario.extent, accuracy: 1e-8)
+                    XCTAssertEqual(harness.store.presentation.phase, .idle)
+                } else {
+                    let expected = trajectory.sample(elapsedTime: elapsed)
+                    XCTAssertEqual(
+                        harness.store.reveal,
+                        GaryxHorizontalRevealState.rubberBandedReveal(
+                            expected.value,
+                            extent: scenario.extent
+                        ),
+                        accuracy: 1e-8,
+                        "frame \(frame), projection \(scenario.projection)"
+                    )
+                    XCTAssertEqual(harness.store.presentation.phase, .settling(.open))
+                }
+            }
+            XCTAssertFalse(harness.frames.isRunning)
+        }
+    }
+
     func testSettleRegrabAdoptsDrawnValueAndCanReverseTarget() throws {
         let harness = Harness(projection: .fullScreenNavigation)
         harness.store.configure(extent: 320, restingPosition: .closed)

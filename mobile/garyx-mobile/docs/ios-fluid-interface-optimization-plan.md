@@ -21,7 +21,7 @@
 |---|---|---|---|
 | 1 | §5 速度交接 | 松手后速度只用来**判定**去哪，settle 一律播固定 spring，drag→动画有可感的"缝" | 高 |
 | 2 | §9 rubber-band | **全 app 零处**，边界一律硬 clamp | 高 |
-| 3 | §3 可中断 | drag 被 gate 挡住不能中途再抓（`canStartOpeningDrag` 等） | 中 |
+| 3 | §3 可中断 | drag 被旧 opening gate 挡住不能中途再抓 | 中 |
 | 4 | §14 reduceTransparency | 中央玻璃 modifier `GaryxAdaptiveGlassModifier` **无分支**，全部 chrome 在开启后仍是全玻璃 | 高（无障碍硬伤） |
 | 5 | §15 Dynamic Type | `GaryxFont` 全语义角色固定 point size（117 处 + 20 处裸 `.system(size:)`），阅读面不随用户字号缩放 | 高 |
 | 6 | §4 spring 纪律 | ~28 处魔法数 ease + 13 处散落 spring；两个**完全相同**的 morph 参数 enum 重复定义 | 中 |

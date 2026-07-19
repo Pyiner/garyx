@@ -229,6 +229,22 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["Back"].exists)
     }
 
+    func testTaskTreeUsesPhysicalTrailingEdgeInRTL() {
+        let app = launchProductionConversation(taskTreeFixture: true, rtl: true)
+        dragTrailingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.78,
+            rtl: true
+        )
+
+        let taskTreeTitle = app.staticTexts["Task tree"]
+        XCTAssertTrue(taskTreeTitle.waitForExistence(timeout: 5))
+        dragTaskTreeClosed(in: app, rtl: true)
+        XCTAssertFalse(taskTreeTitle.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Back"].exists)
+    }
+
     func testSlowMotionFramesMatchFrozenSystemGeometry() {
         let app = launchFakeRoutes(depth: 2)
         let button = app.buttons["fluid.fake.slow-motion"]
@@ -339,7 +355,8 @@ final class FluidRouteStackInteractionTests: XCTestCase {
 
     private func launchProductionConversation(
         automaticallyRegrabs: Bool = false,
-        taskTreeFixture: Bool = false
+        taskTreeFixture: Bool = false,
+        rtl: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
@@ -350,6 +367,7 @@ final class FluidRouteStackInteractionTests: XCTestCase {
             ? "1"
             : "0"
         app.launchEnvironment["GARYX_MOBILE_A5_TASK_TREE_FIXTURE"] = taskTreeFixture ? "1" : "0"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_RTL"] = rtl ? "1" : "0"
         app.launch()
         XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["production.route.status"].waitForExistence(timeout: 10))

@@ -113,6 +113,35 @@ final class HomeChromeInteractionTests: XCTestCase {
         XCTAssertFalse(app.buttons["Back"].exists)
     }
 
+    func testThreadSwipeCancelSettleCanBeRegrabbed() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 7"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "regrabbable unpinned thread row")
+
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let start = origin.withOffset(
+            CGVector(dx: app.frame.width * 0.72, dy: row.frame.midY)
+        )
+        let shortRelease = origin.withOffset(
+            CGVector(dx: app.frame.width * 0.72 - 52, dy: row.frame.midY)
+        )
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: shortRelease,
+            withVelocity: XCUIGestureVelocity(rawValue: 40),
+            thenHoldForDuration: 0
+        )
+
+        // The 52 pt slow release projects closed. A new touch at the settle
+        // boundary must remain eligible and drive the same row open.
+        row.swipeLeft(velocity: .fast)
+
+        XCTAssertTrue(app.buttons["Pin thread"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Favorite thread"].isHittable)
+        XCTAssertTrue(app.buttons["Archive thread"].isHittable)
+        XCTAssertFalse(app.buttons["Back"].exists)
+    }
+
     func testThresholdLongPressPresentsMenuWithoutOpeningThread() throws {
         let app = launchHome(useScrollFixture: true)
         let row = app.staticTexts["Synthetic thread 7"].firstMatch
