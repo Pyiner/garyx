@@ -54,7 +54,6 @@ struct GaryxChromeMorphSurface<Content: View>: View {
             .garyxAdaptiveGlass(
                 .regular,
                 isInteractive: false,
-                fallbackMaterial: .ultraThinMaterial,
                 in: shape
             )
             .clipShape(shape)

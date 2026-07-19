@@ -407,7 +407,7 @@ struct GaryxToolbarIcon: View {
             }
         }
         .frame(width: 44, height: 44)
-        .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
+        .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
         .contentShape(Rectangle())
     }
 }
@@ -422,27 +422,24 @@ struct GaryxCompactGlassIcon: View {
             .font(GaryxFont.system(size: iconSize, weight: .medium))
             .foregroundStyle(.primary)
             .frame(width: diameter, height: diameter)
-            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
             .contentShape(Rectangle())
     }
 }
 
 struct GaryxGlassPanel<Content: View>: View {
     var cornerRadius: CGFloat = 24
-    var fallbackMaterial: Material = .ultraThinMaterial
     var tint: Color? = Color(.systemBackground).opacity(0.96)
     var shadowOpacity: Double = 0.055
     private let content: () -> Content
 
     init(
         cornerRadius: CGFloat = 24,
-        fallbackMaterial: Material = .ultraThinMaterial,
         tint: Color? = Color(.systemBackground).opacity(0.96),
         shadowOpacity: Double = 0.055,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.cornerRadius = cornerRadius
-        self.fallbackMaterial = fallbackMaterial
         self.tint = tint
         self.shadowOpacity = shadowOpacity
         self.content = content
@@ -456,7 +453,6 @@ struct GaryxGlassPanel<Content: View>: View {
                 .regular,
                 isInteractive: false,
                 tint: tint,
-                fallbackMaterial: fallbackMaterial,
                 in: shape
             )
             .clipShape(shape)
@@ -513,7 +509,6 @@ struct GaryxGlassSearchField: View {
             .regular,
             isInteractive: true,
             tint: Color(.systemBackground).opacity(0.92),
-            fallbackMaterial: .ultraThinMaterial,
             in: shape
         )
         .overlay {
@@ -547,7 +542,7 @@ struct GaryxHeaderMenuIcon: View {
             .font(GaryxFont.system(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
-            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
             .contentShape(Rectangle())
     }
 }

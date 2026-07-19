@@ -176,7 +176,6 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 .regular,
                 isInteractive: true,
                 tint: Color(.systemBackground).opacity(0.32),
-                fallbackMaterial: .ultraThinMaterial,
                 in: Circle()
             )
         }
@@ -199,7 +198,6 @@ struct GaryxFullscreenImageGalleryPreview: View {
                     .regular,
                     isInteractive: true,
                     tint: Color(.systemBackground).opacity(0.32),
-                    fallbackMaterial: .ultraThinMaterial,
                     in: Circle()
                 )
         }
@@ -217,7 +215,6 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 .regular,
                 isInteractive: false,
                 tint: Color(.systemBackground).opacity(0.32),
-                fallbackMaterial: .ultraThinMaterial,
                 in: Capsule()
             )
             .accessibilityIdentifier("Image saved to Photos")
@@ -233,7 +230,6 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 .regular,
                 isInteractive: false,
                 tint: Color(.systemBackground).opacity(0.32),
-                fallbackMaterial: .ultraThinMaterial,
                 in: Capsule()
             )
             .accessibilityLabel("Image \(selection + 1) of \(sources.count)")

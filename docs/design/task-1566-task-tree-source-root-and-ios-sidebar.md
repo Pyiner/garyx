@@ -1,5 +1,9 @@
 # Task Tree: Source-Thread Root, Done Retention, and iOS Half-Screen Sidebar
 
+> Historical note (2026-07-19): this blueprint and its “current state” refer
+> to the TASK-1566 baseline. P0-A A5 later replaced both drawer gesture
+> implementations with the shared horizontal-reveal state machine.
+
 Design for TASK-1566. One feature plus two tree-logic corrections, designed
 together because they share one data contract:
 
@@ -15,7 +19,7 @@ together because they share one data contract:
 No implementation code in this document; it is the blueprint for a follow-up
 implementation task.
 
-## 1. Verified Current State
+## 1. Historical Verified State
 
 All findings verified in this worktree (main at `9a8e2385`).
 
@@ -106,7 +110,7 @@ already maps them. Only additive fields need mapping changes.
   `simultaneousGesture` + child-control disabling during drags, open threshold
   22%/35% (predicted) of panel width, close threshold 12%/28%, pre-baked
   gradient edge strip instead of `.shadow`, safe-area-outset clip shape,
-  `GaryxMobileMotion.sidebar` spring.
+  the former shared sidebar spring.
 - Design system helpers exist: `garyxAdaptiveGlass(_:in:)`,
   `GaryxAdaptiveGlassContainer`, `garyxPageBackground`,
   `garyxFloatingBottomChrome`, `garyxAdaptiveTopBar`
@@ -294,7 +298,7 @@ Conflict handling:
   `startLocation.x ≤ 24` (left edge) — mutually exclusive with our right-edge
   start zone. While the task sidebar is open, a new
   `GaryxMobileModel.isTaskTreeSidebarOpen` published flag guards the shell's
-  `openingSidebarGesture` `onEnded` action (one-line guard) so a leading-edge
+  shell opening callback (one-line guard) so a leading-edge
   swipe cannot trigger back-navigation underneath the open panel; the swipe
   instead just closes the sidebar via the scrim's closing gesture.
 - **Drawer already dragging:** the existing `garyxSidebarDragActive`
@@ -328,7 +332,7 @@ Conflict handling:
   near-white per the mobile UI rule (glass for chrome, not per-row).
 - Panel content: compact header (title "Task tree", active-count chip when
   > 0, VoiceOver-visible Close button) + scrollable tree + bottom safe-area
-  padding. Motion: `GaryxMobileMotion.sidebar` spring; Reduce Motion →
+  padding. Motion used the former shared sidebar spring; Reduce Motion →
   crossfade + scrim only.
 - Visual details are finalized at implementation time with the
   `garyx-product-ui` skill; this section fixes structure, metrics, and

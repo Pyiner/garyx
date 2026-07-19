@@ -42,11 +42,7 @@ final class GaryxHomeScrollPerformanceProbe: NSObject, ObservableObject {
         os_signpost(.begin, log: log, name: "GaryxHomeScrollProbe", "%{public}s", "\(label)")
         displayLink?.invalidate()
         let link = CADisplayLink(target: self, selector: #selector(stepDisplayLink(_:)))
-        if #available(iOS 15.0, *) {
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
-        } else {
-            link.preferredFramesPerSecond = 60
-        }
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }

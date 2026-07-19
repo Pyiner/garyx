@@ -184,7 +184,7 @@ struct GaryxSecondaryButtonStyle: ButtonStyle {
             .padding(.vertical, 6)
             .padding(.horizontal, 9)
             .frame(minHeight: 44)
-            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .thinMaterial, in: Capsule())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, in: Capsule())
             .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
@@ -212,7 +212,7 @@ struct GaryxIconButtonStyle: ButtonStyle {
             .font(GaryxFont.system(size: 15, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
-            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .thinMaterial, in: Circle())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
             .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
@@ -232,30 +232,19 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
     let style: GaryxAdaptiveGlassStyle
     let isInteractive: Bool
     let tint: Color?
-    let fallbackMaterial: Material
     let shape: S
     let isEnabled: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-#if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            if reduceTransparency {
-                opaqueFallback(content: content)
-            } else {
-                switch style {
-                case .automatic:
-                    content.glassEffect(isEnabled ? .regular : .identity, in: shape)
-                case .regular:
-                    content.glassEffect(resolvedGlass, in: shape)
-                }
-            }
+        if reduceTransparency {
+            opaqueFallback(content: content)
         } else {
-            fallback(content: content)
+            switch style {
+            case .regular:
+                content.glassEffect(resolvedGlass, in: shape)
+            }
         }
-#else
-        fallback(content: content)
-#endif
     }
 
     @ViewBuilder
@@ -275,19 +264,6 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
         }
     }
 
-    @ViewBuilder
-    private func fallback(content: Content) -> some View {
-        if let tint {
-            content.background((isEnabled ? tint : Color.clear), in: shape)
-        } else {
-            content.background {
-                shape.fill(fallbackMaterial).opacity(isEnabled ? 1 : 0)
-            }
-        }
-    }
-
-#if compiler(>=6.2)
-    @available(iOS 26, *)
     private var resolvedGlass: Glass {
         guard isEnabled else { return .identity }
         var glass = Glass.regular
@@ -299,11 +275,9 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
         }
         return glass
     }
-#endif
 }
 
 enum GaryxAdaptiveGlassStyle {
-    case automatic
     case regular
 }
 
@@ -319,21 +293,13 @@ struct GaryxAdaptiveGlassContainer<Content: View>: View {
     }
 
     var body: some View {
-#if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            if reduceTransparency {
-                content()
-            } else {
-                GlassEffectContainer(spacing: spacing) {
-                    content()
-                }
-            }
-        } else {
+        if reduceTransparency {
             content()
+        } else {
+            GlassEffectContainer(spacing: spacing) {
+                content()
+            }
         }
-#else
-        content()
-#endif
     }
 }
 
@@ -341,15 +307,7 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
     let edges: Edge.Set
 
     func body(content: Content) -> some View {
-#if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            content.scrollEdgeEffectStyle(.soft, for: edges)
-        } else {
-            content
-        }
-#else
-        content
-#endif
+        content.scrollEdgeEffectStyle(.soft, for: edges)
     }
 }
 
@@ -439,15 +397,10 @@ extension View {
             }
     }
 
-    func garyxAdaptiveGlass(_ style: GaryxAdaptiveGlassStyle, in shape: some Shape) -> some View {
-        garyxAdaptiveGlass(style, isInteractive: false, tint: nil, fallbackMaterial: .thinMaterial, in: shape)
-    }
-
     func garyxAdaptiveGlass(
         _ style: GaryxAdaptiveGlassStyle,
         isInteractive: Bool,
         tint: Color? = nil,
-        fallbackMaterial: Material = .thinMaterial,
         in shape: some Shape,
         isEnabled: Bool = true
     ) -> some View {
@@ -456,15 +409,10 @@ extension View {
                 style: style,
                 isInteractive: isInteractive,
                 tint: tint,
-                fallbackMaterial: fallbackMaterial,
                 shape: shape,
                 isEnabled: isEnabled
             )
         )
-    }
-
-    func garyxAdaptiveGlass(in shape: some Shape) -> some View {
-        garyxAdaptiveGlass(.automatic, isInteractive: false, tint: nil, fallbackMaterial: .thinMaterial, in: shape)
     }
 
     func garyxAdaptiveSoftScrollEdge(for edges: Edge.Set) -> some View {

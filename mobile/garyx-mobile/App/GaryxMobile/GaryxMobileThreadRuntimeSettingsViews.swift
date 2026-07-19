@@ -852,7 +852,7 @@ struct GaryxThreadBotBindingSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                    GaryxGlassPanel(cornerRadius: 28, shadowOpacity: 0.045) {
                         VStack(spacing: 0) {
                             if !selectableGroups.isEmpty || boundBot != nil {
                                 botOptionRow(

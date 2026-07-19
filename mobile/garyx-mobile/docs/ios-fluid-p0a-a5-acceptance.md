@@ -171,7 +171,7 @@ done
   'GaryxMobileMotion\.row''Swipe|predictedEnd''Translation|withAnimation\([^)]*row''Swipe|interactive''Spring\(' \
   App/GaryxMobile/GaryxMobileListComponents.swift
 ! rg -n \
-  'sidebarDragOffset|sidebarDragAxis|sidebarDragLive|taskTreeDragOffset|taskTreeDragAxis|taskTreeDragLive|resetSidebarDrag|resetDrag\(\)' \
+  'sidebarDrag''Offset|sidebarDrag''Axis|sidebarDrag''Live|taskTreeDrag''Offset|taskTreeDrag''Axis|taskTreeDrag''Live|resetSidebar''Drag|reset''Drag\(\)' \
   App/GaryxMobile/GaryxMobileViews.swift \
   App/GaryxMobile/GaryxMobileTaskTreeSidebarViews.swift
 ```

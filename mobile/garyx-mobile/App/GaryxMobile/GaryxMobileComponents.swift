@@ -373,7 +373,6 @@ struct GaryxPanelHeaderTitle: View {
             .garyxAdaptiveGlass(
                 .regular,
                 isInteractive: false,
-                fallbackMaterial: .ultraThinMaterial,
                 in: Capsule()
             )
     }

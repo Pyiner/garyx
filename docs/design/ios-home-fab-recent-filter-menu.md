@@ -1,5 +1,9 @@
 # iOS 首页改版:新建线程 FAB + Recent 筛选下拉菜单 + 筛选持久化
 
+> 历史注记（2026-07-19）：本文记录 #TASK-2161 的实施基线。P0-A A6 已按
+> iOS 26-only 政策移除 Glass 的低版本 material 参数；下文组件结构仍是历史
+> 设计记录，示例签名已同步当前 API。
+
 状态:#TASK-2161 综合定稿,实现基准。
 
 修订(2026-07-12,上线后用户决定):移除筛选按钮右上角的 active dot,
@@ -106,8 +110,8 @@ struct GaryxHomeHeaderView: View {
 
 右上角控件由 `Button(plus.bubble)` 换成 `GaryxRecentThreadFilterMenu`
 (§5.2),沿用完全相同的 44pt 玻璃圆治具
-(`garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial:
-.ultraThinMaterial, in: Circle())` + 显式 `.contentShape(Circle())`),
+(`garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())` +
+显式 `.contentShape(Circle())`),
 所以顶栏几何、GlassEffectContainer(spacing: 10) 结构、Reduce Transparency
 的不透明兜底全部不变。
 
@@ -234,8 +238,7 @@ struct GaryxRecentThreadFilterMenu: View {
                     GaryxRecentFilterActiveDot()
                 }
             }
-            .garyxAdaptiveGlass(.regular, isInteractive: true,
-                                fallbackMaterial: .ultraThinMaterial, in: Circle())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
             .contentShape(Circle())
         }
         .menuOrder(.fixed)                       // All 恒在 Chats 上方

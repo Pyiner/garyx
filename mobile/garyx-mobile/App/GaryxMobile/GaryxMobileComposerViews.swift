@@ -315,7 +315,7 @@ struct GaryxComposer: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(GaryxComposerLayout.composerMaterialTint, in: composerCardShape)
             .background(GaryxComposerLayout.composerOcclusionFill, in: composerCardShape)
-            .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: composerCardShape)
+            .garyxAdaptiveGlass(.regular, isInteractive: false, in: composerCardShape)
             .overlay {
                 composerCardShape
                     .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
@@ -380,7 +380,7 @@ struct GaryxComposer: View {
         .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
         .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
         .background(GaryxComposerLayout.workspaceBaseFill, in: workspaceBaseShape)
-        .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: workspaceBaseShape)
+        .garyxAdaptiveGlass(.regular, isInteractive: false, in: workspaceBaseShape)
         .overlay {
             workspaceBaseShape
                 .stroke(GaryxComposerLayout.workspaceBaseHighlight, lineWidth: 0.6)

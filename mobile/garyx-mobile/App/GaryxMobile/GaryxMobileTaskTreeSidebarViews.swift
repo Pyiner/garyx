@@ -151,7 +151,6 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
             .garyxAdaptiveGlass(
                 .regular,
                 isInteractive: false,
-                fallbackMaterial: .ultraThinMaterial,
                 in: Rectangle()
             )
             .clipShape(Rectangle())

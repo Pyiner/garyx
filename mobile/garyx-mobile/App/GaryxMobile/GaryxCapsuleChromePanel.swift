@@ -56,7 +56,6 @@ struct GaryxCapsuleChromeHeaderControl: View {
                 .garyxAdaptiveGlass(
                     .regular,
                     isInteractive: false,
-                    fallbackMaterial: .ultraThinMaterial,
                     in: Capsule(),
                     isEnabled: !isHidden
                 )

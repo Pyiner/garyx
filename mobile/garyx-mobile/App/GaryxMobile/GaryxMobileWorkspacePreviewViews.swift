@@ -113,7 +113,6 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
                         .regular,
                         isInteractive: false,
                         tint: Color(.systemBackground).opacity(0.72),
-                        fallbackMaterial: .ultraThinMaterial,
                         in: Capsule()
                     )
                     .padding(.bottom, 22)
@@ -220,7 +219,6 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
                     .regular,
                     isInteractive: true,
                     tint: Color(.systemBackground).opacity(0.32),
-                    fallbackMaterial: .ultraThinMaterial,
                     in: Circle()
                 )
         }

@@ -140,15 +140,12 @@ final class HomeListScrollPerformanceTests: XCTestCase {
     }
 
     private func scrollMetrics(for app: XCUIApplication) -> [any XCTMetric] {
-        var metrics: [any XCTMetric] = [
+        [
+            XCTHitchMetric(application: app),
             XCTOSSignpostMetric.scrollingAndDecelerationMetric,
             XCTClockMetric(),
-            XCTCPUMetric(application: app)
+            XCTCPUMetric(application: app),
         ]
-        if #available(iOS 26.0, *) {
-            metrics.insert(XCTHitchMetric(application: app), at: 0)
-        }
-        return metrics
     }
 
     private func visibleHomeScrollView(in app: XCUIApplication) -> XCUIElement? {

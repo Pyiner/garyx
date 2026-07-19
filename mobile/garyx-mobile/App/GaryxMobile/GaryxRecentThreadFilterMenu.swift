@@ -27,7 +27,6 @@ struct GaryxRecentThreadFilterMenu: View {
                 .garyxAdaptiveGlass(
                     .regular,
                     isInteractive: true,
-                    fallbackMaterial: .ultraThinMaterial,
                     in: Circle()
                 )
                 .contentShape(Circle())

@@ -6,7 +6,10 @@
 
 ---
 
-## 现状诊断
+## 历史现状诊断
+
+> 历史注记（2026-07-19）：本节记录 2026-07-17 的审计基线，不描述当前
+> P0-A 实现；A1-A5 已完成迁移，逐片与 A6 收官证据见权威设计 §8b。
 
 **好的部分（保持，作为范式推广）：**
 
@@ -37,7 +40,7 @@
 
 ### P0-A 手势物理：速度交接 + rubber-band + 可中断（核心手感批，收益最大）
 
-> **状态（2026-07-18）**：本节为初版审计描述，**权威规格已移至 `ios-fluid-p0a-gesture-physics-design.md`（**版本以该文档内版本史为准**，此处不再记具体号）**——A0 spike 证伪系统手势路线后改为自有导航容器；手势面修正为五处 + image preview 双通道（补 row swipe 与 UIKit bridge）；旧返回语义实态曾为三活一死，现已由 occurrence predecessor 统一替代。**A1/A2 已验收合 main（origin/main 03d999a38）**，A3-A5 等设计 PASS。
+> **状态（2026-07-19）**：本节为初版审计的历史描述，**权威规格与验收索引已移至 `ios-fluid-p0a-gesture-physics-design.md`（版本以该文档内版本史为准）**——A0 spike 证伪系统手势路线后改为自有导航容器；手势面修正为五处 + image preview 双通道（补 row swipe 与 UIKit bridge）；旧返回语义实态曾为三活一死，现已由 occurrence predecessor 统一替代。A1-A5 均已验收并合入 main，A6 执行整批清理收官。
 
 以 `GaryxCapsuleDragDismiss` 的投影模型为蓝本：
 

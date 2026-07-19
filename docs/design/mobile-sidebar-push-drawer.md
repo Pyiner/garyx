@@ -1,11 +1,16 @@
 # Mobile Sidebar Push Drawer Design
 
+> Historical note (2026-07-19): this document records the pre-P0-A A5 drawer
+> implementation and its one-time migration plan. The former app-layer drag
+> helpers and state described below have been removed; current behavior is
+> owned by the shared horizontal-reveal state machine.
+
 ## Goal
 
 Change the compact iOS sidebar from an overlay drawer into a push drawer, and
 allow a left swipe that starts on the visible sidebar to close it.
 
-## Current Implementation
+## Historical Implementation Anchor
 
 `GaryxShellView` owns the mobile shell layout in
 `mobile/garyx-mobile/App/GaryxMobile/GaryxMobileViews.swift`.
@@ -16,7 +21,7 @@ On regular-width layouts it already uses a persistent sidebar:
   `GaryxMainPanelView`.
 - The sidebar is always present and `sidebarVisible` is reset to `false`.
 
-On compact drawer layouts, `drawerBody(width:containerSize:)` currently uses a
+On compact drawer layouts, `drawerBody(width:containerSize:)` then used a
 `ZStack`:
 
 - `GaryxMainPanelView` stays fixed at `x = 0`.
@@ -26,13 +31,13 @@ On compact drawer layouts, `drawerBody(width:containerSize:)` currently uses a
   `offset(x: revealWidth - width)`.
 - A narrow clear strip near the reveal edge also receives the closing drag.
 
-The existing drag state is good and should be reused:
+The former drag state supplied these inputs:
 
-- `sidebarDragOffset` drives interactive progress.
+- A local drag offset drove interactive progress.
 - `sidebarRevealWidth(for:)` normalizes open/closed progress.
-- `openingSidebarGesture(sidebarWidth:)` only opens from the leading edge and
-  delegates nested page behavior through `mainPanelLeadingEdgeAction`.
-- `closingSidebarGesture(sidebarWidth:)` already handles leftward drags with a
+- The opening helper only opened from the leading edge and delegated nested
+  page behavior through the then-current leading-edge action.
+- The closing helper handled leftward drags with a
   horizontal-axis threshold, but it is not attached to the sidebar content.
 
 ## Proposed Layout
@@ -45,11 +50,11 @@ ZStack(alignment: .topLeading) {
     HStack(spacing: 0) {
         GaryxThreadSidebar(showsInlineCloseButton: true)
             .frame(width: width)
-            .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
+            .simultaneousGesture(legacyCloseGesture(sidebarWidth: width))
 
         GaryxMainPanelView()
             .frame(width: containerSize.width, height: containerSize.height)
-            .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
+            .simultaneousGesture(legacyOpenGesture(sidebarWidth: width))
     }
     .frame(width: width + containerSize.width, height: containerSize.height)
     .offset(x: revealWidth - width)
@@ -60,7 +65,7 @@ ZStack(alignment: .topLeading) {
             .offset(x: revealWidth)
             .contentShape(Rectangle())
             .onTapGesture { closeSidebar() }
-            .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
+            .simultaneousGesture(legacyCloseGesture(sidebarWidth: width))
     }
 }
 ```
@@ -81,7 +86,7 @@ still partially visible to the right.
 
 ## Closing Interaction
 
-Attach the existing `closingSidebarGesture(sidebarWidth:)` directly to
+The migration attached the former closing helper directly to
 `GaryxThreadSidebar` with `simultaneousGesture`.
 
 The current axis gate is already appropriate for avoiding vertical-list
@@ -115,7 +120,7 @@ No gateway, routing, or Core data contract changes are needed. The change is
 local SwiftUI composition:
 
 - `sidebarVisible` remains the source of truth for open/closed state.
-- `mainPanelLeadingEdgeAction` remains the guard for right-swipe-open behavior,
+- The then-current leading-edge action remained the right-swipe-open guard,
   preserving the previous rule that the leading gesture matches the current
   page's top-left action.
 - Existing button open, close button, tap-outside close, and leading-edge

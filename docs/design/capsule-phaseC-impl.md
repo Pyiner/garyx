@@ -1,5 +1,9 @@
 # Capsule Phase C — iOS Implementation Design
 
+> Historical note (2026-07-19): this document preserves the Phase C
+> implementation-time baseline. P0-A A4b later replaced the runtime-epoch
+> equality guard described below with scope lifecycle/token ownership.
+
 Scope: iOS only (`mobile/garyx-mobile/`). Gateway Phase A is already on main and exposes protected `/api/capsules*` endpoints. This phase follows `docs/design/capsule.md` §4, §5, §6, and §8.
 
 ## Goals
@@ -159,7 +163,7 @@ func deleteCapsule(_ capsule: GaryxCapsuleSummary) async
 - `openCapsule` selects the capsule via `capsuleHTMLState.select(capsule)`, then calls `loadSelectedCapsuleHTML()`.
 - `loadSelectedCapsuleHTML` checks `capsuleHTMLCache[key]` unless forced. On miss, it calls `capsuleHTML(id:)`, then stores `cache[key] = html` and applies state only if the request is still current and gateway runtime generation still matches.
 - `deleteCapsule` calls `deleteCapsule(id:)`, removes the row locally, removes any memory cache entries for that id, clears selected state if it was open, persists metadata snapshot, and refreshes on failure only through user-visible error.
-- All async methods capture `gatewayRuntimeGeneration` and ignore completions after a gateway/profile switch.
+- At that time, all async methods captured the runtime epoch and ignored completions after a gateway/profile switch.
 
 `App/GaryxMobile/GaryxMobileModel+Navigation.swift`
 

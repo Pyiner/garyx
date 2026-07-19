@@ -237,7 +237,6 @@ struct GaryxConversationView: View {
                                         .garyxAdaptiveGlass(
                                             .regular,
                                             isInteractive: false,
-                                            fallbackMaterial: .ultraThinMaterial,
                                             in: Circle()
                                         )
                                         .allowsHitTesting(false)
@@ -1125,7 +1124,6 @@ private struct GaryxThreadRuntimeHeaderControl: View {
                 .garyxAdaptiveGlass(
                     .regular,
                     isInteractive: false,
-                    fallbackMaterial: .ultraThinMaterial,
                     in: Capsule(),
                     isEnabled: !isHidden
                 )
@@ -1164,37 +1162,26 @@ private extension View {
     /// layout pass and keeps the tail pinned through content growth while
     /// positioned there — no post-load programmatic scroll-down. The
     /// alignment role is deliberately not anchored so short conversations
-    /// keep starting at the top. Before iOS 18 the scroll state machine's
-    /// retry chain remains the only mechanism.
-    @ViewBuilder
+    /// keep starting at the top.
     func garyxBottomAnchoredTranscript() -> some View {
-        if #available(iOS 18.0, *) {
-            self
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        } else {
-            self
-        }
+        self
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .sizeChanges)
     }
 
     /// Reports whether the reader's gesture currently drives the scroll
     /// view (finger down or fling decelerating). Programmatic phases do not
-    /// count. No-op before iOS 18, where the scroll phase API is missing.
-    @ViewBuilder
+    /// count.
     func garyxUserScrollInteraction(_ onChange: @escaping (Bool) -> Void) -> some View {
-        if #available(iOS 18.0, *) {
-            onScrollPhaseChange { _, newPhase in
-                switch newPhase {
-                case .tracking, .interacting, .decelerating:
-                    onChange(true)
-                case .idle, .animating:
-                    onChange(false)
-                @unknown default:
-                    onChange(false)
-                }
+        onScrollPhaseChange { _, newPhase in
+            switch newPhase {
+            case .tracking, .interacting, .decelerating:
+                onChange(true)
+            case .idle, .animating:
+                onChange(false)
+            @unknown default:
+                onChange(false)
             }
-        } else {
-            self
         }
     }
 }

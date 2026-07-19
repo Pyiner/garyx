@@ -1,5 +1,9 @@
 # Mobile View Tasks Source-Thread Filter Design
 
+> Historical note (2026-07-19): this is the implementation-time baseline.
+> P0-A A4b subsequently replaced the old runtime-generation equality guard
+> with scope lifecycle/token ownership.
+
 ## Goal
 
 Remove the rejected mobile "Promote to Task" flow and repurpose the thread
@@ -70,7 +74,7 @@ the local cache.
       `refreshTasksForSourceThread(_:)` so both the all-tasks cache and the
       authoritative filtered list are current.
     - This avoids using broad `refreshRemoteState()` for task-only mutations.
-  - Filtered fetches keep the existing `gatewayRuntimeGeneration` guard and
+  - Filtered fetches originally kept the then-current runtime-epoch guard and
     also pass the requested source thread id through `GaryxMobileTasksPanelState`
     so stale responses are ignored when the user quickly switches threads.
 - `mobile/garyx-mobile/App/GaryxMobile/GaryxMobileConversationViews.swift`

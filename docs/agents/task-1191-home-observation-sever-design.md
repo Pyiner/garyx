@@ -1,5 +1,9 @@
 # Task 1191 Home Observation Sever Design
 
+> Historical note (2026-07-19): this inventory describes the pre-P0-A route
+> observation graph. A4c completed the container migration, so “currently”
+> below means the TASK-1191 implementation baseline rather than current code.
+
 ## Scope
 
 This task implements only the object-observation severing step described in
@@ -18,10 +22,10 @@ Static home route:
   binding, URL handling, settings sheet state, and connect refresh task startup.
 - `GaryxShellView`: mounted when the connection gate passes. It already observes
   narrow stores only: `GaryxShellChromeStore`, `GaryxNavigationDrawerStore`,
-  `GaryxRootNavigationPathStore`, `GaryxRouteNotFoundStore`, and
+  the former root-path observation store, `GaryxRouteNotFoundStore`, and
   `GaryxHomeThreadListStore`. It has no `@EnvironmentObject GaryxMobileModel`.
-- `GaryxRootNavigationView`: home root `NavigationStack`. It observes
-  `GaryxRootNavigationPathStore`, `GaryxRouteNotFoundStore`, and
+- `GaryxRootNavigationView`: home root `NavigationStack`. It observed
+  the former root-path observation store, `GaryxRouteNotFoundStore`, and
   `GaryxHomeThreadListStore`. When `popToHome` has completed the path is empty,
   so `GaryxRootRouteContentView` and its route destinations are not mounted.
 - `GaryxHomeThreadListView`: home list. It observes `GaryxHomeThreadListStore`.

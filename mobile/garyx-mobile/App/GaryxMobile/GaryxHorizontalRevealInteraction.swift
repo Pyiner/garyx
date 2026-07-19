@@ -221,7 +221,6 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
 /// UIKit pan delivery for row-local gestures. Unlike SwiftUI `DragGesture`,
 /// this exposes `.cancelled` as a first-class event so the Core state machine
 /// can settle deterministically after system takeover.
-@available(iOS 18.0, *)
 struct GaryxHorizontalPanGesture: UIGestureRecognizerRepresentable {
     var isEnabled = true
     let shouldBegin: (_ translation: CGSize, _ velocity: CGSize) -> Bool

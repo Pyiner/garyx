@@ -1,5 +1,9 @@
 # Mobile Sidebar Elevated Drawer Design
 
+> Historical note (2026-07-19): this document records the pre-P0-A A5 drawer
+> shape and interaction baseline. The shared horizontal-reveal state machine
+> now owns these gestures, and A4c removed the former leading-edge action.
+
 ## Goal
 
 Tune the compact iOS push drawer so the opened state reads like the ChatGPT iOS
@@ -24,7 +28,7 @@ The gray capsule close handle on the visible main-panel side is useful but
 secondary. The core pass/fail criteria are the divider, elevation, and rounded
 main-panel edge.
 
-## Current Local Shape
+## Historical Local Shape
 
 `GaryxShellView.drawerBody(width:containerSize:)` in
 `mobile/garyx-mobile/App/GaryxMobile/GaryxMobileViews.swift` already uses the
@@ -92,8 +96,8 @@ presentation.
 The change preserves the previous interaction contract:
 
 - Button open and header close still use `setSidebarVisible`.
-- Leading-edge swipe open is unchanged and still gated by
-  `mainPanelLeadingEdgeAction`.
+- Leading-edge swipe open was unchanged and still gated by the then-current
+  leading-edge action.
 - Left swipe on the visible sidebar still closes the drawer.
 - Tap outside and left swipe on the exposed pushed main panel still close the
   drawer through the clear close-capture layer.

@@ -1896,7 +1896,7 @@ private struct GaryxAgentOptionSelectionSheet<Content: View>: View {
             .padding(.bottom, 14)
 
             ScrollView {
-                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                GaryxGlassPanel(cornerRadius: 28, shadowOpacity: 0.045) {
                     VStack(spacing: 0) {
                         content
                     }

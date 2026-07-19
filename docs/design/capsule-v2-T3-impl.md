@@ -1,5 +1,9 @@
 # Capsule v2 — T3 iOS UI 实现设计
 
+> 历史注记（2026-07-19）：本文记录 Capsule T3 实施时的代码锚点；P0-A A4b
+> 已完成请求归属向 scope lifecycle/token 的迁移。下文的“现状”与伪代码均按当时
+> 基线理解，不代表当前实现。
+
 > 实现级设计稿。落点+契约+测试，配合 `docs/design/capsule-v2.md`（§4 iOS、§5.7 iOS
 > dumb-render、§6 update/delete、§7 性能、§8 安全）。**只碰 `mobile/`**，不动
 > gateway/bridge/models/desktop（避免与 T2 冲突）。T1 已合 main：render_state 契约
@@ -380,9 +384,9 @@ func loadCapsulePreviewHTML(capsuleId, revision, forceRefresh: Bool = false) asy
     guard hasGatewaySettings else { return .failed }
     let key = GaryxCapsuleHTMLCacheKey(id: capsuleId, revision: revision)
     if !forceRefresh, let cached = capsuleHTMLCache[key] { return .html(cached) }   // 仅缩略图常态走缓存
-    let gen = gatewayRuntimeGeneration
+    let requestOwner = captureRequestOwner()
     do { let html = try await client().capsuleHTML(id: capsuleId)
-         guard gen == gatewayRuntimeGeneration else { return .failed }
+         guard requestOwner.isCurrent else { return .failed }
          capsuleHTMLCache[key] = html; return .html(html) }
     catch let e as GaryxGatewayError {
         if case .httpStatus(404, _) = e {                       // 404 = 整 capsule 没了

@@ -147,7 +147,6 @@ struct GaryxAutomationCard: View {
                             .regular,
                             isInteractive: true,
                             tint: Color(.systemBackground).opacity(0.66),
-                            fallbackMaterial: .ultraThinMaterial,
                             in: Capsule()
                         )
                         .contentShape(Capsule())
@@ -953,7 +952,7 @@ struct GaryxAutomationThreadPickerSheet: View {
             pickerNotice
 
             ScrollView {
-                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                GaryxGlassPanel(cornerRadius: 28, shadowOpacity: 0.045) {
                     VStack(spacing: 0) {
                         if let selectedTarget {
                             pickerSectionLabel("Selected")

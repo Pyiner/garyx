@@ -162,7 +162,7 @@ private struct GaryxMessageMenuPanel: View {
     let request: GaryxMessageMenuRequest
 
     var body: some View {
-        GaryxGlassPanel(cornerRadius: 18, fallbackMaterial: .regularMaterial, shadowOpacity: 0.16) {
+        GaryxGlassPanel(cornerRadius: 18, shadowOpacity: 0.16) {
             VStack(spacing: 0) {
                 ForEach(Array(request.items.enumerated()), id: \.element.id) { index, item in
                     if index > 0 {
@@ -333,15 +333,11 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
 
     @ViewBuilder
     private func interactionSurface(_ content: Content) -> some View {
-        if movementSuppressesMenu, #available(iOS 18.0, *) {
+        if movementSuppressesMenu {
             // iOS 26's native List reorder recognizer can win an exclusive
             // long-press before the row gesture fires. Arm a stationary-only
             // recognizer alongside it instead: crossing the movement allowance
             // fails this menu gesture and leaves the native lift in control.
-            // `movementSuppressesMenu` only turns on with the reorder feature,
-            // which is availability-gated to iOS 26+, so the #available guard
-            // exists purely to satisfy the iOS 17 deployment target — the
-            // fall-through below is the standard menu gesture.
             content
                 .gesture(
                     GaryxStationaryThreadMenuGesture(onRecognized: presentMenu)
@@ -419,7 +415,6 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
     }
 }
 
-@available(iOS 18.0, *)
 private struct GaryxStationaryThreadMenuGesture: UIGestureRecognizerRepresentable {
     var onRecognized: () -> Void
 
@@ -589,7 +584,6 @@ private struct GaryxThreadActionMenuPanel: View {
     var body: some View {
         GaryxGlassPanel(
             cornerRadius: GaryxThreadActionMenuMetrics.cornerRadius,
-            fallbackMaterial: .regularMaterial,
             tint: Color(.systemBackground).opacity(0.90),
             shadowOpacity: 0.15
         ) {

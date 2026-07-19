@@ -1,5 +1,9 @@
 # Mac / iOS Recent 列表 task 筛选 Tab
 
+> 历史注记（2026-07-19）：本文的“当前/现有”均指 2026-07-12 的实施基线。
+> P0-A A4b 后，iOS 的异步归属已迁移到 scope lifecycle/token；以下旧 epoch
+> 组合只保留为设计演进记录。
+
 状态：产品方向已确认；已按最新主线逐节复核并修订，待设计 review。
 
 原始设计基线：`origin/main` @ `1a4230bde`。
@@ -168,8 +172,8 @@ unavailable/retry presentation，不保存跨 Gateway 的 Error 对象。
 Mac 的 IPC result 必须带 main process 实际使用的 normalized Gateway URL scope；
 renderer 同时校验 ticket scope 和 result scope。仅在 renderer 发请求前读取一次
 `desktopState.settings.gatewayUrl` 不足以证明归属，因为 Gateway 切换可能与 IPC
-handler 取 settings 交错。iOS 由 `gatewayRuntimeGeneration/currentGatewayScopeId` +
-filter-bearing Core ticket + pager epoch 共同组成同一归属键。
+handler 取 settings 交错。当时 iOS 由 runtime epoch、current scope identifier、
+filter-bearing Core ticket 与 pager epoch 共同组成归属键。
 
 完成时写回请求所属 feed，而不是“当前选中的 feed”。这允许用户快速来回切换，
 同时保证：

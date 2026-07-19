@@ -226,7 +226,6 @@ struct GaryxRowActionMenu<Content: View>: View {
                                 .regular,
                                 isInteractive: true,
                                 tint: Color(.systemBackground).opacity(0.68),
-                                fallbackMaterial: .ultraThinMaterial,
                                 in: Capsule()
                             )
                             .contentShape(Capsule())
