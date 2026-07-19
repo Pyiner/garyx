@@ -2766,4 +2766,6 @@ impl OutboundSender for WeixinSender {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+mod characterization;
+#[cfg(test)]
 mod tests;
