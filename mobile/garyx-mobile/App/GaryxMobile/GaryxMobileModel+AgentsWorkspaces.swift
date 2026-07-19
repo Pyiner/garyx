@@ -730,6 +730,11 @@ extension GaryxMobileModel {
         runtimeGeneration: GaryxGatewayRequestToken? = nil,
         remoteStateRefreshRequestId: UUID? = nil
     ) async {
+        #if DEBUG
+        // The compact thread title mounts this loader even in screenshot
+        // routes; deterministic fixtures must not contact a live gateway.
+        guard !debugSnapshotActive else { return }
+        #endif
         let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !provider.isEmpty else { return }
         let observedGeneration = runtimeGeneration ?? gatewayRequestToken

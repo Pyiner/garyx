@@ -15,6 +15,13 @@ extension GaryxMobileModel {
             isLoadingOlderThreadHistory = false
             return
         }
+        #if DEBUG
+        if debugSnapshotActive {
+            messages = cachedMessages(for: selectedThread.id)
+            isLoadingSelectedThreadHistory = false
+            return
+        }
+        #endif
         let threadId = selectedThread.id
         let requestId = UUID()
         let authenticatedScope = gatewayRequestToken.scope

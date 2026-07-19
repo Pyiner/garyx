@@ -391,6 +391,11 @@ extension GaryxMobileModel {
             productionRouteStore.sceneDidBecomeActive()
             composerPayloadCoordinator.sceneDidBecomeActive()
             capsulePreviewSceneSignal.publish(.active)
+            #if DEBUG
+            // Snapshot routes are deterministic local fixtures. Foreground
+            // sync must not replace them with live gateway state.
+            guard !debugSnapshotActive else { return }
+            #endif
             servicePinnedOrderRetry(source: .userAction)
             sceneRefreshTask?.cancel()
             let selectedThreadId = selectedThread?.id
@@ -505,6 +510,11 @@ extension GaryxMobileModel {
     }
 
     func connectAndRefresh() async {
+        #if DEBUG
+        // Screenshot fixtures are a closed local world; no lifecycle callback
+        // may replace them with gateway state while a capture is in flight.
+        guard !debugSnapshotActive else { return }
+        #endif
         gatewayURL = normalizedGatewayURL(gatewayURL)
         gatewayAuthToken = gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
@@ -596,6 +606,9 @@ extension GaryxMobileModel {
     }
 
     func refreshAgentTargets() async {
+        #if DEBUG
+        guard !debugSnapshotActive else { return }
+        #endif
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRequestToken
         let requestId = UUID()
@@ -641,6 +654,11 @@ extension GaryxMobileModel {
     }
 
     func refreshRemoteState() async {
+        #if DEBUG
+        // Panels may request a refresh when they mount. Keep deterministic
+        // snapshot routes offline so their fixture data and error state stay put.
+        guard !debugSnapshotActive else { return }
+        #endif
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRequestToken
         let requestId = UUID()

@@ -28,6 +28,12 @@ extension GaryxMobileModel {
         source: GaryxThreadListRefreshSource,
         forceReplacement: Bool = false
     ) async {
+        #if DEBUG
+        // The home list stays mounted behind pushed routes and owns a silent
+        // refresh loop. Snapshot captures must never let that loop hit a live
+        // gateway and overwrite their local thread/message fixtures.
+        guard !debugSnapshotActive else { return }
+        #endif
         guard hasGatewaySettings else { return }
         servicePinnedOrderRetry(source: source)
         refreshThreadFavoritesSnapshot()

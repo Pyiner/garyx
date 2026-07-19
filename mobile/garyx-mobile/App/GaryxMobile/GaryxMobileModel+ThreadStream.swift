@@ -42,6 +42,9 @@ extension GaryxMobileModel {
     }
 
     func startSelectedThreadStream(for threadId: String) {
+        #if DEBUG
+        guard !debugSnapshotActive else { return }
+        #endif
         guard hasGatewaySettings, case .ready = connectionState else { return }
         let trimmed = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

@@ -586,6 +586,9 @@ extension GaryxMobileModel {
         }
         debugShowsWorkspaceModeSheet = shouldShowWorkspaceModeSheet
         debugShowsGatewaySwitcher = queryValue("sheet") == "gatewaySwitcher"
+        if queryValue("sheet") == "automationEditor" {
+            selectedAutomationEditor = automations.first
+        }
         return true
     }
 
@@ -630,7 +633,17 @@ extension GaryxMobileModel {
 
     func loadDebugSnapshot(recentFilter: GaryxRecentThreadFilter) {
         debugSnapshotActive = true
+        sceneRefreshTask?.cancel()
+        sceneRefreshTask = nil
         cancelBackgroundCommittedRunReconcileLoop()
+        cancelSelectedThreadReconcileLoop()
+        stopSelectedThreadStream()
+        selectedThreadHistoryRequestId = nil
+        selectedThreadHistoryRetryTask?.cancel()
+        selectedThreadHistoryRetryTask = nil
+        selectedThreadHistoryRetryThreadId = nil
+        selectedThreadHistoryRetryCount = 0
+        isLoadingSelectedThreadHistory = false
         clearActiveRunState()
 
         gatewayURL = "http://127.0.0.1:31337"
@@ -668,6 +681,9 @@ extension GaryxMobileModel {
         showsSettings = false
         messagesByThread = [:]
         messageSignaturesByThread = [:]
+        renderSnapshotsByThread = [:]
+        threadHistoryLoadedIds = []
+        selectedThreadRenderFloorByThread = [:]
         activeAssistantMessageIdsByThread = [:]
         pendingDirectFollowUpsByThread = [:]
 
@@ -755,78 +771,46 @@ extension GaryxMobileModel {
             GaryxMobileMessage(
                 id: "debug-user-1",
                 role: .user,
-                text: "Please check markdown rendering, tool folding, and the sidebar hierarchy.",
+                text: "Type check",
                 timestamp: "08:24",
                 isStreaming: false
-            ),
-            GaryxMobileMessage(
-                id: "debug-tools-1",
-                role: .tool,
-                text: "",
-                timestamp: "08:25",
-                isStreaming: false,
-                toolTraceGroup: GaryxMobileToolTraceGroup(
-                    entries: [
-                        GaryxMobileToolTraceEntry(
-                            id: "debug-tool-read",
-                            toolUseId: "toolu-read",
-                            parentToolUseId: nil,
-                            toolName: "Read",
-                            title: "Read",
-                            inputText: "{ \"file\": \"mobile/garyx-mobile/App/GaryxMobile/GaryxMobileViews.swift\" }",
-                            resultText: "Loaded the SwiftUI surface.",
-                            summaryText: "Loaded SwiftUI surface",
-                            inputLabel: "input",
-                            resultLabel: "result",
-                            status: .completed,
-                            isError: false,
-                            timestamp: "08:25",
-                            primaryPathBadge: "GaryxMobileViews.swift"
-                        ),
-                        GaryxMobileToolTraceEntry(
-                            id: "debug-tool-build",
-                            toolUseId: "toolu-build",
-                            parentToolUseId: nil,
-                            toolName: "exec_command",
-                            title: "Bash",
-                            inputText: "swift test",
-                            resultText: "Test Suite passed.",
-                            summaryText: "swift test passed",
-                            inputLabel: "command",
-                            resultLabel: "output",
-                            status: .completed,
-                            isError: false,
-                            timestamp: "08:26",
-                            primaryPathBadge: nil
-                        )
-                    ]
-                )
             ),
             GaryxMobileMessage(
                 id: "debug-assistant-1",
                 role: .assistant,
                 text: """
-                Sync complete
-
                 **Result**
-                - 477 buckets synced
-                - 9 sessions reviewed
-                - Dashboard: https://example.test/usage
-
-                Code block rendering should stay compact and readable:
-
-                ```bash
-                swift test
-                xcodebuild -scheme GaryxMobile build
-                ```
+                Wraps cleanly.
                 """,
-                timestamp: "08:27",
+                timestamp: "08:25",
                 isStreaming: false
             )
         ]
         if let selectedThread {
             messagesByThread[selectedThread.id] = messages
             messageSignaturesByThread[selectedThread.id] = GaryxMessageListSignature.make(for: messages)
+            renderSnapshotsByThread[selectedThread.id] = GaryxRenderSnapshot(
+                basedOnSeq: 2,
+                rows: [
+                    .userTurn(GaryxRenderUserTurnRow(
+                        id: "debug-turn-1",
+                        user: GaryxRenderMessageRef(id: "debug-user-1", seq: 1, role: "user"),
+                        activity: [
+                            .assistantReply(GaryxRenderAssistantReplyRow(
+                                id: "debug-assistant-row-1",
+                                message: GaryxRenderMessageRef(
+                                    id: "debug-assistant-1",
+                                    seq: 2,
+                                    role: "assistant"
+                                )
+                            )),
+                        ]
+                    )),
+                ]
+            )
+            threadHistoryLoadedIds.insert(selectedThread.id)
+            resetSelectedTurnRowsWindow()
+            lockSelectedTurnRowsWindowFloorIfNeeded()
         }
 
         agents = Self.decodeDebugFixture(GaryxAgentsPage.self, from: """
