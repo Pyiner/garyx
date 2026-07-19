@@ -219,7 +219,7 @@ private struct GaryxTaskTreeSidebarPanel: View {
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: GaryxTaskTreeSidebarMetrics.treeGlyph)
-                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("Task tree")
                 .font(GaryxFont.body(weight: .semibold))
@@ -283,7 +283,7 @@ private struct GaryxTaskTreeSidebarPanel: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: GaryxTaskTreeSidebarMetrics.treeGlyph)
-                .font(GaryxFont.system(size: 22, weight: .medium))
+                .font(GaryxFont.fixedSystem(size: 22, weight: .medium))
                 .foregroundStyle(.tertiary)
             Text("No tasks from this thread yet.")
                 .font(GaryxFont.footnote())
@@ -319,36 +319,39 @@ private struct GaryxTaskTreeSidebarRowView: View {
                     HStack(spacing: 6) {
                         if let taskDisplayId = row.taskDisplayId {
                             Text(taskDisplayId)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .font(GaryxFont.monospaced(.caption2, weight: .semibold))
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
                                 .layoutPriority(1)
                         }
                         Text(row.title)
                             .font(GaryxFont.footnote(weight: .medium))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.tail)
                         if row.isCurrent {
                             Text("Current")
-                                .font(GaryxFont.system(size: 10, weight: .bold))
+                                .font(GaryxFont.caption2(weight: .bold))
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1.5)
                                 .background(Color.primary.opacity(0.10), in: Capsule())
+                                // This state badge stays inline beside a task
+                                // title, so its growth is bounded after XXL.
+                                .garyxTypographyBoundary(.compactBadgeChrome)
                         }
                     }
 
                     HStack(spacing: 6) {
                         if row.kind == .sourceThread {
                             Image(systemName: "message")
-                                .font(GaryxFont.system(size: 9, weight: .semibold))
+                                .font(GaryxFont.fixedSystem(size: 9, weight: .semibold))
                                 .foregroundStyle(.secondary)
                         }
                         Text(agentLabel)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                         if let status = row.status {
                             GaryxStatusPill(text: status.label, tone: status.tone)

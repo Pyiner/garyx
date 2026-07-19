@@ -351,6 +351,9 @@ private struct GaryxAgentEnvEditorSection: View {
                 }
             }
             .pickerStyle(.segmented)
+            // The table/text tabs share a fixed segmented track; cap at XXL
+            // while the editor and field rows continue through all sizes.
+            .garyxTypographyBoundary(.segmentedControlChrome)
             .labelsHidden()
 
             if viewMode == .text {
@@ -1387,6 +1390,7 @@ private struct GaryxAvatarStyleRow: View {
 
 struct GaryxAgentCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let agent: GaryxAgentSummary
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
@@ -1460,41 +1464,70 @@ struct GaryxAgentCard: View {
         return actions
     }
 
+    @ViewBuilder
     private var agentIdentityRow: some View {
-        HStack(spacing: 12) {
-            GaryxAgentAvatarView(
-                agentId: agent.id,
-                avatarDataUrl: agent.avatarDataUrl,
-                label: agent.displayName,
-                providerType: agent.providerType,
-                builtIn: agent.builtIn
-            )
-            VStack(alignment: .leading, spacing: 3) {
-                Text(agent.displayName.isEmpty ? agent.id : agent.displayName)
-                    .font(GaryxFont.body(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(agent.id)
-                    .font(GaryxFont.caption(weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        if dynamicTypeSize.isAccessibilitySize {
+            HStack(alignment: .top, spacing: 12) {
+                agentAvatar
+                VStack(alignment: .leading, spacing: 10) {
+                    agentIdentity
+                    HStack(spacing: 6) {
+                        availabilityBadges
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 5) {
-                GaryxStatusPill(
-                    text: GaryxAgentAvailabilityPresentation.statusLabel(enabled: agent.enabled),
-                    tone: agent.enabled ? .good : .muted
-                )
-                if let badge = defaultBadge {
-                    GaryxStatusPill(
-                        text: badge.label,
-                        tone: badge.isMuted ? .muted : .good
-                    )
+            .padding(10)
+            .contentShape(Rectangle())
+        } else {
+            HStack(spacing: 12) {
+                agentAvatar
+                agentIdentity
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 5) {
+                    availabilityBadges
                 }
             }
+            .padding(10)
+            .contentShape(Rectangle())
         }
-        .padding(10)
-        .contentShape(Rectangle())
+    }
+
+    private var agentAvatar: some View {
+        GaryxAgentAvatarView(
+            agentId: agent.id,
+            avatarDataUrl: agent.avatarDataUrl,
+            label: agent.displayName,
+            providerType: agent.providerType,
+            builtIn: agent.builtIn
+        )
+    }
+
+    private var agentIdentity: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(agent.displayName.isEmpty ? agent.id : agent.displayName)
+                .font(GaryxFont.body(weight: .semibold))
+                .foregroundStyle(.primary)
+                .garyxReadingLineLimit()
+            Text(agent.id)
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
+                .garyxReadingLineLimit()
+        }
+    }
+
+    @ViewBuilder
+    private var availabilityBadges: some View {
+        GaryxStatusPill(
+            text: GaryxAgentAvailabilityPresentation.statusLabel(enabled: agent.enabled),
+            tone: agent.enabled ? .good : .muted
+        )
+        if let badge = defaultBadge {
+            GaryxStatusPill(
+                text: badge.label,
+                tone: badge.isMuted ? .muted : .good
+            )
+        }
     }
 
     private var defaultBadge: GaryxAgentDefaultBadgeState? {
@@ -1921,7 +1954,7 @@ private struct GaryxAgentPlainOptionRow: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 16, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 16, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 34, height: 34)
                     .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
@@ -1930,12 +1963,12 @@ private struct GaryxAgentPlainOptionRow: View {
                     Text(title)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     if !subtitle.isEmpty {
                         Text(subtitle)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .garyxReadingLineLimit(2)
                     }
                 }
 

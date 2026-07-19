@@ -78,10 +78,10 @@ struct GaryxRecentThreadsWidgetView: View {
             if threads.isEmpty {
                 VStack(spacing: 3) {
                     Text("No recent threads")
-                        .font(.system(size: 14, weight: .semibold))
+                        .garyxRelativePointFont(size: 14, relativeTo: .body, weight: .semibold)
                         .foregroundStyle(.primary)
                     Text("Open Gary X to refresh")
-                        .font(.system(size: 12, weight: .medium))
+                        .garyxRelativePointFont(size: 12, relativeTo: .caption, weight: .medium)
                         .foregroundStyle(.secondary)
                 }
                 .multilineTextAlignment(.center)
@@ -103,6 +103,9 @@ struct GaryxRecentThreadsWidgetView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(metrics.contentPadding)
+        // WidgetKit families are fixed, non-scrolling canvases; the Core
+        // boundary records the XXL cap and why every row must stay reachable.
+        .garyxWidgetTypographyBoundary(.widgetFamilyChrome)
         .containerBackground(for: .widget) {
             ContainerRelativeShape()
                 .fill(.thinMaterial)
@@ -205,7 +208,11 @@ private struct GaryxRecentThreadWidgetRow: View {
             VStack(alignment: .leading, spacing: metrics.rowWorkspaceSpacing) {
                 HStack(spacing: 6) {
                     Text(thread.title)
-                        .font(.system(size: metrics.rowTitleFontSize, weight: .semibold))
+                        .garyxRelativePointFont(
+                            size: metrics.rowTitleFontSize,
+                            relativeTo: .callout,
+                            weight: .semibold
+                        )
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -213,7 +220,11 @@ private struct GaryxRecentThreadWidgetRow: View {
 
                 if !thread.workspaceName.isEmpty {
                     Text(thread.workspaceName)
-                        .font(.system(size: metrics.rowWorkspaceFontSize, weight: .medium))
+                        .garyxRelativePointFont(
+                            size: metrics.rowWorkspaceFontSize,
+                            relativeTo: .caption,
+                            weight: .medium
+                        )
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

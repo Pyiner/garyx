@@ -163,7 +163,7 @@ struct GaryxClaudeCodeLoginSheet: View {
         VStack(spacing: 18) {
             heroBadge
             Text(presentation.title)
-                .font(GaryxFont.system(size: 26, weight: .bold))
+                .font(GaryxFont.title(weight: .bold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -186,7 +186,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                     .tint(toneColor)
             } else {
                 Image(systemName: presentation.symbolName)
-                    .font(GaryxFont.system(size: 38, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 38, weight: .semibold))
                     .foregroundStyle(toneColor)
                     .symbolRenderingMode(.hierarchical)
             }
@@ -228,7 +228,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                     Text("Advanced Options")
                         .font(GaryxFont.subheadline(weight: .medium))
                     Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 12, weight: .semibold))
                         .rotationEffect(.degrees(showsAdvancedOptions ? 90 : 0))
                 }
                 .foregroundStyle(.secondary)
@@ -248,6 +248,9 @@ struct GaryxClaudeCodeLoginSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    // Login methods share one fixed segmented track; XXL is
+                    // the cap while the explanatory copy stays unbounded.
+                    .garyxTypographyBoundary(.segmentedControlChrome)
                     Text(options.mode.advancedDescription)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.tertiary)
@@ -291,7 +294,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                     authorizationCode = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(GaryxFont.system(size: 18, weight: .medium))
+                        .font(GaryxFont.fixedSystem(size: 18, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(GaryxPressableRowStyle())
@@ -325,7 +328,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                     Text(row.value)
                         .font(GaryxFont.body())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.middle)
                 }
                 .padding(.horizontal, 16)

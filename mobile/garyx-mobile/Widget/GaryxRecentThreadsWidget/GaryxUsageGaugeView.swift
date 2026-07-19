@@ -1,6 +1,56 @@
 import SwiftUI
 import WidgetKit
 
+/// `UIFontMetrics`-equivalent adapter for custom sizes that are dictated by a
+/// compact gauge or WidgetKit family. Reading prose uses semantic text styles;
+/// these fixed-geometry values still scale relative to the nearest text role.
+private struct GaryxRelativePointFontModifier: ViewModifier {
+    @ScaledMetric private var scaledSize: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+
+    init(
+        size: CGFloat,
+        relativeTo textStyle: Font.TextStyle,
+        weight: Font.Weight,
+        design: Font.Design
+    ) {
+        _scaledSize = ScaledMetric(wrappedValue: size, relativeTo: textStyle)
+        self.weight = weight
+        self.design = design
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: scaledSize, weight: weight, design: design))
+    }
+}
+
+extension View {
+    func garyxRelativePointFont(
+        size: CGFloat,
+        relativeTo textStyle: Font.TextStyle,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> some View {
+        modifier(GaryxRelativePointFontModifier(
+            size: size,
+            relativeTo: textStyle,
+            weight: weight,
+            design: design
+        ))
+    }
+
+    @ViewBuilder
+    func garyxWidgetTypographyBoundary(_ boundary: GaryxTypographyScaleBoundary) -> some View {
+        switch boundary.maximumCategory {
+        case nil:
+            self
+        case .extraExtraLarge:
+            dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        }
+    }
+}
+
 // The speedometer gauge shared by the "Garyx Quota" widget and the in-app
 // provider-page Quota hero (design §6.4/D8). This file is compiled into BOTH
 // the app target and the widget extension (see project.yml), so the two
@@ -69,9 +119,13 @@ struct GaryxUsageSpeedometer: View {
                             .foregroundStyle(.secondary)
                     }
                     Text(model.remainingText)
-                        .font(.system(size: metrics.gaugeValueSize, weight: .bold, design: .rounded))
+                        .garyxRelativePointFont(
+                            size: metrics.gaugeValueSize,
+                            relativeTo: .title2,
+                            weight: .bold,
+                            design: .rounded
+                        )
                         .foregroundStyle(model.available ? .primary : .secondary)
-                        .minimumScaleFactor(0.6)
                         .lineLimit(1)
                 }
                 .padding(.horizontal, 2)
@@ -81,20 +135,29 @@ struct GaryxUsageSpeedometer: View {
 
             VStack(spacing: 0) {
                 Text(model.title)
-                    .font(.system(size: metrics.titleSize, weight: .semibold))
+                    .garyxRelativePointFont(
+                        size: metrics.titleSize,
+                        relativeTo: .callout,
+                        weight: .semibold
+                    )
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(2)
                 if metrics.showsDetail {
                     Text(model.detailText)
-                        .font(.system(size: metrics.detailSize, weight: .medium))
+                        .garyxRelativePointFont(
+                            size: metrics.detailSize,
+                            relativeTo: .caption,
+                            weight: .medium
+                        )
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .lineLimit(2)
                 }
             }
         }
         .frame(maxWidth: .infinity)
+        // Gauge labels share a fixed arc and cannot grow beyond its center;
+        // the Core boundary records that geometry exception and its rationale.
+        .garyxWidgetTypographyBoundary(.compactDataVisualizationChrome)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
     }

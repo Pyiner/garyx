@@ -357,19 +357,22 @@ struct GaryxComposer: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: workspaceModeIcon)
-                        .font(GaryxFont.system(size: 14, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                         .frame(width: 19, height: 19)
 
                     Text(workspaceModeTitle)
                         .font(GaryxFont.footnote(weight: .regular))
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
 
                     Image(systemName: "chevron.down")
-                        .font(GaryxFont.system(size: 10, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 10, weight: .semibold))
                 }
                 .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
                 .contentShape(Rectangle())
             }
+            // The mode label is embedded in the composer's fixed accessory
+            // apron; cap it at XXL while the editor remains fully scalable.
+            .garyxTypographyBoundary(.composerAccessoryChrome)
             .buttonStyle(GaryxPressableRowStyle())
             .disabled(!canChangeWorkspaceMode)
             .accessibilityLabel("Workspace mode")
@@ -919,7 +922,7 @@ private struct GaryxComposerAddPopover: View {
                     page = .root
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(GaryxFont.system(size: 14, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 36, height: 36)
                         .background(Color.primary.opacity(0.055), in: Circle())
@@ -964,7 +967,7 @@ private struct GaryxComposerAddPopover: View {
         Button(action: action) {
             HStack(spacing: 13) {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 18, weight: .medium))
+                    .font(GaryxFont.fixedSystem(size: 18, weight: .medium))
                     .symbolRenderingMode(.monochrome)
                     .foregroundStyle(.primary)
                     .frame(
@@ -977,11 +980,11 @@ private struct GaryxComposerAddPopover: View {
                     Text(title)
                         .font(GaryxFont.callout(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(subtitle)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
 
                 Spacer(minLength: 8)
@@ -996,7 +999,7 @@ private struct GaryxComposerAddPopover: View {
                 }
                 if showsChevron {
                     Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -1086,7 +1089,7 @@ private struct GaryxComposerWorkspaceModeSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: systemImage)
-                    .font(GaryxFont.system(size: 16, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 16, weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(width: 34, height: 34)
                     .background(GaryxComposerLayout.actionButtonFill, in: Circle())
@@ -1099,12 +1102,13 @@ private struct GaryxComposerWorkspaceModeSheet: View {
 
                 if selected {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(GaryxFont.system(size: 18, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 18, weight: .semibold))
                         .foregroundStyle(.primary)
                 }
             }
             .padding(.horizontal, 12)
-            .frame(height: GaryxComposerLayout.workspaceModeRowHeight)
+            .padding(.vertical, 8)
+            .frame(minHeight: GaryxComposerLayout.workspaceModeRowHeight)
             .background(
                 selected ? GaryxComposerLayout.workspaceModeSelectedFill : GaryxComposerLayout.workspaceModeRowFill,
                 in: workspaceModeRowShape
@@ -1162,7 +1166,7 @@ struct GaryxAttachmentChip: View {
                 model.removeComposerPayloadItem(attachment)
             } label: {
                 Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 9, weight: .bold))
+                    .font(GaryxFont.fixedSystem(size: 9, weight: .bold))
                     .foregroundStyle(Color.white)
                     .padding(4)
                     .background(Color.black.opacity(0.65), in: Circle())
@@ -1179,7 +1183,7 @@ struct GaryxAttachmentChip: View {
                 .font(GaryxFont.caption(weight: .semibold))
             Text(attachment.name)
                 .font(GaryxFont.caption(weight: .semibold))
-                .lineLimit(1)
+                .garyxReadingLineLimit()
             Button {
                 model.removeComposerPayloadItem(attachment)
             } label: {
@@ -1193,6 +1197,9 @@ struct GaryxAttachmentChip: View {
         .padding(.horizontal, 10)
         .frame(height: 30)
         .background(Color(.tertiarySystemFill), in: Capsule())
+        // File chips share the composer's fixed 30-point attachment tray;
+        // XXL keeps the tray stable and the filename legible.
+        .garyxTypographyBoundary(.composerAccessoryChrome)
     }
 
     private var decodedThumbnail: UIImage? {

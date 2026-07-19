@@ -25,9 +25,9 @@ struct GaryxChannelLogoView: View {
                     .padding(diameter * 0.16)
             } else {
                 Text(fallbackLabel)
-                    .font(GaryxFont.system(size: diameter * 0.34, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: diameter * 0.34, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .minimumScaleFactor(0.65)
             }
         }
@@ -190,11 +190,11 @@ struct GaryxAgentAvatarView: View {
     private var fallbackContent: some View {
         if let symbol = providerPresentation.symbolName {
             Image(systemName: symbol)
-                .font(GaryxFont.system(size: providerIconSize, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: providerIconSize, weight: .semibold))
                 .foregroundStyle(fallbackForeground)
         } else {
             Text(providerPresentation.fallbackInitials)
-                .font(GaryxFont.system(size: diameter * 0.32, weight: .bold))
+                .font(GaryxFont.fixedSystem(size: diameter * 0.32, weight: .bold))
                 .foregroundStyle(fallbackForeground)
         }
     }
@@ -240,6 +240,7 @@ struct GaryxAgentAvatarView: View {
 }
 
 struct GaryxAgentPickerLabel: View {
+    @ScaledMetric(relativeTo: .callout) private var readingSpacingScale: CGFloat = 1
     enum Style {
         case prominent
         case compact
@@ -264,26 +265,31 @@ struct GaryxAgentPickerLabel: View {
                 )
             } else {
                 Image(systemName: "person.crop.circle")
-                    .font(GaryxFont.system(size: fallbackIconSize, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: fallbackIconSize, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
 
             Text(title.isEmpty ? "Agent" : title)
                 .font(labelFont)
                 .foregroundStyle(labelForeground)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.tail)
-                .minimumScaleFactor(0.8)
                 .layoutPriority(1)
 
             if showsChevron {
                 Image(systemName: "chevron.down")
-                    .font(GaryxFont.system(size: chevronSize, weight: .bold))
+                    .font(GaryxFont.fixedSystem(size: chevronSize, weight: .bold))
                     .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, horizontalPadding)
-        .frame(height: labelHeight, alignment: .leading)
+        .padding(.vertical, verticalPadding * readingSpacingScale)
+        .frame(minHeight: labelHeight, alignment: .leading)
+        .if(isCompact) { view in
+            // The compact label sits in the fixed composer accessory row; cap
+            // at XXL while prominent and form variants remain unbounded.
+            view.garyxTypographyBoundary(.composerAccessoryChrome)
+        }
         .if(isProminent) { view in
             view.background {
                 Capsule()
@@ -358,6 +364,17 @@ struct GaryxAgentPickerLabel: View {
         }
     }
 
+    private var verticalPadding: CGFloat {
+        switch style {
+        case .prominent:
+            8
+        case .compact:
+            0
+        case .form:
+            5
+        }
+    }
+
     private var labelFont: Font {
         switch style {
         case .prominent:
@@ -385,6 +402,10 @@ struct GaryxAgentPickerLabel: View {
         case .compact, .form:
             false
         }
+    }
+
+    private var isCompact: Bool {
+        style == .compact
     }
 }
 
@@ -506,10 +527,10 @@ struct GaryxBotAgentPickerControl: View {
                 Text(selectedOption?.title ?? "Follow global default")
                     .font(GaryxFont.callout(weight: .medium))
                     .foregroundStyle(.primary)
-                    .lineLimit(2)
+                    .garyxReadingLineLimit(2)
                     .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(GaryxFont.system(size: 10, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -607,7 +628,7 @@ private struct GaryxBotAgentPickerPopover: View {
             )
         } else {
             Image(systemName: option.selection == .followGlobal ? "arrow.triangle.branch" : "exclamationmark.circle")
-                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 28, height: 28)
         }
@@ -630,6 +651,8 @@ private struct GaryxBotAgentPickerPopover: View {
 struct GaryxAgentTargetPickerPopover: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .callout) private var rowVerticalPadding: CGFloat = 10
     @Binding var selectedAgentTargetId: String
     var showsConfigure = false
     var onConfigure: (() -> Void)?
@@ -674,7 +697,7 @@ struct GaryxAgentTargetPickerPopover: View {
                 } label: {
                     HStack(spacing: 14) {
                         Image(systemName: "slider.horizontal.3")
-                            .font(GaryxFont.system(size: 17, weight: .semibold))
+                            .font(GaryxFont.fixedSystem(size: 17, weight: .semibold))
                             .frame(width: 30)
 
                         Text("Configure")
@@ -683,14 +706,15 @@ struct GaryxAgentTargetPickerPopover: View {
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(.primary)
-                    .frame(height: 48)
+                    .padding(.vertical, rowVerticalPadding)
+                    .frame(minHeight: 48)
                     .padding(.horizontal, 20)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(GaryxPressableRowStyle())
             }
         }
-        .frame(width: 308)
+        .frame(width: dynamicTypeSize.garyxUsesExpandedReadingLayout ? 360 : 308)
         .background(.regularMaterial)
     }
 
@@ -722,19 +746,20 @@ struct GaryxAgentTargetPickerPopover: View {
                     Text(target.title)
                         .font(GaryxFont.callout(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
 
                     if !target.subtitle.isEmpty {
                         Text(target.subtitle)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                     }
                 }
 
                 Spacer(minLength: 0)
             }
-            .frame(height: 54)
+            .padding(.vertical, rowVerticalPadding)
+            .frame(minHeight: 54)
             .padding(.horizontal, 20)
             .contentShape(Rectangle())
         }
@@ -816,19 +841,19 @@ struct GaryxNewThreadAgentSheet: View {
                 Text(Page.main.title)
                     .font(GaryxFont.callout(weight: .medium))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
             } else {
                 Button {
                     page = .main
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left")
-                            .font(GaryxFont.system(size: 13, weight: .semibold))
+                            .font(GaryxFont.fixedSystem(size: 13, weight: .semibold))
                             .foregroundStyle(.secondary)
                         Text(page.title)
                             .font(GaryxFont.callout(weight: .medium))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                     }
                     .contentShape(Rectangle())
                 }
@@ -841,7 +866,7 @@ struct GaryxNewThreadAgentSheet: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 12, weight: .bold))
+                    .font(GaryxFont.fixedSystem(size: 12, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .background(.quaternary.opacity(0.5), in: Circle())
@@ -890,7 +915,7 @@ struct GaryxNewThreadAgentSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "ellipsis.circle")
-                    .font(GaryxFont.system(size: 19, weight: .medium))
+                    .font(GaryxFont.fixedSystem(size: 19, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 30)
 
@@ -905,7 +930,7 @@ struct GaryxNewThreadAgentSheet: View {
                     .foregroundStyle(.secondary)
 
                 Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 8)
@@ -948,13 +973,13 @@ struct GaryxNewThreadAgentSheet: View {
                     Text(target.title)
                         .font(GaryxFont.callout(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
 
                     if !target.subtitle.isEmpty {
                         Text(target.subtitle)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                     }
                 }
 
@@ -1050,10 +1075,10 @@ struct GaryxNewThreadAgentSheet: View {
                 Text(value)
                     .font(GaryxFont.callout())
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
 
                 Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 8)
@@ -1137,7 +1162,7 @@ struct GaryxAgentSheetOptionsPanel: View {
                         Text(option.label)
                             .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
 
                         Spacer(minLength: 0)
                     }
@@ -1177,12 +1202,12 @@ struct GaryxAgentIdentityRow: View {
                 Text(title)
                     .font(GaryxFont.body(weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(GaryxFont.caption(weight: .medium))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
             }
             Spacer()

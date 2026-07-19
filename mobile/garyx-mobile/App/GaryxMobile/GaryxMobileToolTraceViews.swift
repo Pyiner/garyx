@@ -18,7 +18,7 @@ struct GaryxToolTraceGroupView: View {
                     summaryText
 
                     Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                         .opacity(0.74)
                 }
                 .foregroundStyle(group.isActive ? GaryxTheme.primaryText : GaryxTheme.secondaryText)
@@ -51,12 +51,12 @@ struct GaryxToolTraceGroupView: View {
                 baseColor: GaryxTheme.secondaryText,
                 peakColor: GaryxTheme.primaryText
             )
-            .lineLimit(1)
+            .garyxReadingLineLimit()
             .truncationMode(.tail)
         } else {
             Text(group.summary)
                 .font(GaryxFont.subheadline())
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.tail)
         }
     }
@@ -97,7 +97,7 @@ struct GaryxToolCallListSheet: View {
                         dismiss()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(GaryxFont.system(size: 15, weight: .medium))
+                            .font(GaryxFont.fixedSystem(size: 15, weight: .medium))
                             .foregroundStyle(.primary)
                     }
                     .accessibilityLabel("Close tool calls")
@@ -122,7 +122,7 @@ private struct GaryxToolCallRowLabel: View {
                     baseColor: GaryxTheme.secondaryText,
                     peakColor: GaryxTheme.primaryText
                 )
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.middle)
             } else {
                 (Text(row.verb)
@@ -131,7 +131,7 @@ private struct GaryxToolCallRowLabel: View {
                     + Text(row.detail.map { " \($0)" } ?? "")
                     .font(GaryxFont.subheadline())
                     .foregroundStyle(GaryxTheme.secondaryText))
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.tail)
             }
 
@@ -141,7 +141,7 @@ private struct GaryxToolCallRowLabel: View {
                 Text(metadata)
                     .font(GaryxFont.caption())
                     .foregroundStyle(GaryxTheme.tertiaryText)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
             }
         }
         .padding(.vertical, 11)
@@ -154,7 +154,7 @@ private struct GaryxToolCallRowLabel: View {
             GaryxToolCallCommandIcon(color: row.isError ? GaryxTheme.danger : .primary)
         } else {
             Image(systemName: iconName)
-                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                 .foregroundStyle(row.isError ? GaryxTheme.danger : .primary)
         }
     }
@@ -221,7 +221,7 @@ struct GaryxToolCallDetailView: View {
                         switch section.content {
                         case .plainMonospace(let text):
                             Text(text)
-                                .font(.system(size: 13, weight: .regular, design: .monospaced))
+                                .font(GaryxFont.monospaced(.footnote))
                                 .foregroundStyle(.primary)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -251,7 +251,7 @@ private struct GaryxToolCallCodeCard: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: .regular, design: .monospaced))
+            .font(GaryxFont.monospaced(.footnote))
             .foregroundStyle(.primary)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -270,11 +270,11 @@ private struct GaryxToolCallDiffView: View {
                 ForEach(lines) { line in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(marker(for: line.kind))
-                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .font(GaryxFont.monospaced(.caption))
                             .foregroundStyle(markerColor(for: line.kind))
 
                         Text(line.text.isEmpty ? " " : line.text)
-                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .font(GaryxFont.monospaced(.caption))
                             .foregroundStyle(.primary)
                     }
                     .padding(.horizontal, 10)

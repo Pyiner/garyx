@@ -184,18 +184,18 @@ struct GaryxMcpServerCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 24, height: 24)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(server.name)
                             .font(GaryxFont.body(weight: .semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                         Text(server.transport == "streamable_http" ? server.url ?? "HTTP" : server.command)
                             .font(GaryxFont.caption(weight: .medium))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                     }
                     Spacer()
                     GaryxStatusPill(text: server.enabled ? "Enabled" : "Paused", tone: server.enabled ? .good : .muted)

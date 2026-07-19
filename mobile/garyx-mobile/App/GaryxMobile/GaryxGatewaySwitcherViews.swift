@@ -37,10 +37,13 @@ struct GaryxSidebarGatewayIdentityControl: View {
             #endif
         } else {
             Text(identity.title)
-                .font(GaryxFont.system(size: 26, weight: .semibold))
+                .font(GaryxFont.title(weight: .semibold))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .minimumScaleFactor(0.75)
+                // The root identity shares the fixed drawer header row with
+                // its controls, so it grows through XXL and then holds.
+                .garyxTypographyBoundary(.navigationChrome)
         }
     }
 
@@ -48,13 +51,13 @@ struct GaryxSidebarGatewayIdentityControl: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Text(identity.title)
-                    .font(GaryxFont.system(size: 22, weight: .semibold))
+                    .font(GaryxFont.title2(weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .minimumScaleFactor(0.75)
 
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
 
@@ -68,12 +71,15 @@ struct GaryxSidebarGatewayIdentityControl: View {
                     Text(subtitle)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.middle)
                 }
             }
         }
         .contentShape(Rectangle())
+        // This label occupies the same fixed drawer header row as the static
+        // identity, so its title and status stop growing after XXL together.
+        .garyxTypographyBoundary(.navigationChrome)
     }
 
     @ViewBuilder
@@ -152,7 +158,7 @@ struct GaryxGatewaySwitcherSheet: View {
             Text("Gateways")
                 .font(GaryxFont.callout(weight: .medium))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
             Spacer(minLength: 0)
         }
         .overlay(alignment: .trailing) {
@@ -160,7 +166,7 @@ struct GaryxGatewaySwitcherSheet: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 12, weight: .bold))
+                    .font(GaryxFont.fixedSystem(size: 12, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .background(.quaternary.opacity(0.5), in: Circle())
@@ -187,11 +193,11 @@ struct GaryxGatewaySwitcherSheet: View {
                     Text(row.title)
                         .font(GaryxFont.callout(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(rowSubtitle(for: row))
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.middle)
                 }
 
@@ -227,7 +233,7 @@ struct GaryxGatewaySwitcherSheet: View {
     private func footerRow(title: String, systemImage: String) -> some View {
         HStack(spacing: 14) {
             Image(systemName: systemImage)
-                .font(GaryxFont.system(size: 17, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 17, weight: .semibold))
                 .frame(width: 30)
 
             Text(title)
@@ -236,7 +242,8 @@ struct GaryxGatewaySwitcherSheet: View {
             Spacer(minLength: 0)
         }
         .foregroundStyle(.primary)
-        .frame(height: 48)
+        .padding(.vertical, 12)
+        .frame(minHeight: 48)
         .padding(.horizontal, 20)
         .contentShape(Rectangle())
     }

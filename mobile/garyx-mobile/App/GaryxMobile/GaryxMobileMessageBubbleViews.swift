@@ -5,8 +5,11 @@ import UIKit
 struct GaryxMessageBubble: View {
     let message: GaryxMobileMessage
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.garyxMessageBubbleActions) private var actions
     @Environment(\.garyxMotion) private var motion
+    @ScaledMetric(relativeTo: .body) private var userBubbleVerticalPadding: CGFloat = 8
+    @ScaledMetric(relativeTo: .body) private var messageSpacing: CGFloat = 8
     @State private var retrying = false
     @State private var filePreviewSheet: GaryxMessageFilePreviewSheet?
 
@@ -32,8 +35,8 @@ struct GaryxMessageBubble: View {
         switch message.role {
         case .user:
             HStack(alignment: .bottom) {
-                Spacer(minLength: 60)
-                VStack(alignment: .trailing, spacing: 4) {
+                Spacer(minLength: dynamicTypeSize.garyxUsesExpandedReadingLayout ? 12 : 60)
+                VStack(alignment: .trailing, spacing: messageSpacing / 2) {
                     if !message.attachments.isEmpty {
                         GaryxMessageAttachmentStack(attachments: message.attachments, isUser: true)
                             .garyxMessageCopyContext(text: messageCopyText, edge: .trailing)
@@ -60,7 +63,7 @@ struct GaryxMessageBubble: View {
                             onImageFilePreview: messageImageFilePreview
                         )
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, userBubbleVerticalPadding)
                         .background(userBubbleBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .garyxMessageInteraction(text: displayText, edge: .trailing)
                     }
@@ -69,11 +72,15 @@ struct GaryxMessageBubble: View {
                         failureStatusRow(statusText: statusText)
                     }
                 }
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.77, alignment: .trailing)
+                .frame(
+                    maxWidth: UIScreen.main.bounds.width
+                        * (dynamicTypeSize.garyxUsesExpandedReadingLayout ? 0.94 : 0.77),
+                    alignment: .trailing
+                )
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: messageSpacing) {
                 if !message.attachments.isEmpty {
                     GaryxMessageAttachmentStack(attachments: message.attachments, isUser: false)
                         .garyxMessageCopyContext(text: messageCopyText)
@@ -120,7 +127,7 @@ struct GaryxMessageBubble: View {
             )
                 .font(GaryxFont.footnote())
                 .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.vertical, userBubbleVerticalPadding)
                 .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -234,11 +241,11 @@ struct GaryxMessageBubble: View {
                             .controlSize(.mini)
                     } else {
                         Image(systemName: "arrow.clockwise")
-                            .font(GaryxFont.system(size: 11, weight: .semibold))
+                            .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     }
                     Text(retrying ? "Retrying…" : statusText)
                         .font(GaryxFont.caption())
-                        .lineLimit(2)
+                        .garyxReadingLineLimit(2)
                         .multilineTextAlignment(.trailing)
                 }
                 .foregroundStyle(Color(.systemRed))
@@ -251,7 +258,7 @@ struct GaryxMessageBubble: View {
             Text(statusText)
                 .font(GaryxFont.caption())
                 .foregroundStyle(Color(.systemRed))
-                .lineLimit(2)
+                .garyxReadingLineLimit(2)
                 .multilineTextAlignment(.trailing)
         }
     }
@@ -570,7 +577,7 @@ struct GaryxMessageImageAttachmentView: View {
                 .font(GaryxFont.title3(weight: .medium))
             Text(attachment.name.isEmpty ? "Image" : attachment.name)
                 .font(GaryxFont.caption(weight: .medium))
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.middle)
                 .padding(.horizontal, 10)
         }
@@ -650,6 +657,7 @@ struct GaryxMessageImageAttachmentView: View {
 }
 
 struct GaryxMessageFileAttachmentView: View {
+    @ScaledMetric(relativeTo: .footnote) private var verticalPadding: CGFloat = 8
     let attachment: GaryxMobileMessageAttachment
     let isUser: Bool
 
@@ -660,12 +668,13 @@ struct GaryxMessageFileAttachmentView: View {
                 .frame(width: 18, height: 18)
             Text(attachment.name.isEmpty ? "Attachment" : attachment.name)
                 .font(GaryxFont.footnote(weight: .medium))
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.middle)
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 11)
-        .frame(height: 34)
+        .padding(.vertical, verticalPadding)
+        .frame(minHeight: 34)
         .background(
             isUser ? Color.black.opacity(0.06) : Color(.secondarySystemFill),
             in: Capsule()

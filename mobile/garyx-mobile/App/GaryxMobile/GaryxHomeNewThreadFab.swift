@@ -6,7 +6,7 @@ struct GaryxHomeNewThreadFab: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "plus.bubble")
-                .font(GaryxFont.system(size: 20, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 20, weight: .semibold))
                 .foregroundStyle(Color(.systemBackground))
                 .frame(width: 56, height: 56)
                 .background(Color(.label), in: Circle())

@@ -139,7 +139,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
                         .frame(height: 1)
 
                     Image(systemName: "chevron.down")
-                        .font(GaryxFont.system(size: 10, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 10, weight: .semibold))
                         .foregroundStyle(GaryxTheme.secondaryText)
                         .rotationEffect(.degrees(expanded ? 0 : -90))
                         .animation(motion.spatialAnimation(.turnDisclosure), value: expanded)
@@ -177,7 +177,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
                     text: summaryLabel(now: context.date),
                     font: GaryxFont.footnote(weight: .medium)
                 )
-                .lineLimit(1)
+                .garyxReadingLineLimit()
             }
         } else {
             summaryTextLabel(summaryLabel(now: Date()))
@@ -188,7 +188,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
         Text(label)
             .font(GaryxFont.footnote(weight: .medium))
             .foregroundStyle(isRunning ? GaryxTheme.accent : GaryxTheme.secondaryText)
-            .lineLimit(1)
+            .garyxReadingLineLimit()
     }
 
     private func summaryLabel(now: Date) -> String {

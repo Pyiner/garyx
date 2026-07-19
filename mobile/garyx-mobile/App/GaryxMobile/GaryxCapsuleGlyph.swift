@@ -94,7 +94,7 @@ struct GaryxPanelIconView: View {
             GaryxCapsuleGlyph().frame(width: size * 1.16, height: size * 1.16)
         } else {
             Image(systemName: systemName)
-                .font(GaryxFont.system(size: size, weight: weight))
+                .font(GaryxFont.fixedSystem(size: size, weight: weight))
         }
     }
 }

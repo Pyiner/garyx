@@ -139,13 +139,14 @@ struct GaryxEmptyConversationView: View {
             HStack(spacing: 10) {
                 Text(model.newThreadWorkspaceLabel)
                     .font(GaryxFont.body(weight: .semibold))
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(GaryxFont.system(size: 10, weight: .bold))
+                    .font(GaryxFont.fixedSystem(size: 10, weight: .bold))
             }
             .foregroundStyle(Color(.systemBackground))
             .padding(.horizontal, 18)
-            .frame(height: 46)
+            .padding(.vertical, 12)
+            .frame(minHeight: 46)
             .background(Color(.label), in: Capsule())
         }
         .buttonStyle(GaryxPressableRowStyle())
@@ -170,7 +171,7 @@ struct GaryxSelectedThreadEmptyConversationView: View {
                 .font(GaryxFont.title3(weight: .semibold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .garyxReadingLineLimit(2)
 
             Text("No messages yet")
                 .font(GaryxFont.callout())
@@ -325,7 +326,7 @@ struct GaryxRateLimitBanner: View {
                 .font(.caption)
                 .fontWeight(.semibold)
                 // The label never hyphenates; the capsule grows to fit.
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(
                     sending ? Color(.secondaryLabel) : Color(.label)

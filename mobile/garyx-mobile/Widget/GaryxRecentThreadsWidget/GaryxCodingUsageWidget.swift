@@ -91,6 +91,9 @@ struct GaryxCodingUsageWidgetView: View {
 
     var body: some View {
         linkedContent
+            // WidgetKit families are fixed, non-scrolling canvases; the Core
+            // boundary records the XXL cap and why the gauges stay reachable.
+            .garyxWidgetTypographyBoundary(.widgetFamilyChrome)
             .containerBackground(for: .widget) {
                 ContainerRelativeShape().fill(.thinMaterial)
             }
@@ -124,12 +127,20 @@ struct GaryxCodingUsageWidgetView: View {
                     if metrics.showsHeader {
                         HStack {
                             Text("Weekly quota left")
-                                .font(.system(size: metrics.headerSize, weight: .semibold))
+                                .garyxRelativePointFont(
+                                    size: metrics.headerSize,
+                                    relativeTo: .subheadline,
+                                    weight: .semibold
+                                )
                                 .foregroundStyle(.secondary)
                             Spacer()
                             if let ageText {
                                 Text(ageText)
-                                    .font(.system(size: metrics.detailSize, weight: .medium))
+                                    .garyxRelativePointFont(
+                                        size: metrics.detailSize,
+                                        relativeTo: .caption,
+                                        weight: .medium
+                                    )
                                     .foregroundStyle(.tertiary)
                             }
                         }
@@ -142,7 +153,11 @@ struct GaryxCodingUsageWidgetView: View {
                     .frame(maxHeight: .infinity)
                     if !metrics.showsHeader, metrics.showsDetail, let ageText {
                         Text(ageText)
-                            .font(.system(size: metrics.detailSize - 1, weight: .medium))
+                            .garyxRelativePointFont(
+                                size: metrics.detailSize - 1,
+                                relativeTo: .caption2,
+                                weight: .medium
+                            )
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -158,10 +173,10 @@ struct GaryxCodingUsageWidgetView: View {
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("No usage yet")
-                .font(.system(size: 14, weight: .semibold))
+                .garyxRelativePointFont(size: 14, relativeTo: .body, weight: .semibold)
                 .foregroundStyle(.primary)
             Text("Open Garyx to connect")
-                .font(.system(size: 11.5, weight: .medium))
+                .garyxRelativePointFont(size: 11.5, relativeTo: .caption, weight: .medium)
                 .foregroundStyle(.secondary)
         }
         .multilineTextAlignment(.center)

@@ -97,7 +97,7 @@ struct GaryxAutomationCard: View {
                             Text(automation.label)
                                 .font(GaryxFont.title3(weight: .semibold))
                                 .foregroundStyle(.primary)
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
                             if automation.validationState == .invalid {
                                 GaryxStatusPill(text: "Invalid", tone: .danger)
                             }
@@ -106,7 +106,7 @@ struct GaryxAutomationCard: View {
                             Text(automation.prompt)
                                 .font(GaryxFont.callout())
                                 .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .garyxReadingLineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if automation.validationState == .invalid,
@@ -134,13 +134,13 @@ struct GaryxAutomationCard: View {
                 Text(garyxAutomationScheduleCardSummary(automation.schedule))
                     .font(GaryxFont.callout(weight: .medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                 Spacer(minLength: 0)
                 Button {
                     showsActionPanel.toggle()
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(GaryxFont.system(size: 18, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 18, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 40, height: 34)
                         .garyxAdaptiveGlass(
@@ -284,6 +284,8 @@ private func garyxAutomationScheduleCardSummary(_ schedule: GaryxAutomationSched
 }
 
 private struct GaryxAutomationActionPopover: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .callout) private var rowVerticalPadding: CGFloat = 11
     var onRun: (() -> Void)?
     var onThreads: (() -> Void)?
     let onEdit: () -> Void
@@ -307,7 +309,7 @@ private struct GaryxAutomationActionPopover: View {
             Divider().padding(.leading, 44)
             actionButton(title: "Delete", systemName: "trash", isDestructive: true, action: onDelete)
         }
-        .frame(width: 226)
+        .frame(width: dynamicTypeSize.garyxUsesExpandedReadingLayout ? 340 : 226)
         .padding(.vertical, 6)
     }
 
@@ -320,7 +322,7 @@ private struct GaryxAutomationActionPopover: View {
         Button(role: isDestructive ? .destructive : nil, action: action) {
             HStack(spacing: 10) {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                     .frame(width: 24)
                 Text(title)
                     .font(GaryxFont.callout(weight: .medium))
@@ -328,7 +330,8 @@ private struct GaryxAutomationActionPopover: View {
             }
             .foregroundStyle(isDestructive ? GaryxTheme.danger : .primary)
             .padding(.horizontal, 12)
-            .frame(height: 44)
+            .padding(.vertical, rowVerticalPadding)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(GaryxPressableRowStyle())
@@ -626,6 +629,9 @@ struct GaryxAutomationFormFields: View {
                     Text("Existing Thread").tag(true)
                 }
                 .pickerStyle(.segmented)
+                // Both target labels share one fixed segmented track; stop at
+                // XXL so neither segment collapses the other.
+                .garyxTypographyBoundary(.segmentedControlChrome)
                 targetPicker
             }
 
@@ -860,7 +866,9 @@ private struct GaryxAutomationIntervalStepper: View {
                 .font(GaryxFont.body(weight: .semibold))
                 .foregroundStyle(.primary)
                 .monospacedDigit()
-                .frame(width: 44, height: 36)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(minWidth: 44, minHeight: 36)
 
             Divider()
                 .frame(height: 22)
@@ -889,7 +897,7 @@ private struct GaryxAutomationIntervalStepper: View {
     private func stepButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(GaryxFont.system(size: 14, weight: .bold))
+                .font(GaryxFont.fixedSystem(size: 14, weight: .bold))
                 .foregroundStyle(.primary)
                 .frame(width: 36, height: 36)
                 .contentShape(Rectangle())

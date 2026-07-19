@@ -29,13 +29,16 @@ struct GaryxCapsuleChromeCompactRow: View {
             Text(title)
                 .font(GaryxFont.callout(weight: .medium))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.tail)
                 .layoutPriority(1)
         }
         .padding(.horizontal, 12)
         .frame(height: 44, alignment: .leading)
         .frame(maxWidth: maxWidth ?? .infinity, alignment: .leading)
+        // The same row is the 44-point capsule and its morph twin. Cap at XXL
+        // so both endpoints keep identical single-line geometry.
+        .garyxTypographyBoundary(.navigationChrome)
     }
 }
 
@@ -167,7 +170,7 @@ struct GaryxCapsuleChromePanel: View {
                 Text(sourceConversationTitle)
                     .font(GaryxFont.subheadline(weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.tail)
                     .layoutPriority(1)
 
@@ -189,10 +192,10 @@ struct GaryxCapsuleChromePanel: View {
         Button { onAction(action) } label: {
             HStack(spacing: 12) {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 16, weight: .medium))
+                    .font(GaryxFont.fixedSystem(size: 16, weight: .medium))
                     .frame(width: 24)
                 Text(title)
-                    .font(GaryxFont.scaledCallout(weight: .medium))
+                    .font(GaryxFont.callout(weight: .medium))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(destructive ? GaryxTheme.danger : Color.primary)

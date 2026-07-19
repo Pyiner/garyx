@@ -140,18 +140,18 @@ struct GaryxSkillCard: View {
                 } label: {
                     HStack(alignment: .center, spacing: 10) {
                         Image(systemName: "wand.and.stars")
-                            .font(GaryxFont.system(size: 15, weight: .semibold))
+                            .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(skill.name)
                                 .font(GaryxFont.body(weight: .semibold))
                                 .foregroundStyle(.primary)
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
                             Text(skill.description.isEmpty ? skill.id : skill.description)
                                 .font(GaryxFont.caption(weight: .medium))
                                 .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .garyxReadingLineLimit(2)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -344,19 +344,19 @@ struct GaryxSkillEntryRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: node.entryType == "directory" ? "folder.fill" : "doc.text")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                     .foregroundStyle(node.entryType == "directory" ? .secondary : .primary)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(node.name)
                         .font(GaryxFont.callout(weight: .medium))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     if node.entryType == "file", node.path != node.name {
                         Text(node.path)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
                 }
@@ -400,7 +400,7 @@ private struct GaryxSkillDocumentPreview: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Image(systemName: previewIcon)
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Text(previewLabel)
                     .font(GaryxFont.caption(weight: .semibold))
@@ -410,7 +410,7 @@ private struct GaryxSkillDocumentPreview: View {
                     Text(document.mediaType)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
             }
 

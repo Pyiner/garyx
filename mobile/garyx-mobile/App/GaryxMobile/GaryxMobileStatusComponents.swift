@@ -15,13 +15,16 @@ struct GaryxStatusPill: View {
 
     var body: some View {
         Text(text)
-            .font(GaryxFont.system(size: 11, weight: .semibold))
+            .font(GaryxFont.caption2(weight: .semibold))
             .foregroundStyle(color)
-            .lineLimit(1)
+            .garyxReadingLineLimit()
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(color.opacity(0.10), in: Capsule())
+            // Status pills must stay inline with their parent row; XXL avoids
+            // an unbounded badge taking over the row while still scaling it.
+            .garyxTypographyBoundary(.compactBadgeChrome)
     }
 
     private var color: Color {
@@ -103,32 +106,34 @@ struct GaryxGlobalErrorToastHost: View {
 }
 
 struct GaryxGlobalErrorToast: View {
+    @ScaledMetric(relativeTo: .footnote) private var verticalPadding: CGFloat = 10
+    @ScaledMetric(relativeTo: .footnote) private var contentSpacing: CGFloat = 9
     let text: String
     let onDismiss: () -> Void
 
     var body: some View {
         Button(action: onDismiss) {
-            HStack(spacing: 9) {
+            HStack(spacing: contentSpacing) {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                     .foregroundStyle(GaryxTheme.danger.opacity(0.86))
 
                 Text(text)
                     .font(GaryxFont.footnote(weight: .medium))
                     .foregroundStyle(.primary)
-                    .lineLimit(2)
+                    .garyxReadingLineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Spacer(minLength: 2)
 
                 Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 10, weight: .bold))
+                    .font(GaryxFont.fixedSystem(size: 10, weight: .bold))
                     .foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, verticalPadding)
             .frame(maxWidth: 360, alignment: .leading)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
@@ -261,7 +266,7 @@ struct GaryxStateView: View {
         case .panel:
             GaryxFont.title2(weight: .medium)
         case .inline:
-            GaryxFont.system(size: 28, weight: .medium)
+            GaryxFont.fixedSystem(size: 28, weight: .medium)
         }
     }
 
@@ -383,7 +388,7 @@ struct GaryxToolbarIcon: View {
         Group {
             if let systemName {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 18, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
             } else if let customContent {
                 customContent()
@@ -402,7 +407,7 @@ struct GaryxCompactGlassIcon: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(GaryxFont.system(size: iconSize, weight: .medium))
+            .font(GaryxFont.fixedSystem(size: iconSize, weight: .medium))
             .foregroundStyle(.primary)
             .frame(width: diameter, height: diameter)
             .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
@@ -452,6 +457,7 @@ struct GaryxGlassPanel<Content: View>: View {
 }
 
 struct GaryxGlassSearchField: View {
+    @ScaledMetric(relativeTo: .subheadline) private var verticalPadding: CGFloat = 9
     let placeholder: String
     @Binding var text: String
 
@@ -465,7 +471,7 @@ struct GaryxGlassSearchField: View {
 
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(GaryxFont.system(size: 15, weight: .medium))
+                .font(GaryxFont.fixedSystem(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
 
             TextField(placeholder, text: $text)
@@ -479,7 +485,7 @@ struct GaryxGlassSearchField: View {
                     text = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(GaryxFont.system(size: 15, weight: .medium))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(GaryxPressableRowStyle())
@@ -487,7 +493,8 @@ struct GaryxGlassSearchField: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 38)
+        .padding(.vertical, verticalPadding)
+        .frame(minHeight: 38)
         .garyxAdaptiveGlass(
             .regular,
             isInteractive: true,
@@ -522,7 +529,7 @@ struct GaryxSidebarMenuButton: View {
 struct GaryxHeaderMenuIcon: View {
     var body: some View {
         Image(systemName: "line.3.horizontal")
-            .font(GaryxFont.system(size: 17, weight: .semibold))
+            .font(GaryxFont.fixedSystem(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
@@ -540,7 +547,7 @@ struct GaryxCircleBadge: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(GaryxFont.system(size: iconSize, weight: iconWeight))
+            .font(GaryxFont.fixedSystem(size: iconSize, weight: iconWeight))
             .foregroundStyle(foreground)
             .frame(width: diameter, height: diameter)
             .background(background, in: Circle())
@@ -548,6 +555,7 @@ struct GaryxCircleBadge: View {
 }
 
 struct GaryxPrimaryCapsuleButton: View {
+    @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = 16
     let title: String
     var systemImage: String? = nil
     let action: () -> Void
@@ -557,7 +565,7 @@ struct GaryxPrimaryCapsuleButton: View {
             HStack(spacing: 10) {
                 if let systemImage, !systemImage.isEmpty {
                     Image(systemName: systemImage)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                 }
 
                 Text(title)
@@ -565,7 +573,8 @@ struct GaryxPrimaryCapsuleButton: View {
             }
             .foregroundStyle(Color(.systemBackground))
             .frame(maxWidth: .infinity)
-            .frame(height: 56)
+            .padding(.vertical, verticalPadding)
+            .frame(minHeight: 56)
             .background(Color(.label), in: Capsule())
         }
         .buttonStyle(GaryxPressableRowStyle())

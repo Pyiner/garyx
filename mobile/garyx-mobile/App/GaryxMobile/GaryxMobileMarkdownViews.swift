@@ -18,6 +18,7 @@ enum GaryxClipboard {
 }
 
 struct GaryxMarkdownText: View {
+    @ScaledMetric(relativeTo: .body) private var blockSpacing: CGFloat = 8
     let text: String
     var foreground: Color = .primary
     var codeBackground: Color = GaryxTheme.surface
@@ -32,7 +33,7 @@ struct GaryxMarkdownText: View {
     var onImageFilePreview: GaryxMarkdownImagePreviewResolver?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: blockSpacing) {
             ForEach(GaryxMarkdownRenderCache.shared.blocks(from: text)) { block in
                 switch block.kind {
                 case .markdown(let lines):
@@ -91,6 +92,12 @@ struct GaryxMarkdownText: View {
 }
 
 private struct GaryxMarkdownParagraphView: View {
+    @ScaledMetric(relativeTo: .body) private var paragraphSpacing: CGFloat = 4
+    @ScaledMetric(relativeTo: .body) private var blankLineHeight: CGFloat = 10
+    @ScaledMetric(relativeTo: .body) private var listSpacing: CGFloat = 8
+    @ScaledMetric(relativeTo: .body) private var bulletDiameter: CGFloat = 4
+    @ScaledMetric(relativeTo: .body) private var bulletOffset: CGFloat = 2
+    @ScaledMetric(relativeTo: .body) private var readingLineSpacing: CGFloat = 5
     let lines: [GaryxMarkdownLine]
     let foreground: Color
     var allowsRelativeFileLinks = false
@@ -101,17 +108,17 @@ private struct GaryxMarkdownParagraphView: View {
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: paragraphSpacing) {
             ForEach(lines) { line in
                 switch line.kind {
                 case .blank:
-                    Color.clear.frame(height: 10)
+                    Color.clear.frame(height: blankLineHeight)
                 case .bullet(let text):
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: listSpacing) {
                         Circle()
                             .fill(foreground)
-                            .frame(width: 4, height: 4)
-                            .offset(y: -2)
+                            .frame(width: bulletDiameter, height: bulletDiameter)
+                            .offset(y: -bulletOffset)
 
                         Text(GaryxMarkdownText.attributedString(from: text, linkifyFilePaths: onFileLinkTap != nil))
                             .font(GaryxFont.body())
@@ -119,11 +126,11 @@ private struct GaryxMarkdownParagraphView: View {
                             .tint(GaryxTheme.link)
                             .environment(\.openURL, openURLAction)
                             .garyxTextSelection(allowsTextSelection)
-                            .lineSpacing(5)
+                            .lineSpacing(readingLineSpacing)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 case .numbered(let label, let text):
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: listSpacing) {
                         Text(label)
                             .font(GaryxFont.body(weight: .medium))
                             .foregroundStyle(foreground)
@@ -135,7 +142,7 @@ private struct GaryxMarkdownParagraphView: View {
                             .tint(GaryxTheme.link)
                             .environment(\.openURL, openURLAction)
                             .garyxTextSelection(allowsTextSelection)
-                            .lineSpacing(5)
+                            .lineSpacing(readingLineSpacing)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 case .paragraph(let text):
@@ -145,7 +152,7 @@ private struct GaryxMarkdownParagraphView: View {
                         .tint(GaryxTheme.link)
                         .environment(\.openURL, openURLAction)
                         .garyxTextSelection(allowsTextSelection)
-                        .lineSpacing(5)
+                        .lineSpacing(readingLineSpacing)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -299,7 +306,7 @@ private struct GaryxCodeBlockView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code.isEmpty ? " " : code)
-                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+                    .font(GaryxFont.monospaced(.footnote))
                     .foregroundStyle(foreground)
                     .garyxTextSelection(allowsTextSelection)
                     .fixedSize(horizontal: true, vertical: true)
@@ -381,6 +388,9 @@ private struct GaryxMarkdownTable {
 }
 
 private struct GaryxMarkdownTableView: View {
+    @ScaledMetric(relativeTo: .callout) private var columnWidthScale: CGFloat = 1
+    @ScaledMetric(relativeTo: .callout) private var cellLineSpacing: CGFloat = 5
+    @ScaledMetric(relativeTo: .callout) private var cellVerticalPadding: CGFloat = 7
     let table: GaryxMarkdownTable
     let foreground: Color
     let background: Color
@@ -434,7 +444,7 @@ private struct GaryxMarkdownTableView: View {
                 cellView(
                     text: text,
                     column: column,
-                    width: table.columnWidths[columnIndex],
+                    width: table.columnWidths[columnIndex] * columnWidthScale,
                     isHeader: isHeader
                 )
 
@@ -461,11 +471,11 @@ private struct GaryxMarkdownTableView: View {
             .multilineTextAlignment(column.alignment.textAlignment)
             .environment(\.openURL, openURLAction)
             .garyxTextSelection(allowsTextSelection)
-            .lineSpacing(5)
+            .lineSpacing(cellLineSpacing)
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: width, alignment: column.alignment.frameAlignment)
             .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.vertical, cellVerticalPadding)
     }
 
     private func rowBackground(isHeader: Bool, rowIndex: Int) -> Color {
@@ -654,7 +664,7 @@ private struct GaryxMarkdownImageView: View {
     private var filePreviewChip: some View {
         HStack(spacing: 10) {
             Image(systemName: "doc.text")
-                .font(GaryxFont.system(size: 18, weight: .medium))
+                .font(GaryxFont.fixedSystem(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(alt.isEmpty ? sourceFileName : alt)
@@ -663,12 +673,12 @@ private struct GaryxMarkdownImageView: View {
                 Text(source)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right")
-                .font(GaryxFont.system(size: 11, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12)
@@ -686,7 +696,7 @@ private struct GaryxMarkdownImageView: View {
     private var failurePlaceholder: some View {
         HStack(spacing: 10) {
             Image(systemName: "photo")
-                .font(GaryxFont.system(size: 18, weight: .medium))
+                .font(GaryxFont.fixedSystem(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(alt.isEmpty ? "Image" : alt)
@@ -695,7 +705,7 @@ private struct GaryxMarkdownImageView: View {
                 Text(source)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)

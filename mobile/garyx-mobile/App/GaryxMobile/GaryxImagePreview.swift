@@ -167,7 +167,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                         .tint(.primary)
                 } else {
                     Image(systemName: saveState == .saved ? "checkmark" : "square.and.arrow.down")
-                        .font(GaryxFont.system(size: 16, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 16, weight: .semibold))
                         .foregroundStyle(.primary)
                 }
             }
@@ -191,7 +191,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
             onDismiss()
         } label: {
             Image(systemName: "xmark")
-                .font(GaryxFont.system(size: 16, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 16, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
                 .contentShape(Circle())

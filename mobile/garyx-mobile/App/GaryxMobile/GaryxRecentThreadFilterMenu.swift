@@ -21,7 +21,7 @@ struct GaryxRecentThreadFilterMenu: View {
             .labelsHidden()
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
-                .font(GaryxFont.system(size: 16, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 16, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
                 .garyxAdaptiveGlass(

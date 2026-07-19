@@ -145,7 +145,7 @@ struct GaryxWorkspacePathRow: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: isSelected ? "folder.fill" : "folder")
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .frame(width: 28, height: 28)
 
@@ -153,11 +153,11 @@ struct GaryxWorkspacePathRow: View {
                     Text(path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(garyxCompactPathLabel(path))
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.middle)
                 }
 
@@ -221,7 +221,7 @@ struct GaryxWorkspaceUpRow: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.turn.up.left")
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 28, height: 28)
                 Text("Parent Folder")
@@ -242,7 +242,7 @@ struct GaryxWorkspaceEmptyDirectoryRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "tray")
-                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 28, height: 28)
             Text("Empty folder")
@@ -266,7 +266,7 @@ struct GaryxWorkspaceFileRow: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: iconName)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                     .foregroundStyle(entry.entryType == "directory" ? .primary : .secondary)
                     .frame(width: 28, height: 28)
 
@@ -274,17 +274,17 @@ struct GaryxWorkspaceFileRow: View {
                     Text(entry.name.isEmpty ? entry.path.garyxLastPathComponent : entry.name)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(detail)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
 
                 Spacer(minLength: 0)
 
                 Image(systemName: entry.entryType == "directory" ? "chevron.right" : "doc.text.magnifyingglass")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 16)
@@ -328,18 +328,18 @@ struct GaryxWorkspacePreviewSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: previewIconName)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(preview.name)
                             .font(GaryxFont.subheadline(weight: .semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                         Text(preview.path)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 0)

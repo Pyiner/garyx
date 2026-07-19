@@ -60,11 +60,11 @@ struct GaryxConfiguredBotConfigRow: View {
                         Text(bot.displayName)
                             .font(GaryxFont.subheadline(weight: .semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                         Text(detailLine)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
 
@@ -215,6 +215,9 @@ struct GaryxBotAccountForm: View {
                     Text("Worktree").tag("worktree")
                 }
                 .pickerStyle(.segmented)
+                // UISegmentedControl owns a fixed single-line track; cap its
+                // labels at XXL while every surrounding form row is unbounded.
+                .garyxTypographyBoundary(.segmentedControlChrome)
                 GaryxFormRow(title: "Enabled") {
                     Toggle("Enabled", isOn: $enabled)
                         .labelsHidden()
@@ -475,7 +478,7 @@ private struct GaryxBotConfigFieldEditor: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .font(GaryxFont.callout())
-            .lineLimit(1)
+            .garyxReadingLineLimit()
             .focused($isFocused)
             .accessibilityLabel(field.label)
             .textFieldStyle(.plain)
@@ -488,7 +491,7 @@ private struct GaryxBotConfigFieldEditor: View {
             .autocorrectionDisabled()
             .keyboardType(field.kind == .number ? .decimalPad : .default)
             .font(GaryxFont.callout())
-            .lineLimit(1)
+            .garyxReadingLineLimit()
             .focused($isFocused)
             .accessibilityLabel(field.label)
             .textFieldStyle(.plain)

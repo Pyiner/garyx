@@ -313,7 +313,7 @@ struct GaryxGatewaySetupView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "plus")
-                                .font(GaryxFont.system(size: 15, weight: .semibold))
+                                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                                 .foregroundStyle(.secondary)
                                 .frame(width: 26, height: 26)
                             Text("Add Gateway")
@@ -436,7 +436,7 @@ private struct GaryxSetupGatewayRow: View {
                         .frame(width: 26, height: 26)
                 } else {
                     Image(systemName: "network")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 26, height: 26)
                 }
@@ -445,12 +445,12 @@ private struct GaryxSetupGatewayRow: View {
                     Text(row.title)
                         .font(GaryxFont.callout(weight: .medium))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     if !row.subtitle.isEmpty {
                         Text(row.subtitle)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
                 }
@@ -508,6 +508,7 @@ struct GaryxShellView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.garyxMotion) private var motion
 
     let onSetSidebarVisible: (Bool, Bool) -> Void
@@ -594,8 +595,13 @@ struct GaryxShellView: View, Equatable {
 
     private func drawerSidebarWidth(for containerSize: CGSize) -> CGFloat {
         // The drawer is navigation-only now; it overlays the home list as a
-        // partial sheet on every size class.
-        min(sidebarWidth, containerSize.width * 0.86)
+        // partial sheet on every size class. Accessibility reading sizes need
+        // nearly the full canvas so long module names wrap by words instead of
+        // being forced into single-character fragments beside the icon column.
+        if dynamicTypeSize.isAccessibilitySize {
+            return containerSize.width * 0.96
+        }
+        return min(sidebarWidth, containerSize.width * 0.86)
     }
 
     private func drawerBody(width: CGFloat, containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {

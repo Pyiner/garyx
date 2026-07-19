@@ -221,7 +221,7 @@ struct GaryxConversationView: View {
                             updateScrollState(proxy: proxy) { $0.scrollToBottomTapped() }
                         } label: {
                             Image(systemName: "arrow.down")
-                                .font(GaryxFont.system(size: 15, weight: .semibold))
+                                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                                 .foregroundStyle(.primary)
                                 .frame(width: 42, height: 42)
                                 // Glass is decoration only: an iOS 26

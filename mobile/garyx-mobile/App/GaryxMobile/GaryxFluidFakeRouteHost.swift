@@ -407,7 +407,7 @@ private struct GaryxFluidFakeRouteRoot: View {
             )
             Text(probe.status)
                 .font(.caption2.monospaced())
-                .lineLimit(3)
+                .garyxReadingLineLimit(3)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)

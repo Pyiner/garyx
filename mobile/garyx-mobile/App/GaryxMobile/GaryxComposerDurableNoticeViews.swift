@@ -47,7 +47,7 @@ struct GaryxComposerDurableNoticeStack: View {
     private func noticeCard(_ notice: GaryxComposerDurableNotice) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: iconName(for: notice.kind))
-                .font(.system(size: 15, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                 .foregroundStyle(tint(for: notice.kind))
                 .frame(width: 22, height: 22)
                 .accessibilityHidden(true)

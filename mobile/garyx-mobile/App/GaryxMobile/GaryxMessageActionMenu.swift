@@ -110,9 +110,9 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
     var bottomInset: CGFloat = 0
     var dismissToken = ""
     @Environment(\.garyxMotion) private var motion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = 46
 
-    private static let menuWidth: CGFloat = 236
-    private static let rowHeight: CGFloat = 46
     private static let margin: CGFloat = 12
 
     func body(content: Content) -> some View {
@@ -125,7 +125,7 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
                             .onTapGesture { request.dismiss() }
 
                         GaryxMessageMenuPanel(request: request)
-                            .frame(width: Self.menuWidth)
+                            .frame(width: menuWidth(in: proxy.size.width))
                             .offset(panelOffset(for: request, in: proxy))
                             .transition(motion.transition(.messageMenu))
                     }
@@ -141,14 +141,15 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
     private func panelOffset(for request: GaryxMessageMenuRequest, in proxy: GeometryProxy) -> CGSize {
         let rect = proxy[request.anchor]
         let size = proxy.size
-        let menuHeight = CGFloat(request.items.count) * Self.rowHeight + 12
+        let resolvedMenuWidth = menuWidth(in: size.width)
+        let menuHeight = CGFloat(request.items.count) * rowHeight + 12
 
         var x: CGFloat
         switch request.edge {
         case .leading: x = rect.minX
-        case .trailing: x = rect.maxX - Self.menuWidth
+        case .trailing: x = rect.maxX - resolvedMenuWidth
         }
-        x = min(max(x, Self.margin), max(Self.margin, size.width - Self.menuWidth - Self.margin))
+        x = min(max(x, Self.margin), max(Self.margin, size.width - resolvedMenuWidth - Self.margin))
 
         let bottomLimit = size.height - bottomInset - Self.margin
         var y = rect.maxY + 8
@@ -158,9 +159,16 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
         y = min(max(y, Self.margin), max(Self.margin, bottomLimit - menuHeight))
         return CGSize(width: x, height: y)
     }
+
+    private func menuWidth(in availableWidth: CGFloat) -> CGFloat {
+        let preferredWidth: CGFloat = dynamicTypeSize.garyxUsesExpandedReadingLayout ? 340 : 236
+        return min(preferredWidth, availableWidth - Self.margin * 2)
+    }
 }
 
 private struct GaryxMessageMenuPanel: View {
+    @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = 46
+    @ScaledMetric(relativeTo: .subheadline) private var verticalPadding: CGFloat = 8
     let request: GaryxMessageMenuRequest
 
     var body: some View {
@@ -182,11 +190,12 @@ private struct GaryxMessageMenuPanel: View {
                                 .foregroundStyle(.primary)
                             Spacer(minLength: 12)
                             Image(systemName: item.systemImage)
-                                .font(.system(size: 15, weight: .regular))
+                                .font(GaryxFont.fixedSystem(size: 15, weight: .regular))
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 14)
-                        .frame(height: 46)
+                        .padding(.vertical, verticalPadding)
+                        .frame(minHeight: rowHeight)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(GaryxPressableRowStyle())
@@ -448,6 +457,9 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
     let bottomInset: CGFloat
 
     @Environment(\.garyxMotion) private var motion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = GaryxThreadActionMenuMetrics.rowHeight
+    @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = GaryxThreadActionMenuMetrics.verticalPadding
 
     func body(content: Content) -> some View {
         content.overlayPreferenceValue(GaryxThreadActionMenuPreferenceKey.self) { request in
@@ -510,8 +522,7 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
         in proxy: GeometryProxy
     ) -> CGSize {
         let sourceRect = focusedSourceRect(for: request, in: proxy)
-        let panelHeight = CGFloat(request.items.count) * GaryxThreadActionMenuMetrics.rowHeight
-            + GaryxThreadActionMenuMetrics.verticalPadding * 2
+        let panelHeight = CGFloat(request.items.count) * rowHeight + verticalPadding * 2
         let margin = GaryxThreadActionMenuMetrics.surfaceMargin
         let x = min(
             max(sourceRect.minX, margin),
@@ -530,7 +541,10 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
     }
 
     private func resolvedPanelWidth(in proxy: GeometryProxy) -> CGFloat {
-        min(
+        if dynamicTypeSize.garyxUsesExpandedReadingLayout {
+            return min(340, proxy.size.width - GaryxThreadActionMenuMetrics.surfaceMargin * 2)
+        }
+        return min(
             max(
                 proxy.size.width * GaryxThreadActionMenuMetrics.menuWidthFraction,
                 GaryxThreadActionMenuMetrics.minimumMenuWidth
@@ -542,6 +556,8 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
 }
 
 private struct GaryxThreadActionMenuPanel: View {
+    @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = GaryxThreadActionMenuMetrics.rowHeight
+    @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = GaryxThreadActionMenuMetrics.verticalPadding
     let request: GaryxThreadActionMenuRequest
 
     var body: some View {
@@ -558,12 +574,12 @@ private struct GaryxThreadActionMenuPanel: View {
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: item.systemImage)
-                                .font(GaryxFont.system(size: 18, weight: .regular))
+                                .font(GaryxFont.fixedSystem(size: 18, weight: .regular))
                                 .frame(width: 28)
 
                             Text(item.title)
                                 .font(GaryxFont.body())
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
 
                             Spacer(minLength: 0)
                         }
@@ -571,7 +587,7 @@ private struct GaryxThreadActionMenuPanel: View {
                             item.role == .destructive ? GaryxTheme.danger : Color.primary
                         )
                         .padding(.horizontal, 18)
-                        .frame(height: GaryxThreadActionMenuMetrics.rowHeight)
+                        .frame(minHeight: rowHeight)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(GaryxThreadActionMenuButtonStyle())
@@ -579,7 +595,7 @@ private struct GaryxThreadActionMenuPanel: View {
                     .opacity(item.isEnabled ? 1 : 0.42)
                 }
             }
-            .padding(.vertical, GaryxThreadActionMenuMetrics.verticalPadding)
+            .padding(.vertical, verticalPadding)
         }
     }
 }

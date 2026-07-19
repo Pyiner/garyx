@@ -157,7 +157,7 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
                     previewHeader
                     if let text = currentPreview.text, !text.isEmpty {
                         Text(text)
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(GaryxFont.monospaced(.footnote))
                             .foregroundStyle(.primary)
                             .textSelection(.enabled)
                     } else {
@@ -186,12 +186,12 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
             Text(currentPreview.displayName)
                 .font(GaryxFont.subheadline(weight: .semibold))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.middle)
             Text(currentPreview.path)
                 .font(GaryxFont.caption())
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.middle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -212,7 +212,7 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
             onDismiss()
         } label: {
             Image(systemName: "xmark")
-                .font(GaryxFont.system(size: 16, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 16, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
                 .garyxAdaptiveGlass(
@@ -354,7 +354,7 @@ private struct GaryxWorkspaceTextPreview: View {
     var body: some View {
         ScrollView([.vertical, .horizontal], showsIndicators: true) {
             Text(text)
-                .font(.system(size: 12, design: .monospaced))
+                .font(GaryxFont.monospaced(.caption))
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .padding(10)

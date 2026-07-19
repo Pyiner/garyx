@@ -46,6 +46,7 @@ struct GaryxCompactRowDivider: View {
 }
 
 struct GaryxDisclosureListRow: View {
+    @ScaledMetric(relativeTo: .subheadline) private var readingSpacingScale: CGFloat = 1
     let title: String
     var subtitle: String?
     var systemImage: String?
@@ -60,25 +61,25 @@ struct GaryxDisclosureListRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 10 * readingSpacingScale) {
                 if let imageName {
                     Image(systemName: imageName)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(isSelected ? .primary : .secondary)
                         .frame(width: iconFrame, height: iconFrame)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 2 * readingSpacingScale) {
                     Text(title)
                         .font(GaryxFont.subheadline(weight: titleWeight))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
 
                     if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
                 }
@@ -86,11 +87,11 @@ struct GaryxDisclosureListRow: View {
                 Spacer(minLength: 0)
 
                 Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
+            .padding(.vertical, verticalPadding * readingSpacingScale)
             .frame(minHeight: minHeight)
             .background {
                 if isSelected {
@@ -121,7 +122,7 @@ struct GaryxSelectionCheckmark: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(GaryxFont.system(size: size, weight: weight))
+            .font(GaryxFont.fixedSystem(size: size, weight: weight))
             .foregroundStyle(.primary)
             .accessibilityHidden(true)
     }
@@ -149,7 +150,7 @@ struct GaryxMenuSelectionLabel: View {
                 GaryxSelectionCheckmark(size: 13)
             } else {
                 Image(systemName: fallbackSystemImage)
-                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
         }
@@ -219,7 +220,7 @@ struct GaryxRowActionMenu<Content: View>: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(GaryxFont.system(size: 17, weight: .semibold))
+                            .font(GaryxFont.fixedSystem(size: 17, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: actionMenuWidth, height: 28)
                             .garyxAdaptiveGlass(
@@ -334,7 +335,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
                     perform(action)
                 } label: {
                     Image(systemName: action.systemImage)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(Color.white)
                         .rotationEffect(.degrees(action.iconRotationDegrees))
                         .frame(width: actionButtonDiameter, height: actionButtonDiameter)

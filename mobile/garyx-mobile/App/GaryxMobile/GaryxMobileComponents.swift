@@ -366,10 +366,13 @@ struct GaryxPanelHeaderTitle: View {
         Text(title)
             .font(GaryxFont.callout(weight: .medium))
             .foregroundStyle(.primary)
-            .lineLimit(1)
+            .garyxReadingLineLimit()
             .truncationMode(.tail)
             .padding(.horizontal, 14)
             .frame(height: 44, alignment: .leading)
+            // This title is the label inside a 44-point navigation capsule;
+            // XXL preserves its fixed bar geometry without freezing small sizes.
+            .garyxTypographyBoundary(.navigationChrome)
             .garyxAdaptiveGlass(
                 .regular,
                 isInteractive: false,

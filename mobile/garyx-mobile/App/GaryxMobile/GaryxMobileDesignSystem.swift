@@ -75,7 +75,7 @@ struct GaryxFavoriteStar: View {
 
     private var star: some View {
         Image(systemName: isFavorited ? "star.fill" : "star")
-            .font(GaryxFont.system(size: size, weight: .semibold))
+            .font(GaryxFont.fixedSystem(size: size, weight: .semibold))
             .foregroundStyle(
                 isFavorited
                     ? AnyShapeStyle(
@@ -103,47 +103,144 @@ enum GaryxSafeAreaChrome {
 
 enum GaryxFont {
     static func largeTitle(weight: Font.Weight = .regular) -> Font {
-        .system(size: 34, weight: weight)
+        font(.largeTitle, weight: weight)
+    }
+
+    static func title(weight: Font.Weight = .regular) -> Font {
+        font(.title, weight: weight)
     }
 
     static func title2(weight: Font.Weight = .regular) -> Font {
-        .system(size: 22, weight: weight)
+        font(.title2, weight: weight)
     }
 
     static func title3(weight: Font.Weight = .regular) -> Font {
-        .system(size: 20, weight: weight)
+        font(.title3, weight: weight)
+    }
+
+    static func headline(weight: Font.Weight = .semibold) -> Font {
+        font(.headline, weight: weight)
     }
 
     static func body(weight: Font.Weight = .regular) -> Font {
-        .system(size: 17, weight: weight)
+        font(.body, weight: weight)
     }
 
     static func callout(weight: Font.Weight = .regular) -> Font {
-        .system(size: 16, weight: weight)
-    }
-
-    /// Callout that follows Dynamic Type. Prefer this for reading surfaces
-    /// (menus, options, settings rows) where accessibility sizes must
-    /// actually grow the text; the fixed variants remain for chrome whose
-    /// geometry is pinned (e.g. the title-capsule morph).
-    static func scaledCallout(weight: Font.Weight = .regular) -> Font {
-        .system(.callout, design: .default, weight: weight)
+        font(.callout, weight: weight)
     }
 
     static func subheadline(weight: Font.Weight = .regular) -> Font {
-        .system(size: 15, weight: weight)
+        font(.subheadline, weight: weight)
     }
 
     static func footnote(weight: Font.Weight = .regular) -> Font {
-        .system(size: 13, weight: weight)
+        font(.footnote, weight: weight)
     }
 
     static func caption(weight: Font.Weight = .regular) -> Font {
-        .system(size: 12, weight: weight)
+        font(.caption, weight: weight)
     }
 
-    static func system(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+    static func caption2(weight: Font.Weight = .regular) -> Font {
+        font(.caption2, weight: weight)
+    }
+
+    static func monospaced(
+        _ role: GaryxTypographyRole,
+        weight: Font.Weight = .regular
+    ) -> Font {
+        font(role, weight: weight, design: .monospaced)
+    }
+
+    static func uiFont(
+        _ role: GaryxTypographyRole,
+        compatibleWith traitCollection: UITraitCollection? = nil
+    ) -> UIFont {
+        UIFont.preferredFont(
+            forTextStyle: role.specification.textStyle.uiKitTextStyle,
+            compatibleWith: traitCollection
+        )
+    }
+
+    /// Fixed point sizes are reserved for SF Symbols, avatar initials, and
+    /// explicitly documented fixed chrome geometry. Readable text must use a
+    /// semantic role above so Dynamic Type and the system optical tables apply.
+    static func fixedSystem(size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
+    }
+
+    private static func font(
+        _ role: GaryxTypographyRole,
+        weight: Font.Weight,
+        design: Font.Design = .default
+    ) -> Font {
+        .system(role.specification.textStyle.swiftUITextStyle, design: design, weight: weight)
+    }
+}
+
+private extension GaryxTypographyTextStyle {
+    var swiftUITextStyle: Font.TextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title: .title
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .body: .body
+        case .callout: .callout
+        case .subheadline: .subheadline
+        case .footnote: .footnote
+        case .caption: .caption
+        case .caption2: .caption2
+        }
+    }
+
+    var uiKitTextStyle: UIFont.TextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title: .title1
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .body: .body
+        case .callout: .callout
+        case .subheadline: .subheadline
+        case .footnote: .footnote
+        case .caption: .caption1
+        case .caption2: .caption2
+        }
+    }
+}
+
+private struct GaryxTypographyScaleBoundaryModifier: ViewModifier {
+    let boundary: GaryxTypographyScaleBoundary
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch boundary.maximumCategory {
+        case nil:
+            content
+        case .extraExtraLarge:
+            content.dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        }
+    }
+}
+
+private struct GaryxReadingLineLimitModifier: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let compactLimit: Int?
+
+    func body(content: Content) -> some View {
+        content.lineLimit(dynamicTypeSize.garyxUsesExpandedReadingLayout ? nil : compactLimit)
+    }
+}
+
+extension DynamicTypeSize {
+    /// The largest standard category already needs the same wrapping freedom
+    /// as accessibility categories on compact iPhone rows.
+    var garyxUsesExpandedReadingLayout: Bool {
+        self >= .xxxLarge
     }
 }
 
@@ -189,7 +286,7 @@ struct GaryxMiniIconButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(GaryxFont.system(size: 13, weight: .semibold))
+            .font(GaryxFont.fixedSystem(size: 13, weight: .semibold))
             .foregroundStyle(isPrimary ? Color(.systemBackground) : Color.primary)
             .frame(width: 44, height: 44)
             .background(
@@ -204,7 +301,7 @@ struct GaryxMiniIconButtonStyle: ButtonStyle {
 struct GaryxIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(GaryxFont.system(size: 15, weight: .semibold))
+            .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
@@ -341,6 +438,19 @@ private struct GaryxFloatingBottomChromeModifier<Chrome: View>: ViewModifier {
 }
 
 extension View {
+    /// Applies one of the centrally documented fixed-geometry exceptions.
+    /// Reading surfaces use `.readingSurface`, which intentionally has no cap.
+    func garyxTypographyBoundary(_ boundary: GaryxTypographyScaleBoundary) -> some View {
+        modifier(GaryxTypographyScaleBoundaryModifier(boundary: boundary))
+    }
+
+    /// Compact rows may stay concise below the largest standard size. At
+    /// XXXL and accessibility sizes they expose complete text instead of
+    /// preserving a one-line desktop-like density.
+    func garyxReadingLineLimit(_ compactLimit: Int? = 1) -> some View {
+        modifier(GaryxReadingLineLimitModifier(compactLimit: compactLimit))
+    }
+
     /// Pins vertical scroll content to the scroll container's width so stray
     /// horizontal child overflow can never widen the scroll content and make
     /// the page horizontally pannable. Apply to the top-level content of a

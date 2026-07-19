@@ -41,6 +41,9 @@ struct GaryxCapsulesView: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                        // Gallery tabs occupy one fixed segmented track, so
+                        // label growth stops at XXL to preserve both targets.
+                        .garyxTypographyBoundary(.segmentedControlChrome)
                         .labelsHidden()
                         .tint(GaryxTheme.controlTint)
                     }
@@ -175,11 +178,11 @@ private struct GaryxCapsuleGalleryCard: View {
                     Text(capsule.displayTitle)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(subline)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.tail)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -311,7 +314,7 @@ struct GaryxCapsulePreviewThumbnail: View {
     private func placeholder(systemName: String, text: String) -> some View {
         VStack(spacing: 6) {
             Image(systemName: systemName)
-                .font(GaryxFont.system(size: 18, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 18, weight: .semibold))
             Text(text)
                 .font(GaryxFont.caption(weight: .medium))
         }
@@ -967,7 +970,7 @@ private struct GaryxMobileCapsuleChatCard: View {
                     Text(displayTitle)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(GaryxCapsuleChatCardPresentation.subtitle(action: card.action))
                         .font(GaryxFont.caption(weight: .medium))
                         .foregroundStyle(.secondary)

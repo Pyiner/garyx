@@ -274,7 +274,7 @@ struct GaryxGatewayEmptyProfilesRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "network")
-                .font(GaryxFont.system(size: 14, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 22, height: 22)
             Text("No saved gateways")
@@ -307,7 +307,7 @@ struct GaryxSavedGatewayProfileRow: View {
                         .frame(width: 20, height: 20)
                 } else {
                     Image(systemName: "network")
-                        .font(GaryxFont.system(size: 14, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 20, height: 20)
                 }
@@ -316,18 +316,18 @@ struct GaryxSavedGatewayProfileRow: View {
                     Text(profile.label)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(profile.gatewayUrl)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
 
                 Spacer(minLength: 0)
 
                 if profile.hasToken {
                     Image(systemName: "key.fill")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
             }

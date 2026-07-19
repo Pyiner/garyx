@@ -101,12 +101,28 @@ public enum GaryxTypographyRole: String, CaseIterable, Sendable {
         leading: GaryxTypographyLeadingIntent
     ) -> GaryxTypographyRoleSpecification {
         GaryxTypographyRoleSpecification(
-            textStyle: GaryxTypographyTextStyle(rawValue: rawValue)!,
+            textStyle: textStyle,
             basePointSize: size,
             tracking: tracking,
             leading: leading,
             scalePolicy: .unbounded
         )
+    }
+
+    private var textStyle: GaryxTypographyTextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title: .title
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .body: .body
+        case .callout: .callout
+        case .subheadline: .subheadline
+        case .footnote: .footnote
+        case .caption: .caption
+        case .caption2: .caption2
+        }
     }
 }
 
@@ -124,12 +140,19 @@ public enum GaryxTypographyScaleBoundary: String, CaseIterable, Sendable {
     case composerAccessoryChrome
     case segmentedControlChrome
     case compactBadgeChrome
+    case compactDataVisualizationChrome
+    case widgetFamilyChrome
 
     public var maximumCategory: GaryxTypographyContentSizeCategory? {
         switch self {
         case .readingSurface:
             nil
-        case .navigationChrome, .composerAccessoryChrome, .segmentedControlChrome, .compactBadgeChrome:
+        case .navigationChrome,
+             .composerAccessoryChrome,
+             .segmentedControlChrome,
+             .compactBadgeChrome,
+             .compactDataVisualizationChrome,
+             .widgetFamilyChrome:
             .extraExtraLarge
         }
     }
@@ -146,6 +169,10 @@ public enum GaryxTypographyScaleBoundary: String, CaseIterable, Sendable {
             "Segment labels share a fixed system control track, so growth stops at XXL and the surrounding form content remains unbounded."
         case .compactBadgeChrome:
             "Compact status badges must remain inline with their row, so growth stops at XXL while the row's reading text remains unbounded."
+        case .compactDataVisualizationChrome:
+            "Labels embedded in a fixed gauge must stay inside its arc, so growth stops at XXL while surrounding usage explanations remain unbounded."
+        case .widgetFamilyChrome:
+            "WidgetKit snapshots have a fixed non-scrolling family canvas, so their relative typography stops at XXL to keep every static row reachable."
         }
     }
 }

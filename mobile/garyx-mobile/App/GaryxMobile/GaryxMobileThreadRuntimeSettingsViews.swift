@@ -45,13 +45,16 @@ struct GaryxThreadRuntimeCompactRow: View {
             Text(title)
                 .font(GaryxFont.callout(weight: .medium))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .truncationMode(.tail)
                 .layoutPriority(1)
         }
         .padding(.horizontal, 12)
         .frame(height: 44, alignment: .leading)
         .frame(maxWidth: maxWidth ?? .infinity, alignment: .leading)
+        // Compact and expanded morph headers must share this 44-point anchor;
+        // XXL is the largest size that preserves the no-jump geometry.
+        .garyxTypographyBoundary(.navigationChrome)
     }
 
     @ViewBuilder
@@ -67,7 +70,7 @@ struct GaryxThreadRuntimeCompactRow: View {
             )
         } else {
             Image(systemName: "person.crop.circle")
-                .font(GaryxFont.system(size: diameter * 0.72, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: diameter * 0.72, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: diameter, height: diameter)
         }
@@ -111,6 +114,9 @@ struct GaryxThreadRuntimeMorphSurface: View {
 struct GaryxThreadRuntimeSettingsPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxMotion) private var motion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .callout) private var settingsRowVerticalPadding: CGFloat = 8
+    @ScaledMetric(relativeTo: .callout) private var optionsRowVerticalPadding: CGFloat = 8
 
     let compactRowWidth: CGFloat
     let isExpanded: Bool
@@ -376,9 +382,9 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                 } label: {
                     HStack(spacing: 12) {
                         Text(option.label)
-                            .font(GaryxFont.scaledCallout(weight: selectedId == option.id ? .semibold : .regular))
+                            .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.tail)
 
                         Spacer(minLength: 0)
@@ -388,6 +394,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         }
                     }
                     .padding(.horizontal, 16)
+                    .padding(.vertical, optionsRowVerticalPadding)
                     .frame(minHeight: 44)
                     .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
@@ -430,13 +437,13 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "chevron.left")
-                                .font(GaryxFont.system(size: 12, weight: .semibold))
+                                .font(GaryxFont.fixedSystem(size: 12, weight: .semibold))
                                 .foregroundStyle(.secondary)
 
                             Text(page.title)
-                                .font(GaryxFont.scaledCallout(weight: .medium))
+                                .font(GaryxFont.callout(weight: .medium))
                                 .foregroundStyle(.primary)
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
 
                             Spacer(minLength: 0)
                         }
@@ -477,13 +484,13 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         Text(agentTitle)
                             .font(GaryxFont.callout(weight: .semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
 
                         if let subtitle = agentSubtitle {
                             Text(subtitle)
                                 .font(GaryxFont.caption())
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
                         }
                     }
 
@@ -564,25 +571,49 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         onTap: @escaping () -> Void
     ) -> some View {
         Button(action: onTap) {
-            HStack(spacing: 10) {
-                Text(title)
-                    .font(GaryxFont.callout(weight: .medium))
-                    .foregroundStyle(.primary)
+            Group {
+                if dynamicTypeSize.garyxUsesExpandedReadingLayout {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(GaryxFont.callout(weight: .medium))
+                            .foregroundStyle(.primary)
 
-                Spacer(minLength: 0)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(value)
+                                .font(GaryxFont.callout())
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            if enabled {
+                                Image(systemName: "chevron.right")
+                                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        Text(title)
+                            .font(GaryxFont.callout(weight: .medium))
+                            .foregroundStyle(.primary)
 
-                Text(value)
-                    .font(GaryxFont.callout())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                        Spacer(minLength: 0)
 
-                if enabled {
-                    Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        Text(value)
+                            .font(GaryxFont.callout())
+                            .foregroundStyle(.secondary)
+                            .garyxReadingLineLimit()
+
+                        if enabled {
+                            Image(systemName: "chevron.right")
+                                .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 8)
+            .padding(.vertical, settingsRowVerticalPadding)
             .frame(minHeight: 48)
             .contentShape(Rectangle())
         }
@@ -771,7 +802,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
             )
         } else {
             Image(systemName: "person.crop.circle")
-                .font(GaryxFont.system(size: 22, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 22, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: diameter, height: diameter)
         }
@@ -941,7 +972,7 @@ struct GaryxThreadBotBindingSheet: View {
             Text("Thread Bot")
                 .font(GaryxFont.callout(weight: .medium))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
             Spacer(minLength: 0)
             Button {
                 dismiss()
@@ -994,7 +1025,7 @@ struct GaryxThreadBotBindingSheet: View {
                     )
                 } else {
                     Image(systemName: systemName)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(isDestructive ? .red : .secondary)
                         .frame(width: 34, height: 34)
                         .background(Color(.secondarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1004,11 +1035,11 @@ struct GaryxThreadBotBindingSheet: View {
                     Text(title)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(isDestructive ? .red : .primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(subtitle)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.tail)
                 }
                 Spacer(minLength: 0)

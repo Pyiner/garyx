@@ -658,7 +658,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                     .frame(width: 1, height: 1)
                     .clipped()
             }
-            .font(.system(size: 1))
+            .font(GaryxFont.fixedSystem(size: 1))
             .padding(.top, 88)
             .padding(.trailing, 2)
         }
@@ -725,10 +725,13 @@ struct GaryxHomeHeaderView: View {
                 GaryxSidebarMenuButton(action: onOpenDrawer)
 
                 Text("Garyx")
-                    .font(GaryxFont.system(size: 26, weight: .semibold))
+                    .font(GaryxFont.title(weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .minimumScaleFactor(0.75)
+                    // The wordmark shares a fixed navigation row with the
+                    // drawer and filter controls, so growth stops after XXL.
+                    .garyxTypographyBoundary(.navigationChrome)
 
                 Spacer(minLength: 0)
 
@@ -824,7 +827,7 @@ struct GaryxNavigationDrawerView: View {
                         ForEach(snapshot.workspaceRows) { row in
                             GaryxDrawerChildRow(title: row.name) {
                                 Image(systemName: "folder")
-                                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 22, height: 22)
                             } action: {
@@ -882,7 +885,7 @@ private struct GaryxDrawerSectionLabel: View {
         Text(title)
             .font(GaryxFont.caption(weight: .medium))
             .foregroundStyle(.secondary)
-            .lineLimit(1)
+            .garyxReadingLineLimit()
             .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
             .padding(.top, 14)
             .padding(.bottom, 2)
@@ -905,7 +908,7 @@ private struct GaryxDrawerChildRow<Icon: View>: View {
                 Text(title)
                     .font(GaryxFont.callout())
                     .foregroundStyle(Color.primary.opacity(0.88))
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.middle)
 
                 Spacer(minLength: 0)
@@ -934,7 +937,7 @@ struct GaryxSidebarNavigationRow: View {
                 Text(panel.label)
                     .font(GaryxFont.callout(weight: .medium))
                     .foregroundStyle(textColor)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
 
                 Spacer(minLength: 0)
             }
@@ -1094,9 +1097,9 @@ private struct GaryxSidebarEmptyRow: View {
     }
 }
 
-/// Auto-load footer rendered from the pager's projected state. The row
-/// keeps a constant 44pt height across idle/loading/failed so page
-/// completions never shift bottom content; only exhaustion removes it.
+/// Auto-load footer rendered from the pager's projected state. The row keeps
+/// a 44-point minimum across states but may grow with Dynamic Type; only
+/// exhaustion removes it.
 private struct GaryxSidebarThreadAutoLoadFooter: View {
     @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
     @Environment(\.garyxLoadMoreThreads) private var loadMoreThreads
@@ -1131,7 +1134,7 @@ private struct GaryxSidebarThreadAutoLoadFooter: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                             Text("Couldn't load more · Tap to retry")
                                 .font(GaryxFont.caption(weight: .medium))
                         }
@@ -1145,7 +1148,8 @@ private struct GaryxSidebarThreadAutoLoadFooter: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 44)
+            .frame(minHeight: 44)
+            .padding(.vertical, 4)
             .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
             .padding(.bottom, 10)
         }
@@ -1162,7 +1166,7 @@ struct GaryxSidebarSectionHeader: View {
             Text(title)
                 .font(GaryxFont.caption(weight: .medium))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
             if let statusLabel {
                 Text(" · ")
                     .font(GaryxFont.caption(weight: .medium))
@@ -1171,7 +1175,7 @@ struct GaryxSidebarSectionHeader: View {
                 Text(statusLabel)
                     .font(GaryxFont.caption(weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .layoutPriority(1)
                     .accessibilityIdentifier("\(title.lowercased())-section-status")
             }
@@ -1256,7 +1260,7 @@ struct GaryxRelativeTimestampText: View {
             Text(garyxFormattedTaskTimestamp(timestampValue, now: context.date))
                 .font(GaryxFont.caption())
                 .foregroundStyle(.tertiary)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
         }
     }
 }
@@ -1279,9 +1283,11 @@ struct GaryxSidebarThreadRowView: View {
     // the drawer disables the sidebar while a horizontal drag is in flight to
     // keep mid-drag finger-ups from opening rows.
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var readingSpacingScale: CGFloat = 1
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 10 * readingSpacingScale) {
             if let avatar {
                 GaryxAgentAvatarView(
                     agentId: avatar.agentId,
@@ -1299,50 +1305,26 @@ struct GaryxSidebarThreadRowView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: density.textSpacing) {
-                HStack(alignment: .center, spacing: 5) {
-                    Text(presentation.title)
-                        .font(density.titleFont)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .foregroundStyle(.primary)
-                        .layoutPriority(1)
-
-                    if presentation.isPinned {
-                        if let onUnpin {
-                            Button(action: onUnpin) {
-                                Image(systemName: "pin.fill")
-                                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
-                                    .rotationEffect(.degrees(28))
-                                    .frame(width: 20, height: 20)
-                            }
-                            .frame(width: 26, height: 22)
-                            .contentShape(Rectangle())
-                            .buttonStyle(GaryxPressableRowStyle())
-                            .accessibilityLabel("Unpin thread")
-                        } else {
-                            Image(systemName: "pin.fill")
-                                .font(GaryxFont.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(28))
-                                .frame(width: 20, height: 20)
-                                .accessibilityHidden(true)
-                        }
+            VStack(alignment: .leading, spacing: density.textSpacing * readingSpacingScale) {
+                if dynamicTypeSize.garyxUsesExpandedReadingLayout {
+                    HStack(alignment: .firstTextBaseline, spacing: 5 * readingSpacingScale) {
+                        threadTitle
+                        pinIndicator
+                        Spacer(minLength: 0)
                     }
-
-                    Spacer(minLength: 8)
-
-                    trailingMeta
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-
-                if let subtitle = presentation.subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(density.subtitleFont)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    threadSubtitle
+                    if hasTrailingMeta {
+                        trailingMeta
+                    }
+                } else {
+                    HStack(alignment: .center, spacing: 5) {
+                        threadTitle
+                        pinIndicator
+                        Spacer(minLength: 8)
+                        trailingMeta
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    threadSubtitle
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1361,7 +1343,7 @@ struct GaryxSidebarThreadRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: density.minHeight, alignment: .leading)
         .padding(.horizontal, isFullBleed ? GaryxSidebarMetrics.sectionHorizontalPadding : GaryxSidebarMetrics.rowInnerHorizontalPadding)
-        .padding(.vertical, density.verticalPadding(isFullBleed: isFullBleed))
+        .padding(.vertical, density.verticalPadding(isFullBleed: isFullBleed) * readingSpacingScale)
         .padding(.horizontal, isFullBleed ? 0 : GaryxSidebarMetrics.rowOuterPadding - 4)
     }
 }
@@ -1463,6 +1445,59 @@ private struct GaryxSidebarRunningIndicator: View {
 }
 
 private extension GaryxSidebarThreadRowView {
+    var threadTitle: some View {
+        Text(presentation.title)
+            .font(density.titleFont)
+            .garyxReadingLineLimit()
+            .truncationMode(.tail)
+            .foregroundStyle(.primary)
+            .layoutPriority(1)
+    }
+
+    @ViewBuilder
+    var threadSubtitle: some View {
+        if let subtitle = presentation.subtitle, !subtitle.isEmpty {
+            Text(subtitle)
+                .font(density.subtitleFont)
+                .foregroundStyle(.secondary)
+                .garyxReadingLineLimit()
+                .truncationMode(.tail)
+        }
+    }
+
+    @ViewBuilder
+    var pinIndicator: some View {
+        if presentation.isPinned {
+            if let onUnpin {
+                Button(action: onUnpin) {
+                    Image(systemName: "pin.fill")
+                        .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(28))
+                        .frame(width: 20, height: 20)
+                }
+                .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
+                .buttonStyle(GaryxPressableRowStyle())
+                .accessibilityLabel("Unpin thread")
+            } else {
+                Image(systemName: "pin.fill")
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(28))
+                    .frame(width: 20, height: 20)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    var hasTrailingMeta: Bool {
+        (presentation.isRunning && avatar == nil)
+            || (presentation.isSelected && selectionDisplay == .checkmark)
+            || liveTimestampValue?.isEmpty == false
+            || presentation.trailingTimestamp?.isEmpty == false
+    }
+
     var rowAccessibilityLabel: String {
         [
             presentation.title,
@@ -1493,7 +1528,7 @@ private extension GaryxSidebarThreadRowView {
                 Text(trailingTimestamp)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
             }
         }
     }
@@ -1521,7 +1556,7 @@ struct GaryxSidebarActionPill: View {
                         .scaleEffect(0.8)
                 } else {
                     Image(systemName: iconSystemName)
-                        .font(GaryxFont.system(size: 13, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 13, weight: .semibold))
                 }
 
                 Text(title)

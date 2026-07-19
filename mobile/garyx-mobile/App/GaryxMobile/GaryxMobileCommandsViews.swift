@@ -114,7 +114,7 @@ struct GaryxSlashCommandCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: "command")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 24, height: 24)
 
@@ -122,11 +122,11 @@ struct GaryxSlashCommandCard: View {
                         Text("/\(command.name)")
                             .font(GaryxFont.body(weight: .semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                         Text(command.description.isEmpty ? command.prompt : command.description)
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .garyxReadingLineLimit(2)
                     }
                     Spacer(minLength: 8)
                 }

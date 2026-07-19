@@ -148,12 +148,13 @@ private struct GaryxFormFieldTitle: View {
                     .foregroundStyle(GaryxTheme.danger)
             }
         }
-        .lineLimit(2)
+        .garyxReadingLineLimit(2)
         .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 struct GaryxFormRow<Content: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let title: String
     let required: Bool
     let valuePlacement: GaryxFormValuePlacement
@@ -191,7 +192,7 @@ struct GaryxFormRow<Content: View>: View {
 
     @ViewBuilder
     private var rowLayout: some View {
-        if valuePlacement == .below {
+        if valuePlacement == .below || dynamicTypeSize.garyxUsesExpandedReadingLayout {
             stackedRow
         } else {
             trailingRow
@@ -232,7 +233,7 @@ struct GaryxFormReadOnlyRow: View {
         GaryxFormRow(title: title) {
             Text(value)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .garyxReadingLineLimit(2)
                 .truncationMode(.middle)
         }
     }
@@ -277,6 +278,7 @@ struct GaryxFormReadOnlyMultilineRow: View {
 }
 
 struct GaryxFormTextFieldRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let title: String
     @Binding var text: String
     var placeholder: String = ""
@@ -299,7 +301,7 @@ struct GaryxFormTextFieldRow: View {
             if isReadOnly {
                 Text(displayValue)
                     .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                    .lineLimit(wrapsValue ? 3 : 1)
+                    .garyxReadingLineLimit(wrapsValue ? 3 : 1)
                     .truncationMode(.middle)
             } else {
                 editableField
@@ -314,10 +316,11 @@ struct GaryxFormTextFieldRow: View {
 
     @ViewBuilder
     private var editableField: some View {
-        if wrapsValue {
+        if wrapsValue || dynamicTypeSize.garyxUsesExpandedReadingLayout {
             TextField(placeholder, text: $text, axis: .vertical)
-                .lineLimit(1...3)
-                .multilineTextAlignment(valuePlacement == .trailing ? .trailing : .leading)
+                .lineLimit(1...(wrapsValue ? 6 : 3))
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .focused($isFocused)
                 .accessibilityLabel(title)
                 .textFieldStyle(.plain)
@@ -327,7 +330,6 @@ struct GaryxFormTextFieldRow: View {
                 .keyboardType(keyboardType)
         } else {
             TextField(placeholder, text: $text)
-                .lineLimit(1)
                 .multilineTextAlignment(valuePlacement == .trailing ? .trailing : .leading)
                 .focused($isFocused)
                 .accessibilityLabel(title)
@@ -363,7 +365,7 @@ struct GaryxFormSecureFieldRow: View {
                 .textContentType(textContentType)
                 .textInputAutocapitalization(autocapitalization)
                 .autocorrectionDisabled(autocorrectionDisabled)
-                .lineLimit(1)
+                .garyxReadingLineLimit()
                 .multilineTextAlignment(valuePlacement == .trailing ? .trailing : .leading)
                 .focused($isFocused)
                 .accessibilityLabel(title)
@@ -573,7 +575,7 @@ struct GaryxGatewayHeadersEditor: View {
                                 removeRow(row.id)
                             } label: {
                                 Image(systemName: "trash")
-                                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                                    .font(GaryxFont.fixedSystem(size: 13, weight: .semibold))
                                     .frame(width: 32, height: 32)
                             }
                             .buttonStyle(GaryxPressableRowStyle())
@@ -714,10 +716,10 @@ struct GaryxFormMenuValueLabel: View {
             Text(value)
                 .font(Font.callout.weight(.medium))
                 .foregroundStyle(.primary)
-                .lineLimit(2)
+                .garyxReadingLineLimit(2)
                 .truncationMode(.middle)
             Image(systemName: "chevron.down")
-                .font(GaryxFont.system(size: 10, weight: .semibold))
+                .font(GaryxFont.fixedSystem(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
         }
@@ -737,10 +739,10 @@ struct GaryxFormSelectionRow: View {
                 Text(displayValue)
                     .font(Font.callout.weight(isPlaceholder ? .regular : .medium))
                     .foregroundStyle(isPlaceholder ? .secondary : .primary)
-                    .lineLimit(2)
+                    .garyxReadingLineLimit(2)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
             }
@@ -853,11 +855,11 @@ struct GaryxWorkspacePathSelectionRow: View {
                 Text(displayValue)
                     .font(Font.callout.weight(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .regular : .medium))
                     .foregroundStyle(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.tail)
                     .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
             }
@@ -1013,7 +1015,7 @@ struct GaryxWorkspaceSelectSheet: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1021,25 +1023,28 @@ struct GaryxWorkspaceSelectSheet: View {
                         Text(title)
                             .font(Font.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                         if let badge {
                             Text(badge)
                                 .font(Font.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .garyxReadingLineLimit()
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1.5)
                                 .background(
                                     Color(.secondarySystemFill),
                                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 )
+                                // The option badge stays inline beside the
+                                // workspace name, so its growth stops at XXL.
+                                .garyxTypographyBoundary(.compactBadgeChrome)
                         }
                     }
                     if !detail.isEmpty {
                         Text(normalizedWorkspacePath(detail))
                             .font(Font.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
                 }
@@ -1048,7 +1053,7 @@ struct GaryxWorkspaceSelectSheet: View {
                     GaryxSelectionCheckmark(size: 12)
                 } else if showsChevron {
                     Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 12, weight: .semibold))
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -1118,7 +1123,7 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
                     }
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(GaryxFont.system(size: 13, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 32, height: 32)
                         .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
@@ -1132,11 +1137,11 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
                     Text(workspaceDisplayName(currentPath).isEmpty ? "Folders" : workspaceDisplayName(currentPath))
                         .font(Font.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(currentPath.isEmpty ? "Choose a folder" : workspacePathCompactLabel(currentPath))
                         .font(Font.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
@@ -1153,7 +1158,8 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
                         }
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 10)
-                        .frame(height: 30)
+                        .padding(.vertical, 6)
+                        .frame(minHeight: 30)
                         .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                     }
                     .buttonStyle(GaryxPressableRowStyle())
@@ -1225,23 +1231,23 @@ private struct GaryxWorkspaceDirectoryBrowserRow: View {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "folder")
-                        .font(GaryxFont.system(size: 15, weight: .medium))
+                        .font(GaryxFont.fixedSystem(size: 15, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name)
                             .font(Font.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                         Text(workspacePathCompactLabel(entry.path))
                             .font(Font.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .garyxReadingLineLimit()
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                        .font(GaryxFont.fixedSystem(size: 12, weight: .semibold))
                         .foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 8)
@@ -1289,7 +1295,7 @@ private func sheetHeader(title: String) -> some View {
         Text(title)
             .font(Font.callout.weight(.medium))
             .foregroundStyle(.primary)
-            .lineLimit(1)
+            .garyxReadingLineLimit()
         Spacer(minLength: 0)
         Button {
         } label: {

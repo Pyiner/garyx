@@ -71,7 +71,7 @@ struct GaryxProviderModelsRow: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 9) {
                 Image(systemName: iconName)
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 20, height: 20)
 
@@ -79,18 +79,18 @@ struct GaryxProviderModelsRow: View {
                     Text(providerPresentation.displayName)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                     Text(rowModel.detailText)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
 
                 Spacer(minLength: 8)
 
                 GaryxStatusPill(text: rowModel.statusText, tone: rowModel.statusTone.garyxPillTone)
                 Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
 
@@ -216,6 +216,9 @@ extension GaryxUsageLevel {
 /// with a `resets in 2d 4h` caption. Used inline in the provider list row and
 /// in the detail sheet's Usage section.
 private struct GaryxUsageMeterRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var readingSpacing: CGFloat = 3
+    @ScaledMetric(relativeTo: .caption) private var trackScale: CGFloat = 1
     let label: String
     let remainingPercent: Double
     let remainingText: String
@@ -224,24 +227,21 @@ private struct GaryxUsageMeterRow: View {
     var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(label)
-                    .font(GaryxFont.caption(weight: compact ? .regular : .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                Spacer(minLength: 6)
-                Text(remainingText)
-                    .font(GaryxFont.caption(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                if !caption.isEmpty {
-                    Text(caption)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+        VStack(alignment: .leading, spacing: readingSpacing) {
+            if dynamicTypeSize.garyxUsesExpandedReadingLayout {
+                VStack(alignment: .leading, spacing: readingSpacing) {
+                    meterLabel
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        remainingLabel
+                        captionLabel
+                    }
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    meterLabel
+                    Spacer(minLength: 6)
+                    remainingLabel
+                    captionLabel
                 }
             }
             GeometryReader { proxy in
@@ -253,7 +253,31 @@ private struct GaryxUsageMeterRow: View {
                         .frame(width: max(0, proxy.size.width * remainingPercent / 100))
                 }
             }
-            .frame(height: compact ? 4 : 5)
+            .frame(height: (compact ? 4 : 5) * trackScale)
+        }
+    }
+
+    private var meterLabel: some View {
+        Text(label)
+            .font(GaryxFont.caption(weight: compact ? .regular : .medium))
+            .foregroundStyle(.secondary)
+            .garyxReadingLineLimit()
+    }
+
+    private var remainingLabel: some View {
+        Text(remainingText)
+            .font(GaryxFont.caption(weight: .semibold))
+            .foregroundStyle(.primary)
+            .garyxReadingLineLimit()
+    }
+
+    @ViewBuilder
+    private var captionLabel: some View {
+        if !caption.isEmpty {
+            Text(caption)
+                .font(GaryxFont.caption())
+                .foregroundStyle(.tertiary)
+                .garyxReadingLineLimit()
         }
     }
 }
@@ -275,7 +299,7 @@ private struct GaryxUsagePillsRow: View {
                     Text(updated)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                        .garyxReadingLineLimit()
                 }
             }
         }
@@ -678,10 +702,10 @@ private struct GaryxProviderDefaultPickerRow: View {
         } valueLabel: {
             HStack(spacing: 6) {
                 Text(selectedLabel)
-                    .lineLimit(1)
+                    .garyxReadingLineLimit()
                     .truncationMode(.middle)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(GaryxFont.system(size: 10, weight: .semibold))
+                    .font(GaryxFont.fixedSystem(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
             .foregroundStyle(.primary)

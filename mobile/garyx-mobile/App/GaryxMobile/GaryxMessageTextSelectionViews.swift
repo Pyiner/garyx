@@ -30,6 +30,7 @@ struct GaryxMessageTextSelectionSheet: View {
 }
 
 private struct GaryxSelectableTextView: UIViewRepresentable {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let text: String
 
     func makeUIView(context: Context) -> UITextView {
@@ -39,27 +40,44 @@ private struct GaryxSelectableTextView: UIViewRepresentable {
         view.alwaysBounceVertical = true
         view.dataDetectorTypes = [.link]
         view.backgroundColor = .clear
-        view.textContainerInset = UIEdgeInsets(top: 14, left: 14, bottom: 28, right: 14)
         view.adjustsFontForContentSizeCategory = true
-        view.attributedText = Self.attributedText(for: text)
+        configure(view)
         return view
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
-        let next = Self.attributedText(for: text)
-        if uiView.attributedText != next {
-            uiView.attributedText = next
-        }
+        configure(uiView)
     }
 
-    private static func attributedText(for text: String) -> NSAttributedString {
+    private func configure(_ view: UITextView) {
+        // Reading the environment makes SwiftUI update this representable when
+        // Dynamic Type changes while the selection sheet is open.
+        _ = dynamicTypeSize
+        let font = GaryxFont.uiFont(.body, compatibleWith: view.traitCollection)
+        let next = Self.attributedText(for: text, font: font)
+        if view.attributedText != next {
+            view.attributedText = next
+        }
+        let inset = UIFontMetrics(forTextStyle: .body).scaledValue(
+            for: 14,
+            compatibleWith: view.traitCollection
+        )
+        view.textContainerInset = UIEdgeInsets(
+            top: inset,
+            left: inset,
+            bottom: inset * 2,
+            right: inset
+        )
+    }
+
+    private static func attributedText(for text: String, font: UIFont) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 5
-        paragraph.paragraphSpacing = 6
+        paragraph.lineSpacing = font.lineHeight * (5.0 / 22.0)
+        paragraph.paragraphSpacing = font.lineHeight * (6.0 / 22.0)
         return NSAttributedString(
             string: text,
             attributes: [
-                .font: UIFont.systemFont(ofSize: 17),
+                .font: font,
                 .foregroundColor: UIColor.label,
                 .paragraphStyle: paragraph,
             ]
