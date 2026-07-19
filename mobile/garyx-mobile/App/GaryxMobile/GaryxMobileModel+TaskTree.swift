@@ -42,7 +42,10 @@ extension GaryxMobileModel {
         guard !anchor.isEmpty else {
             taskTreeForestPage = nil
             taskTreeLoadPhase = .idle
-            taskTreeRevealInteraction.invalidate(position: .closed)
+            taskTreeRevealInteraction.invalidate(
+                position: .closed,
+                event: .routeInvalidated
+            )
             isTaskTreeSidebarOpen = false
             return
         }

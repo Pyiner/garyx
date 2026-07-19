@@ -271,6 +271,116 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         XCTAssertFalse(store.hasPresentationBarrier)
     }
 
+    func testSceneInterruptionTerminatesEveryGlobalRevealInteraction() {
+        let model = routePreparationModel(session: .shared)
+        model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
+        model.drawerRevealInteraction.beginGesture()
+        model.drawerRevealInteraction.updateGesture(logicalTranslation: 140)
+        model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .open)
+        model.taskTreeRevealInteraction.setTarget(.closed, animated: true)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation.phase, .settling(.closed))
+
+        model.handleScenePhase(.inactive)
+
+        XCTAssertEqual(model.drawerRevealInteraction.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .closed
+        ))
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .closed
+        ))
+        model.assertGlobalRevealInteractionsHaveZeroResidue()
+    }
+
+    func testSceneInterruptionStressLeavesBothLongLivedStoresIdle() {
+        let model = routePreparationModel(session: .shared)
+        model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
+        model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .closed)
+
+        for iteration in 0..<250 {
+            let canonicalPosition: GaryxHorizontalRevealPosition = iteration.isMultiple(of: 2)
+                ? .closed
+                : .open
+            model.sidebarVisible = canonicalPosition == .open
+            model.isTaskTreeSidebarOpen = canonicalPosition == .open
+            model.drawerRevealInteraction.invalidate(
+                position: canonicalPosition,
+                event: .routeInvalidated
+            )
+            model.taskTreeRevealInteraction.invalidate(
+                position: canonicalPosition,
+                event: .routeInvalidated
+            )
+
+            model.drawerRevealInteraction.beginGesture()
+            model.drawerRevealInteraction.updateGesture(
+                logicalTranslation: canonicalPosition == .closed ? 140 : -140
+            )
+            model.taskTreeRevealInteraction.setTarget(
+                canonicalPosition == .closed ? .open : .closed,
+                animated: true
+            )
+            XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+            XCTAssertTrue(model.taskTreeRevealInteraction.isSettling)
+
+            model.handleScenePhase(.inactive)
+
+            XCTAssertEqual(
+                model.drawerRevealInteraction.presentation.phase,
+                .idle,
+                "drawer iteration \(iteration)"
+            )
+            XCTAssertEqual(
+                model.taskTreeRevealInteraction.presentation.phase,
+                .idle,
+                "task tree iteration \(iteration)"
+            )
+            XCTAssertEqual(
+                model.drawerRevealInteraction.presentation.target,
+                canonicalPosition,
+                "drawer iteration \(iteration)"
+            )
+            XCTAssertEqual(
+                model.taskTreeRevealInteraction.presentation.target,
+                canonicalPosition,
+                "task tree iteration \(iteration)"
+            )
+            XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+            XCTAssertFalse(model.taskTreeRevealInteraction.diagnostics.hasTerminalResidue)
+        }
+    }
+
+    func testRouteAndGatewayInvalidationCannotRetainRevealOwnership() {
+        let model = routePreparationModel(session: .shared)
+        model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
+        model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .closed)
+        model.drawerRevealInteraction.beginGesture()
+        model.drawerRevealInteraction.updateGesture(logicalTranslation: 140)
+        model.taskTreeRevealInteraction.setTarget(.open, animated: true)
+
+        model.applyCanonicalRouteProjection([])
+
+        model.assertGlobalRevealInteractionsHaveZeroResidue()
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.target, .closed)
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation.target, .closed)
+
+        model.sidebarVisible = true
+        model.isTaskTreeSidebarOpen = true
+        model.drawerRevealInteraction.setTarget(.open, animated: true)
+        model.taskTreeRevealInteraction.setTarget(.open, animated: true)
+        model.resetGatewayRuntimeState()
+
+        XCTAssertFalse(model.sidebarVisible)
+        XCTAssertFalse(model.isTaskTreeSidebarOpen)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.target, .closed)
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation.target, .closed)
+        model.assertGlobalRevealInteractionsHaveZeroResidue()
+    }
+
     func testModalBarrierQueuesWholeChainUntilExactlyOnceReleaseThenHardSnaps() {
         let current = entry("current-modal", .panel("agents"))
         let store = GaryxProductionRouteStore()

@@ -7,6 +7,16 @@ struct GaryxHorizontalRevealPresentation: Equatable {
     var target: GaryxHorizontalRevealPosition
 }
 
+struct GaryxHorizontalRevealInteractionDiagnostics: Equatable {
+    var presentation: GaryxHorizontalRevealPresentation
+    var extent: CGFloat
+    var settleDriverIsActive: Bool
+
+    var hasTerminalResidue: Bool {
+        presentation.phase != .idle || settleDriverIsActive
+    }
+}
+
 /// Main-actor adapter around the pure Core reveal state. It owns only display
 /// link orchestration and publishes the one presentation value SwiftUI draws.
 @MainActor
@@ -43,6 +53,18 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         )
     }
 
+    deinit {
+        MainActor.assumeIsolated {
+            settleDriver.invalidate()
+            activeCurve = nil
+            _ = state.forceTerminal(
+                .hostTeardown,
+                to: requestedPosition,
+                extent: extent
+            )
+        }
+    }
+
     var reveal: CGFloat { presentation.reveal }
     var progress: CGFloat {
         guard extent > 0 else { return requestedPosition == .open ? 1 : 0 }
@@ -54,6 +76,13 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         return false
     }
     var isGestureEligible: Bool { isConfigured && extent > 0 }
+    var diagnostics: GaryxHorizontalRevealInteractionDiagnostics {
+        GaryxHorizontalRevealInteractionDiagnostics(
+            presentation: presentation,
+            extent: extent,
+            settleDriverIsActive: settleDriver.isSettling
+        )
+    }
     var requiresEdgeZone: Bool {
         presentation.phase == .idle && presentation.target == .closed
     }
@@ -77,23 +106,12 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
                 }
                 return
             }
-            let oldExtent = extent
-            let interrupted = settleDriver.interrupt()
-            state.rederiveExtent(from: oldExtent, to: newExtent)
             extent = newExtent
-            publish()
-            if case .settling(let target) = state.phase, newExtent > 0 {
-                let scale = oldExtent > 0 ? newExtent / oldExtent : 1
-                startSettle(
-                    .init(
-                        target: target,
-                        initialReveal: state.reveal,
-                        initialVelocity: (interrupted?.velocity ?? 0) * scale
-                    ),
-                    animated: true,
-                    curve: activeCurve ?? nonMomentumCurve
-                )
-            }
+            // A size-class/safe-area change invalidates the physical gesture
+            // track. Snap to the canonical endpoint now; a driver paused by
+            // scene or geometry changes must never remain the only owner that
+            // can return hit testing to the surface.
+            forceTerminal(.geometryChanged, position: restingPosition)
             return
         }
 
@@ -181,12 +199,43 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         return settle.target
     }
 
-    func invalidate(position: GaryxHorizontalRevealPosition) {
+    func invalidate(
+        position: GaryxHorizontalRevealPosition,
+        event: GaryxHorizontalRevealInvalidation = .routeInvalidated
+    ) {
         requestedPosition = position
+        forceTerminal(event, position: position)
+    }
+
+    func forceTerminal(
+        _ event: GaryxHorizontalRevealInvalidation,
+        position: GaryxHorizontalRevealPosition? = nil
+    ) {
+        let terminalPosition = position ?? requestedPosition
+        requestedPosition = terminalPosition
         settleDriver.invalidate()
         activeCurve = nil
-        state.synchronize(to: position, extent: extent)
+        _ = state.forceTerminal(event, to: terminalPosition, extent: extent)
         publish()
+        assertTerminalHasZeroResidue()
+    }
+
+    func assertTerminalHasZeroResidue(
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        assert(
+            presentation.phase == .idle,
+            "terminal reveal retained interaction ownership",
+            file: file,
+            line: line
+        )
+        assert(
+            !settleDriver.isSettling,
+            "terminal reveal retained display-link settle",
+            file: file,
+            line: line
+        )
     }
 
     private func startSettle(
@@ -195,6 +244,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         curve: GaryxMotionPhysics.SpringCurve
     ) {
         guard animated, extent > 0 else {
+            settleDriver.invalidate()
             state.synchronize(to: settle.target, extent: extent)
             activeCurve = nil
             publish()
@@ -229,6 +279,33 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         if presentation != next {
             presentation = next
         }
+    }
+}
+
+@MainActor
+extension GaryxMobileModel {
+    /// The drawer and task-tree stores outlive the SwiftUI surfaces that
+    /// configure them. Lifecycle and canonical-owner invalidations therefore
+    /// terminate both stores together at their model-owned endpoints.
+    func forceTerminalGlobalRevealInteractions(
+        _ event: GaryxHorizontalRevealInvalidation
+    ) {
+        drawerRevealInteraction.forceTerminal(
+            event,
+            position: sidebarVisible ? .open : .closed
+        )
+        taskTreeRevealInteraction.forceTerminal(
+            event,
+            position: isTaskTreeSidebarOpen ? .open : .closed
+        )
+    }
+
+    func assertGlobalRevealInteractionsHaveZeroResidue(
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        drawerRevealInteraction.assertTerminalHasZeroResidue(file: file, line: line)
+        taskTreeRevealInteraction.assertTerminalHasZeroResidue(file: file, line: line)
     }
 }
 

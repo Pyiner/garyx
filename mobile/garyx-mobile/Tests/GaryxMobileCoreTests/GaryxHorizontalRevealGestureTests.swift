@@ -131,4 +131,96 @@ final class GaryxHorizontalRevealGestureTests: XCTestCase {
         XCTAssertEqual(settle.target, .open)
         XCTAssertEqual(settle.initialVelocity, 220)
     }
+
+    func testEveryExternalInvalidationForceTerminatesDraggingAndSettling() throws {
+        let extent: CGFloat = 330
+
+        for invalidation in GaryxHorizontalRevealInvalidation.allCases {
+            var dragging = GaryxHorizontalRevealState(position: .closed, extent: extent)
+            dragging.beginDrag(extent: extent)
+            dragging.updateDrag(logicalTranslation: 140, extent: extent)
+
+            XCTAssertTrue(dragging.forceTerminal(
+                invalidation,
+                to: .closed,
+                extent: extent
+            ), "dragging / \(invalidation)")
+            XCTAssertEqual(dragging.phase, .idle, "dragging / \(invalidation)")
+            XCTAssertEqual(dragging.settledPosition, .closed, "dragging / \(invalidation)")
+            XCTAssertEqual(dragging.reveal, 0, "dragging / \(invalidation)")
+            XCTAssertTrue(dragging.phase.allowsSurfaceHitTesting)
+
+            var settling = GaryxHorizontalRevealState(position: .closed, extent: extent)
+            _ = try XCTUnwrap(settling.beginProgrammaticSettle(
+                to: .open,
+                initialVelocity: 240,
+                extent: extent
+            ))
+            settling.updateSettle(sampledReveal: 180, extent: extent)
+
+            XCTAssertTrue(settling.forceTerminal(
+                invalidation,
+                to: .open,
+                extent: extent
+            ), "settling / \(invalidation)")
+            XCTAssertEqual(settling.phase, .idle, "settling / \(invalidation)")
+            XCTAssertEqual(settling.settledPosition, .open, "settling / \(invalidation)")
+            XCTAssertEqual(settling.reveal, extent, "settling / \(invalidation)")
+            XCTAssertTrue(settling.phase.allowsSurfaceHitTesting)
+        }
+    }
+
+    func testRecognizerCancellationAndInvalidationStressAlwaysReturnsToIdle() throws {
+        let extent: CGFloat = 330
+        var state = GaryxHorizontalRevealState(position: .closed, extent: extent)
+        var position = GaryxHorizontalRevealPosition.closed
+        let invalidations = GaryxHorizontalRevealInvalidation.allCases
+
+        for iteration in 0..<1_000 {
+            state.beginDrag(extent: extent)
+            state.updateDrag(
+                logicalTranslation: position == .closed ? 120 : -120,
+                extent: extent
+            )
+
+            if iteration.isMultiple(of: 2) {
+                let cancellation = try XCTUnwrap(state.cancelDrag(extent: extent))
+                XCTAssertEqual(cancellation.target, position)
+                state.updateSettle(
+                    sampledReveal: position.reveal(for: extent),
+                    extent: extent
+                )
+                XCTAssertEqual(state.finishSettle(extent: extent), position)
+            } else {
+                _ = state.forceTerminal(
+                    invalidations[iteration % invalidations.count],
+                    to: position,
+                    extent: extent
+                )
+            }
+
+            XCTAssertEqual(state.phase, .idle, "iteration \(iteration)")
+            XCTAssertEqual(state.settledPosition, position, "iteration \(iteration)")
+            XCTAssertEqual(
+                state.reveal,
+                position.reveal(for: extent),
+                "iteration \(iteration)"
+            )
+            XCTAssertTrue(state.phase.allowsSurfaceHitTesting, "iteration \(iteration)")
+
+            position = position == .closed ? .open : .closed
+            _ = try XCTUnwrap(state.beginProgrammaticSettle(
+                to: position,
+                initialVelocity: 0,
+                extent: extent
+            ))
+            _ = state.forceTerminal(
+                invalidations[(iteration + 1) % invalidations.count],
+                to: position,
+                extent: extent
+            )
+            XCTAssertEqual(state.phase, .idle, "programmatic iteration \(iteration)")
+            XCTAssertTrue(state.phase.allowsSurfaceHitTesting)
+        }
+    }
 }

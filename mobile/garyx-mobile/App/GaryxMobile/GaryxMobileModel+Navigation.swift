@@ -34,6 +34,7 @@ extension GaryxMobileModel {
     /// The UIKit occurrence path is the navigation truth. Module selection and
     /// selectedThread are read-only projections for existing feature stores.
     func applyCanonicalRouteProjection(_ path: [GaryxRouteEntry]) {
+        forceTerminalGlobalRevealInteractions(.routeInvalidated)
         let projectedNavigation = GaryxMobileNavigationState(projecting: path)
         if navigationState != projectedNavigation {
             navigationState = projectedNavigation

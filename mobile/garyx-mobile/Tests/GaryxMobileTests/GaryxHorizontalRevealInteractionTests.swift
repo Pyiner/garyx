@@ -150,6 +150,136 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         ))
     }
 
+    func testZeroExtentCannotRetainASettleWithoutAFrameDriver() {
+        let harness = Harness(projection: .fullScreenNavigation)
+        harness.store.configure(extent: 330, restingPosition: .closed)
+        harness.store.setTarget(.open, animated: true)
+        XCTAssertEqual(harness.store.presentation.phase, .settling(.open))
+        XCTAssertTrue(harness.frames.isRunning)
+
+        harness.store.configure(extent: 0, restingPosition: .open)
+
+        XCTAssertEqual(harness.store.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .open
+        ))
+        XCTAssertFalse(harness.frames.isRunning)
+    }
+
+    func testGeometryChangeTerminatesDragAtCanonicalEndpoint() {
+        let harness = Harness(projection: .fullScreenNavigation)
+        harness.store.configure(extent: 330, restingPosition: .open)
+        harness.store.beginGesture()
+        harness.store.updateGesture(logicalTranslation: -170)
+        XCTAssertEqual(harness.store.presentation.phase, .dragging)
+
+        harness.store.configure(extent: 440, restingPosition: .open)
+
+        XCTAssertEqual(harness.store.presentation, .init(
+            reveal: 440,
+            phase: .idle,
+            target: .open
+        ))
+        XCTAssertFalse(harness.frames.isRunning)
+        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+    }
+
+    func testEveryExternalInvalidationStopsDriverAndReleasesPhase() {
+        for invalidation in GaryxHorizontalRevealInvalidation.allCases {
+            let harness = Harness(projection: .fullScreenNavigation)
+            harness.store.configure(extent: 330, restingPosition: .closed)
+            harness.store.beginGesture()
+            harness.store.updateGesture(logicalTranslation: 140)
+
+            harness.store.forceTerminal(invalidation, position: .closed)
+
+            XCTAssertEqual(harness.store.presentation, .init(
+                reveal: 0,
+                phase: .idle,
+                target: .closed
+            ), "dragging / \(invalidation)")
+            XCTAssertFalse(harness.frames.isRunning, "dragging / \(invalidation)")
+            XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+
+            harness.store.setTarget(.open, animated: true)
+            XCTAssertTrue(harness.frames.isRunning)
+            harness.store.forceTerminal(invalidation, position: .open)
+
+            XCTAssertEqual(harness.store.presentation, .init(
+                reveal: 330,
+                phase: .idle,
+                target: .open
+            ), "settling / \(invalidation)")
+            XCTAssertFalse(harness.frames.isRunning, "settling / \(invalidation)")
+            XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        }
+    }
+
+    func testRevealInvalidationStressHasZeroSteadyStateResidue() {
+        let harness = Harness(projection: .fullScreenNavigation)
+        harness.store.configure(extent: 330, restingPosition: .closed)
+        let invalidations = GaryxHorizontalRevealInvalidation.allCases
+        var position = GaryxHorizontalRevealPosition.closed
+
+        for iteration in 0..<1_000 {
+            let nextPosition: GaryxHorizontalRevealPosition = position == .closed
+                ? .open
+                : .closed
+            harness.store.setTarget(nextPosition, animated: true)
+            XCTAssertTrue(harness.frames.isRunning, "settle iteration \(iteration)")
+            if iteration.isMultiple(of: 3) {
+                harness.advance(by: 1.0 / 120.0)
+            }
+            harness.store.forceTerminal(
+                invalidations[iteration % invalidations.count],
+                position: nextPosition
+            )
+            XCTAssertFalse(harness.frames.isRunning, "settle iteration \(iteration)")
+            XCTAssertFalse(
+                harness.store.diagnostics.hasTerminalResidue,
+                "settle iteration \(iteration)"
+            )
+
+            position = nextPosition
+            harness.store.beginGesture()
+            harness.store.updateGesture(
+                logicalTranslation: position == .closed ? 50 : -50
+            )
+            harness.store.forceTerminal(
+                invalidations[(iteration + 1) % invalidations.count],
+                position: position
+            )
+            XCTAssertFalse(harness.frames.isRunning, "drag iteration \(iteration)")
+            XCTAssertFalse(
+                harness.store.diagnostics.hasTerminalResidue,
+                "drag iteration \(iteration)"
+            )
+        }
+    }
+
+    func testStoreDeinitInvalidatesAnActiveSettleDriver() {
+        let clock = ManualTimeSource()
+        let frames = ManualFrameSource()
+        var store: GaryxHorizontalRevealInteractionStore? = GaryxHorizontalRevealInteractionStore(
+            projection: .fullScreenNavigation,
+            settleDriver: GaryxGestureSettleDriver(
+                timeSource: clock,
+                frameSource: frames
+            )
+        )
+        weak var releasedStore = store
+        store?.configure(extent: 330, restingPosition: .closed)
+        store?.setTarget(.open, animated: true)
+        XCTAssertTrue(frames.isRunning)
+
+        store = nil
+
+        XCTAssertNil(releasedStore)
+        XCTAssertFalse(frames.isRunning)
+        XCTAssertNil(frames.onFrame)
+    }
+
     @MainActor
     private final class Harness {
         let clock = ManualTimeSource()

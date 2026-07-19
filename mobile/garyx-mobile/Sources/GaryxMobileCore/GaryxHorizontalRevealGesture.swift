@@ -27,6 +27,19 @@ public enum GaryxHorizontalRevealPhase: Equatable, Sendable {
     }
 }
 
+/// External invalidations that must synchronously release reveal interaction
+/// ownership. These mirror the force-terminal events of the route
+/// presentation coordinator: once geometry, scene, or canonical ownership is
+/// gone, no display-link callback is allowed to remain responsible for making
+/// the surface interactive again.
+public enum GaryxHorizontalRevealInvalidation: String, CaseIterable, Codable, Sendable {
+    case sceneInactive
+    case geometryChanged
+    case routeInvalidated
+    case gatewayForced
+    case hostTeardown
+}
+
 public struct GaryxHorizontalRevealSettle: Equatable, Sendable {
     public let target: GaryxHorizontalRevealPosition
     public let initialReveal: CGFloat
@@ -109,6 +122,33 @@ public struct GaryxHorizontalRevealState: Equatable, Sendable {
         reveal = position.reveal(for: extent)
         dragOrigin = reveal
         cancellationTarget = position
+    }
+
+    /// Force-terminal reduction for lifecycle and ownership invalidations.
+    ///
+    /// The event is intentionally exhaustive even though every invalidation
+    /// has the same terminal shape. Adding another external cancellation path
+    /// therefore requires deciding its Core behavior and extending the matrix
+    /// tests instead of stopping a frame driver without releasing the phase.
+    @discardableResult
+    public mutating func forceTerminal(
+        _ invalidation: GaryxHorizontalRevealInvalidation,
+        to position: GaryxHorizontalRevealPosition,
+        extent: CGFloat
+    ) -> Bool {
+        let endpoint = position.reveal(for: extent)
+        let hadResidue = phase != .idle
+            || settledPosition != position
+            || abs(reveal - endpoint) > 0.000_001
+        switch invalidation {
+        case .sceneInactive,
+             .geometryChanged,
+             .routeInvalidated,
+             .gatewayForced,
+             .hostTeardown:
+            synchronize(to: position, extent: extent)
+        }
+        return hadResidue
     }
 
     /// Starts a new drag or takes over a settle at its analytically sampled

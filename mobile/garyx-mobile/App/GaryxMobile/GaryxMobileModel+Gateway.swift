@@ -171,6 +171,9 @@ extension GaryxMobileModel {
     }
 
     func resetGatewayRuntimeState(scopeExit: GaryxGatewayScopeExit = .suspend) {
+        sidebarVisible = false
+        isTaskTreeSidebarOpen = false
+        forceTerminalGlobalRevealInteractions(.gatewayForced)
         exitCurrentGatewayScope(scopeExit)
         clearThreadFavoritesRuntime()
         pinnedOrderReorderTask?.cancel()
@@ -434,11 +437,13 @@ extension GaryxMobileModel {
                 await refreshCodingUsageWidget()
             }
         case .inactive:
+            forceTerminalGlobalRevealInteractions(.sceneInactive)
             productionRouteStore.sceneDidBecomeInactive()
             composerPayloadCoordinator.sceneDidBecomeInactive()
             composerPayloadCoordinator.cancelPendingInput(.sceneInactive)
             capsulePreviewSceneSignal.publish(.inactive)
         case .background:
+            forceTerminalGlobalRevealInteractions(.sceneInactive)
             productionRouteStore.sceneDidBecomeInactive()
             composerPayloadCoordinator.sceneDidBecomeInactive()
             composerPayloadCoordinator.cancelPendingInput(.sceneInactive)
@@ -452,6 +457,7 @@ extension GaryxMobileModel {
             cancelBackgroundCommittedRunReconcileLoop()
             stopSelectedThreadStream()
         @unknown default:
+            forceTerminalGlobalRevealInteractions(.sceneInactive)
             productionRouteStore.sceneDidBecomeInactive()
             composerPayloadCoordinator.sceneDidBecomeInactive()
             composerPayloadCoordinator.cancelPendingInput(.sceneInactive)
