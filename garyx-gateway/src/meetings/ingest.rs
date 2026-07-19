@@ -192,6 +192,15 @@ impl IngestionState {
 }
 
 impl MeetingService {
+    #[cfg(test)]
+    pub(crate) fn ingestion_join_retry_window_for_test(&self) -> Duration {
+        self.ingestion
+            .timing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .join_retry_window
+    }
+
     pub fn start_ingestion(self: &Arc<Self>, join_retry_window_secs: u64) {
         self.ingestion
             .timing

@@ -203,6 +203,24 @@ async fn test_live_config_cell_supports_concurrent_snapshot_and_replace() {
     }
 }
 
+/// Regression for the hot-reload drift where the meetings ingestion
+/// join-retry window refreshed only on the file-watcher path: applying a
+/// runtime config must update both meeting knobs, not just the page size.
+#[tokio::test]
+async fn test_apply_runtime_config_refreshes_meeting_ingestion_window() {
+    let state = test_state();
+    let mut config = GaryxConfig::default();
+    config.gateway.meetings.join_retry_window_secs = 1234;
+
+    state.apply_runtime_config(config.clone()).await.unwrap();
+
+    assert_eq!(
+        state.ops.meetings.ingestion_join_retry_window_for_test(),
+        std::time::Duration::from_secs(config.gateway.meetings.effective_join_retry_window_secs()),
+        "API-driven config saves must refresh the ingestion window"
+    );
+}
+
 #[tokio::test]
 async fn test_apply_runtime_config_reconciles_bridge_and_dispatcher() {
     let state = test_state();

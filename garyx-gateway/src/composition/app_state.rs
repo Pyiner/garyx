@@ -287,6 +287,14 @@ impl AppState {
         self.ops
             .meetings
             .set_read_page_bytes(projection.meeting_read_page_bytes);
+        // Closing a hot-reload drift: the ingestion join-retry window used to
+        // refresh only on the file-watcher path (via the channel-plugin
+        // rebuild), so API-driven settings saves left it stale until restart.
+        // start_ingestion is idempotent and boot already starts ingestion
+        // unconditionally; this call only refreshes the window.
+        self.ops
+            .meetings
+            .start_ingestion(projection.meeting_join_retry_window_secs);
         self.integration
             .bridge
             .replace_agent_profiles(self.ops.custom_agents.snapshot().await)
