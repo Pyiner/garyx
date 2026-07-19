@@ -81,12 +81,13 @@ generation, and tool trace remains intentionally local to those presentations.
 
 ## Same-slice removal audit
 
-The A4c section 8a audit returns no matches across source, tests, and docs for
-the former root content path owner, its three path synchronization surfaces,
-the legacy leading-edge enum and values, the panel-private return history and
-dispatch functions, or sidebar disappearance route writes. Remaining native
-navigation stacks are the explicitly preserved modal, form, setup, text
-selection, and tool-trace owners and none has a root content path binding.
+The A4c section 8a audit returns no matches across mobile product source,
+tests, and the P0-A design and acceptance docs for the former root content path
+owner, its three path synchronization surfaces, the legacy leading-edge enum
+and values, the panel-private return history and dispatch functions, or sidebar
+disappearance route writes. Remaining native navigation stacks are the
+explicitly preserved modal, form, setup, text selection, and tool-trace owners
+and none has a root content path binding.
 
 ## Validation
 
