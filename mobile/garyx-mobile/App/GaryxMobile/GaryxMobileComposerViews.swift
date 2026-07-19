@@ -71,6 +71,7 @@ struct GaryxComposer: View {
     @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxRouteContext) private var routeContext
+    @Environment(\.garyxMotion) private var motion
     @ObservedObject var payload: GaryxComposerPayloadCoordinator
     let isFocused: FocusState<Bool>.Binding
     @State private var isPickingAttachments = false
@@ -151,7 +152,7 @@ struct GaryxComposer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)
         .animation(
-            .spring(response: 0.24, dampingFraction: 0.88),
+            motion.spatialAnimation(.composerPayload),
             value: routePayloadItems
         )
         .garyxSheet(isPresented: $showsWorkspaceModeSheet) {
@@ -590,7 +591,7 @@ struct GaryxComposer: View {
         .disabled(isAddingAttachments)
         .accessibilityLabel(isAddingAttachments ? "Adding attachments" : "Add attachment")
         .accessibilityHint("Take a photo, choose photos or files, or insert a saved command")
-        .animation(.spring(response: 0.22, dampingFraction: 0.82), value: showsAddPanel)
+        .animation(motion.spatialAnimation(.composerPanel), value: showsAddPanel)
         .garyxPopover(
             isPresented: $showsAddPanel,
             attachmentAnchor: .rect(.bounds),
@@ -860,6 +861,7 @@ private struct GaryxComposerAddPopover: View {
     let onChoosePhotos: () -> Void
     let onChooseFiles: () -> Void
     let onChooseCommand: (GaryxSlashCommand) -> Void
+    @Environment(\.garyxMotion) private var motion
     @State private var page: Page = .root
 
     var body: some View {
@@ -873,7 +875,7 @@ private struct GaryxComposerAddPopover: View {
         }
         .frame(width: GaryxComposerLayout.addPanelWidth)
         .padding(8)
-        .animation(.snappy(duration: 0.22), value: page)
+        .animation(motion.spatialAnimation(.composerDrilldown), value: page)
     }
 
     private var rootActions: some View {
@@ -1018,6 +1020,8 @@ private struct GaryxComposerAddPopover: View {
 }
 
 private struct GaryxComposerAddPanelRowButtonStyle: ButtonStyle {
+    @Environment(\.garyxMotion) private var motion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
@@ -1027,8 +1031,8 @@ private struct GaryxComposerAddPanelRowButtonStyle: ButtonStyle {
                     style: .continuous
                 )
             )
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(motion.scale(.subtlePress, active: configuration.isPressed))
+            .animation(motion.animation(.subtlePress), value: configuration.isPressed)
     }
 }
 

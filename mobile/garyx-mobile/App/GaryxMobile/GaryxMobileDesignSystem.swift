@@ -56,26 +56,21 @@ enum GaryxTheme {
 
 /// Shared Capsule favorite glyph for gallery badges and focused chrome.
 struct GaryxFavoriteStar: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.garyxMotion) private var motion
 
     let isFavorited: Bool
     var size: CGFloat = 18
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                star
-            } else {
-                star.symbolEffect(.bounce, value: isFavorited)
-            }
-        }
-        .shadow(
-            color: GaryxTheme.capsuleFavoriteGlow.opacity(
-                isFavorited ? (colorScheme == .dark ? 0.30 : 0.45) : 0
-            ),
-            radius: 4
-        )
+        star
+            .animation(motion.animation(.favoriteToggle), value: isFavorited)
+            .shadow(
+                color: GaryxTheme.capsuleFavoriteGlow.opacity(
+                    isFavorited ? (colorScheme == .dark ? 0.30 : 0.45) : 0
+                ),
+                radius: 4
+            )
     }
 
     private var star: some View {

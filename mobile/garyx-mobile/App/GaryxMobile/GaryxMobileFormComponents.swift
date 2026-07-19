@@ -551,7 +551,7 @@ private struct GaryxGatewayHeaderDraftRow: Identifiable {
 }
 
 struct GaryxGatewayHeadersEditor: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxMotion) private var motion
     @Binding var text: String
     @State private var rows: [GaryxGatewayHeaderDraftRow] = []
     @State private var lastText = ""
@@ -638,7 +638,7 @@ struct GaryxGatewayHeadersEditor: View {
         Binding(
             get: { isExpanded },
             set: { next in
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                withAnimation(motion.animation(.formDisclosure)) {
                     isExpanded = next
                 }
             }

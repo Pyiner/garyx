@@ -3,10 +3,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-enum GaryxMobileMotion {
-    static let sidebarDrilldown = Animation.easeOut(duration: 0.16)
-}
-
 struct GaryxRootView: View {
     let model: GaryxMobileModel
     @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
@@ -512,8 +508,7 @@ struct GaryxShellView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.layoutDirection) private var layoutDirection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
 
     let onSetSidebarVisible: (Bool, Bool) -> Void
     let onRefreshAll: () async -> Void
@@ -747,10 +742,7 @@ struct GaryxShellView: View, Equatable {
     }
 
     private var animatesTransitions: Bool {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
+        motion.animatesSpatially(.settle)
     }
 
     private func closeSidebar() {

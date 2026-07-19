@@ -77,7 +77,14 @@ struct GaryxMotionContext: Equatable {
         anchor: UnitPoint = .center
     ) -> AnyTransition {
         let resolution = resolution(token)
-        guard resolution.allowsSpatialMotion else { return .opacity }
+        switch resolution.mode {
+        case .immediate:
+            return .identity
+        case .crossFade:
+            return .opacity
+        case .spatial:
+            break
+        }
 
         var transition = AnyTransition.opacity
         if let edge {

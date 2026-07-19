@@ -1,14 +1,5 @@
 import SwiftUI
 
-extension AnyTransition {
-    /// Shared entrance for transcript content: a quick fade with a subtle
-    /// 10pt lift. Deliberately offset-based instead of `.move`, so tall
-    /// bubbles do not slide across their whole height.
-    static let garyxTranscriptAppear = AnyTransition
-        .offset(y: 10)
-        .combined(with: .opacity)
-}
-
 /// Named coordinate space attached to the transcript CONTENT stack (not the
 /// scroll viewport). Positions measured in it are scroll-invariant: they only
 /// change when the layout itself changes, which is what makes it the right
@@ -18,6 +9,7 @@ extension AnyTransition {
 let garyxConversationContentSpaceName = "garyx-conversation-content"
 
 struct GaryxMobileTurnRowsView: View {
+    @Environment(\.garyxMotion) private var motion
     let rows: [GaryxMobileTurnRow]
     let prefetchBoundaryRowCount: Int
     let onNearHistoryBoundary: () -> Void
@@ -60,12 +52,12 @@ struct GaryxMobileTurnRowsView: View {
     private func turnRowContent(rowIndex: Int, row: GaryxMobileTurnRow) -> some View {
         if let userBlock = row.userBlock {
             GaryxMobileTranscriptBlockView(block: userBlock)
-                .transition(.garyxTranscriptAppear)
+                .transition(motion.transition(.transcriptAppear))
         }
 
         ForEach(Array(row.activityRows.enumerated()), id: \.element.id) { _, activityRow in
             GaryxMobileTurnActivityRowView(row: activityRow)
-                .transition(.garyxTranscriptAppear)
+                .transition(motion.transition(.transcriptAppear))
         }
 
         // Server render_state appends capsule cards after the turn's final
@@ -75,7 +67,7 @@ struct GaryxMobileTurnRowsView: View {
                 turnId: row.id,
                 cards: row.capsuleCards
             )
-            .transition(.garyxTranscriptAppear)
+            .transition(motion.transition(.transcriptAppear))
         }
     }
 }
@@ -113,6 +105,7 @@ struct GaryxMobileTranscriptBlockView: View {
 }
 
 struct GaryxTurnSummaryView<Content: View>: View {
+    @Environment(\.garyxMotion) private var motion
     let turn: GaryxMobileAgentTurn
     let content: Content
 
@@ -133,7 +126,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
                 userControlled = true
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(motion.animation(.turnDisclosure)) {
                     expanded.toggle()
                 }
             } label: {
@@ -149,6 +142,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
                         .font(GaryxFont.system(size: 10, weight: .semibold))
                         .foregroundStyle(GaryxTheme.secondaryText)
                         .rotationEffect(.degrees(expanded ? 0 : -90))
+                        .animation(motion.spatialAnimation(.turnDisclosure), value: expanded)
                 }
                 .contentShape(Rectangle())
             }
@@ -159,13 +153,13 @@ struct GaryxTurnSummaryView<Content: View>: View {
                 VStack(alignment: .leading, spacing: 14) {
                     content
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(motion.transition(.turnDisclosure, moveFrom: .top))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: isRunning) { _, isRunning in
             guard !userControlled else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(motion.animation(.turnAutoDisclosure)) {
                 expanded = isRunning
             }
         }

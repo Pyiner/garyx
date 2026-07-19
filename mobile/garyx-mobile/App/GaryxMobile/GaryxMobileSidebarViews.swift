@@ -153,7 +153,7 @@ enum GaryxSidebarMetrics {
 
 struct GaryxHomeThreadListView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxMotion) private var motion
     @StateObject private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
     @State private var threadMenuDismissToken = 0
     @State private var completedDropHapticTrigger = 0
@@ -354,7 +354,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             .moveDisabled(pinnedMoveIsDisabled(for: item))
         }
         .onMove(perform: pinnedMoveAction)
-        .animation(threadListAnimation, value: items.map(\.id))
+        .animation(motion.spatialAnimation(.threadListMutation), value: items.map(\.id))
 
         spacerRow(height: 10)
 
@@ -403,10 +403,6 @@ struct GaryxHomeThreadListView: View, Equatable {
         }
     }
 
-    private var threadListAnimation: Animation? {
-        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
-    }
-
     private func refreshAll() async {
         await onRefreshAll()
     }
@@ -415,7 +411,7 @@ struct GaryxHomeThreadListView: View, Equatable {
         guard shouldRefreshSidebarThreads else { return }
         // Let the drawer-open animation settle before the first refresh so
         // response handling does not contend with the opening transition.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        try? await Task.sleep(for: .seconds(GaryxMotion.drawerRefreshDeferral))
         guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
         await refreshSidebarThreads()
         while !Task.isCancelled {
@@ -1003,14 +999,20 @@ struct GaryxSidebarRowDivider: View {
 }
 
 private struct GaryxSidebarSkeletonRows: View {
-    private static let shimmerDuration: Double = 2.4
+    @Environment(\.garyxMotion) private var motion
     let rowCount: Int
 
     var body: some View {
         let count = max(0, rowCount)
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+        TimelineView(
+            .animation(
+                minimumInterval: GaryxMotion.timelineMinimumInterval,
+                paused: motion.pausesContinuousMotion(.loadingShimmer)
+            )
+        ) { context in
+            let shimmerDuration = motion.cycleDuration(.loadingShimmer)
             let normalized = context.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: Self.shimmerDuration) / Self.shimmerDuration
+                .truncatingRemainder(dividingBy: shimmerDuration) / shimmerDuration
             let phase = CGFloat(normalized) * 2.0 - 0.5
             let fill = LinearGradient(
                 colors: [
@@ -1369,12 +1371,13 @@ struct GaryxSidebarThreadRowView: View {
 /// tinted bubble with an iMessage-style three-dot typing wave, ringed by the
 /// page background so it sits cleanly on any avatar.
 struct GaryxAvatarTypingBadge: View {
+    @Environment(\.garyxMotion) private var motion
     var isPaused = false
     var scale: CGFloat = 1
 
     var body: some View {
         Group {
-            if isPaused {
+            if isPaused || motion.pausesContinuousMotion(.runningTyping) {
                 badge(activeDot: -1)
             } else {
                 // One looping PhaseAnimator drives the three-dot wave on the render
@@ -1385,7 +1388,7 @@ struct GaryxAvatarTypingBadge: View {
                 PhaseAnimator([0, 1, 2]) { activeDot in
                     badge(activeDot: activeDot)
                 } animation: { _ in
-                    .easeInOut(duration: 0.34)
+                    motion.continuousAnimation(.runningTyping)
                 }
             }
         }
@@ -1411,9 +1414,16 @@ struct GaryxAvatarTypingBadge: View {
 }
 
 private struct GaryxSidebarRunningIndicator: View {
+    @Environment(\.garyxMotion) private var motion
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            let cycle = 1.55
+        TimelineView(
+            .animation(
+                minimumInterval: GaryxMotion.timelineMinimumInterval,
+                paused: motion.pausesContinuousMotion(.runningOrbit)
+            )
+        ) { context in
+            let cycle = motion.cycleDuration(.runningOrbit)
             let progress = context.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: cycle) / cycle
 
@@ -1552,6 +1562,7 @@ struct GaryxSidebarActionPill: View {
 
 struct GaryxWorkspaceBotsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxMotion) private var motion
     let drilldown: GaryxWorkspaceBotsDrilldown?
     @State private var showsAddWorkspace = false
     @State private var addWorkspacePath = ""
@@ -1612,7 +1623,7 @@ struct GaryxWorkspaceBotsView: View {
             contentHorizontalPadding: 0
         ) {
             GaryxWorkspaceRootSection(groups: model.sidebarWorkspaceThreadGroups) { path in
-                withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+                withAnimation(motion.spatialAnimation(.drilldown)) {
                     model.openWorkspaceBotsDrilldown(.workspace(path), source: .current)
                 }
             }

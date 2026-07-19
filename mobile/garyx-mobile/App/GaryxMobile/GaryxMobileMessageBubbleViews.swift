@@ -6,6 +6,7 @@ struct GaryxMessageBubble: View {
     let message: GaryxMobileMessage
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.garyxMessageBubbleActions) private var actions
+    @Environment(\.garyxMotion) private var motion
     @State private var retrying = false
     @State private var filePreviewSheet: GaryxMessageFilePreviewSheet?
 
@@ -103,7 +104,10 @@ struct GaryxMessageBubble: View {
             // Smooth the height growth while this bubble streams. Settled
             // bubbles compare their (storage-shared) text in O(1) and never
             // animate, so long transcripts pay nothing.
-            .animation(message.isStreaming ? .easeOut(duration: 0.16) : nil, value: message.text)
+            .animation(
+                message.isStreaming ? motion.spatialAnimation(.streamingResize) : nil,
+                value: message.text
+            )
         case .system:
             GaryxMarkdownText(
                 text: displayText,

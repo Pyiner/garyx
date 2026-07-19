@@ -341,7 +341,7 @@ struct GaryxCapsulePreviewThumbnail: View {
 
 struct GaryxCapsuleFocusedPreviewView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxMotion) private var motion
     @EnvironmentObject private var model: GaryxMobileModel
     let selection: GaryxCapsulePreviewSelection
     @StateObject private var loader = GaryxCapsuleFocusedPreviewLoader()
@@ -554,22 +554,28 @@ struct GaryxCapsuleFocusedPreviewView: View {
                         .accessibilityLabel("Close Capsule actions")
                         .accessibilityAddTraits(.isButton)
 
+                    let renderedExpanded = motion.allowsSpatialMotion(.morphOpen)
+                        ? morphState.isExpanded
+                        : true
                     GaryxChromeMorphSurface(
-                        isExpanded: morphState.isExpanded,
+                        isExpanded: renderedExpanded,
                         anchorRect: geometry[anchor],
                         containerSize: geometry.size,
-                        metrics: GaryxCapsuleChromeMorph.metrics,
+                        metrics: GaryxCapsuleChromeMetrics.metrics,
                         onClose: requestCapsuleChromeDismiss
                     ) {
                         GaryxCapsuleChromePanel(
                             capsule: displayCapsule,
                             sourceThread: sourceThread,
                             compactRowWidth: geometry[anchor].width,
-                            isExpanded: morphState.isExpanded,
+                            isExpanded: renderedExpanded,
                             onToggle: requestCapsuleChromeDismiss,
                             onAction: requestChromeAction
                         )
                     }
+                    .opacity(
+                        motion.allowsSpatialMotion(.morphOpen) || morphState.isExpanded ? 1 : 0
+                    )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -597,18 +603,18 @@ struct GaryxCapsuleFocusedPreviewView: View {
         let transition = GaryxChromeMorphPresentationReducer.reduce(
             state: morphState,
             event: event,
-            reduceMotion: reduceMotion
+            transitionMode: motion.resolution(.morphOpen).mode
         )
         switch transition.animation {
         case .none:
             morphState = transition.state
         case .open:
-            withAnimation(GaryxCapsuleChromeMorph.openAnimation) {
+            withAnimation(motion.animation(.morphOpen)) {
                 morphState = transition.state
             }
         case .close:
             withAnimation(
-                GaryxCapsuleChromeMorph.closeAnimation,
+                motion.animation(.morphClose),
                 completionCriteria: .logicallyComplete
             ) {
                 morphState = transition.state
@@ -722,7 +728,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
                 from: releasedState,
                 releaseVelocity: velocity,
                 targetState: next,
-                curve: .init(response: 0.34, dampingRatio: 0.82)
+                curve: GaryxMotion.springCurve(for: .momentumSnapBack)
             )
         case .none:
             settleDriver.invalidate()
@@ -745,7 +751,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
             from: cancelledState,
             releaseVelocity: .zero,
             targetState: next,
-            curve: .init(response: 0.28, dampingRatio: 0.9)
+            curve: GaryxMotion.springCurve(for: .cancelSnapBack)
         )
     }
 

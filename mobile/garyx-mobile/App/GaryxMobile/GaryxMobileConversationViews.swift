@@ -152,7 +152,7 @@ struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxRouteContext) private var routeContext
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxMotion) private var motion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var isComposerFocused: Bool
@@ -245,7 +245,7 @@ struct GaryxConversationView: View {
                                 .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
                         }
                         .buttonStyle(.plain)
-                        .transition(.scale(scale: 0.88).combined(with: .opacity))
+                        .transition(motion.transition(.scrollLatest))
                         .accessibilityLabel("Scroll to latest message")
                     }
 
@@ -265,7 +265,7 @@ struct GaryxConversationView: View {
                         .disabled(model.isNewThreadAgentBindingUnavailable)
                 }
                 .frame(maxWidth: .infinity)
-                .animation(.easeOut(duration: 0.18), value: showsScrollToBottomButton)
+                .animation(motion.animation(.scrollLatest), value: showsScrollToBottomButton)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
@@ -406,26 +406,26 @@ struct GaryxConversationView: View {
             garyxDismissKeyboard()
             // Mount the surface collapsed, exactly over the capsule…
             runtimePanelPresented = true
-            guard !reduceMotion else {
+            guard let animation = motion.animation(.morphOpen) else {
                 runtimePanelExpanded = true
                 return
             }
             // …then spring it open on the next main-actor turn so the morph
             // visibly starts from the capsule rect.
             Task { @MainActor in
-                withAnimation(GaryxThreadRuntimeMorph.openAnimation) {
+                withAnimation(animation) {
                     runtimePanelExpanded = true
                 }
             }
         } else {
             guard runtimePanelPresented else { return }
-            guard !reduceMotion, runtimePanelExpanded else {
+            guard let animation = motion.animation(.morphClose), runtimePanelExpanded else {
                 runtimePanelExpanded = false
                 runtimePanelPresented = false
                 return
             }
             withAnimation(
-                GaryxThreadRuntimeMorph.closeAnimation,
+                animation,
                 completionCriteria: .logicallyComplete
             ) {
                 runtimePanelExpanded = false
@@ -527,7 +527,7 @@ struct GaryxConversationView: View {
                         GaryxRateLimitBanner(rateLimit: rateLimit) {
                             await model.send("continue")
                         }
-                        .transition(.garyxTranscriptAppear)
+                        .transition(motion.transition(.transcriptAppear))
                     }
                 }
             }
@@ -803,11 +803,7 @@ struct GaryxConversationView: View {
         let update = {
             showsDebouncedTailThinking = visible
         }
-        if reduceMotion {
-            update()
-        } else {
-            withAnimation(.easeOut(duration: 0.15), update)
-        }
+        withAnimation(motion.animation(.tailThinking), update)
         if visible {
             updateScrollState(proxy: proxy) { $0.thinkingIndicatorShown() }
         }
@@ -846,7 +842,7 @@ struct GaryxConversationView: View {
                         return
                     }
                     if request.animated && index == 0 {
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        withAnimation(motion.spatialAnimation(.scrollToTail)) {
                             scrollToConversationTail(proxy)
                         }
                     } else {

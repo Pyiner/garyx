@@ -48,6 +48,7 @@ struct GaryxFullscreenImagePreview: View {
 /// the launching surface (for example one tool call's thumbnail strip)
 /// without closing and reopening the preview for each image.
 struct GaryxFullscreenImageGalleryPreview: View {
+    @Environment(\.garyxMotion) private var motion
     let sources: [GaryxImagePreviewSource]
     let initialIndex: Int
     /// Resolves a `gatewayFilePath` source into a data URL through the
@@ -146,7 +147,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
             if saveState == .saved {
                 savedConfirmation
                     .padding(.bottom, 28)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(motion.transition(.imageSaveFeedback, moveFrom: .bottom))
             }
         }
         .garyxAlert(item: $saveAlert, content: saveAlertView)
@@ -253,7 +254,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                     loadGatewayDataURL: loadGatewayDataUrl
                 )
                 guard ownsSaveOperation(operationID) else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(motion.animation(.imageSaveFeedback)) {
                     saveState = .saved
                 }
                 UIAccessibility.post(notification: .announcement, argument: "Saved to Photos")
@@ -261,7 +262,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 guard ownsSaveOperation(operationID), saveState == .saved else { return }
                 saveOperationID = nil
                 saveTask = nil
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(motion.animation(.imageSaveFeedback)) {
                     saveState = .idle
                 }
             } catch is CancellationError {
@@ -299,7 +300,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
     }
 
     private func resetGalleryDismissOffset() {
-        withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+        withAnimation(motion.spatialAnimation(.snapBack)) {
             galleryDismissOffset = 0
         }
     }
@@ -530,6 +531,7 @@ enum GaryxImageDecoder {
 
 private struct GaryxZoomableImageCanvas: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.garyxMotion) private var motion
     let image: UIImage
     /// True when this canvas is one page of a paged gallery. Inside a paged
     /// TabView, an attached drag gesture claims the touch stream before the
@@ -572,7 +574,7 @@ private struct GaryxZoomableImageCanvas: View {
                 .simultaneousGesture(dragGesture, including: dragGestureMask)
                 .onTapGesture(count: 2) {
                     resetDismissGesture()
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                    withAnimation(motion.spatialAnimation(.imageZoom)) {
                         if scale > 1 {
                             resetViewport()
                         } else {
@@ -612,7 +614,7 @@ private struct GaryxZoomableImageCanvas: View {
             .onEnded { _ in
                 lastScale = scale
                 if scale <= 1.02 {
-                    withAnimation(.easeOut(duration: 0.18)) {
+                    withAnimation(motion.spatialAnimation(.imageZoomReset)) {
                         resetViewport()
                     }
                 }
@@ -691,7 +693,7 @@ private struct GaryxZoomableImageCanvas: View {
             from: dismissDragOffset,
             to: 0,
             initialVelocity: releaseVelocity,
-            curve: .init(response: 0.22, dampingRatio: 0.88),
+            curve: GaryxMotion.springCurve(for: .settle),
             onUpdate: { sample in
                 dismissDragOffset = max(0, sample.value)
             },

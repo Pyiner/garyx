@@ -60,6 +60,7 @@ struct GaryxClaudeCodeAuthEntryRow: View {
 struct GaryxClaudeCodeLoginSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.garyxMotion) private var motion
     @EnvironmentObject private var model: GaryxMobileModel
 
     @State private var authorizationCode = ""
@@ -115,7 +116,7 @@ struct GaryxClaudeCodeLoginSheet: View {
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(28)
         .presentationBackground(Color(.systemBackground))
-        .animation(.easeInOut(duration: 0.24), value: presentation.step)
+        .animation(motion.animation(.authenticationStep), value: presentation.step)
         .onChange(of: model.claudeCodeAuthSession?.loginId) { _, _ in
             authorizationCode = ""
         }
@@ -219,7 +220,9 @@ struct GaryxClaudeCodeLoginSheet: View {
     private var advancedOptions: some View {
         VStack(spacing: 12) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showsAdvancedOptions.toggle() }
+                withAnimation(motion.animation(.disclosure)) {
+                    showsAdvancedOptions.toggle()
+                }
             } label: {
                 HStack(spacing: 6) {
                     Text("Advanced Options")
@@ -256,7 +259,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                     Color(.secondarySystemBackground),
                     in: RoundedRectangle(cornerRadius: 16, style: .continuous)
                 )
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(motion.transition(.disclosure, moveFrom: .top))
             }
         }
         .padding(.top, 4)

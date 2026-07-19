@@ -108,6 +108,7 @@ private struct GaryxInPlaceMessageMenuModifier: ViewModifier {
 private struct GaryxMessageMenuHostModifier: ViewModifier {
     var bottomInset: CGFloat = 0
     var dismissToken = ""
+    @Environment(\.garyxMotion) private var motion
 
     private static let menuWidth: CGFloat = 236
     private static let rowHeight: CGFloat = 46
@@ -125,10 +126,10 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
                         GaryxMessageMenuPanel(request: request)
                             .frame(width: Self.menuWidth)
                             .offset(panelOffset(for: request, in: proxy))
-                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                            .transition(motion.transition(.messageMenu))
                     }
                 }
-                .animation(.easeOut(duration: 0.14), value: request?.token)
+                .animation(motion.animation(.messageMenu), value: request?.token)
                 .onChange(of: dismissToken) { _, _ in
                     request?.dismiss()
                 }
@@ -293,8 +294,7 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
     let primaryAction: () -> Void
     let itemsProvider: () -> [GaryxThreadActionMenuItem]
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
     @Environment(\.isEnabled) private var isEnabled
     @State private var presented: PresentedMenu?
 
@@ -308,10 +308,10 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
             .background {
                 if presented != nil {
                     focusedSourceBackground
-                        .transition(focusTransition)
+                        .transition(motion.transition(.threadMenuFocus))
                 }
             }
-            .animation(focusAnimation, value: presented?.token)
+            .animation(motion.animation(.threadMenuFocus), value: presented?.token)
             .onChange(of: dismissToken) { _, _ in
                 presented = nil
             }
@@ -393,26 +393,6 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
         .padding(.vertical, GaryxThreadActionMenuMetrics.sourceVerticalInset)
     }
 
-    private var focusAnimation: Animation? {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        ) ? .timingCurve(0.22, 1, 0.36, 1, duration: 0.16) : nil
-    }
-
-    private var focusTransition: AnyTransition {
-        if usesCrossFade {
-            return .opacity
-        }
-        return .opacity.combined(with: .scale(scale: 0.985))
-    }
-
-    private var usesCrossFade: Bool {
-        GaryxAccessibilityTransitionPolicy.usesCrossFade(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
-    }
 }
 
 private struct GaryxStationaryThreadMenuGesture: UIGestureRecognizerRepresentable {
@@ -465,8 +445,7 @@ private struct GaryxStationaryThreadMenuGesture: UIGestureRecognizerRepresentabl
 private struct GaryxThreadActionMenuHostModifier: ViewModifier {
     let bottomInset: CGFloat
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
 
     func body(content: Content) -> some View {
         content.overlayPreferenceValue(GaryxThreadActionMenuPreferenceKey.self) { request in
@@ -484,10 +463,12 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
                         GaryxThreadActionMenuPanel(request: request)
                             .frame(width: panelWidth)
                             .offset(panelOffset(for: request, panelWidth: panelWidth, in: proxy))
-                            .transition(menuTransition)
+                            .transition(
+                                motion.transition(.threadMenu, anchor: .bottomLeading)
+                            )
                     }
                 }
-                .animation(menuAnimation, value: request?.token)
+                .animation(motion.animation(.threadMenu), value: request?.token)
             }
             .ignoresSafeArea()
         }
@@ -556,26 +537,6 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
         )
     }
 
-    private var menuAnimation: Animation? {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        ) ? .timingCurve(0.22, 1, 0.36, 1, duration: 0.17) : nil
-    }
-
-    private var menuTransition: AnyTransition {
-        if usesCrossFade {
-            return .opacity
-        }
-        return .opacity.combined(with: .scale(scale: 0.965, anchor: .bottomLeading))
-    }
-
-    private var usesCrossFade: Bool {
-        GaryxAccessibilityTransitionPolicy.usesCrossFade(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
-    }
 }
 
 private struct GaryxThreadActionMenuPanel: View {

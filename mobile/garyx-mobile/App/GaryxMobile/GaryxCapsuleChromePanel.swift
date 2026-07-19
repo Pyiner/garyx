@@ -8,9 +8,7 @@ struct GaryxCapsuleChromeAnchorKey: PreferenceKey {
     }
 }
 
-enum GaryxCapsuleChromeMorph {
-    static let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.76)
-    static let closeAnimation = Animation.spring(response: 0.32, dampingFraction: 0.92)
+enum GaryxCapsuleChromeMetrics {
     static let metrics = GaryxChromeMorphSurfaceMetrics(
         horizontalMargin: 12,
         maximumExpandedWidth: 480,

@@ -5,12 +5,18 @@ import SwiftUI
 /// trailing edge, assistant text lines on the leading edge) swept by the same
 /// soft shimmer treatment as `GaryxShimmerText`, instead of a bare spinner.
 struct GaryxThreadHistoryLoadingView: View {
-    private static let shimmerDuration: Double = 2.4
+    @Environment(\.garyxMotion) private var motion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+        TimelineView(
+            .animation(
+                minimumInterval: GaryxMotion.timelineMinimumInterval,
+                paused: motion.pausesContinuousMotion(.loadingShimmer)
+            )
+        ) { context in
+            let shimmerDuration = motion.cycleDuration(.loadingShimmer)
             let normalized = context.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: Self.shimmerDuration) / Self.shimmerDuration
+                .truncatingRemainder(dividingBy: shimmerDuration) / shimmerDuration
             let phase = CGFloat(normalized) * 2.0 - 0.5
             let fill = LinearGradient(
                 colors: [
@@ -186,12 +192,18 @@ struct GaryxThinkingLabel: View {
 }
 
 struct GaryxUserMessageLoadingBubble: View {
-    private static let shimmerDuration: Double = 2.4
+    @Environment(\.garyxMotion) private var motion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+        TimelineView(
+            .animation(
+                minimumInterval: GaryxMotion.timelineMinimumInterval,
+                paused: motion.pausesContinuousMotion(.loadingShimmer)
+            )
+        ) { context in
+            let shimmerDuration = motion.cycleDuration(.loadingShimmer)
             let normalized = context.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: Self.shimmerDuration) / Self.shimmerDuration
+                .truncatingRemainder(dividingBy: shimmerDuration) / shimmerDuration
             let phase = CGFloat(normalized) * 2.0 - 0.5
             let fill = LinearGradient(
                 colors: [
@@ -340,14 +352,20 @@ struct GaryxRateLimitBanner: View {
 }
 
 struct GaryxShimmerText: View {
+    @Environment(\.garyxMotion) private var motion
     let text: String
     var font: Font = GaryxFont.body()
     var baseColor: Color = GaryxTheme.secondaryText
     var peakColor: Color = Color(.label)
-    var duration: Double = 2.6
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+        TimelineView(
+            .animation(
+                minimumInterval: GaryxMotion.timelineMinimumInterval,
+                paused: motion.pausesContinuousMotion(.thinkingShimmer)
+            )
+        ) { context in
+            let duration = motion.cycleDuration(.thinkingShimmer)
             let normalized = context.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: duration) / duration
             let phase = CGFloat(normalized) * 2.0 - 0.5

@@ -14,8 +14,10 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     @Published private(set) var presentation: GaryxHorizontalRevealPresentation
 
     private let projection: GaryxMotionPhysics.ProjectionPolicy
-    private let curve: GaryxMotionPhysics.SpringCurve
+    private let releaseCurve: GaryxMotionPhysics.SpringCurve
+    private let nonMomentumCurve: GaryxMotionPhysics.SpringCurve
     private let settleDriver: GaryxGestureSettleDriver
+    private var activeCurve: GaryxMotionPhysics.SpringCurve?
     private var state: GaryxHorizontalRevealState
     private var extent: CGFloat = 0
     private var requestedPosition: GaryxHorizontalRevealPosition
@@ -24,13 +26,15 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     init(
         initialPosition: GaryxHorizontalRevealPosition = .closed,
         projection: GaryxMotionPhysics.ProjectionPolicy,
-        curve: GaryxMotionPhysics.SpringCurve = GaryxRouteTransitionCalibration.settleCurve,
+        releaseCurve: GaryxMotionPhysics.SpringCurve = GaryxMotion.springCurve(for: .settle),
+        nonMomentumCurve: GaryxMotionPhysics.SpringCurve = GaryxMotion.springCurve(for: .snapBack),
         settleDriver: GaryxGestureSettleDriver? = nil
     ) {
         requestedPosition = initialPosition
         state = GaryxHorizontalRevealState(position: initialPosition)
         self.projection = projection
-        self.curve = curve
+        self.releaseCurve = releaseCurve
+        self.nonMomentumCurve = nonMomentumCurve
         self.settleDriver = settleDriver ?? .displayLinked()
         presentation = GaryxHorizontalRevealPresentation(
             reveal: 0,
@@ -86,7 +90,8 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
                         initialReveal: state.reveal,
                         initialVelocity: (interrupted?.velocity ?? 0) * scale
                     ),
-                    animated: true
+                    animated: true,
+                    curve: activeCurve ?? nonMomentumCurve
                 )
             }
             return
@@ -106,12 +111,14 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         requestedPosition = position
         guard isConfigured, extent > 0 else {
             settleDriver.invalidate()
+            activeCurve = nil
             state.synchronize(to: position, extent: extent)
             publish()
             return
         }
         if !animated {
             settleDriver.invalidate()
+            activeCurve = nil
             state.synchronize(to: position, extent: extent)
             publish()
             return
@@ -120,6 +127,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
             return
         }
         _ = settleDriver.interrupt()
+        activeCurve = nil
         guard let settle = state.beginProgrammaticSettle(
             to: position,
             initialVelocity: initialVelocity,
@@ -129,7 +137,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
             return
         }
         publish()
-        startSettle(settle, animated: true)
+        startSettle(settle, animated: true, curve: nonMomentumCurve)
     }
 
     func beginGesture() {
@@ -142,6 +150,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
             interruptedReveal: interrupted == nil ? nil : presentation.reveal,
             extent: extent
         )
+        activeCurve = nil
         publish()
     }
 
@@ -159,7 +168,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         ) else { return nil }
         requestedPosition = settle.target
         publish()
-        startSettle(settle, animated: true)
+        startSettle(settle, animated: true, curve: releaseCurve)
         return settle.target
     }
 
@@ -168,26 +177,30 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         guard let settle = state.cancelDrag(extent: extent) else { return nil }
         requestedPosition = settle.target
         publish()
-        startSettle(settle, animated: true)
+        startSettle(settle, animated: true, curve: nonMomentumCurve)
         return settle.target
     }
 
     func invalidate(position: GaryxHorizontalRevealPosition) {
         requestedPosition = position
         settleDriver.invalidate()
+        activeCurve = nil
         state.synchronize(to: position, extent: extent)
         publish()
     }
 
     private func startSettle(
         _ settle: GaryxHorizontalRevealSettle,
-        animated: Bool
+        animated: Bool,
+        curve: GaryxMotionPhysics.SpringCurve
     ) {
         guard animated, extent > 0 else {
             state.synchronize(to: settle.target, extent: extent)
+            activeCurve = nil
             publish()
             return
         }
+        activeCurve = curve
         settleDriver.settle(
             from: settle.initialReveal,
             to: settle.target.reveal(for: extent),
@@ -200,6 +213,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
             },
             onCompletion: { [weak self] in
                 guard let self else { return }
+                activeCurve = nil
                 _ = state.finishSettle(extent: extent)
                 publish()
             }

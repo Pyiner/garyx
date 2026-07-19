@@ -32,7 +32,7 @@ struct GaryxThreadListRowButton: View, Equatable {
     let onSetFavorite: (String, Bool) -> Void
     let onArchive: (GaryxThreadSummary, GaryxThreadArchiveStrategy) -> Void
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxMotion) private var motion
     @State private var suppressNextPrimaryTap = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -58,13 +58,13 @@ struct GaryxThreadListRowButton: View, Equatable {
         }
         .padding(.leading, input.indent)
         .frame(height: isExiting ? 0 : nil, alignment: .top)
-        .opacity(isExiting ? 0 : 1)
-        .scaleEffect(isExiting ? 0.98 : 1, anchor: .trailing)
-        .offset(x: isExiting ? 18 : 0)
+        .opacity(motion.opacity(.rowRemoval, active: isExiting))
+        .scaleEffect(motion.scale(.rowRemoval, active: isExiting), anchor: .trailing)
+        .offset(x: motion.offset(.rowRemoval, active: isExiting).width)
         .clipped()
         .allowsHitTesting(!isExiting)
         .accessibilityHidden(isExiting)
-        .animation(archiveAnimation, value: isExiting)
+        .animation(motion.animation(.rowRemoval), value: isExiting)
     }
 
     private var rowContent: some View {
@@ -207,7 +207,4 @@ struct GaryxThreadListRowButton: View, Equatable {
         input.motion == .archiving || input.motion == .leavingFilteredList
     }
 
-    private var archiveAnimation: Animation? {
-        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.2)
-    }
 }

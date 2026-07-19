@@ -452,7 +452,10 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             commitPendingCanonicalMutation()
             deactivateSourceAtCommitBoundary()
         }
-        startSettle(logicalVelocity: logicalVelocity)
+        startSettle(
+            logicalVelocity: logicalVelocity,
+            curve: GaryxRouteTransitionCalibration.settleCurve
+        )
         return outcome
     }
 
@@ -463,7 +466,10 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         }
         self.transition = transition
         callbacks.phaseChanged(.cancelSettle)
-        startSettle(logicalVelocity: 0)
+        startSettle(
+            logicalVelocity: 0,
+            curve: GaryxRouteTransitionCalibration.programmaticSettleCurve
+        )
     }
 
     @discardableResult
@@ -1008,11 +1014,17 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         if !animated || transition.visualPolicy == .immediate {
             completeSettleImmediately()
         } else {
-            startSettle(logicalVelocity: 0)
+            startSettle(
+                logicalVelocity: 0,
+                curve: GaryxRouteTransitionCalibration.programmaticSettleCurve
+            )
         }
     }
 
-    private func startSettle(logicalVelocity: CGFloat) {
+    private func startSettle(
+        logicalVelocity: CGFloat,
+        curve: GaryxMotionPhysics.SpringCurve
+    ) {
         guard let transition, let target = transition.settleTarget else { return }
         if transition.visualPolicy == .immediate {
             completeSettleImmediately()
@@ -1024,14 +1036,13 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             from: transition.progress,
             to: target,
             initialVelocity: normalizedVelocity,
-            curve: GaryxRouteTransitionCalibration.settleCurve,
+            curve: curve,
             onUpdate: { [weak self] sample in
                 guard let self, var transition = self.transition else { return }
-                // SwiftUI's analytic system spring is slightly underdamped and
-                // can overshoot under a high-velocity regrab. Full-screen
-                // navigation progress is endpoint-bounded and monotonic: keep
-                // the system timing while preventing a one-frame visual
-                // reversal after reaching either endpoint.
+                // A momentum-release token may be slightly underdamped and
+                // overshoot under a high-velocity regrab. Full-screen
+                // navigation progress is endpoint-bounded and monotonic for
+                // both release and critically damped programmatic tokens.
                 let progress = settlesForward
                     ? min(max(sample.value, transition.progress), target)
                     : max(min(sample.value, transition.progress), target)

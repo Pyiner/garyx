@@ -40,8 +40,7 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
     @ObservedObject var interaction: GaryxHorizontalRevealInteractionStore
     let content: SurfaceContent
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
     @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
@@ -183,17 +182,11 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
     }
 
     private var usesCrossFade: Bool {
-        GaryxAccessibilityTransitionPolicy.usesCrossFade(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
+        !motion.allowsSpatialMotion(.settle)
     }
 
     private var animatesTransitions: Bool {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
+        motion.animates(.settle)
     }
 
     private func closePanel() {

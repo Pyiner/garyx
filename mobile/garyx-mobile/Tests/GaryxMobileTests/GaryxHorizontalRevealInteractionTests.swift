@@ -78,6 +78,28 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         }
     }
 
+    func testProgrammaticSettleUsesCriticallyDampedToken() {
+        let harness = Harness(projection: .fullScreenNavigation)
+        harness.store.configure(extent: 330, restingPosition: .closed)
+        harness.store.setTarget(.open, animated: true)
+
+        harness.advance(by: 0.06)
+        let curve = GaryxRouteTransitionCalibration.programmaticSettleCurve
+        let expected = GaryxMotionPhysics.SettleTrajectory(
+            initialValue: 0,
+            targetValue: 330,
+            initialVelocity: 0,
+            curve: curve
+        ).sample(elapsedTime: 0.06)
+
+        XCTAssertEqual(curve.dampingRatio, 1)
+        XCTAssertEqual(
+            harness.store.reveal,
+            GaryxHorizontalRevealState.rubberBandedReveal(expected.value, extent: 330),
+            accuracy: 1e-8
+        )
+    }
+
     func testSettleRegrabAdoptsDrawnValueAndCanReverseTarget() throws {
         let harness = Harness(projection: .fullScreenNavigation)
         harness.store.configure(extent: 320, restingPosition: .closed)

@@ -20,27 +20,12 @@ struct GaryxHomeNewThreadFab: View {
 }
 
 private struct GaryxHomeFabPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !usesCrossFade ? 0.96 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(pressAnimation, value: configuration.isPressed)
-    }
-
-    private var usesCrossFade: Bool {
-        GaryxAccessibilityTransitionPolicy.usesCrossFade(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
-    }
-
-    private var pressAnimation: Animation? {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        ) ? .easeOut(duration: 0.12) : nil
+            .scaleEffect(motion.scale(.floatingPress, active: configuration.isPressed))
+            .opacity(motion.opacity(.floatingPress, active: configuration.isPressed))
+            .animation(motion.animation(.floatingPress), value: configuration.isPressed)
     }
 }

@@ -260,10 +260,10 @@ struct GaryxSwipeActionRow<Content: View>: View {
     let content: Content
     @Environment(\.garyxOpenSwipeActionRowId) private var openSwipeActionRowId
     @Environment(\.layoutDirection) private var layoutDirection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
     @StateObject private var revealInteraction = GaryxHorizontalRevealInteractionStore(
-        projection: .shortTravelDismiss
+        projection: .shortTravelDismiss,
+        releaseCurve: GaryxMotion.springCurve(for: .rowSwipe)
     )
     @State private var localIsOpen = false
     @State private var didPlayFullRevealFeedback = false
@@ -458,10 +458,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
     }
 
     private var animatesTransitions: Bool {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
+        motion.animatesSpatially(.rowSwipe)
     }
 
     private func playFullRevealFeedbackIfNeeded() {
@@ -472,28 +469,13 @@ struct GaryxSwipeActionRow<Content: View>: View {
 }
 
 struct GaryxItemActionMenuButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.garyxMotion) private var motion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !usesCrossFade ? 0.96 : 1)
-            .opacity(configuration.isPressed ? 0.78 : 1)
-            .animation(pressAnimation, value: configuration.isPressed)
-    }
-
-    private var usesCrossFade: Bool {
-        GaryxAccessibilityTransitionPolicy.usesCrossFade(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        )
-    }
-
-    private var pressAnimation: Animation? {
-        GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        ) ? .easeOut(duration: 0.12) : nil
+            .scaleEffect(motion.scale(.press, active: configuration.isPressed))
+            .opacity(motion.opacity(.press, active: configuration.isPressed))
+            .animation(motion.animation(.press), value: configuration.isPressed)
     }
 }
 

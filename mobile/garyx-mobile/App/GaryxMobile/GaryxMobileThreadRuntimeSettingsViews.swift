@@ -13,11 +13,7 @@ struct GaryxThreadRuntimeChromeAnchorKey: PreferenceKey {
     }
 }
 
-enum GaryxThreadRuntimeMorph {
-    /// Dynamic-island style: a quick spring with a hint of bounce on open,
-    /// a tighter settle on close.
-    static let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.76)
-    static let closeAnimation = Animation.spring(response: 0.32, dampingFraction: 0.92)
+enum GaryxThreadRuntimeMorphMetrics {
     static let collapsedCornerRadius: CGFloat = 22
     static let expandedCornerRadius: CGFloat = 28
     /// The expanded panel intentionally overlaps the back and ellipsis
@@ -83,35 +79,38 @@ struct GaryxThreadRuntimeCompactRow: View {
 /// matched-geometry pairs. The header row stays put; only the surface
 /// frame, corner radius, and body opacity animate.
 struct GaryxThreadRuntimeMorphSurface: View {
+    @Environment(\.garyxMotion) private var motion
     let isExpanded: Bool
     let anchorRect: CGRect
     let containerSize: CGSize
     let onClose: () -> Void
 
     var body: some View {
+        let renderedExpanded = motion.allowsSpatialMotion(.morphOpen) ? isExpanded : true
         GaryxChromeMorphSurface(
-            isExpanded: isExpanded,
+            isExpanded: renderedExpanded,
             anchorRect: anchorRect,
             containerSize: containerSize,
             metrics: GaryxChromeMorphSurfaceMetrics(
-                horizontalMargin: GaryxThreadRuntimeMorph.horizontalMargin,
-                maximumExpandedWidth: GaryxThreadRuntimeMorph.maxExpandedWidth,
-                collapsedCornerRadius: GaryxThreadRuntimeMorph.collapsedCornerRadius,
-                expandedCornerRadius: GaryxThreadRuntimeMorph.expandedCornerRadius
+                horizontalMargin: GaryxThreadRuntimeMorphMetrics.horizontalMargin,
+                maximumExpandedWidth: GaryxThreadRuntimeMorphMetrics.maxExpandedWidth,
+                collapsedCornerRadius: GaryxThreadRuntimeMorphMetrics.collapsedCornerRadius,
+                expandedCornerRadius: GaryxThreadRuntimeMorphMetrics.expandedCornerRadius
             ),
             onClose: onClose
         ) {
             GaryxThreadRuntimeSettingsPanel(
                 compactRowWidth: anchorRect.width,
-                isExpanded: isExpanded
+                isExpanded: renderedExpanded
             )
         }
+        .opacity(motion.allowsSpatialMotion(.morphOpen) || isExpanded ? 1 : 0)
     }
 }
 
 struct GaryxThreadRuntimeSettingsPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxMotion) private var motion
 
     let compactRowWidth: CGFloat
     let isExpanded: Bool
@@ -258,7 +257,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                     .frame(height: optionsViewportHeight)
                     // Measured-height corrections (Dynamic Type growth)
                     // settle with the same curve as the page entrance.
-                    .animation(.easeOut(duration: 0.18), value: optionsViewportHeight)
+                    .animation(motion.spatialAnimation(.panelResize), value: optionsViewportHeight)
                     .scrollIndicators(.hidden)
                     .garyxAdaptiveSoftScrollEdge(for: [.top, .bottom])
                     .transition(.identity)
@@ -291,7 +290,8 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     /// The leaving page slips toward its side of the stack; the entering
     /// page arrives from its own side. Reduce Motion keeps only the fade.
     private var pageHiddenOffset: CGFloat {
-        reduceMotion ? 0 : (page == .main ? -12 : 12)
+        let distance = motion.offset(.runtimeDrilldownEnter, active: true).width
+        return page == .main ? -distance : distance
     }
 
     private var panelMaxHeight: CGFloat {
@@ -722,16 +722,16 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     private func setPage(_ nextPage: Page) {
         var exiting = pager
         guard let token = exiting.begin(to: nextPage) else { return }
-        withAnimation(.easeIn(duration: 0.10)) {
+        withAnimation(motion.animation(.runtimeDrilldownExit)) {
             pager = exiting
         }
         Task { @MainActor in
             // 100ms exit + 50ms rest before the new page enters.
-            try? await Task.sleep(for: .milliseconds(150))
+            try? await Task.sleep(for: .seconds(GaryxMotion.runtimeDrilldownSwapDelay))
             var entering = pager
             guard entering.complete(token: token, to: nextPage) else { return }
             measuredOptionsHeight = nil
-            withAnimation(.easeOut(duration: reduceMotion ? 0.12 : 0.18)) {
+            withAnimation(motion.animation(.runtimeDrilldownEnter)) {
                 pager = entering
             }
         }
@@ -811,13 +811,15 @@ struct GaryxThreadRuntimeSettingsPanel: View {
 /// while touched, nothing persistent — selection is carried by the
 /// checkmark alone.
 private struct GaryxRuntimeMenuRowButtonStyle: ButtonStyle {
+    @Environment(\.garyxMotion) private var motion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
                 Color.primary.opacity(configuration.isPressed ? 0.045 : 0),
                 in: RoundedRectangle(cornerRadius: 11, style: .continuous)
             )
-            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+            .animation(motion.animation(.pressHighlight), value: configuration.isPressed)
     }
 }
 
