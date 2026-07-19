@@ -209,9 +209,11 @@ async fn test_live_config_cell_supports_concurrent_snapshot_and_replace() {
 async fn test_apply_runtime_config_failure_leaves_meeting_knobs_unchanged() {
     let state = test_state();
     let baseline = state.ops.meetings.ingestion_join_retry_window_for_test();
+    let baseline_page = state.ops.meetings.read_page_bytes();
 
     let mut config = GaryxConfig::default();
     config.gateway.meetings.join_retry_window_secs = 4321;
+    config.gateway.meetings.read_page_bytes = 999_999;
     config.agents.insert(
         "claude".to_owned(),
         serde_json::json!({
@@ -229,6 +231,11 @@ async fn test_apply_runtime_config_failure_leaves_meeting_knobs_unchanged() {
         state.ops.meetings.ingestion_join_retry_window_for_test(),
         baseline,
         "a rejected candidate config must not leak the ingestion window"
+    );
+    assert_eq!(
+        state.ops.meetings.read_page_bytes(),
+        baseline_page,
+        "a rejected candidate config must not leak the read page size"
     );
 }
 

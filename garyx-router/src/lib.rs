@@ -68,6 +68,7 @@ pub use endpoint_projection::{
 pub use file_store::FileThreadStore;
 pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};
+pub use router::default_agent_from_config;
 pub use router::{
     AgentDispatcher, InboundRequest, InboundResult, MessageRouter,
     NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreationError, ThreadCreator, ThreadMessageRequest,

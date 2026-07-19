@@ -30,6 +30,23 @@ fn test_resolve_agent_default() {
     );
 }
 
+/// Constructor-path guard: a custom default agent must take effect at
+/// construction (not only through update_config). Hardcoding the
+/// constructor's derivation turns this red.
+#[test]
+fn test_construct_with_custom_default_agent_resolves_it() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let mut config = GaryxConfig::default();
+    config
+        .agents
+        .insert("default".to_owned(), json!("assistant1"));
+    let router = MessageRouter::new(store, config);
+    assert_eq!(
+        router.resolve_agent_for_channel("telegram", "bot1", Some("u1"), false),
+        "assistant1"
+    );
+}
+
 #[test]
 fn test_update_config() {
     let mut router = make_router();
