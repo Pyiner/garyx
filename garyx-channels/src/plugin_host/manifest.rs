@@ -22,10 +22,10 @@ use thiserror::Error;
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryModel {
     /// Strongest guarantee. Plugin ACKs upstream only after
-    /// `inbound/end.ok`.
+    /// `inbound/stream_end.ok`.
     PullExplicitAck,
     /// Plugin owns its HTTP listener; holds the upstream response
-    /// open until `inbound/end.ok`.
+    /// open until `inbound/stream_end.ok`.
     PushNegativeAck,
     /// Best-effort only. Plugin loses the message on crash.
     PushAtMostOnce,

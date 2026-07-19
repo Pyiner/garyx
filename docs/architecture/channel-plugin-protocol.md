@@ -375,10 +375,14 @@ forbids the others:
 - `abandon_inbound` initiated by plugin, ACKed by host — host
   promises no more frames; SDK fires `on_stream_abandoned` instead
   of `on_end`.
-- Host shutdown cancellation — host pre-emptively emits
+- Host shutdown cancellation — the protocol reserves
   `inbound/stream_end` with `status: { "error": "host_shutting_down" }`
-  during its own shutdown, which is just the first case with a
-  specific status string.
+  for the host to pre-emptively terminate streams during its own
+  shutdown, which is just the first case with a specific status
+  string. **Not emitted by the shipped host** (see §7.1 Shipped status
+  values): today a shutdown simply stops producing frames, and the
+  plugin's stop-grace / `abandon_inbound` path (case 2) is what closes
+  still-live streams.
 
 There is no "plugin synthesizes an `inbound/stream_end`-shaped event" path
 any more. That was the round-3 contradiction, and this replaces it
@@ -631,9 +635,11 @@ Design notes:
   `merge_stream_text` / `apply_stream_boundary_text`. If the plugin
   only cares about the final reply (minolab's case), it can ignore all
   `stream_frame`s and read `final_text` from `inbound/stream_end`.
-- **Cancellation**: if the host is shutting down mid-stream it emits
-  `inbound/stream_end` with `status: { "error": "host_shutting_down" }`.
-  Plugins should treat this as "do not ACK upstream"; see §11.
+- **Cancellation (reserved)**: the protocol reserves
+  `inbound/stream_end` with `status: { "error": "host_shutting_down" }`
+  for shutdown-time cancellation. Plugins that receive it should treat
+  it as "do not ACK upstream"; see §11. The shipped host does not emit
+  it yet — see the next bullet.
 - **Shipped status values**: the shipped host emits
   `inbound/stream_end` only when the agent stream completes, always
   with `status: "ok"`. Pre-dispatch failures surface as the
@@ -1428,11 +1434,14 @@ the one place copy needs to be maintained.
   - `initialize`, `start`, `stop`, `shutdown`: 10s
   - `auth_flow/*`: 15s
   - `dispatch_outbound`, `record_outbound`: 30s
-  - `deliver_inbound`: **none** on the RPC itself (it returns fast),
-    but each `inbound/stream_frame` has an **idle timeout of 60s**
-    between frames. If the stream stalls the host emits `inbound/stream_end`
-    with `status: { "error": "stream_idle_timeout" }` and invalidates
-    the stream id; the plugin should not continue using it.
+  - `deliver_inbound`: **none** on the RPC itself (it returns fast).
+    The protocol reserves a per-stream **idle timeout of 60s** between
+    frames, on expiry of which the host would emit
+    `inbound/stream_end` with `status: { "error":
+    "stream_idle_timeout" }` and invalidate the stream id. **Not
+    implemented by the shipped host** (see §7.1 Shipped status
+    values): today a stalled stream stays open until the run
+    completes or the plugin abandons it via `abandon_inbound`.
 - Timeout expiry produces `-32603 InternalError` at the caller but
   does not by itself terminate the child; only crash or
   unresponsive-shutdown triggers process kill.

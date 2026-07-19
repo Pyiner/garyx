@@ -127,13 +127,15 @@ pub enum TombstoneReason {
     /// decided to cancel). Host-side emissions after the ACK are a
     /// protocol violation.
     Abandoned,
-    /// Host is cancelling on its own shutdown path. The terminal
-    /// `inbound/end` carries `{ "error": "host_shutting_down" }` and
-    /// no further frames are expected.
+    /// Host is cancelling on its own shutdown path. The protocol
+    /// reserves a terminal `inbound/stream_end` carrying
+    /// `{ "error": "host_shutting_down" }` for this; the shipped host
+    /// does not emit it yet (§7.1 Shipped status values) — the variant
+    /// exists so the tombstone taxonomy is complete.
     HostShutdown,
-    /// The stream idled past the per-frame idle timeout (§11.1). Host
-    /// emitted the terminal `inbound/end` and will never emit for it
-    /// again.
+    /// The stream idled past the reserved per-frame idle timeout
+    /// (§11.1, not implemented by the shipped host). Kept for the same
+    /// taxonomy-completeness reason as [`Self::HostShutdown`].
     IdleTimeout,
 }
 
@@ -141,11 +143,11 @@ pub enum TombstoneReason {
 ///
 /// Used by both sides:
 /// - **Plugin SDK:** tombstones a stream id at `abandon_inbound` send
-///   time, then discards any subsequent `stream_frame` / `inbound/end`
+///   time, then discards any subsequent `stream_frame` / `inbound/stream_end`
 ///   at the codec layer *and* at queue-execution time.
 /// - **Host transport:** tombstones a stream id before writing the
 ///   `abandon_inbound` response, then refuses to emit any further
-///   `stream_frame` / `inbound/end` for that id (protocol violation
+///   `stream_frame` / `inbound/stream_end` for that id (protocol violation
 ///   otherwise).
 ///
 /// Since IDs are unique per host process lifetime, tombstones never
