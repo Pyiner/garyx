@@ -636,9 +636,36 @@ impl garyx_bridge::ProviderRuntime for EchoProvider {
         options: &garyx_models::provider::ProviderRunOptions,
         on_chunk: garyx_bridge::provider_trait::StreamCallback,
     ) -> Result<garyx_models::provider::ProviderRunResult, garyx_bridge::BridgeError> {
+        use garyx_models::provider::{ProviderMessage, ProviderMessageRole};
         let response = format!("echo: {}", options.message);
         on_chunk(StreamEvent::Delta {
             text: response.clone(),
+        });
+        // Top-level tool call (no parent_tool_use_id, so the bridge's
+        // nested-subagent suppression must not drop it).
+        on_chunk(StreamEvent::ToolUse {
+            message: ProviderMessage {
+                role: ProviderMessageRole::ToolUse,
+                content: json!({"command": "b1 probe tool"}),
+                text: None,
+                timestamp: None,
+                metadata: HashMap::new(),
+                tool_use_id: Some("call_b1_tool".to_owned()),
+                tool_name: Some("Bash".to_owned()),
+                is_error: None,
+            },
+        });
+        on_chunk(StreamEvent::ToolResult {
+            message: ProviderMessage {
+                role: ProviderMessageRole::ToolResult,
+                content: json!("tool ok"),
+                text: Some("tool ok".to_owned()),
+                timestamp: None,
+                metadata: HashMap::new(),
+                tool_use_id: Some("call_b1_tool".to_owned()),
+                tool_name: Some("Bash".to_owned()),
+                is_error: Some(false),
+            },
         });
         on_chunk(StreamEvent::Done);
         Ok(garyx_models::provider::ProviderRunResult {
@@ -706,8 +733,7 @@ async fn deliver_inbound_native_stream_reaches_plugin_ordered_with_routed_thread
         .await;
     bridge.set_default_provider_key("test-provider").await;
 
-    let (plugin_sender, stream_events, _plugin_keep_alive) =
-        recording_stream_event_plugin_sender();
+    let (plugin_sender, stream_events, _plugin_keep_alive) = recording_stream_event_plugin_sender();
     let mut dispatcher = ChannelDispatcherImpl::new();
     dispatcher
         .register_plugin(plugin_sender)
@@ -772,13 +798,36 @@ async fn deliver_inbound_native_stream_reaches_plugin_ordered_with_routed_thread
             |event| matches!(&event.event, StreamEventFrame::Delta { text } if text.contains("echo: hello native stream")),
         )
         .expect("assistant delta must reach the plugin");
+    let tool_use_index = recorded
+        .iter()
+        .position(|event| {
+            matches!(
+                &event.event,
+                StreamEventFrame::ToolUse { message }
+                    if message.tool_use_id.as_deref() == Some("call_b1_tool")
+                        && message.tool_name.as_deref() == Some("Bash")
+            )
+        })
+        .expect("top-level tool_use frame must reach the plugin");
+    let tool_result_index = recorded
+        .iter()
+        .position(|event| {
+            matches!(
+                &event.event,
+                StreamEventFrame::ToolResult { message }
+                    if message.tool_use_id.as_deref() == Some("call_b1_tool")
+            )
+        })
+        .expect("tool_result frame must reach the plugin");
     let done_index = recorded
         .iter()
         .position(|event| matches!(event.event, StreamEventFrame::Done))
         .expect("Done frame must reach the plugin");
     assert!(
-        delta_index < done_index,
-        "assistant text must arrive before Done (no reordering across the attach flip)"
+        delta_index < tool_use_index
+            && tool_use_index < tool_result_index
+            && tool_result_index < done_index,
+        "full tool-call sequence must arrive in provider order: delta({delta_index}) < tool_use({tool_use_index}) < tool_result({tool_result_index}) < done({done_index})"
     );
     assert!(
         matches!(
@@ -789,30 +838,306 @@ async fn deliver_inbound_native_stream_reaches_plugin_ordered_with_routed_thread
     );
 }
 
+/// Regression oracle for the CommittedReplay half of the failure
+/// mapping: a bridge with no committed event bus must fail the
+/// dispatch with `InternalError` (the pre-pipeline behavior), never a
+/// non-retryable params error or a retryable Busy.
+#[tokio::test]
+async fn deliver_inbound_maps_committed_replay_failure_to_internal_error() {
+    let handler = build_handler();
+    let error = handler
+        .on_request(
+            "deliver_inbound".to_owned(),
+            json!({
+                "account_id": "main",
+                "from_id": "user-1",
+                "thread_binding_key": "chat-1",
+                "message": "hello with no committed bus",
+            }),
+        )
+        .await
+        .expect_err("missing committed event bus must fail the dispatch");
+    assert_eq!(
+        error.0,
+        PluginErrorCode::InternalError.as_i32(),
+        "CommittedReplay failure must map to InternalError, got ({}, {})",
+        error.0,
+        error.1
+    );
+}
+
+/// Regression oracle for the Dispatch half of the failure mapping: a
+/// routing/dispatch failure after the subscription was established must
+/// map to `InternalError` AND finish the deferred origin native stream
+/// (close_stream clears the live-stream gate; no frame ever reaches
+/// the plugin).
+#[tokio::test]
+async fn deliver_inbound_maps_dispatch_failure_to_internal_error_and_finishes_native_stream() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(Arc::new(ThreadHistoryRepository::new(
+        store.clone(),
+        Arc::new(ThreadTranscriptStore::memory()),
+    )));
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(128);
+    bridge.set_event_tx(event_tx).await;
+    // Deliberately NO provider registered: route_and_dispatch reaches
+    // the agent dispatch and fails there — the Dispatch error arm.
+
+    let (plugin_sender, stream_events, _plugin_keep_alive) = recording_stream_event_plugin_sender();
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher
+        .register_plugin(plugin_sender)
+        .expect("test plugin sender should register");
+    let handler = HostInboundHandler::new(
+        "test-plugin".to_owned(),
+        Arc::new(Mutex::new(MessageRouter::new(
+            store,
+            GaryxConfig::default(),
+        ))),
+        bridge,
+        Arc::new(SwappableDispatcher::new(dispatcher)),
+        std::sync::Weak::new(),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+
+    let error = handler
+        .on_request(
+            "deliver_inbound".to_owned(),
+            json!({
+                "account_id": "main",
+                "from_id": "user-1",
+                "thread_binding_key": "chat-dispatch-fail",
+                "message": "hello with no provider",
+                "run_id": "b1-dispatch-fail",
+            }),
+        )
+        .await
+        .expect_err("dispatch without any provider must fail");
+    assert_eq!(
+        error.0,
+        PluginErrorCode::InternalError.as_i32(),
+        "Dispatch failure must map to InternalError, got ({}, {})",
+        error.0,
+        error.1
+    );
+    assert_eq!(
+        handler.active_stream_count(),
+        0,
+        "finish_without_stream must clear the live-stream gate on the Dispatch error arm"
+    );
+    assert!(
+        stream_events
+            .lock()
+            .expect("recording stream event plugin lock poisoned")
+            .is_empty(),
+        "no native stream frame may reach the plugin on a failed dispatch"
+    );
+}
+
+/// Strip line comments, block comments (nested), string literals, raw
+/// string literals, and char literals from Rust source so a source
+/// guard can only match real code tokens — a comment mentioning a
+/// forbidden name must not trip the guard, and a comment mentioning the
+/// required name must not satisfy it.
+fn strip_comments_and_strings(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Line comment.
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment (nested).
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            let mut depth = 1;
+            i += 2;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        // Raw string literal r"..." / r#"..."# / br#"..."#.
+        if bytes[i] == b'r' || (bytes[i] == b'b' && i + 1 < bytes.len() && bytes[i + 1] == b'r') {
+            let start = if bytes[i] == b'b' { i + 1 } else { i };
+            let mut j = start + 1;
+            let mut hashes = 0;
+            while j < bytes.len() && bytes[j] == b'#' {
+                hashes += 1;
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                // Scan to closing quote followed by `hashes` hashes.
+                j += 1;
+                'raw: while j < bytes.len() {
+                    if bytes[j] == b'"' {
+                        let mut k = j + 1;
+                        let mut seen = 0;
+                        while k < bytes.len() && seen < hashes && bytes[k] == b'#' {
+                            seen += 1;
+                            k += 1;
+                        }
+                        if seen == hashes {
+                            i = k;
+                            break 'raw;
+                        }
+                    }
+                    j += 1;
+                }
+                if j >= bytes.len() {
+                    i = j;
+                }
+                continue;
+            }
+        }
+        // String literal.
+        if bytes[i] == b'"' {
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // Char literal / lifetime. Only skip a real char literal
+        // ('x', '\n', '\u{..}'); lifetimes ('a) pass through.
+        if bytes[i] == b'\'' && i + 1 < bytes.len() {
+            let is_char_literal =
+                bytes[i + 1] == b'\\' || (i + 2 < bytes.len() && bytes[i + 2] == b'\'');
+            if is_char_literal {
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Every non-test source file of the garyx crate, comment/string
+/// stripped. The guard scans the whole crate (not just
+/// channel_plugin_host.rs) so moving hand-rolled orchestration into a
+/// sibling helper file cannot dodge it.
+fn stripped_production_sources() -> Vec<(std::path::PathBuf, String)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read src dir") {
+            let path = entry.expect("read dir entry").path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "tests") {
+                    continue;
+                }
+                walk(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    walk(&src_root, &mut files);
+    assert!(
+        files.len() > 5,
+        "sanity: crate source walk found only {} files",
+        files.len()
+    );
+    files
+        .into_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(&path).expect("read source file");
+            let stripped = strip_comments_and_strings(&source);
+            (path, stripped)
+        })
+        .collect()
+}
+
 /// Source guard: the subprocess plugin host must route inbound
 /// dispatches through the shared `InboundPipeline`, never hand-roll
 /// the fanout → committed-replay → route_and_dispatch → attach →
-/// settle sequence again. Every marker below names one piece of the
-/// formerly duplicated orchestration; if any of them reappears in
-/// this file, the fifth inbound copy is being reintroduced.
+/// settle sequence again — in this file or any sibling helper file.
+///
+/// Both halves operate on comment/string-stripped source, so a comment
+/// can neither satisfy the required token nor trip a forbidden one.
+/// The primary enforcement is compile-level (`bound_fanout` and
+/// `committed_callback` are `pub(crate)` in garyx-channels); this scan
+/// is the belt-and-suspenders layer that also catches indirect
+/// re-rolls through still-public APIs such as
+/// `committed_callback_for_thread`.
 #[test]
 fn host_inbound_goes_through_shared_pipeline_only() {
-    let source = include_str!("../channel_plugin_host.rs");
+    let sources = stripped_production_sources();
+    let host = sources
+        .iter()
+        .find(|(path, _)| path.ends_with("channel_plugin_host.rs"))
+        .expect("channel_plugin_host.rs must exist");
     assert!(
-        source.contains("inbound::InboundPipeline"),
-        "the host must dispatch through garyx_channels::inbound::InboundPipeline"
+        host.1.contains("inbound::InboundPipeline"),
+        "the host must dispatch through garyx_channels::inbound::InboundPipeline (code token, comments don't count)"
     );
-    for forbidden in [
-        "route_and_dispatch(",
-        "committed_replay::committed_callback",
-        "DeferredBoundStreamFanout",
-        "DeferredFanoutAgentDispatcher",
-        "replay_subscription",
-    ] {
-        let occurrences = source.matches(forbidden).count();
-        assert_eq!(
-            occurrences, 0,
-            "channel_plugin_host.rs must not hand-roll the inbound sequence; found `{forbidden}` {occurrences} time(s)"
-        );
+    assert!(
+        host.1.contains(".dispatch("),
+        "the host must actually invoke InboundPipeline::dispatch"
+    );
+    for (path, stripped) in &sources {
+        for forbidden in [
+            ".route_and_dispatch(",
+            "committed_callback",
+            "DeferredBoundStreamFanout",
+            "DeferredFanoutAgentDispatcher",
+        ] {
+            assert!(
+                !stripped.contains(forbidden),
+                "{} must not hand-roll the inbound sequence; found code token `{forbidden}`",
+                path.display()
+            );
+        }
     }
+}
+
+/// The stripper itself must actually strip — otherwise the guard above
+/// silently degrades back to comment-sensitive matching.
+#[test]
+fn comment_stripper_removes_comments_and_strings_but_keeps_code() {
+    let source = r##"
+// line DeferredBoundStreamFanout
+/* block committed_callback /* nested */ still */
+let a = "string .route_and_dispatch(";
+let b = r#"raw committed_callback"#;
+let c = '"';
+real_code_token(a);
+"##;
+    let stripped = strip_comments_and_strings(source);
+    assert!(!stripped.contains("DeferredBoundStreamFanout"));
+    assert!(!stripped.contains("committed_callback"));
+    assert!(!stripped.contains(".route_and_dispatch("));
+    assert!(stripped.contains("real_code_token"));
 }

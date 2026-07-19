@@ -1,5 +1,10 @@
 pub mod auth_flow;
-pub mod bound_fanout;
+/// Deferred bound-endpoint fanout. `pub(crate)` on purpose: the only
+/// production consumer is [`inbound::InboundPipeline`]; keeping the
+/// module crate-private makes hand-rolling a second inbound
+/// orchestration in downstream crates a compile error, not just a
+/// source-guard failure.
+pub(crate) mod bound_fanout;
 pub mod builtin_catalog;
 pub mod channel_trait;
 pub mod committed_replay;

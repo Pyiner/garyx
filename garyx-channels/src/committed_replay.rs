@@ -623,7 +623,13 @@ async fn backfill_run_pages(
 ///
 /// Call this immediately before `route_and_dispatch` so no committed record is
 /// missed between subscribe and the run's first emit.
-pub async fn committed_callback(
+///
+/// `pub(crate)` on purpose: the only production consumer is
+/// [`crate::inbound::InboundPipeline`]. Downstream crates must dispatch
+/// through the shared pipeline instead of re-rolling subscribe-before-
+/// dispatch by hand; thread-scoped gateway delivery uses the still-public
+/// [`committed_callback_for_thread`].
+pub(crate) async fn committed_callback(
     bridge: &Arc<MultiProviderBridge>,
     run_id: &str,
     consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,

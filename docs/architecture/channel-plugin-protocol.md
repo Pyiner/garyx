@@ -3,9 +3,14 @@
 **Status:** Shipped — this document matches the implementation
 (`garyx-channels/src/plugin_host/`, `garyx/src/channel_plugin_host.rs`).
 The §-references in code comments (§5.3, §6.3a, §7.1, §9.4, §11.1, …)
-point into this document. Sections describing explicitly deferred work
-(e.g. built-in dispatcher unification, §12.6 host-proxied ingress) say
-so inline.
+point into this document. Wire-name deviations from the original draft
+have been folded in: the terminal notification is
+`inbound/stream_end` (never `inbound/end`), `deliver_inbound`'s
+`local_reply` is always `null` with local replies delivered via
+`dispatch_outbound` (§7.1), and the native `dispatch_stream_event`
+generation is documented in §7.1a. Sections describing explicitly
+deferred work (e.g. built-in dispatcher unification, §12.6
+host-proxied ingress) say so inline.
 **Owner:** garyx core
 **Protocol version:** 1 (`plugin_host::PROTOCOL_VERSION`)
 
@@ -75,7 +80,7 @@ direction:
   `abandon_inbound` (stream cancellation, §6.2); `record_outbound`
   (§7.3).
 - **Host → plugin (notifications).** `inbound/stream_frame`,
-  `inbound/end` (server-initiated stream for each `deliver_inbound`,
+  `inbound/stream_end` (server-initiated stream for each `deliver_inbound`,
   §7.1).
 - **Plugin → host (notifications, optional).** `register_ingress`
   (advisory URL self-announcement for `push_negative_ack` plugins,
@@ -266,7 +271,7 @@ stream, no splits:
    polling, deregisters webhook routes internally, pauses socket
    receive).
 2. Plugin does **not** pre-emptively abort in-flight `deliver_inbound`
-   streams. It waits for each active `stream_id` to reach `inbound/end`
+   streams. It waits for each active `stream_id` to reach `inbound/stream_end`
    from the host, up to the **stop grace deadline**.
 3. On grace expiry the plugin sends a new RPC,
    **`abandon_inbound`** (plugin → host), for each still-live
@@ -280,7 +285,7 @@ stream, no splits:
    ```
 
    Effect: **the host commits to not emitting any further `stream_frame`
-   or `inbound/end` for that `stream_id` once it has written the
+   or `inbound/stream_end` for that `stream_id` once it has written the
    `abandon_inbound` response.** The host cancels the router-side task
    if it's still running (best effort — the router's response callback
    becomes a no-op) and marks the stream terminated in its bookkeeping.
@@ -289,7 +294,7 @@ stream, no splits:
    **Post-ACK tombstone rule (normative).** Between the time the plugin
    emits the `abandon_inbound` request and the time it observes the
    host's ACK, the host MAY already have written further
-   `stream_frame` / `inbound/end` notifications for that `stream_id`
+   `stream_frame` / `inbound/stream_end` notifications for that `stream_id`
    into the pipe. Moreover, such frames may already be sitting in the
    SDK's per-`stream_id` serial queue (decoded but not yet dispatched
    to plugin user code), or even executing mid-callback. To keep the
@@ -300,7 +305,7 @@ stream, no splits:
      `stream_id` as *tombstoned* the moment it sends the
      `abandon_inbound` request (not when the ACK arrives).
    - **Codec-layer discard.** The SDK's codec reader MUST silently
-     discard any `inbound/stream_frame` or `inbound/end` it reads
+     discard any `inbound/stream_frame` or `inbound/stream_end` it reads
      from the pipe for a tombstoned `stream_id`, before dispatch.
    - **Queue purge + execution-time check.** Any frames for the
      tombstoned `stream_id` that were already decoded and enqueued
@@ -334,7 +339,7 @@ stream, no splits:
    trivially safe.
 
    **Host-side emission rule.** The host MUST NOT emit new
-   `stream_frame` or `inbound/end` after writing the
+   `stream_frame` or `inbound/stream_end` after writing the
    `abandon_inbound` response. The host enforces this with a
    per-`stream_id` boolean that the `abandon_inbound` handler sets
    *before* writing its response; the host's emitter consults the
@@ -351,31 +356,31 @@ stream, no splits:
    After `abandon_inbound.ok`, the SDK delivers a **single** terminal
    event to plugin user code on the per-stream serial queue: a locally
    synthesized `on_end` callback with `status: { "error":
-   "stop_grace_expired" }`. This is NOT labelled `inbound/end` — it's a
+   "stop_grace_expired" }`. This is NOT labelled `inbound/stream_end` — it's a
    distinct `on_stream_abandoned` callback in the SDK, so the two
    sources of terminality never collide. Plugin code MUST treat it as
    "do not ACK upstream" (same rule as host-shutdown cancellation,
    §7.1).
 
 4. `stop` is idempotent. The `stop` RPC resolves only after every
-   active stream has either observed `inbound/end` OR had its
+   active stream has either observed `inbound/stream_end` OR had its
    `abandon_inbound` acknowledged by the host.
 
 **Authority rule, unambiguous.** For any `stream_id`, exactly one of
 three terminal events reaches plugin user code, and each of them
 forbids the others:
 
-- `inbound/end` from host (the normal case) — authoritative; SDK
+- `inbound/stream_end` from host (the normal case) — authoritative; SDK
   closes the per-stream queue.
 - `abandon_inbound` initiated by plugin, ACKed by host — host
   promises no more frames; SDK fires `on_stream_abandoned` instead
   of `on_end`.
 - Host shutdown cancellation — host pre-emptively emits
-  `inbound/end` with `status: { "error": "host_shutting_down" }`
+  `inbound/stream_end` with `status: { "error": "host_shutting_down" }`
   during its own shutdown, which is just the first case with a
   specific status string.
 
-There is no "plugin synthesizes an `inbound/end`-shaped event" path
+There is no "plugin synthesizes an `inbound/stream_end`-shaped event" path
 any more. That was the round-3 contradiction, and this replaces it
 with a real protocol-level RPC (`abandon_inbound`) that makes the
 host authoritative about stream lifecycle without tearing plugin
@@ -551,7 +556,7 @@ stream event, not after the last one**.
 
 The RPC is therefore split into a **short request** (get an
 `InboundHandle` + `thread_id`) and a **server-initiated stream** (one
-call to `inbound/stream_frame` per event, terminated by `inbound/end`).
+call to `inbound/stream_frame` per event, terminated by `inbound/stream_end`).
 
 ```jsonc
 // 1. plugin → host, request
@@ -580,7 +585,7 @@ call to `inbound/stream_frame` per event, terminated by `inbound/end`).
   "result": {
     "stream_id": "str_7a2f…",       // server-assigned, unique per host process lifetime (§6.2)
     "thread_id": "thr_7f…",         // known BEFORE any stream frame
-    "local_reply": null             // synchronous reply if any
+    "local_reply": null             // ALWAYS null in the shipped host; see below
   }
 }
 
@@ -598,11 +603,13 @@ call to `inbound/stream_frame` per event, terminated by `inbound/end`).
 
 // 4. host → plugin, terminal notification — carries any tail state
 //    (final thread_id, bookkeeping deltas) the plugin needs for
-//    its ACK / persist step.
-{ "method": "inbound/end",
+//    its ACK / persist step. The shipped host also attaches
+//    `dispatch_metadata` (e.g. `{ "session_id": … }`) when it has
+//    provider session attribution for the run.
+{ "method": "inbound/stream_end",
   "params": { "stream_id": "str_7a2f…",
               "seq": 2,
-              "status": "ok" | { "error": "..." },
+              "status": "ok",
               "thread_id": "thr_7f…",
               "final_text": "full concatenated agent reply" } }
 ```
@@ -620,32 +627,38 @@ Design notes:
   stdio pipe is already ordered, so `seq` is a belt-and-suspenders
   correctness check (and survives any future move to a transport that
   reorders).
-- **`inbound/end.final_text`** avoids forcing the plugin to reimplement
+- **`inbound/stream_end.final_text`** avoids forcing the plugin to reimplement
   `merge_stream_text` / `apply_stream_boundary_text`. If the plugin
   only cares about the final reply (minolab's case), it can ignore all
-  `stream_frame`s and read `final_text` from `inbound/end`.
+  `stream_frame`s and read `final_text` from `inbound/stream_end`.
 - **Cancellation**: if the host is shutting down mid-stream it emits
-  `inbound/end` with `status: { "error": "host_shutting_down" }`.
+  `inbound/stream_end` with `status: { "error": "host_shutting_down" }`.
   Plugins should treat this as "do not ACK upstream"; see §11.
+- **Shipped status values**: the shipped host emits
+  `inbound/stream_end` only when the agent stream completes, always
+  with `status: "ok"`. Pre-dispatch failures surface as the
+  `deliver_inbound` JSON-RPC error response instead (no stream frames,
+  no terminal). Plugins MUST NOT depend on receiving an error-status
+  terminal today; treat the error-status shape as reserved.
 
-**Per-stream completion rule (normative).** `inbound/end` is the
+**Per-stream completion rule (normative).** `inbound/stream_end` is the
 **authoritative terminal event for a stream_id**. At the moment a
-plugin processes `inbound/end`:
+plugin processes `inbound/stream_end`:
 
 - Any remaining `inbound/stream_frame` with the same `stream_id`
   already in the plugin's inbound pipe MUST be drained and applied
   to plugin-side accumulators **before** the plugin acts on
-  `inbound/end`. The SDK enforces this by dispatching per-`stream_id`
-  frames on a *single* serial task and treating `inbound/end` as just
+  `inbound/stream_end`. The SDK enforces this by dispatching per-`stream_id`
+  frames on a *single* serial task and treating `inbound/stream_end` as just
   another ordered frame that happens to close the queue.
-- `inbound/end.final_text` is the source of truth for the final
+- `inbound/stream_end.final_text` is the source of truth for the final
   message body. A plugin that reconstructs text from `stream_frame`s
   itself MUST verify it matches `final_text` and use `final_text` on
   mismatch. Mismatches are a bug report to `garyx doctor`, not a
   protocol violation — streams can legitimately skip frames on host
   backpressure.
 - A plugin that does persist-on-done work (minolab's `publish_message`
-  + `record_outbound`) MUST do that work **inside** its `inbound/end`
+  + `record_outbound`) MUST do that work **inside** its `inbound/stream_end`
   handler, not inside a `stream_frame` handler, and MUST NOT access
   per-stream state (`thread_id`, accumulated text) after that
   handler returns. The SDK exposes this as `Stream::on_end(FnOnce)`.
@@ -661,10 +674,33 @@ The plugin is responsible for:
 - calling `record_outbound` (§7.3) if it wants the host's thread
   persistence layer to track the outbound message.
 
-Non-streaming dispatch (synchronous-reply-only agents) produces a
-`deliver_inbound` response containing `local_reply`, followed by an
-immediate `inbound/end` with `seq: 0` — the plugin code path is
-identical.
+**Local replies (shipped behavior).** When the router answers a
+request locally — native commands such as `/threads`, or any
+synchronous-reply path — the shipped host does NOT put the text in the
+`deliver_inbound` response: `result.local_reply` is always `null`, no
+`inbound/stream_frame` or `inbound/stream_end` is emitted for that
+request, and the reply is delivered through the plugin's own
+`dispatch_outbound` (§7.2) tagged with the resolved `thread_id`. A
+plugin therefore needs no special local-reply handling at all; its
+ordinary outbound path receives the message.
+
+### 7.1a Native stream-event generation (`dispatch_stream_event`)
+
+Plugins that advertise `dispatch_stream_event: true` in their
+capabilities (manifest and `initialize` response) opt into the second,
+native streaming generation: instead of the §7.1
+`inbound/stream_frame` / `inbound/stream_end` notifications, the host
+sends each agent event as a `dispatch_stream_event` **request**
+carrying the full stream envelope (`account_id`, `chat_id`,
+`endpoint_identity`, `thread_id`, `run_id`, `event`, optional
+`delivery_thread_id`), and the plugin renders the stream itself. This
+is also the fanout path bound non-origin endpoints use. The §7.1
+frame notifications remain the default for plugins without the
+capability — both generations are permanent parts of this protocol,
+not a migration window. Capability gating on the host side:
+`outbound && !dispatch_stream_event` selects the host-rendered legacy
+adapter for outbound fanout; `dispatch_stream_event` selects native
+envelope delivery.
 
 ### 7.2 Outbound: `host → plugin` (`dispatch_outbound`)
 
@@ -1394,7 +1430,7 @@ the one place copy needs to be maintained.
   - `dispatch_outbound`, `record_outbound`: 30s
   - `deliver_inbound`: **none** on the RPC itself (it returns fast),
     but each `inbound/stream_frame` has an **idle timeout of 60s**
-    between frames. If the stream stalls the host emits `inbound/end`
+    between frames. If the stream stalls the host emits `inbound/stream_end`
     with `status: { "error": "stream_idle_timeout" }` and invalidates
     the stream id; the plugin should not continue using it.
 - Timeout expiry produces `-32603 InternalError` at the caller but
@@ -1409,7 +1445,7 @@ Declared at the transport layer, enforced by both sides:
 |---|---|---|
 | Max JSON-RPC frame size | 8 MiB | `[runtime].max_frame_bytes` in manifest; host caps at 64 MiB regardless. |
 | Max concurrent in-flight `deliver_inbound` per plugin | 32 | `[runtime].max_inflight_inbound`. |
-| Max queued `inbound/stream_frame` per stream | 256 | Fixed; drop with `inbound/end` error beyond. |
+| Max queued `inbound/stream_frame` per stream | 256 | Fixed; drop with `inbound/stream_end` error beyond. |
 | Max inline image bytes per `deliver_inbound` | 4 MiB | Fixed. |
 
 When a plugin exceeds in-flight inbound, the host responds to the 33rd
@@ -1434,7 +1470,7 @@ MUST:
 
 The shared temp directory is provided by the host in `initialize.host.data_dir`
 under `attachments/inbound/` and is garbage-collected by the host 24h
-after `inbound/end`. Plugins do not need to clean up themselves.
+after `inbound/stream_end`. Plugins do not need to clean up themselves.
 
 This means typical phone-photo batches (every photo 3-8 MiB) flow
 through `file_paths`, never through inline `images[]`. The SDK's
@@ -1450,7 +1486,7 @@ Three cases, each declared explicitly in the manifest via
 1. **`pull_explicit_ack`** (e.g. minolab's `poll` + `/ack`). The
    plugin holds the message in an "unacked" state upstream and only
    calls the upstream ACK API after `deliver_inbound` has returned
-   AND `inbound/end` reported `status: "ok"`. A host crash
+   AND `inbound/stream_end` reported `status: "ok"`. A host crash
    mid-processing means the message re-appears on the next poll.
    No host-side buffering needed. **Strongest guarantee.**
 
@@ -1462,7 +1498,7 @@ Three cases, each declared explicitly in the manifest via
    intermediary in v0.2 (see §12.6). The plugin's crash-recovery
    contract is therefore:
    - Hold the upstream HTTP response open (do not 200 on receipt)
-     until `inbound/end.ok` arrives. Then 200.
+     until `inbound/stream_end.ok` arrives. Then 200.
    - If the pipe to the host is broken (host crashed), return a 5xx
      so upstream redelivers when the host is back.
    - De-duplicate on upstream `event_id` across redeliveries; after
@@ -1503,7 +1539,7 @@ Three cases, each declared explicitly in the manifest via
 
 3. **`push_at_most_once`** (ephemeral websocket frames, fire-and-
    forget push notifications where upstream has no retry). A crash
-   between the plugin reading the frame and `inbound/end.ok` drops
+   between the plugin reading the frame and `inbound/stream_end.ok` drops
    the message silently. Plugins MUST advertise this so desktop can
    badge the channel with a "best-effort delivery" indicator and
    docs can warn users.

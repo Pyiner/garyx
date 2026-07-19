@@ -229,10 +229,7 @@ mod tests {
                 Arc::new(|_event: StreamEvent| {}),
                 None,
                 move |thread_id| async move {
-                    resolved_sink
-                        .lock()
-                        .expect("resolved lock")
-                        .push(thread_id);
+                    resolved_sink.lock().expect("resolved lock").push(thread_id);
                 },
             )
             .await;
@@ -277,10 +274,7 @@ mod tests {
                 Arc::new(|_event: StreamEvent| {}),
                 Some(event),
                 move |thread_id| async move {
-                    resolved_sink
-                        .lock()
-                        .expect("resolved lock")
-                        .push(thread_id);
+                    resolved_sink.lock().expect("resolved lock").push(thread_id);
                 },
             )
             .await;

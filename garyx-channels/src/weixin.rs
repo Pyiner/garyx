@@ -4193,11 +4193,16 @@ impl WeixinChannel {
             dispatcher: &runtime.dispatcher,
         };
         let result = pipeline
-            .dispatch(request, response_callback, None, move |thread_id| async move {
-                if let Ok(mut holder) = holder_for_resolved.lock() {
-                    *holder = thread_id;
-                }
-            })
+            .dispatch(
+                request,
+                response_callback,
+                None,
+                move |thread_id| async move {
+                    if let Ok(mut holder) = holder_for_resolved.lock() {
+                        *holder = thread_id;
+                    }
+                },
+            )
             .await;
 
         match result {
