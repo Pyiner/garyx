@@ -107,6 +107,11 @@ pub struct IntegrationState {
     /// it at boot; embedded/test states without a plugin runtime simply
     /// never set it. Shared across state re-compositions.
     pub channel_plugin_rebuilder: Arc<std::sync::OnceLock<ChannelPluginRebuilder>>,
+    /// Process-wide plugin self-update master switch. Handlers hold
+    /// this exact Arc, and `apply_runtime_config` refreshes it on
+    /// every apply — a `plugins.auto_update` edit takes effect without
+    /// any channel-plugin rebuild (Phase-7 review F1).
+    pub plugin_auto_update_enabled: Arc<AtomicBool>,
 }
 
 pub struct AppState {
@@ -133,6 +138,27 @@ impl AppState {
     /// wins; later calls are ignored (the hook is process-lifetime).
     pub fn set_channel_plugin_rebuilder(&self, rebuilder: ChannelPluginRebuilder) {
         let _ = self.integration.channel_plugin_rebuilder.set(rebuilder);
+    }
+
+    /// The process-wide plugin self-update master switch handlers
+    /// share. See [`IntegrationState::plugin_auto_update_enabled`].
+    pub fn plugin_auto_update_enabled(&self) -> Arc<AtomicBool> {
+        self.integration.plugin_auto_update_enabled.clone()
+    }
+
+    /// The explicit projection of config inputs whose change requires a
+    /// channel-plugin rebuild (built-in runtime restart + subprocess
+    /// discovery/respawn): the channels section itself and the public
+    /// URL baked into each subprocess plugin's HostContext. Everything
+    /// else is either hot (dispatcher/bridge/meeting knobs, the plugin
+    /// auto-update switch, per-account reload_accounts) or explicitly
+    /// restart-required (e.g. plugins.auto_update_check_interval,
+    /// which only feeds the boot-spawned auto-update loop).
+    fn channel_plugin_rebuild_inputs(config: &GaryxConfig) -> serde_json::Value {
+        serde_json::json!({
+            "channels": serde_json::to_value(&config.channels).ok(),
+            "public_url": config.gateway.public_url,
+        })
     }
 
     pub fn provider_runtime_ready(&self) -> bool {
@@ -305,11 +331,13 @@ impl AppState {
     }
 
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
-        // Channels-diff gate for the plugin rebuild below: unrelated
+        // Rebuild-inputs gate for the plugin rebuild below: unrelated
         // config saves (shortcuts, MCP servers, …) must not bounce
-        // live channel connections.
-        let channels_changed = serde_json::to_value(&self.config_snapshot().channels).ok()
-            != serde_json::to_value(&config.channels).ok();
+        // live channel connections. The gate compares the explicit
+        // rebuild-input projection, not just `channels`.
+        let rebuild_inputs_changed =
+            Self::channel_plugin_rebuild_inputs(self.config_snapshot().as_ref())
+                != Self::channel_plugin_rebuild_inputs(&config);
         let projection = RuntimeConfigProjection::from_config(&config);
         self.integration
             .bridge
@@ -327,6 +355,11 @@ impl AppState {
         self.ops
             .meetings
             .set_ingestion_join_retry_window(projection.meeting_join_retry_window_secs);
+        // Hot knob: handlers share this Arc, so a plugins.auto_update
+        // edit takes effect immediately with zero channel bounce.
+        self.integration
+            .plugin_auto_update_enabled
+            .store(projection.plugin_auto_update, Ordering::Release);
         // Rebuild the built-in routes from the new config and publish
         // them through the `SwappableDispatcher` so the concrete swap
         // identity is preserved (§9.4: respawning plugins rely on it).
@@ -406,7 +439,7 @@ impl AppState {
         // file watcher reach it through this one hook; failures are
         // logged, matching the historical watcher-path semantics —
         // the applied dispatcher/bridge state above is already live.
-        if channels_changed
+        if rebuild_inputs_changed
             && let Some(rebuilder) = self.integration.channel_plugin_rebuilder.get()
             && let Err(error) = rebuilder(config).await
         {
@@ -471,6 +504,7 @@ impl AppState {
                 channel_swap: self.integration.channel_swap.clone(),
                 channel_plugin_manager: self.integration.channel_plugin_manager.clone(),
                 channel_plugin_rebuilder: self.integration.channel_plugin_rebuilder.clone(),
+                plugin_auto_update_enabled: self.integration.plugin_auto_update_enabled.clone(),
             },
         }
     }

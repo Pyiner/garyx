@@ -526,6 +526,8 @@ pub(super) struct MarkdownRegexes {
     pub(super) table_pipe: Regex,
 }
 
+/// Pre-compiled regexes for markdown-to-plain-text conversion.
+/// Compiled once and cached for the process lifetime.
 pub(super) fn markdown_regexes() -> &'static MarkdownRegexes {
     static REGEXES: OnceLock<MarkdownRegexes> = OnceLock::new();
     REGEXES.get_or_init(|| MarkdownRegexes {
@@ -596,6 +598,11 @@ pub(super) fn looks_like_local_media_path(input: &str) -> bool {
     Path::new(candidate).extension().is_some()
 }
 
+/// Check whether a URL/path looks like a known media file (image, video, or
+/// a handful of common document types).  Arbitrary URLs that don't match a
+/// known media extension are **not** treated as media – this prevents tool
+/// results containing API URLs (e.g. `https://api.github.com/…`) from being
+/// downloaded and sent as `attachment.bin`.
 pub(super) fn looks_like_known_media_url(url: &str) -> bool {
     let lower = url
         .split('?')

@@ -49,72 +49,6 @@ const SESSION_PAUSE_DURATION: Duration = Duration::from_secs(3600);
 /// Maximum CDN upload retry attempts on server errors (5xx).
 const CDN_UPLOAD_MAX_RETRIES: u32 = 3;
 
-/// The one production construction point of Weixin's streaming text
-/// flush decision values (Phase-6 B3): the rule lives in the shared
-/// engine, the measurements stay channel-side.
-
-/// Mark an account's session as paused (expired). All API calls for this
-/// account should be suppressed for `SESSION_PAUSE_DURATION`.
-
-/// Returns `true` if the account's session is currently paused.
-/// Removes expired entries on check (SDK parity).
-
-/// Clear session pause (e.g. after a successful getUpdates).
-
-// ---------------------------------------------------------------------------
-// get_updates_buf persistence — survive restarts without re-delivery.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Token send counter — each context_token can only be used for ~10 sends.
-// We track usage and treat the token as exhausted at TOKEN_SEND_LIMIT.
-// ---------------------------------------------------------------------------
-
-/// Maximum sends per context_token before we consider it exhausted.
-/// Empirically verified 2026-05-02: hard cap is 10; we leave 1 reserve for
-/// retry safety, so the in-process soft cap is 9.
-
-/// Increment the send counter for a token and return the new count.
-/// Returns `None` if the token has already reached the limit (caller should not send).
-
-/// Check how many sends remain for the given token.
-
-/// Reset the send counter for a specific token (called when we get a fresh token).
-
-/// Prune counters for tokens that are no longer in use (housekeeping).
-
-// ---------------------------------------------------------------------------
-// Lightweight observability counters for Weixin streaming-update rollout.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Pending outbound message queue — when weixin sends fail (e.g. token expired),
-// messages are queued here and flushed when a new inbound message arrives with
-// a fresh context_token.
-// ---------------------------------------------------------------------------
-
-/// Queue a failed outbound message for later delivery when a fresh token arrives.
-
-/// Drain and return pending outbound messages for a user (called when a fresh
-/// context_token arrives via an inbound message).
-
-/// Returns the count of pending outbound messages for a user.
-
-/// Extract account_id from a weixin bot token.
-/// Token format is typically `"account_id@im.bot:secret"`.
-
-/// Build a packed uint32 client version matching the SDK's format:
-/// `(major << 16) | (minor << 8) | patch`.
-
-/// Pre-compiled regexes for markdown-to-plain-text conversion.
-/// Compiled once and cached for the process lifetime.
-
-/// Check whether a URL/path looks like a known media file (image, video, or
-/// a handful of common document types).  Arbitrary URLs that don't match a
-/// known media extension are **not** treated as media – this prevents tool
-/// results containing API URLs (e.g. `https://api.github.com/…`) from being
-/// downloaded and sent as `attachment.bin`.
-
 #[derive(Clone)]
 struct WeixinInboundRuntime {
     http: Client,
@@ -1178,6 +1112,22 @@ mod state;
 mod streaming;
 
 pub(crate) use streaming::{WeixinStreamingCallbackConfig, build_weixin_response_callback};
+
+// The split preserves the crate-public weixin surface exactly: every
+// symbol that was `pub` at `garyx_channels::weixin::*` before the
+// Phase-7 motion is re-exported here (pinned by the
+// weixin_public_api integration probe).
+pub use send::{
+    send_file_message_from_path, send_file_message_from_path_with_cdn_base,
+    send_image_message_from_path, send_image_message_from_path_with_cdn_base, send_text_message,
+};
+pub use state::{
+    PendingOutboundMessage, clear_session_pause, drain_pending_outbound, get_context_token,
+    get_context_token_for_thread, get_typing_ticket, is_session_paused, pause_session,
+    pending_outbound_count, queue_pending_outbound, set_context_token,
+    set_context_token_for_thread, set_typing_ticket, token_send_count_prune,
+    token_send_count_reset, token_send_increment, token_sends_remaining,
+};
 
 use media::*;
 use protocol::*;

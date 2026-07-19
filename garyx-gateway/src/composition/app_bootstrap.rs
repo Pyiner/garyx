@@ -447,6 +447,9 @@ impl AppStateBuilder {
                 channel_swap: self.channel_swap,
                 channel_plugin_manager: self.channel_plugin_manager,
                 channel_plugin_rebuilder: Arc::new(std::sync::OnceLock::new()),
+                plugin_auto_update_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                    self.config.plugins.auto_update,
+                )),
             },
         });
 

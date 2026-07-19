@@ -258,6 +258,67 @@ async fn test_apply_runtime_config_refreshes_meeting_ingestion_window() {
 }
 
 #[tokio::test]
+async fn plugin_auto_update_change_must_refresh_runtime_master_switch() {
+    use std::sync::atomic::AtomicUsize;
+
+    let state = test_state();
+    let switch = state.plugin_auto_update_enabled();
+    let rebuilds = Arc::new(AtomicUsize::new(0));
+    let rebuilds_hook = rebuilds.clone();
+    state.set_channel_plugin_rebuilder(Arc::new(move |_config| {
+        let rebuilds = rebuilds_hook.clone();
+        Box::pin(async move {
+            rebuilds.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }));
+
+    let mut config = GaryxConfig::default();
+    config.plugins.auto_update = true;
+    state.apply_runtime_config(config.clone()).await.unwrap();
+    assert!(
+        switch.load(Ordering::Acquire),
+        "a plugins.auto_update edit must reach the shared runtime switch"
+    );
+    assert_eq!(
+        rebuilds.load(Ordering::SeqCst),
+        0,
+        "the auto-update switch is a hot knob; it must not bounce channel plugins"
+    );
+
+    config.plugins.auto_update = false;
+    state.apply_runtime_config(config).await.unwrap();
+    assert!(
+        !switch.load(Ordering::Acquire),
+        "disabling auto-update must take effect without a rebuild or restart"
+    );
+    assert_eq!(rebuilds.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn public_url_change_triggers_plugin_rebuild() {
+    use std::sync::atomic::AtomicUsize;
+
+    let state = test_state();
+    let rebuilds = Arc::new(AtomicUsize::new(0));
+    let rebuilds_hook = rebuilds.clone();
+    state.set_channel_plugin_rebuilder(Arc::new(move |_config| {
+        let rebuilds = rebuilds_hook.clone();
+        Box::pin(async move {
+            rebuilds.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }));
+
+    // public_url is baked into each subprocess plugin's HostContext at
+    // spawn time, so it is a declared rebuild input.
+    let mut config = GaryxConfig::default();
+    config.gateway.public_url = "https://gateway.example.com".to_owned();
+    state.apply_runtime_config(config).await.unwrap();
+    assert_eq!(rebuilds.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_apply_runtime_config_invokes_rebuilder_only_on_channels_change() {
     use std::sync::atomic::AtomicUsize;
 

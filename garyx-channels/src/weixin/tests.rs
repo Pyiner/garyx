@@ -1070,3 +1070,49 @@ async fn handle_message_routes_text_through_inbound_dispatch() {
         "inbound dispatch must bind a thread for the sender"
     );
 }
+
+/// Phase-7 declared observability migration: the domain split moves
+/// weixin log sites into submodules, so their implicit tracing
+/// targets follow the code (`garyx_channels::weixin::state` instead
+/// of `garyx_channels::weixin`). No config in this repository filters
+/// on the old target; this test pins the new contract so a future
+/// move is a conscious decision again.
+#[tokio::test]
+async fn weixin_state_log_targets_follow_the_submodule_path() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[derive(Clone)]
+    struct TargetCapture(Arc<std::sync::Mutex<Vec<String>>>);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for TargetCapture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            self.0
+                .lock()
+                .expect("target capture lock")
+                .push(event.metadata().target().to_owned());
+        }
+    }
+
+    let targets = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(TargetCapture(targets.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    // queue_pending_outbound logs unconditionally and touches only
+    // in-process state.
+    queue_pending_outbound("acct-target-pin", "user-target-pin", "hello").await;
+    let _ = drain_pending_outbound("acct-target-pin", "user-target-pin").await;
+
+    let seen = targets.lock().expect("target capture lock").clone();
+    assert!(
+        seen.iter()
+            .any(|target| target == "garyx_channels::weixin::state"),
+        "state-store logs must carry the submodule target; saw {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|target| target == "garyx_channels::weixin"),
+        "no stray log should still claim the pre-split hub target here"
+    );
+}

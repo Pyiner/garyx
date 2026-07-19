@@ -20,6 +20,8 @@ pub(super) fn session_pause_store() -> &'static SessionPauseStore {
     STORE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+/// Mark an account's session as paused (expired). All API calls for this
+/// account should be suppressed for `SESSION_PAUSE_DURATION`.
 pub async fn pause_session(account_id: &str) {
     let mut store = session_pause_store().lock().await;
     store.insert(account_id.to_owned(), std::time::Instant::now());
@@ -30,6 +32,8 @@ pub async fn pause_session(account_id: &str) {
     );
 }
 
+/// Returns `true` if the account's session is currently paused.
+/// Removes expired entries on check (SDK parity).
 pub async fn is_session_paused(account_id: &str) -> bool {
     let mut store = session_pause_store().lock().await;
     if let Some(paused_at) = store.get(account_id) {
@@ -41,10 +45,15 @@ pub async fn is_session_paused(account_id: &str) -> bool {
     false
 }
 
+/// Clear session pause (e.g. after a successful getUpdates).
 pub async fn clear_session_pause(account_id: &str) {
     let mut store = session_pause_store().lock().await;
     store.remove(account_id);
 }
+
+// ---------------------------------------------------------------------------
+// get_updates_buf persistence — survive restarts without re-delivery.
+// ---------------------------------------------------------------------------
 
 pub(super) fn get_updates_buf_persistence_path() -> std::path::PathBuf {
     garyx_models::local_paths::default_session_data_dir().join("weixin_getupdates_buf.json")
@@ -99,6 +108,14 @@ pub(super) async fn set_persisted_cursor(account_id: &str, cursor: &str) {
     tokio::task::spawn_blocking(move || persist_get_updates_buf(&snapshot));
 }
 
+// ---------------------------------------------------------------------------
+// Token send counter — each context_token can only be used for ~10 sends.
+// We track usage and treat the token as exhausted at TOKEN_SEND_LIMIT.
+// ---------------------------------------------------------------------------
+
+/// Maximum sends per context_token before we consider it exhausted.
+/// Empirically verified 2026-05-02: hard cap is 10; we leave 1 reserve for
+/// retry safety, so the in-process soft cap is 9.
 pub(super) const TOKEN_SEND_LIMIT: u32 = 9;
 
 pub(super) type TokenSendCountStore = Arc<Mutex<HashMap<String, u32>>>;
@@ -108,6 +125,8 @@ pub(super) fn token_send_count_store() -> &'static TokenSendCountStore {
     STORE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+/// Increment the send counter for a token and return the new count.
+/// Returns `None` if the token has already reached the limit (caller should not send).
 pub async fn token_send_increment(token: &str) -> Option<u32> {
     if token.trim().is_empty() {
         return None;
@@ -121,21 +140,28 @@ pub async fn token_send_increment(token: &str) -> Option<u32> {
     Some(*count)
 }
 
+/// Check how many sends remain for the given token.
 pub async fn token_sends_remaining(token: &str) -> u32 {
     let store = token_send_count_store().lock().await;
     let used = store.get(token).copied().unwrap_or(0);
     TOKEN_SEND_LIMIT.saturating_sub(used)
 }
 
+/// Reset the send counter for a specific token (called when we get a fresh token).
 pub async fn token_send_count_reset(token: &str) {
     let mut store = token_send_count_store().lock().await;
     store.remove(token);
 }
 
+/// Prune counters for tokens that are no longer in use (housekeeping).
 pub async fn token_send_count_prune(active_tokens: &[&str]) {
     let mut store = token_send_count_store().lock().await;
     store.retain(|k, _| active_tokens.contains(&k.as_str()));
 }
+
+// ---------------------------------------------------------------------------
+// Lightweight observability counters for Weixin streaming-update rollout.
+// ---------------------------------------------------------------------------
 
 pub(super) static WEIXIN_MEDIA_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub(super) static WEIXIN_SEND_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -186,6 +212,12 @@ pub(super) fn record_weixin_send_calls_per_inbound(count: u32) {
 }
 
 #[derive(Clone, Debug)]
+// ---------------------------------------------------------------------------
+// Pending outbound message queue — when weixin sends fail (e.g. token expired),
+// messages are queued here and flushed when a new inbound message arrives with
+// a fresh context_token.
+// ---------------------------------------------------------------------------
+
 pub struct PendingOutboundMessage {
     pub to_user_id: String,
     pub text: String,
@@ -199,6 +231,7 @@ pub(super) fn pending_outbound_store() -> &'static PendingOutboundStore {
     STORE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+/// Queue a failed outbound message for later delivery when a fresh token arrives.
 pub async fn queue_pending_outbound(account_id: &str, to_user_id: &str, text: &str) {
     let key = format!("{account_id}:{to_user_id}");
     let mut store = pending_outbound_store().lock().await;
@@ -220,6 +253,8 @@ pub async fn queue_pending_outbound(account_id: &str, to_user_id: &str, text: &s
     );
 }
 
+/// Drain and return pending outbound messages for a user (called when a fresh
+/// context_token arrives via an inbound message).
 pub async fn drain_pending_outbound(
     account_id: &str,
     user_id: &str,
@@ -229,6 +264,7 @@ pub async fn drain_pending_outbound(
     store.remove(&key).unwrap_or_default()
 }
 
+/// Returns the count of pending outbound messages for a user.
 pub async fn pending_outbound_count(account_id: &str, user_id: &str) -> usize {
     let key = format!("{account_id}:{user_id}");
     let store = pending_outbound_store().lock().await;

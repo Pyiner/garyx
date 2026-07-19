@@ -11,8 +11,9 @@
 //!   reconciliation against the live pool;
 //! - cron job definitions — boot-only, `CronService::load` runs once;
 //! - agent profiles — sourced from the custom-agent store, not the config;
-//! - `gateway.host`/`port`/`public_url` and the auto-update switches —
-//!   boot-only reads;
+//! - `gateway.host`/`port` — boot-only reads (`public_url` is a
+//!   channel-plugin rebuild input, `plugins.auto_update` is projected
+//!   below as a hot knob);
 //! - `config.channels` — passed through verbatim because the hot-reload
 //!   dispatcher rebuild has state (weixin running, preserved plugin senders)
 //!   that a pre-derived value must not flatten.
@@ -36,6 +37,10 @@ pub struct RuntimeConfigProjection {
     pub meeting_join_retry_window_secs: u64,
     /// Managed MCP server definitions handed to the cron dispatch runtime.
     pub managed_mcp_servers: HashMap<String, McpServerConfig>,
+    /// Plugin self-update master switch (`plugins.auto_update`). Hot:
+    /// applied to the process-wide shared AtomicBool on every config
+    /// apply — never requires a channel-plugin rebuild.
+    pub plugin_auto_update: bool,
 }
 
 impl RuntimeConfigProjection {
@@ -47,6 +52,7 @@ impl RuntimeConfigProjection {
                 .meetings
                 .effective_join_retry_window_secs(),
             managed_mcp_servers: config.mcp_servers.clone(),
+            plugin_auto_update: config.plugins.auto_update,
         }
     }
 }

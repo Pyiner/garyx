@@ -944,6 +944,7 @@ dependencies = [
  "tokio-tungstenite",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "urlencoding",
  "uuid",
  "wiremock",

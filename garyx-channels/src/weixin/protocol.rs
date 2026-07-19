@@ -7,6 +7,8 @@ use super::*;
 pub(super) type Aes128EcbEnc = Encryptor<Aes128>;
 pub(super) type Aes128EcbDec = Decryptor<Aes128>;
 
+/// Extract account_id from a weixin bot token.
+/// Token format is typically `"account_id@im.bot:secret"`.
 pub(super) fn account_id_from_token(token: &str) -> &str {
     token.split(':').next().unwrap_or(token).trim()
 }
@@ -57,6 +59,8 @@ pub(super) fn auth_headers(builder: RequestBuilder, account: &WeixinAccount) -> 
         .header("iLink-App-ClientVersion", build_client_version())
 }
 
+/// Build a packed uint32 client version matching the SDK's format:
+/// `(major << 16) | (minor << 8) | patch`.
 pub(super) fn build_client_version() -> String {
     let version = env!("CARGO_PKG_VERSION");
     let parts: Vec<u32> = version

@@ -390,6 +390,34 @@ fn register_plugin_state_logging(plugin_manager: &mut ChannelPluginManager) {
     });
 }
 
+/// Install the production channel-plugin rebuilder hook on `state`
+/// (Phase-7 single derivation point). Captures a `Weak<AppState>` so
+/// the hook never forms an `AppState -> hook -> AppState` strong
+/// reference cycle: if the gateway is tearing down when a rebuild
+/// fires, the upgrade fails and the rebuild is skipped.
+pub(crate) fn install_channel_plugin_rebuilder(
+    state: &Arc<AppState>,
+    plugin_manager: &std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
+    bridge: &Arc<MultiProviderBridge>,
+    no_channels: bool,
+) {
+    let weak_state = Arc::downgrade(state);
+    let plugin_manager = plugin_manager.clone();
+    let bridge = bridge.clone();
+    state.set_channel_plugin_rebuilder(Arc::new(move |config: GaryxConfig| {
+        let weak_state = weak_state.clone();
+        let plugin_manager = plugin_manager.clone();
+        let bridge = bridge.clone();
+        Box::pin(async move {
+            let Some(state) = weak_state.upgrade() else {
+                // Gateway shutting down; nothing to rebuild against.
+                return Ok(());
+            };
+            rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels).await
+        })
+    }));
+}
+
 pub(crate) async fn rebuild_channel_plugins(
     plugin_manager: &std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
     config: &GaryxConfig,
@@ -480,14 +508,13 @@ pub(crate) async fn rebuild_channel_plugins_with_factory(
                 // without forming a manager↔handler reference
                 // cycle that would survive gateway shutdown.
                 plugin_manager: std::sync::Arc::downgrade(plugin_manager),
-                // Plugin-side master kill switch is the existing
-                // `plugins.auto_update` config field. Captured here
-                // (one-shot read) so handlers see the right
-                // initial value; future hot-reload paths flip the
-                // AtomicBool without rebuilding handlers.
-                plugin_auto_update_enabled: std::sync::Arc::new(
-                    std::sync::atomic::AtomicBool::new(config.plugins.auto_update),
-                ),
+                // Plugin-side master kill switch: the process-wide
+                // shared handle owned by AppState. apply_runtime_config
+                // refreshes it on every config apply, so a
+                // `plugins.auto_update` edit takes effect immediately
+                // without rebuilding handlers or bouncing channels
+                // (Phase-7 review F1).
+                plugin_auto_update_enabled: state.plugin_auto_update_enabled(),
             },
         )
         .await;
@@ -621,22 +648,9 @@ pub(crate) async fn run(
     // Phase-7: install the channel-plugin rebuilder so
     // `apply_runtime_config` is the single derivation point for
     // channel hot-reload. Both the HTTP settings path and the file
-    // watcher below converge on it (gated on an actual channels
-    // change inside apply_runtime_config).
-    {
-        let plugin_manager = plugin_manager.clone();
-        let state_for_rebuild = state.clone();
-        let bridge_for_rebuild = bridge.clone();
-        state.set_channel_plugin_rebuilder(Arc::new(move |config: GaryxConfig| {
-            let plugin_manager = plugin_manager.clone();
-            let state = state_for_rebuild.clone();
-            let bridge = bridge_for_rebuild.clone();
-            Box::pin(async move {
-                rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels)
-                    .await
-            })
-        }));
-    }
+    // watcher below converge on it (gated on a rebuild-inputs change
+    // inside apply_runtime_config).
+    install_channel_plugin_rebuilder(&state, &plugin_manager, &bridge, no_channels);
 
     // Teardown mirrors startup: the single production registration point
     // records each phase's inverse and shutdown drains the stack in reverse
@@ -757,10 +771,86 @@ pub(crate) async fn run(
 
 #[cfg(test)]
 mod tests {
+    use super::install_channel_plugin_rebuilder;
     use super::{TeardownStack, register_shutdown_teardowns};
     use garyx_channels::ChannelPluginManager;
     use garyx_gateway::CronService;
     use std::sync::Arc;
+
+    /// Production-wiring guard (Phase-7 review F3): drives the REAL
+    /// installer + the REAL ChannelPluginManager through
+    /// apply_runtime_config. Deleting the production installer (or its
+    /// wiring to rebuild_channel_plugins) leaves the manager empty and
+    /// turns this red — the synthetic-hook tests in garyx-gateway
+    /// cannot see that regression.
+    #[tokio::test]
+    async fn production_rebuilder_hook_rebuilds_the_real_manager_on_rebuild_input_change() {
+        use garyx_gateway::server::AppStateBuilder;
+        use garyx_models::config::GaryxConfig;
+
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
+        let state = AppStateBuilder::new(GaryxConfig::default())
+            .with_meetings_dir(temp.path().join("meetings"))
+            .with_bridge(bridge.clone())
+            .build();
+        let plugin_manager = state.channel_plugin_manager();
+
+        // Sentinel: a state hook on the CURRENT manager records the
+        // stop events the rebuild's stop_all() fires before swapping
+        // in the replacement manager. reload_plugin_accounts (the
+        // non-rebuild hot path) emits no state transitions, so this
+        // observable distinguishes a real rebuild from an
+        // accounts-only reload.
+        let observed = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        {
+            let observed = observed.clone();
+            plugin_manager
+                .lock()
+                .await
+                .register_state_hook(move |status| {
+                    observed
+                        .lock()
+                        .expect("sentinel lock")
+                        .push(format!("{}:{:?}", status.metadata.id, status.state));
+                });
+        }
+
+        install_channel_plugin_rebuilder(&state, &plugin_manager, &bridge, false);
+
+        // A disabled account still changes the channels section (gate
+        // passes) without starting any built-in runtime loop.
+        let mut config = GaryxConfig::default();
+        config
+            .channels
+            .plugin_channel_mut("telegram")
+            .accounts
+            .insert(
+                "probe".to_owned(),
+                garyx_models::config::telegram_account_to_plugin_entry(
+                    &garyx_models::config::TelegramAccount {
+                        token: "unused".to_owned(),
+                        enabled: false,
+                        name: None,
+                        agent_id: None,
+                        workspace_dir: None,
+                        owner_target: None,
+                        groups: std::collections::HashMap::new(),
+                    },
+                ),
+            );
+        state
+            .apply_runtime_config(config)
+            .await
+            .expect("apply must succeed");
+
+        let events = observed.lock().expect("sentinel lock").clone();
+        assert!(
+            events.iter().any(|event| event.contains("Stopped")),
+            "the boot-installed hook must run the REAL rebuild (stop_all on the old manager); observed: {events:?}"
+        );
+        state.ops.meetings.shutdown_ingestion();
+    }
 
     /// Mutation guard for startup/shutdown mirroring: this drives the SAME
     /// registration function production `run` uses, with real (inert)
