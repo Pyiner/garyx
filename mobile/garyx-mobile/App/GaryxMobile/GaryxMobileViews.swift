@@ -620,8 +620,11 @@ struct GaryxShellView: View, Equatable {
 
         // The public UIKit pan cancels descendant touches when it wins. Keep
         // both surfaces inert for the whole explicit drag/settle phase so a
-        // regrab cannot accidentally activate a control under the finger.
-        let drawerDragActive = drawerRevealInteraction.presentation.phase != .idle
+        // regrab cannot accidentally activate a control under the finger. The
+        // freeze is a hit-testing policy, never a disabled appearance.
+        let drawerAllowsSurfaceHitTesting =
+            drawerRevealInteraction.presentation.phase.allowsSurfaceHitTesting
+        let drawerInteractionActive = !drawerAllowsSurfaceHitTesting
 
         return ZStack(alignment: .topLeading) {
             GaryxNavigationDrawerView(
@@ -635,10 +638,11 @@ struct GaryxShellView: View, Equatable {
                 onManageGateways: onManageGateways,
                 debugShowsGatewaySwitcher: $debugShowsGatewaySwitcher
             )
-            .disabled(drawerDragActive)
             .frame(width: width, height: containerSize.height)
             .contentShape(Rectangle())
-            .allowsHitTesting(revealWidth > width * 0.82)
+            .allowsHitTesting(
+                drawerAllowsSurfaceHitTesting && revealWidth > width * 0.82
+            )
             .offset(x: drawerOffset)
 
             GaryxRootNavigationView(
@@ -646,7 +650,7 @@ struct GaryxShellView: View, Equatable {
                 routeNotFoundStore: routeNotFoundStore,
                 homeListStore: homeListStore,
                 model: model,
-                isSidebarDragActive: drawerDragActive,
+                isSidebarDragActive: drawerInteractionActive,
                 onOpenDrawer: {
                     onSetSidebarVisible(true, true)
                 },
@@ -667,7 +671,6 @@ struct GaryxShellView: View, Equatable {
                 onArchiveThread: onArchiveThread
             )
             .equatable()
-            .disabled(drawerDragActive)
             .allowsHitTesting(abs(revealWidth) < 0.5)
             .overlay {
                 // While any part of the drawer is revealed, the main panel
@@ -716,6 +719,7 @@ struct GaryxShellView: View, Equatable {
             }
             .contentShape(Rectangle())
             .offset(x: contentOffset)
+            .allowsHitTesting(drawerAllowsSurfaceHitTesting)
             .zIndex(0)
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)

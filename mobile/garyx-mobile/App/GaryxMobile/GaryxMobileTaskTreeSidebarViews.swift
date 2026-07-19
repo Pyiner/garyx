@@ -84,6 +84,11 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
                         )
                     }
                 }
+                // Freeze controls without propagating SwiftUI's disabled
+                // environment, which visually dims the already-rendered tree.
+                .allowsHitTesting(
+                    interaction.presentation.phase.allowsSurfaceHitTesting
+                )
                 .onAppear {
                     interaction.configure(
                         extent: panelWidth,
@@ -133,7 +138,6 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
         progress: CGFloat,
         safeAreaInsets: EdgeInsets
     ) -> some View {
-        let dragActive = interaction.presentation.phase != .idle
         let leadingSign: CGFloat = layoutDirection == .leftToRight ? 1 : -1
 
         // Full-height rail: the material reaches the physical top and bottom
@@ -175,7 +179,6 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
             // Reduce Motion: crossfade + scrim only, no interactive slide.
             .opacity(usesCrossFade ? Double(progress) : 1)
             .offset(x: usesCrossFade ? 0 : leadingSign * (panelWidth - reveal))
-            .disabled(dragActive)
             .ignoresSafeArea(edges: [.top, .bottom])
             .accessibilityAddTraits(.isModal)
             .accessibilityAction(.escape) { closePanel() }

@@ -17,6 +17,14 @@ public enum GaryxHorizontalRevealPhase: Equatable, Sendable {
     case idle
     case dragging
     case settling(GaryxHorizontalRevealPosition)
+
+    /// Reveal transitions must reject descendant taps, but that interaction
+    /// freeze is not a disabled control state. SwiftUI consumers apply this as
+    /// a hit-testing gate so existing content never adopts disabled styling
+    /// while a drag or programmatic settle is in flight.
+    public var allowsSurfaceHitTesting: Bool {
+        self == .idle
+    }
 }
 
 public struct GaryxHorizontalRevealSettle: Equatable, Sendable {

@@ -24,6 +24,10 @@ final class GaryxMobileResourceStateTests: XCTestCase {
 
         state.beginRefresh()
         XCTAssertEqual(state.phase, .loaded)
+        XCTAssertFalse(
+            state.phase.isLoading,
+            "refreshing with existing content must never re-enter the loading presentation"
+        )
         XCTAssertTrue(state.isRefreshing)
 
         state.failRefresh("Gateway unavailable", keepingStaleValue: true)

@@ -71,6 +71,34 @@ final class GaryxHorizontalRevealGestureTests: XCTestCase {
         XCTAssertEqual(reversal.initialVelocity, -300)
     }
 
+    func testDragAndProgrammaticSettleUseAnInvisibleHitTestingFreeze() throws {
+        let extent: CGFloat = 330
+        var state = GaryxHorizontalRevealState(position: .closed, extent: extent)
+
+        XCTAssertTrue(state.phase.allowsSurfaceHitTesting)
+
+        state.beginDrag(extent: extent)
+        XCTAssertFalse(
+            state.phase.allowsSurfaceHitTesting,
+            "an active drag blocks taps without disabling the rendered controls"
+        )
+
+        state.synchronize(to: .closed, extent: extent)
+        _ = try XCTUnwrap(state.beginProgrammaticSettle(
+            to: .open,
+            initialVelocity: 0,
+            extent: extent
+        ))
+        XCTAssertFalse(
+            state.phase.allowsSurfaceHitTesting,
+            "a programmatic settle must not become a visually disabled content state"
+        )
+
+        state.updateSettle(sampledReveal: extent, extent: extent)
+        XCTAssertEqual(state.finishSettle(extent: extent), .open)
+        XCTAssertTrue(state.phase.allowsSurfaceHitTesting)
+    }
+
     func testCancellationAfterRegrabResumesInterruptedTarget() throws {
         let extent: CGFloat = 300
         var state = GaryxHorizontalRevealState(position: .closed, extent: extent)
