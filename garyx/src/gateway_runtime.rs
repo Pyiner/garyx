@@ -31,10 +31,15 @@ use garyx_router::{
 use crate::commands::VERSION;
 use crate::config_support::{default_config_path_buf, load_config_or_default, print_diagnostics};
 
-/// LIFO stack of async teardown actions. Each startup phase registers its
-/// inverse as it completes; shutdown drains the stack in reverse registration
-/// order, so startup and shutdown can never drift apart.
-struct TeardownStack(Vec<Box<dyn FnOnce() -> futures_boxed::BoxFuture + Send>>);
+/// LIFO stack of labeled async teardown actions. Each startup phase registers
+/// its inverse as it completes; shutdown drains the stack in reverse
+/// registration order, so startup and shutdown can never drift apart.
+struct TeardownStack(
+    Vec<(
+        &'static str,
+        Box<dyn FnOnce() -> futures_boxed::BoxFuture + Send>,
+    )>,
+);
 
 mod futures_boxed {
     pub(super) type BoxFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
@@ -45,41 +50,48 @@ impl TeardownStack {
         Self(Vec::new())
     }
 
-    fn push<F, Fut>(&mut self, teardown: F)
+    fn push<F, Fut>(&mut self, label: &'static str, teardown: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.0.push(Box::new(move || Box::pin(teardown())));
+        self.0.push((label, Box::new(move || Box::pin(teardown()))));
     }
 
-    async fn drain(self) {
-        for teardown in self.0.into_iter().rev() {
+    async fn drain(self) -> Vec<&'static str> {
+        let mut executed = Vec::with_capacity(self.0.len());
+        for (label, teardown) in self.0.into_iter().rev() {
+            tracing::debug!(teardown = label, "running shutdown teardown");
             teardown().await;
+            executed.push(label);
         }
+        executed
     }
 }
 
-/// Phase 1 witness: exclusive ownership of the data directory plus the raw
-/// persistent stores. Nothing else may open runtime storage before this
-/// exists, and later phases can only be reached through it.
-struct LockedStores {
-    session_data_dir: String,
-    garyx_db: Arc<garyx_gateway::garyx_db::GaryxDbService>,
-    transcript_store: Arc<ThreadTranscriptStore>,
-    message_ledger: Arc<MessageLedgerStore>,
-}
-
-/// Phase 2 witness: canonical thread data imported (legacy boot import and
-/// one-shot cutovers complete) and the store handles bound for the bridge.
-/// Listener binding is unreachable without passing through this type.
-struct ImportedStores {
-    session_data_dir: String,
-    garyx_db: Arc<garyx_gateway::garyx_db::GaryxDbService>,
-    message_ledger: Arc<MessageLedgerStore>,
-    bridge: Arc<MultiProviderBridge>,
-    thread_store: Arc<dyn ThreadStore>,
-    thread_history: Arc<ThreadHistoryRepository>,
+/// The single production registration point for runtime teardowns. Reversing
+/// the registration order here flips the drain order asserted by
+/// `shutdown_teardowns_drain_plugins_before_cron`, so startup/shutdown
+/// mirroring is pinned through the same path production uses.
+fn register_shutdown_teardowns(
+    teardown: &mut TeardownStack,
+    cron_service: Arc<CronService>,
+    plugin_manager: std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
+) {
+    // Move the assembly's cron handle into its teardown so the drain-time
+    // Arc::try_unwrap sees exactly the same outstanding references as the
+    // pre-stack shutdown sequence did.
+    teardown.push("cron_service", move || async move {
+        match Arc::try_unwrap(cron_service) {
+            Ok(mut svc) => svc.stop().await,
+            Err(_) => tracing::debug!("Cron service still has outstanding references on shutdown"),
+        }
+    });
+    teardown.push("channel_plugins", move || async move {
+        let mut plugin_manager = plugin_manager.lock().await;
+        plugin_manager.stop_all().await;
+        plugin_manager.cleanup_all().await;
+    });
 }
 
 /// Phase 3 witness: the fully wired state graph. Serving requires this type.
@@ -103,203 +115,238 @@ impl RuntimeAssembler {
     }
 
     /// The typed startup chain: each phase consumes the previous phase's
-    /// witness, so an illegal ordering does not compile.
+    /// witness, so an illegal ordering does not compile. The witnesses and
+    /// their only constructors live in the sealed [`phases`] module, so no
+    /// code in this crate — including submodules of this file — can forge a
+    /// phase output and skip a step.
     pub async fn assemble(self) -> Result<RuntimeAssembly, Box<dyn std::error::Error>> {
-        let locked = acquire_locked_stores(&self.config).await?;
-        let imported = import_thread_data(locked).await?;
-        assemble_runtime(imported, self.config, self.config_path).await
+        let locked = phases::acquire_locked_stores(&self.config).await?;
+        let imported = phases::import_thread_data(locked).await?;
+        phases::assemble_runtime(imported, self.config, self.config_path).await
     }
 }
 
-/// Phase 1: take exclusive ownership of the data directory before opening any
-/// other persistent runtime store. GaryxDbService holds the lock for the
-/// lifetime of AppState and performs schema initialization only after the
-/// pre-R5 parent handoff barrier has cleared.
-async fn acquire_locked_stores(
-    config: &GaryxConfig,
-) -> Result<LockedStores, Box<dyn std::error::Error>> {
-    let session_data_dir = config
-        .sessions
-        .data_dir
-        .clone()
-        .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
+/// Sealed startup phases. The witness types' fields are private to this
+/// module and the three phase functions are their only constructors, so the
+/// typed chain cannot be bypassed from anywhere else in the crate —
+/// including submodules of the composition root.
+mod phases {
+    use super::*;
 
-    // Take exclusive ownership of the data directory before opening any
-    // other persistent runtime store. GaryxDbService holds the lock for
-    // the lifetime of AppState and performs schema initialization only
-    // after the pre-R5 parent handoff barrier has cleared.
-    let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
-        garyx_models::local_paths::garyx_database_path_for_data_dir(Path::new(&session_data_dir)),
-    )?);
-    let transcript_root = thread_transcripts_dir_for_data_dir(Path::new(&session_data_dir));
-    let transcript_store = Arc::new(ThreadTranscriptStore::file(&transcript_root).await?);
-    let message_ledger = Arc::new(
-        MessageLedgerStore::file(message_ledger_dir_for_data_dir(Path::new(
-            &session_data_dir,
-        )))
-        .await?,
-    );
-    Ok(LockedStores {
-        session_data_dir,
-        garyx_db,
-        transcript_store,
-        message_ledger,
-    })
-}
+    /// Phase 1 witness: exclusive ownership of the data directory plus the raw
+    /// persistent stores. Nothing else may open runtime storage before this
+    /// exists, and later phases can only be reached through it.
+    pub(super) struct LockedStores {
+        session_data_dir: String,
+        garyx_db: Arc<garyx_gateway::garyx_db::GaryxDbService>,
+        transcript_store: Arc<ThreadTranscriptStore>,
+        message_ledger: Arc<MessageLedgerStore>,
+    }
 
-/// Phase 2: import canonical thread data and bind the store handles the
-/// bridge and history layers share.
-async fn import_thread_data(
-    stores: LockedStores,
-) -> Result<ImportedStores, Box<dyn std::error::Error>> {
-    let LockedStores {
-        session_data_dir,
-        garyx_db,
-        transcript_store,
-        message_ledger,
-    } = stores;
-    let bridge = Arc::new(MultiProviderBridge::new());
+    /// Phase 2 witness: canonical thread data imported (legacy boot import and
+    /// one-shot cutovers complete) and the store handles bound for the bridge.
+    /// Listener binding is unreachable without passing through this type.
+    pub(super) struct ImportedStores {
+        session_data_dir: String,
+        garyx_db: Arc<garyx_gateway::garyx_db::GaryxDbService>,
+        message_ledger: Arc<MessageLedgerStore>,
+        bridge: Arc<MultiProviderBridge>,
+        thread_store: Arc<dyn ThreadStore>,
+        thread_history: Arc<ThreadHistoryRepository>,
+    }
 
-    // Thread records live in SQLite, full stop (#TASK-1864). The file
-    // archive survives only as the one-shot boot-import source for
-    // upgrades from pre-SQLite installs; there is no runtime file mode
-    // and no dual-write mirror. Emergency recovery = the archived
-    // backups plus a fresh boot import, not a mode switch.
-    tracing::info!("thread store backend: sqlite");
-    // One-shot migration of the retired file-based task counter into the
-    // SQLite allocator row (no-op once the row exists).
-    garyx_gateway::seed_task_counter_from_legacy(&garyx_db, Path::new(&session_data_dir));
-    let thread_store: Arc<dyn ThreadStore> = garyx_gateway::assemble_sqlite_thread_store(
-        garyx_db.clone(),
-        transcript_store.clone(),
-        &bridge,
-    )?;
-    garyx_gateway::run_legacy_boot_import(
-        &garyx_db,
-        &thread_store,
-        &transcript_store,
-        Path::new(&session_data_dir),
-    )
-    .await?;
-    let thread_history = Arc::new(ThreadHistoryRepository::new(
-        thread_store.clone(),
-        transcript_store,
-    ));
-    Ok(ImportedStores {
-        session_data_dir,
-        garyx_db,
-        message_ledger,
-        bridge,
-        thread_store,
-        thread_history,
-    })
-}
+    /// Phase 1: take exclusive ownership of the data directory before opening any
+    /// other persistent runtime store. GaryxDbService holds the lock for the
+    /// lifetime of AppState and performs schema initialization only after the
+    /// pre-R5 parent handoff barrier has cleared.
+    pub(super) async fn acquire_locked_stores(
+        config: &GaryxConfig,
+    ) -> Result<LockedStores, Box<dyn std::error::Error>> {
+        let session_data_dir = config
+            .sessions
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
 
-/// Phase 3: build the fully wired state graph — cron, AppState, crash
-/// recovery under the data-dir lock, and the bridge/cron runtime bindings.
-async fn assemble_runtime(
-    imported: ImportedStores,
-    config: GaryxConfig,
-    config_path: PathBuf,
-) -> Result<RuntimeAssembly, Box<dyn std::error::Error>> {
-    let ImportedStores {
-        session_data_dir,
-        garyx_db,
-        message_ledger,
-        bridge,
-        thread_store,
-        thread_history,
-    } = imported;
-    let (event_tx, _) = tokio::sync::broadcast::channel(128);
+        // Take exclusive ownership of the data directory before opening any
+        // other persistent runtime store. GaryxDbService holds the lock for
+        // the lifetime of AppState and performs schema initialization only
+        // after the pre-R5 parent handoff barrier has cleared.
+        let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
+            garyx_models::local_paths::garyx_database_path_for_data_dir(Path::new(
+                &session_data_dir,
+            )),
+        )?);
+        let transcript_root = thread_transcripts_dir_for_data_dir(Path::new(&session_data_dir));
+        let transcript_store = Arc::new(ThreadTranscriptStore::file(&transcript_root).await?);
+        let message_ledger = Arc::new(
+            MessageLedgerStore::file(message_ledger_dir_for_data_dir(Path::new(
+                &session_data_dir,
+            )))
+            .await?,
+        );
+        Ok(LockedStores {
+            session_data_dir,
+            garyx_db,
+            transcript_store,
+            message_ledger,
+        })
+    }
 
-    let mut cron_service_raw = CronService::new(PathBuf::from(&session_data_dir));
-    let cron_boot_config = config.cron.clone();
-    match cron_service_raw.load(&cron_boot_config).await {
-        Ok(()) => {
-            cron_service_raw.start();
+    /// Phase 2: import canonical thread data and bind the store handles the
+    /// bridge and history layers share.
+    pub(super) async fn import_thread_data(
+        stores: LockedStores,
+    ) -> Result<ImportedStores, Box<dyn std::error::Error>> {
+        let LockedStores {
+            session_data_dir,
+            garyx_db,
+            transcript_store,
+            message_ledger,
+        } = stores;
+        let bridge = Arc::new(MultiProviderBridge::new());
+
+        // Thread records live in SQLite, full stop (#TASK-1864). The file
+        // archive survives only as the one-shot boot-import source for
+        // upgrades from pre-SQLite installs; there is no runtime file mode
+        // and no dual-write mirror. Emergency recovery = the archived
+        // backups plus a fresh boot import, not a mode switch.
+        tracing::info!("thread store backend: sqlite");
+        // One-shot migration of the retired file-based task counter into the
+        // SQLite allocator row (no-op once the row exists).
+        garyx_gateway::seed_task_counter_from_legacy(&garyx_db, Path::new(&session_data_dir));
+        let thread_store: Arc<dyn ThreadStore> = garyx_gateway::assemble_sqlite_thread_store(
+            garyx_db.clone(),
+            transcript_store.clone(),
+            &bridge,
+        )?;
+        garyx_gateway::run_legacy_boot_import(
+            &garyx_db,
+            &thread_store,
+            &transcript_store,
+            Path::new(&session_data_dir),
+        )
+        .await?;
+        let thread_history = Arc::new(ThreadHistoryRepository::new(
+            thread_store.clone(),
+            transcript_store,
+        ));
+        Ok(ImportedStores {
+            session_data_dir,
+            garyx_db,
+            message_ledger,
+            bridge,
+            thread_store,
+            thread_history,
+        })
+    }
+
+    /// Phase 3: build the fully wired state graph — cron, AppState, crash
+    /// recovery under the data-dir lock, and the bridge/cron runtime bindings.
+    pub(super) async fn assemble_runtime(
+        imported: ImportedStores,
+        config: GaryxConfig,
+        config_path: PathBuf,
+    ) -> Result<RuntimeAssembly, Box<dyn std::error::Error>> {
+        let ImportedStores {
+            session_data_dir,
+            garyx_db,
+            message_ledger,
+            bridge,
+            thread_store,
+            thread_history,
+        } = imported;
+        let (event_tx, _) = tokio::sync::broadcast::channel(128);
+
+        let mut cron_service_raw = CronService::new(PathBuf::from(&session_data_dir));
+        let cron_boot_config = config.cron.clone();
+        match cron_service_raw.load(&cron_boot_config).await {
+            Ok(()) => {
+                cron_service_raw.start();
+                tracing::info!(
+                    configured_jobs = cron_boot_config.jobs.len(),
+                    "Cron service started"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to initialize cron service");
+            }
+        }
+        let cron_service = Arc::new(cron_service_raw);
+
+        let restart_tokens = parse_restart_tokens_from_env();
+        if !restart_tokens.is_empty() {
             tracing::info!(
-                configured_jobs = cron_boot_config.jobs.len(),
-                "Cron service started"
+                count = restart_tokens.len(),
+                "Restart auth tokens loaded from GARYX_RESTART_TOKENS"
             );
         }
-        Err(error) => {
-            tracing::warn!(error = %error, "Failed to initialize cron service");
+        let thread_logs = Arc::new(ThreadFileLogger::new(default_thread_log_dir()));
+
+        let builder =
+            AppStateBuilder::new(config.clone()).with_persistent_local_stores(garyx_db.clone());
+        let state = builder
+            .with_thread_store(thread_store.clone())
+            .with_thread_history(thread_history.clone())
+            .with_message_ledger(message_ledger)
+            .with_bridge(bridge.clone())
+            .with_provider_runtime_ready(false)
+            .with_event_tx(event_tx)
+            .with_cron_service(cron_service.clone())
+            .with_config_path(config_path)
+            .with_restart_tokens(restart_tokens)
+            .with_thread_log_sink(thread_logs.clone())
+            .build();
+
+        // Crash recovery is a destructive projection update and must finish
+        // under the data-dir lock before Gateway binds its listener. It must
+        // not allocate new activity ordering: completed runs stay in place.
+        state.ops.garyx_db.clear_stale_active_runs()?;
+        let recovered_inputs = state.ops.garyx_db.recover_orphaned_pending_user_inputs()?;
+        if recovered_inputs > 0 {
+            tracing::info!(
+                recovered_inputs,
+                "settled orphaned queued user inputs during startup"
+            );
         }
-    }
-    let cron_service = Arc::new(cron_service_raw);
+        let lifecycle_cutoff = (chrono::Utc::now() - chrono::Duration::days(7))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let (pruned_operations, pruned_cleanup_jobs) = state
+            .ops
+            .garyx_db
+            .prune_lifecycle_history(&lifecycle_cutoff)?;
+        if pruned_operations > 0 || pruned_cleanup_jobs > 0 {
+            tracing::info!(
+                pruned_operations,
+                pruned_cleanup_jobs,
+                "pruned expired lifecycle operation history"
+            );
+        }
 
-    let restart_tokens = parse_restart_tokens_from_env();
-    if !restart_tokens.is_empty() {
-        tracing::info!(
-            count = restart_tokens.len(),
-            "Restart auth tokens loaded from GARYX_RESTART_TOKENS"
-        );
+        // Bind the bridge to AppState's final SQLite store handle so provider
+        // persistence, routing, and history all share the same truth source.
+        bridge
+            .set_thread_store(state.threads.thread_store.clone())
+            .await;
+        bridge.set_thread_history(state.threads.history.clone());
+        bridge.set_event_tx(state.ops.events.sender()).await;
+        cron_service
+            .set_dispatch_runtime(
+                state.threads.thread_store.clone(),
+                state.threads.router.clone(),
+                bridge.clone(),
+                state.channel_dispatcher(),
+                state.ops.thread_logs.clone(),
+                config.mcp_servers.clone(),
+                state.ops.custom_agents.clone(),
+            )
+            .await;
+        Ok(RuntimeAssembly {
+            state,
+            bridge,
+            cron_service,
+        })
     }
-    let thread_logs = Arc::new(ThreadFileLogger::new(default_thread_log_dir()));
-
-    let builder =
-        AppStateBuilder::new(config.clone()).with_persistent_local_stores(garyx_db.clone());
-    let state = builder
-        .with_thread_store(thread_store.clone())
-        .with_thread_history(thread_history.clone())
-        .with_message_ledger(message_ledger)
-        .with_bridge(bridge.clone())
-        .with_provider_runtime_ready(false)
-        .with_event_tx(event_tx)
-        .with_cron_service(cron_service.clone())
-        .with_config_path(config_path)
-        .with_restart_tokens(restart_tokens)
-        .with_thread_log_sink(thread_logs.clone())
-        .build();
-
-    // Crash recovery is a destructive projection update and must finish
-    // under the data-dir lock before Gateway binds its listener. It must
-    // not allocate new activity ordering: completed runs stay in place.
-    state.ops.garyx_db.clear_stale_active_runs()?;
-    let recovered_inputs = state.ops.garyx_db.recover_orphaned_pending_user_inputs()?;
-    if recovered_inputs > 0 {
-        tracing::info!(
-            recovered_inputs,
-            "settled orphaned queued user inputs during startup"
-        );
-    }
-    let lifecycle_cutoff = (chrono::Utc::now() - chrono::Duration::days(7))
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let (pruned_operations, pruned_cleanup_jobs) = state
-        .ops
-        .garyx_db
-        .prune_lifecycle_history(&lifecycle_cutoff)?;
-    if pruned_operations > 0 || pruned_cleanup_jobs > 0 {
-        tracing::info!(
-            pruned_operations,
-            pruned_cleanup_jobs,
-            "pruned expired lifecycle operation history"
-        );
-    }
-
-    // Bind the bridge to AppState's final SQLite store handle so provider
-    // persistence, routing, and history all share the same truth source.
-    bridge
-        .set_thread_store(state.threads.thread_store.clone())
-        .await;
-    bridge.set_thread_history(state.threads.history.clone());
-    bridge.set_event_tx(state.ops.events.sender()).await;
-    cron_service
-        .set_dispatch_runtime(
-            state.threads.thread_store.clone(),
-            state.threads.router.clone(),
-            bridge.clone(),
-            state.channel_dispatcher(),
-            state.ops.thread_logs.clone(),
-            config.mcp_servers.clone(),
-            state.ops.custom_agents.clone(),
-        )
-        .await;
-    Ok(RuntimeAssembly {
-        state,
-        bridge,
-        cron_service,
-    })
 }
 
 fn parse_restart_tokens_from_env() -> Vec<String> {
@@ -565,33 +612,17 @@ pub(crate) async fn run(
         .assemble()
         .await?;
 
-    // Teardown mirrors startup: each phase registers its inverse as it
-    // completes and shutdown drains the stack in reverse order, so the two
-    // sequences cannot drift apart.
-    let mut teardown = TeardownStack::new();
-    // Move the assembly's cron handle into its teardown so the drain-time
-    // Arc::try_unwrap sees exactly the same outstanding references as the
-    // pre-stack shutdown sequence did.
-    teardown.push(move || async move {
-        match Arc::try_unwrap(cron_service) {
-            Ok(mut svc) => svc.stop().await,
-            Err(_) => tracing::debug!("Cron service still has outstanding references on shutdown"),
-        }
-    });
-
     // 3.0 Share the channel plugin manager with AppState so HTTP
     // endpoints (`GET /api/channels/plugins`) see the same
     // registrations the boot path creates. Single source of truth.
     let plugin_manager = state.channel_plugin_manager();
     register_plugin_state_logging(&mut *plugin_manager.lock().await);
-    {
-        let plugin_manager = plugin_manager.clone();
-        teardown.push(move || async move {
-            let mut plugin_manager = plugin_manager.lock().await;
-            plugin_manager.stop_all().await;
-            plugin_manager.cleanup_all().await;
-        });
-    }
+
+    // Teardown mirrors startup: the single production registration point
+    // records each phase's inverse and shutdown drains the stack in reverse
+    // order, so the two sequences cannot drift apart.
+    let mut teardown = TeardownStack::new();
+    register_shutdown_teardowns(&mut teardown, cron_service, plugin_manager.clone());
 
     // 3.1 Start hot reload watcher (best effort)
     let hot_reloader = {
@@ -712,30 +743,36 @@ pub(crate) async fn run(
     // Always run the shutdown sequence, even when startup/serve fails:
     // drain the teardown stack registered during startup (LIFO), i.e.
     // channel plugins first, then the cron service.
-    teardown.drain().await;
+    let _ = teardown.drain().await;
     run_result
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TeardownStack;
-    use std::sync::{Arc, Mutex};
+    use super::{TeardownStack, register_shutdown_teardowns};
+    use garyx_channels::ChannelPluginManager;
+    use garyx_gateway::CronService;
+    use std::sync::Arc;
 
+    /// Mutation guard for startup/shutdown mirroring: this drives the SAME
+    /// registration function production `run` uses, with real (inert)
+    /// runtime objects, and asserts the drained order. Reversing the
+    /// registration order inside `register_shutdown_teardowns` turns this
+    /// test red.
     #[tokio::test]
-    async fn teardown_stack_drains_in_reverse_registration_order() {
-        let order = Arc::new(Mutex::new(Vec::new()));
-        let mut stack = TeardownStack::new();
-        for label in ["cron", "plugins", "deferred"] {
-            let order = order.clone();
-            stack.push(move || async move {
-                order.lock().expect("order lock").push(label);
-            });
-        }
-        stack.drain().await;
+    async fn shutdown_teardowns_drain_plugins_before_cron() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let cron_service = Arc::new(CronService::new(tmp.path().to_path_buf()));
+        let plugin_manager = Arc::new(tokio::sync::Mutex::new(ChannelPluginManager::new()));
+
+        let mut teardown = TeardownStack::new();
+        register_shutdown_teardowns(&mut teardown, cron_service, plugin_manager);
+
+        let executed = teardown.drain().await;
         assert_eq!(
-            order.lock().expect("order lock").as_slice(),
-            &["deferred", "plugins", "cron"],
-            "teardown must mirror startup in LIFO order"
+            executed,
+            vec!["channel_plugins", "cron_service"],
+            "shutdown must mirror startup: plugins stop before the cron service"
         );
     }
 }
