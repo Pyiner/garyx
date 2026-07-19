@@ -51,6 +51,22 @@ public struct GaryxUsageWindow: Codable, Equatable, Sendable {
     }
 }
 
+/// A provider-defined usage window scoped to a named model or model family.
+/// Claude Code currently uses this shape for Fable's independent weekly quota.
+public struct GaryxScopedUsageLimit: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var kind: String
+    public var window: GaryxUsageWindow
+
+    public init(id: String, name: String, kind: String, window: GaryxUsageWindow) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.window = window
+    }
+}
+
 /// One per-model quota bucket as reported by coding providers that expose
 /// model-scoped allowance, currently Antigravity.
 public struct GaryxModelUsage: Codable, Equatable, Identifiable, Sendable {
@@ -130,6 +146,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
     public var plan: String?
     public var weekly: GaryxUsageWindow?
     public var session: GaryxUsageWindow?
+    public var scopedLimits: [GaryxScopedUsageLimit]
     public var models: [GaryxModelUsage]
     public var error: String?
 
@@ -141,6 +158,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         plan: String? = nil,
         weekly: GaryxUsageWindow? = nil,
         session: GaryxUsageWindow? = nil,
+        scopedLimits: [GaryxScopedUsageLimit] = [],
         models: [GaryxModelUsage] = [],
         error: String? = nil
     ) {
@@ -151,6 +169,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         self.plan = plan
         self.weekly = weekly
         self.session = session
+        self.scopedLimits = scopedLimits
         self.models = models
         self.error = error
     }
@@ -163,6 +182,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         case plan
         case weekly
         case session
+        case scopedLimits = "scoped_limits"
         case models
         case error
     }
@@ -176,6 +196,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         plan = try container.decodeIfPresent(String.self, forKey: .plan)
         weekly = try container.decodeIfPresent(GaryxUsageWindow.self, forKey: .weekly)
         session = try container.decodeIfPresent(GaryxUsageWindow.self, forKey: .session)
+        scopedLimits = try container.decodeIfPresent([GaryxScopedUsageLimit].self, forKey: .scopedLimits) ?? []
         models = try container.decodeIfPresent([GaryxModelUsage].self, forKey: .models) ?? []
         error = try container.decodeIfPresent(String.self, forKey: .error)
     }
@@ -189,6 +210,9 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(plan, forKey: .plan)
         try container.encodeIfPresent(weekly, forKey: .weekly)
         try container.encodeIfPresent(session, forKey: .session)
+        if !scopedLimits.isEmpty {
+            try container.encode(scopedLimits, forKey: .scopedLimits)
+        }
         if !models.isEmpty {
             try container.encode(models, forKey: .models)
         }
@@ -625,7 +649,7 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
     public var stale: Bool
     /// `updated 3m ago`, derived from the response `refreshed_at` when known.
     public var updatedText: String?
-    /// Session/Weekly meters in display order (session first), Claude/Codex only.
+    /// Session, weekly, and provider-scoped meters in display order.
     public var windows: [GaryxProviderUsageWindowDisplayModel]
     /// Per-model quota buckets (Antigravity), tightest remaining first.
     public var models: [GaryxProviderModelUsageDisplayModel]
@@ -694,6 +718,16 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
         }
         if let weekly = provider.weekly {
             windows.append(windowDisplayModel(label: "Weekly", window: weekly, fallback: "weekly window", now: now))
+        }
+        for limit in provider.scopedLimits {
+            windows.append(
+                windowDisplayModel(
+                    label: limit.name,
+                    window: limit.window,
+                    fallback: limit.kind.contains("weekly") ? "weekly window" : "usage window",
+                    now: now
+                )
+            )
         }
 
         if let weekly = provider.weekly {

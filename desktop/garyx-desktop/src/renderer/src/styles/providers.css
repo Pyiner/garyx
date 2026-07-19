@@ -365,6 +365,16 @@
   width: 100%;
 }
 
+.provider-quota-secondary.stacked {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+}
+
+.provider-quota-secondary-meter {
+  width: 100%;
+}
+
 .provider-quota-card-meta {
   display: flex;
   align-items: center;

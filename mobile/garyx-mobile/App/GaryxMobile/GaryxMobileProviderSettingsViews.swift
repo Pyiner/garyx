@@ -283,7 +283,7 @@ private struct GaryxUsagePillsRow: View {
 }
 
 /// The inline usage block under a provider list row: plan/stale pills plus
-/// Session+Weekly meters (Claude/Codex) or per-model mini-bars (Antigravity),
+/// Session/weekly/scoped meters (Claude/Codex) or per-model mini-bars (Antigravity),
 /// dimmed when stale; the five non-metered providers show "No quota data"
 /// rather than hiding (D6).
 private struct GaryxProviderUsageInlineBlock: View {
@@ -600,7 +600,7 @@ struct GaryxModelProviderDefaultsSheet: View {
 }
 
 /// The detail sheet's Usage section: full §4 treatment — plan pill, stale tag,
-/// freshness line, Session/Weekly meters or all Antigravity buckets.
+/// freshness line, session/weekly/scoped meters, or all Antigravity buckets.
 private struct GaryxProviderUsageFormSection: View {
     let usageDisplay: GaryxProviderUsageDisplayModel?
 

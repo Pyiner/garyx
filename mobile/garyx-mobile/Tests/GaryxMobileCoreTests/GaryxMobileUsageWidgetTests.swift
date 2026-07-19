@@ -16,7 +16,17 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
               "available": true,
               "plan": "max",
               "weekly": {"used_percent": 27.0, "remaining_percent": 73.0, "resets_at": "2030-01-07T11:00:00+00:00"},
-              "session": {"used_percent": 11.0, "remaining_percent": 89.0, "resets_at": "2030-01-01T05:00:00+00:00"}
+              "session": {"used_percent": 11.0, "remaining_percent": 89.0, "resets_at": "2030-01-01T05:00:00+00:00"},
+              "scoped_limits": [{
+                "id": "weekly_scoped:Fable",
+                "name": "Fable",
+                "kind": "weekly_scoped",
+                "window": {
+                  "used_percent": 82.0,
+                  "remaining_percent": 18.0,
+                  "resets_at": "2030-01-07T11:00:00+00:00"
+                }
+              }]
             },
             {
               "id": "codex",
@@ -66,6 +76,9 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertEqual(claude.weekly?.remainingPercent, 73.0)
         XCTAssertEqual(claude.weekly?.resetsAt, "2030-01-07T11:00:00+00:00")
         XCTAssertEqual(claude.session?.remainingPercent, 89.0)
+        XCTAssertEqual(claude.scopedLimits.count, 1)
+        XCTAssertEqual(claude.scopedLimits[0].name, "Fable")
+        XCTAssertEqual(claude.scopedLimits[0].window.remainingPercent, 18.0)
 
         let codex = try XCTUnwrap(usage.provider(id: "codex"))
         XCTAssertTrue(codex.stale)
@@ -457,7 +470,19 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
             stale: true,
             plan: " max ",
             weekly: GaryxUsageWindow(usedPercent: 27, remainingPercent: 73, resetAfterSeconds: 2 * 86_400 + 4 * 3_600),
-            session: GaryxUsageWindow(usedPercent: 89, remainingPercent: 11, resetAfterSeconds: 3_600 + 12 * 60)
+            session: GaryxUsageWindow(usedPercent: 89, remainingPercent: 11, resetAfterSeconds: 3_600 + 12 * 60),
+            scopedLimits: [
+                GaryxScopedUsageLimit(
+                    id: "weekly_scoped:Fable",
+                    name: "Fable",
+                    kind: "weekly_scoped",
+                    window: GaryxUsageWindow(
+                        usedPercent: 82,
+                        remainingPercent: 18,
+                        resetAfterSeconds: 86_400
+                    )
+                )
+            ]
         )
 
         let display = try XCTUnwrap(
@@ -470,7 +495,7 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertEqual(display.plan, "max")
         XCTAssertTrue(display.stale)
         XCTAssertEqual(display.updatedText, "updated 3m ago")
-        XCTAssertEqual(display.windows.map(\.label), ["Session", "Weekly"])
+        XCTAssertEqual(display.windows.map(\.label), ["Session", "Weekly", "Fable"])
 
         let session = display.windows[0]
         XCTAssertEqual(session.remainingPercent, 11, accuracy: 0.0001)
@@ -483,6 +508,12 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertEqual(weekly.remainingText, "73%")
         XCTAssertEqual(weekly.detailText, "resets in 2d 4h")
         XCTAssertEqual(weekly.level, .healthy)
+
+        let fable = display.windows[2]
+        XCTAssertEqual(fable.remainingPercent, 18, accuracy: 0.0001)
+        XCTAssertEqual(fable.remainingText, "18%")
+        XCTAssertEqual(fable.detailText, "resets in 1d")
+        XCTAssertEqual(fable.level, .critical)
 
         // Summary keeps the weekly-first legacy semantics for existing callers,
         // and the stale flag folds into the caption as before.

@@ -494,6 +494,17 @@ test("coding usage accepts the signed i64 reset interval emitted by Rust", async
               remaining_percent: 0,
               reset_after_seconds: -1,
             },
+            scoped_limits: [{
+              id: "weekly_scoped:Fable",
+              name: "Fable",
+              kind: "weekly_scoped",
+              window: {
+                used_percent: 82,
+                remaining_percent: 18,
+                resets_at: "2026-01-03T00:00:00Z",
+                reset_after_seconds: 86400,
+              },
+            }],
           },
         ],
         refreshed_at: "2026-01-02T00:00:00Z",
@@ -501,6 +512,17 @@ test("coding usage accepts the signed i64 reset interval emitted by Rust", async
     async () => {
       const usage = await getCodingUsage(settings);
       assert.equal(usage.providers[0].weekly.resetAfterSeconds, -1);
+      assert.deepEqual(usage.providers[0].scopedLimits, [{
+        id: "weekly_scoped:Fable",
+        name: "Fable",
+        kind: "weekly_scoped",
+        window: {
+          usedPercent: 82,
+          remainingPercent: 18,
+          resetsAt: "2026-01-03T00:00:00Z",
+          resetAfterSeconds: 86400,
+        },
+      }]);
     },
   );
 });

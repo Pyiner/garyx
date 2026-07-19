@@ -95,6 +95,23 @@ impl UsageWindow {
     }
 }
 
+/// One provider-defined usage window scoped to a named model or model family.
+///
+/// Claude Code currently returns Fable's independent weekly allowance through
+/// `limits[].scope.model`, alongside the ordinary session and weekly windows.
+/// Keep this separate from `models`, whose remaining-fraction contract belongs
+/// to Antigravity quota buckets.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScopedUsageLimit {
+    /// Stable identity derived from the upstream limit kind and model scope.
+    pub id: String,
+    /// Human-readable upstream model/family name, for example `Fable`.
+    pub name: String,
+    /// Upstream limit kind, currently `weekly_scoped` for Fable.
+    pub kind: String,
+    pub window: UsageWindow,
+}
+
 /// One Antigravity model quota bucket.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelUsage {
@@ -166,6 +183,10 @@ pub struct ProviderUsage {
     /// Rolling session allowance (5-hour window).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<UsageWindow>,
+    /// Additional provider-defined model/family windows, such as Claude
+    /// Fable's independent weekly allowance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scoped_limits: Vec<ScopedUsageLimit>,
     /// Per-model quota buckets. Present for Antigravity only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelUsage>,
@@ -184,6 +205,7 @@ impl ProviderUsage {
             plan: None,
             weekly: None,
             session: None,
+            scoped_limits: Vec::new(),
             models: Vec::new(),
             error: Some(error),
         }
@@ -280,7 +302,14 @@ async fn fetch_claude_usage() -> Result<ProviderUsage, String> {
 fn parse_claude_usage(value: &Value, plan: Option<String>) -> Result<ProviderUsage, String> {
     let weekly = value.get("seven_day").and_then(parse_claude_window);
     let session = value.get("five_hour").and_then(parse_claude_window);
-    if weekly.is_none() && session.is_none() {
+    let scoped_limits = value
+        .get("limits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(parse_claude_scoped_limit)
+        .collect::<Vec<_>>();
+    if weekly.is_none() && session.is_none() && scoped_limits.is_empty() {
         return Err("Claude usage response had no usable usage windows".to_string());
     }
     Ok(ProviderUsage {
@@ -291,6 +320,7 @@ fn parse_claude_usage(value: &Value, plan: Option<String>) -> Result<ProviderUsa
         plan,
         weekly,
         session,
+        scoped_limits,
         models: Vec::new(),
         error: None,
     })
@@ -311,6 +341,42 @@ fn parse_claude_window(window: &Value) -> Option<UsageWindow> {
         resets_at,
         reset_after_seconds,
     ))
+}
+
+/// Parse a Claude `limits[]` entry only when it carries a usable model scope.
+/// Ordinary `session` and `weekly_all` entries intentionally remain sourced
+/// from the stable top-level windows so they are not duplicated in clients.
+fn parse_claude_scoped_limit(limit: &Value) -> Option<ScopedUsageLimit> {
+    if limit.get("is_active").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let kind = limit.get("kind").and_then(Value::as_str)?.trim();
+    if kind.is_empty() {
+        return None;
+    }
+    let model = limit.get("scope")?.get("model")?;
+    let name = model.get("display_name").and_then(Value::as_str)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let scope_id = model
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name);
+    let used = limit.get("percent").and_then(Value::as_f64)?;
+    let resets_at = limit
+        .get("resets_at")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let reset_after_seconds = resets_at.as_deref().and_then(seconds_until);
+    Some(ScopedUsageLimit {
+        id: format!("{kind}:{scope_id}"),
+        name: name.to_owned(),
+        kind: kind.to_owned(),
+        window: UsageWindow::from_used_percent(used, resets_at, reset_after_seconds),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +450,7 @@ fn parse_codex_usage(value: &Value) -> Result<ProviderUsage, String> {
         plan,
         weekly,
         session,
+        scoped_limits: Vec::new(),
         models: Vec::new(),
         error: None,
     })
@@ -822,6 +889,7 @@ fn parse_antigravity_usage(value: &Value) -> Result<ProviderUsage, String> {
         plan: None,
         weekly: None,
         session: None,
+        scoped_limits: Vec::new(),
         models,
         error: None,
     })
@@ -915,10 +983,33 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn parses_claude_weekly_and_session() {
+    fn parses_claude_weekly_session_and_scoped_model_limit() {
         let payload = json!({
             "five_hour": {"utilization": 11.0, "resets_at": "2030-01-01T05:00:00+00:00"},
             "seven_day": {"utilization": 27.0, "resets_at": "2030-01-07T11:00:00+00:00"},
+            "limits": [
+                {
+                    "kind": "session",
+                    "percent": 11,
+                    "resets_at": "2030-01-01T05:00:00+00:00"
+                },
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 82,
+                    "resets_at": "2030-01-07T11:00:00+00:00",
+                    "is_active": true,
+                    "scope": {
+                        "model": {"id": null, "display_name": "Fable"},
+                        "surface": null
+                    }
+                },
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 9,
+                    "is_active": false,
+                    "scope": {"model": {"id": "inactive", "display_name": "Inactive"}}
+                }
+            ]
         });
         let usage = parse_claude_usage(&payload, Some("max".to_string())).unwrap();
         assert!(usage.available);
@@ -933,6 +1024,34 @@ mod tests {
         );
         let session = usage.session.expect("session window");
         assert_eq!(session.remaining_percent, 89.0);
+        assert_eq!(usage.scoped_limits.len(), 1);
+        let fable = &usage.scoped_limits[0];
+        assert_eq!(fable.id, "weekly_scoped:Fable");
+        assert_eq!(fable.name, "Fable");
+        assert_eq!(fable.kind, "weekly_scoped");
+        assert_eq!(fable.window.used_percent, 82.0);
+        assert_eq!(fable.window.remaining_percent, 18.0);
+        assert_eq!(
+            fable.window.resets_at.as_deref(),
+            Some("2030-01-07T11:00:00+00:00")
+        );
+    }
+
+    #[test]
+    fn claude_scoped_limit_alone_is_a_usable_reading() {
+        let payload = json!({
+            "limits": [{
+                "kind": "weekly_scoped",
+                "percent": 35.0,
+                "scope": {"model": {"id": "claude-fable-5", "display_name": "Fable"}}
+            }]
+        });
+
+        let usage = parse_claude_usage(&payload, None).unwrap();
+        assert!(usage.weekly.is_none());
+        assert!(usage.session.is_none());
+        assert_eq!(usage.scoped_limits[0].id, "weekly_scoped:claude-fable-5");
+        assert_eq!(usage.scoped_limits[0].window.remaining_percent, 65.0);
     }
 
     #[test]
@@ -1234,10 +1353,15 @@ mod tests {
             Ok(usage) => {
                 assert!(usage.available);
                 println!(
-                    "claude: plan={:?} weekly_remaining={:?} session_remaining={:?}",
+                    "claude: plan={:?} weekly_remaining={:?} session_remaining={:?} scoped_remaining={:?}",
                     usage.plan,
                     usage.weekly.as_ref().map(|w| w.remaining_percent),
                     usage.session.as_ref().map(|w| w.remaining_percent),
+                    usage
+                        .scoped_limits
+                        .iter()
+                        .map(|limit| (limit.name.as_str(), limit.window.remaining_percent))
+                        .collect::<Vec<_>>(),
                 );
             }
             Err(error) => println!("claude unavailable: {error}"),

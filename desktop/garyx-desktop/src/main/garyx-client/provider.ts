@@ -6,6 +6,7 @@ import type {
   DesktopProviderModels,
   DesktopProviderRecentSession,
   DesktopProviderUsage,
+  DesktopScopedUsageLimit,
   DesktopSettings,
   DesktopUsageWindow,
   ListProviderRecentSessionsInput,
@@ -253,6 +254,28 @@ function mapUsageWindow(value: unknown, path: string): DesktopUsageWindow {
   };
 }
 
+function mapScopedUsageLimit(value: unknown, path: string): DesktopScopedUsageLimit {
+  const record = requireContractRecord(value, path);
+  return {
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
+    ),
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    kind: requireContractNonEmptyString(
+      requireContractField(record, "kind", path),
+      `${path}.kind`,
+    ),
+    window: mapUsageWindow(
+      requireContractField(record, "window", path),
+      `${path}.window`,
+    ),
+  };
+}
+
 function mapModelUsage(value: unknown, path: string): DesktopModelUsage {
   const record = requireContractRecord(value, path);
   return {
@@ -318,6 +341,11 @@ function mapProviderUsage(value: unknown, path: string): DesktopProviderUsage {
     session: hasContractField(record, "session")
       ? mapUsageWindow(record.session, `${path}.session`)
       : null,
+    scopedLimits: hasContractField(record, "scoped_limits")
+      ? requireContractArray(record.scoped_limits, `${path}.scoped_limits`).map((limit, index) =>
+          mapScopedUsageLimit(limit, `${path}.scoped_limits[${index}]`),
+        )
+      : [],
     models: hasContractField(record, "models")
       ? requireContractArray(record.models, `${path}.models`).map((model, index) =>
           mapModelUsage(model, `${path}.models[${index}]`),

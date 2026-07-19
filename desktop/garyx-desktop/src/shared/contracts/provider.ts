@@ -43,6 +43,13 @@ export interface DesktopUsageWindow {
   resetAfterSeconds?: number | null;
 }
 
+export interface DesktopScopedUsageLimit {
+  id: string;
+  name: string;
+  kind: string;
+  window: DesktopUsageWindow;
+}
+
 export interface DesktopModelUsage {
   id: string;
   name: string;
@@ -62,6 +69,7 @@ export interface DesktopProviderUsage {
   plan?: string | null;
   weekly?: DesktopUsageWindow | null;
   session?: DesktopUsageWindow | null;
+  scopedLimits: DesktopScopedUsageLimit[];
   models: DesktopModelUsage[];
   error?: string | null;
 }

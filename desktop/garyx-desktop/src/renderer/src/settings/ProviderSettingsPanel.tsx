@@ -373,6 +373,42 @@ export function ProviderSettingsPanel({
       || usageResetText(model.resetsAt, model.resetAfterSeconds, t('reset time unknown'));
   }
 
+  function providerUsageWindows(
+    usage: DesktopProviderUsage,
+  ): Array<{ key: string; label: string; value: DesktopUsageWindow; fallback: string }> {
+    const windows: Array<{
+      key: string;
+      label: string;
+      value: DesktopUsageWindow;
+      fallback: string;
+    }> = [];
+    if (usage.session) {
+      windows.push({
+        key: 'session',
+        label: t('Session'),
+        value: usage.session,
+        fallback: t('session window'),
+      });
+    }
+    if (usage.weekly) {
+      windows.push({
+        key: 'weekly',
+        label: t('Weekly'),
+        value: usage.weekly,
+        fallback: t('weekly window'),
+      });
+    }
+    for (const limit of usage.scopedLimits) {
+      windows.push({
+        key: `scoped:${limit.id}`,
+        label: limit.name,
+        value: limit.window,
+        fallback: limit.kind.includes('weekly') ? t('weekly window') : t('usage window'),
+      });
+    }
+    return windows;
+  }
+
   function sortedModelsByRemaining(usage: DesktopProviderUsage): DesktopModelUsage[] {
     return [...usage.models].sort((left, right) =>
       clampUsagePercent(left.remainingPercent) - clampUsagePercent(right.remainingPercent),
@@ -495,25 +531,31 @@ export function ProviderSettingsPanel({
         </>
       );
     } else {
-      const primary = usage.weekly || usage.session || null;
-      const primaryLabel = usage.weekly ? t('Weekly') : t('Session');
-      const primaryFallback = usage.weekly ? t('weekly window') : t('session window');
+      const windows = providerUsageWindows(usage);
+      const primary = windows.find((entry) => entry.key === 'weekly')
+        || windows.find((entry) => entry.key === 'session')
+        || windows[0];
+      const secondary = windows.filter((entry) => entry !== primary);
       body = primary ? (
         <>
           {renderQuotaGauge(
-            primaryLabel,
-            primary.remainingPercent,
-            usageWindowCaption(primary, primaryFallback),
+            primary.label,
+            primary.value.remainingPercent,
+            usageWindowCaption(primary.value, primary.fallback),
             { stale: usage.stale },
           )}
-          {usage.session && usage.weekly ? (
-            <div className="provider-quota-secondary">
-              {renderUsageMeter(
-                t('Session'),
-                usage.session.remainingPercent,
-                usageWindowCaption(usage.session, t('session window')),
-                { compact: true, stale: usage.stale },
-              )}
+          {secondary.length > 0 ? (
+            <div className={classNames('provider-quota-secondary', secondary.length > 1 && 'stacked')}>
+              {secondary.map((entry) => (
+                <div className="provider-quota-secondary-meter" key={entry.key}>
+                  {renderUsageMeter(
+                    entry.label,
+                    entry.value.remainingPercent,
+                    usageWindowCaption(entry.value, entry.fallback),
+                    { compact: true, stale: usage.stale },
+                  )}
+                </div>
+              ))}
             </div>
           ) : null}
         </>
@@ -589,50 +631,38 @@ export function ProviderSettingsPanel({
           {t('Unavailable')}
         </span>
       );
-    } else if (usage.models.length > 0) {
-      content = (
-        <div className="provider-usage-models">
-          {sortedModelsByRemaining(usage).map((model) => (
-            <div className="provider-usage-model-row" key={model.id || model.name}>
-              {renderUsageMeter(model.name, model.remainingPercent, modelUsageCaption(model), {
-                stale: usage.stale,
-                title: model.description || undefined,
-              })}
-            </div>
-          ))}
-        </div>
-      );
     } else {
-      const windows: Array<{ key: string; label: string; value: DesktopUsageWindow; fallback: string }> = [];
-      if (usage.session) {
-        windows.push({
-          key: 'session',
-          label: t('Session'),
-          value: usage.session,
-          fallback: t('session window'),
-        });
-      }
-      if (usage.weekly) {
-        windows.push({
-          key: 'weekly',
-          label: t('Weekly'),
-          value: usage.weekly,
-          fallback: t('weekly window'),
-        });
-      }
-      content = windows.length > 0 ? (
-        <div className="provider-usage-window-grid">
-          {windows.map((entry) => (
-            <div className="provider-usage-window-card" key={entry.key}>
-              {renderUsageMeter(
-                entry.label,
-                entry.value.remainingPercent,
-                usageWindowCaption(entry.value, entry.fallback),
-                { stale: usage.stale },
-              )}
+      const windows = providerUsageWindows(usage);
+      const models = sortedModelsByRemaining(usage);
+      content = windows.length > 0 || models.length > 0 ? (
+        <>
+          {windows.length > 0 ? (
+            <div className="provider-usage-window-grid">
+              {windows.map((entry) => (
+                <div className="provider-usage-window-card" key={entry.key}>
+                  {renderUsageMeter(
+                    entry.label,
+                    entry.value.remainingPercent,
+                    usageWindowCaption(entry.value, entry.fallback),
+                    { stale: usage.stale },
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          ) : null}
+          {models.length > 0 ? (
+            <div className="provider-usage-models">
+              {models.map((model) => (
+                <div className="provider-usage-model-row" key={model.id || model.name}>
+                  {renderUsageMeter(model.name, model.remainingPercent, modelUsageCaption(model), {
+                    stale: usage.stale,
+                    title: model.description || undefined,
+                  })}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
       ) : <span className="provider-usage-muted">{t('No quota data')}</span>;
     }
     return (
