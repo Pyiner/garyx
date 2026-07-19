@@ -69,6 +69,9 @@
 
 ### P1-C 动画 token 收敛：一套 GaryxMotion 设计令牌
 
+> 实施审计、令牌映射与参数变更清单：
+> [`ios-fluid-p1c-motion-audit.md`](ios-fluid-p1c-motion-audit.md)。
+
 - 合并两个参数完全相同的 morph enum（`GaryxCapsuleChromeMorph` 与 `GaryxThreadRuntimeMorph`，同为 0.42/0.76 + 0.32/0.92）；
 - 建统一 token 集（morph / settle / drilldown / toast / press / rowSwipe），替换 ~28 处魔法数 ease 与 8+ 处 inline spring；
 - 立规则并写进 token 注释：**默认 critically damped（dampingFraction≈1，无过冲）；只有手势带动量的释放（甩、抛）才允许 bounce（~0.8）**。凭空出现的菜单/toast 过冲即违规。
