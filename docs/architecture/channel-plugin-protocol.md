@@ -200,7 +200,7 @@ Reuses JSON-RPC's reserved range plus our own:
 | -32005 | ConfigRejected | Lifecycle-time config refusal. Emitted from `initialize` / `describe` when the plugin refuses the entire account config set (protocol version mismatch, schema upgrade required, unsupported manifest capability, etc.). Fatal for that plugin instance until the operator acts. |
 | -32006 | Busy | Retryable: receiver is at capacity. Shipped emitter: the plugin self-replace swap barrier (§9.4) with a `retry_after_ms` hint; `max_inflight_inbound` capacity rejection is reserved (§11.2). Caller should back off and retry. |
 | -32007 | ChannelConfigRejected | Per-message config refusal from `dispatch_outbound` (e.g. `account_id` disabled since initialize, target chat_id no longer valid). Non-fatal; the host surfaces it as `ChannelError::Config` and the caller's retry policy decides. Distinct from `-32005` so the supervisor does not mistake a bad outbound target for a broken plugin. |
-| -32008 | PayloadTooLarge | Fatal, non-retryable: frame exceeds `max_frame_bytes` or inline attachment exceeds its cap (§11.2). Sender MUST split or spill before retrying, never retry verbatim. Kept distinct from `-32006 Busy` because the retry policy is the opposite. |
+| -32008 | PayloadTooLarge | Reserved — no shipped emission site. Intended semantics: fatal, non-retryable; frame exceeds `max_frame_bytes` or inline attachment exceeds its cap (§11.2); sender MUST split or spill before retrying, never retry verbatim; distinct from `-32006 Busy` because the retry policy is the opposite. **Shipped behavior for an oversized frame: the codec fails the decode (`FrameTooLarge`) and the transport disconnects** — the sender sees a broken pipe / plugin respawn, not a classifiable error response. |
 
 ## 6. Lifecycle (host → plugin)
 
@@ -1455,9 +1455,9 @@ enforcement exists yet:
 
 | Limit | Default | Override | Status |
 |---|---|---|---|
-| Max JSON-RPC frame size | 8 MiB | `[runtime].max_frame_bytes` in manifest; host caps at 64 MiB regardless. | **Enforced** (codec layer, `-32008 PayloadTooLarge`). |
+| Max JSON-RPC frame size | 8 MiB | `[runtime].max_frame_bytes` in manifest; host caps at 64 MiB regardless. | **Enforced** (codec layer) — but the failure mode is a decode error (`FrameTooLarge`) followed by transport disconnect, NOT a `-32008` response; the classifiable `-32008 PayloadTooLarge` reply is reserved (§5.3). |
 | Max concurrent in-flight `deliver_inbound` per plugin | 32 | `[runtime].max_inflight_inbound`. | Reserved — parsed from the manifest, not consumed; the shipped host accepts unbounded concurrent inbound. |
-| Max queued `inbound/stream_frame` per stream | 256 | Fixed; drop with `inbound/stream_end` error beyond. | Reserved — the shipped stream callback queue is unbounded and never emits an error terminal (§7.1 Shipped status values). |
+| Max queued `inbound/stream_frame` per stream | 256 | Fixed. | Reserved — intended semantics: drop with an `inbound/stream_end` error terminal beyond the cap. The shipped stream callback queue is unbounded and never emits an error terminal (§7.1 Shipped status values). |
 | Max inline image bytes per `deliver_inbound` | 4 MiB | Fixed. | Reserved — inline images are copied through without a size check; only the whole-frame limit above applies. |
 
 Reserved semantics, for when enforcement lands: a plugin exceeding
@@ -1480,8 +1480,11 @@ MUST:
 3. Compute the total frame size **before sending** and, if it would
    exceed `max_frame_bytes`, split into multiple `deliver_inbound`
    calls or spill more attachments to disk. The frame limit is a
-   hard boundary — the host rejects with `-32008 PayloadTooLarge`
-   and does not retry.
+   hard boundary — and in the shipped host an oversized frame fails
+   at the codec and disconnects the transport (§11.2), so there is no
+   error response to recover from; the classifiable `-32008
+   PayloadTooLarge` rejection is reserved (§5.3). Pre-computing the
+   size is therefore mandatory, not advisory.
 
 The shared temp directory is provided by the host in `initialize.host.data_dir`
 under `attachments/inbound/` and is garbage-collected by the host 24h
