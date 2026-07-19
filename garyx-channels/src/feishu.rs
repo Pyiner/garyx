@@ -627,6 +627,7 @@ pub enum FeishuError {
 // Tests
 // ---------------------------------------------------------------------------
 
+mod cot_render;
 pub mod outbound;
 #[cfg(test)]
 mod tests;
