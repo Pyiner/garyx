@@ -351,8 +351,12 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
     }
 
     @discardableResult
-    fileprivate mutating func restoreToDraftAfterConflictAdmission() -> GaryxDeliveryEnvelope? {
-        guard phase == .ambiguous, userDisposition == .none else { return nil }
+    fileprivate mutating func restoreToDraftAfterConflictAdmission(
+        allowingUndispatchedCreate: Bool
+    ) -> GaryxDeliveryEnvelope? {
+        guard (phase == .ambiguous
+                || (allowingUndispatchedCreate && phase == .notDispatched)),
+              userDisposition == .none else { return nil }
         let restored = envelope
         userDisposition = .restoredToDraft
         phase = .abandoned
@@ -363,9 +367,11 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
     @discardableResult
     public mutating func resendAsDuplicate(
         newRecordID: GaryxDeliveryRecordID,
-        newClientIntentID: String
+        newClientIntentID: String,
+        allowingUndispatchedCreate: Bool = false
     ) -> GaryxDeliveryEnvelope? {
-        guard phase == .ambiguous,
+        guard (phase == .ambiguous
+                || (allowingUndispatchedCreate && phase == .notDispatched)),
               userDisposition == .none,
               let envelope,
               newRecordID != id,
@@ -456,6 +462,8 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
         case (.notDispatched, .transportAttempted),
              (.notDispatched, .acknowledged),
              (.notDispatched, .cancelledByDiscard),
+             (.notDispatched, .abandoned),
+             (.notDispatched, .supersededByDuplicate),
              (.transportAttempted, .ambiguous),
              (.transportAttempted, .acknowledged),
              (.transportAttempted, .evidence),
@@ -516,9 +524,12 @@ public enum GaryxDeliveryDraftRecoveryReducer {
         record: inout GaryxDeliveryRecord,
         conflictSet: inout GaryxPayloadConflictSet,
         candidate: GaryxPayloadConflictCandidate,
-        membershipDurabilityAvailable: Bool
+        membershipDurabilityAvailable: Bool,
+        allowingUndispatchedCreate: Bool = false
     ) -> GaryxDeliveryDraftRecoveryDisposition {
-        guard record.phase == .ambiguous, record.userDisposition == .none else {
+        guard (record.phase == .ambiguous
+                || (allowingUndispatchedCreate && record.phase == .notDispatched)),
+              record.userDisposition == .none else {
             return .rejectedNotAmbiguous
         }
         guard conflictSet.scope == record.scope else { return .rejectedConflictScope }
@@ -530,7 +541,9 @@ public enum GaryxDeliveryDraftRecoveryReducer {
         ) else {
             return .rejectedConflictDurability
         }
-        guard let envelope = nextRecord.restoreToDraftAfterConflictAdmission() else {
+        guard let envelope = nextRecord.restoreToDraftAfterConflictAdmission(
+            allowingUndispatchedCreate: allowingUndispatchedCreate
+        ) else {
             return .rejectedNotAmbiguous
         }
         record = nextRecord

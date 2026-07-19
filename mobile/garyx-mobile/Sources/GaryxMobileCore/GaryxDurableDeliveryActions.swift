@@ -19,7 +19,8 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
         recoveredEntryID: GaryxComposerPayloadEntryID,
         recoveredLifecycleNonce: String,
         recoveredGeneration: UInt64,
-        conflictSetID: GaryxPayloadConflictSetID
+        conflictSetID: GaryxPayloadConflictSetID,
+        allowingUndispatchedCreate: Bool = false
     ) -> GaryxDeliveryDraftRecoveryPlan? {
         guard recoveredGeneration > snapshot.generationClaimFloor,
               recoveredGeneration <= snapshot.generationHighWatermark,
@@ -59,7 +60,8 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
             record: &record,
             conflictSet: &conflict,
             candidate: recoveredCandidate,
-            membershipDurabilityAvailable: true
+            membershipDurabilityAvailable: true,
+            allowingUndispatchedCreate: allowingUndispatchedCreate
         ) else {
             return nil
         }
@@ -121,7 +123,8 @@ public enum GaryxDeliveryDuplicateResendPlanner {
         snapshot: GaryxComposerDurabilitySnapshot,
         deliveryID: GaryxDeliveryRecordID,
         newDeliveryID: GaryxDeliveryRecordID,
-        newClientIntentID: String
+        newClientIntentID: String,
+        allowingUndispatchedCreate: Bool = false
     ) -> GaryxDeliveryDuplicateResendPlan? {
         guard snapshot.deliveries[newDeliveryID] == nil,
               var original = snapshot.deliveries[deliveryID],
@@ -132,7 +135,8 @@ public enum GaryxDeliveryDuplicateResendPlanner {
               entry.lifecycle.phase == .active,
               let envelope = original.resendAsDuplicate(
                 newRecordID: newDeliveryID,
-                newClientIntentID: newClientIntentID
+                newClientIntentID: newClientIntentID,
+                allowingUndispatchedCreate: allowingUndispatchedCreate
               ) else {
             return nil
         }
@@ -156,6 +160,133 @@ public enum GaryxDeliveryDuplicateResendPlanner {
                     .upsertEntry(entry),
                     .upsertDelivery(original),
                     .upsertDelivery(duplicate),
+                ]
+            )
+        )
+    }
+}
+
+// MARK: - Atomic multi-stage create exits
+
+public struct GaryxCreateDraftRecoveryPlan: Equatable, Sendable {
+    public let envelope: GaryxDeliveryEnvelope
+    public let deliveryID: GaryxDeliveryRecordID
+    public let recoveredEntryID: GaryxComposerPayloadEntryID
+    public let conflictSetID: GaryxPayloadConflictSetID
+    public let transaction: GaryxComposerDurabilityTransaction
+}
+
+public enum GaryxCreateDraftRecoveryPlanner {
+    /// The create response and its message envelope settle together. A
+    /// not-dispatched message is safe to restore, while an attempted chat-start
+    /// uses the same conflict-preserving exit as an ambiguous delivery.
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        key: GaryxCreateDeliveryKey,
+        recoveredEntryID: GaryxComposerPayloadEntryID,
+        recoveredLifecycleNonce: String,
+        recoveredGeneration: UInt64,
+        conflictSetID: GaryxPayloadConflictSetID
+    ) -> GaryxCreateDraftRecoveryPlan? {
+        guard var create = snapshot.createDeliveries[key],
+              create.phase == .ambiguous,
+              create.userDisposition == .none,
+              let entryID = create.entryID else {
+            return nil
+        }
+        let matches = snapshot.deliveries.values.filter {
+            $0.scope == key.scope
+                && $0.entryID == entryID
+                && $0.correlationID == key.createIntentID
+                && ($0.phase == .notDispatched || $0.phase == .ambiguous)
+                && $0.userDisposition == .none
+        }
+        guard matches.count == 1,
+              let delivery = matches.first,
+              create.restoreToDraft(),
+              let deliveryPlan = GaryxDeliveryDraftRecoveryPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: delivery.id,
+                recoveredEntryID: recoveredEntryID,
+                recoveredLifecycleNonce: recoveredLifecycleNonce,
+                recoveredGeneration: recoveredGeneration,
+                conflictSetID: conflictSetID,
+                allowingUndispatchedCreate: true
+              ) else {
+            return nil
+        }
+        return GaryxCreateDraftRecoveryPlan(
+            envelope: deliveryPlan.envelope,
+            deliveryID: delivery.id,
+            recoveredEntryID: recoveredEntryID,
+            conflictSetID: conflictSetID,
+            transaction: .init(
+                expectedRevision: snapshot.revision,
+                label: "restore ambiguous create and message through payload conflict",
+                mutations: deliveryPlan.transaction.mutations + [.upsertCreateDelivery(create)]
+            )
+        )
+    }
+}
+
+public struct GaryxCreateDuplicateRebuildPlan: Equatable, Sendable {
+    public let envelope: GaryxDeliveryEnvelope
+    public let originalDeliveryID: GaryxDeliveryRecordID
+    public let newDeliveryID: GaryxDeliveryRecordID
+    public let newCreateKey: GaryxCreateDeliveryKey
+    public let ambiguousAfter: GaryxCreateDeliveryPhase?
+    public let transaction: GaryxComposerDurabilityTransaction
+}
+
+public enum GaryxCreateDuplicateRebuildPlanner {
+    /// Rebuild is intentionally duplicate-risk: both the create intent and the
+    /// message intent change, and the original correlation remains available
+    /// for late evidence without mutating the new copy.
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        key: GaryxCreateDeliveryKey,
+        newCreateIntentID: String,
+        newDeliveryID: GaryxDeliveryRecordID
+    ) -> GaryxCreateDuplicateRebuildPlan? {
+        guard var create = snapshot.createDeliveries[key],
+              create.phase == .ambiguous,
+              create.userDisposition == .none,
+              let entryID = create.entryID else {
+            return nil
+        }
+        let matches = snapshot.deliveries.values.filter {
+            $0.scope == key.scope
+                && $0.entryID == entryID
+                && $0.correlationID == key.createIntentID
+                && ($0.phase == .notDispatched || $0.phase == .ambiguous)
+                && $0.userDisposition == .none
+        }
+        guard matches.count == 1,
+              let delivery = matches.first,
+              let nextCreate = create.rebuildWithDuplicateRisk(
+                newCreateIntentID: newCreateIntentID
+              ),
+              let deliveryPlan = GaryxDeliveryDuplicateResendPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: delivery.id,
+                newDeliveryID: newDeliveryID,
+                newClientIntentID: newCreateIntentID,
+                allowingUndispatchedCreate: true
+              ) else {
+            return nil
+        }
+        return GaryxCreateDuplicateRebuildPlan(
+            envelope: deliveryPlan.envelope,
+            originalDeliveryID: delivery.id,
+            newDeliveryID: newDeliveryID,
+            newCreateKey: nextCreate.key,
+            ambiguousAfter: create.ambiguousAfter,
+            transaction: .init(
+                expectedRevision: snapshot.revision,
+                label: "supersede ambiguous create with duplicate-risk copy",
+                mutations: deliveryPlan.transaction.mutations + [
+                    .upsertCreateDelivery(create),
+                    .upsertCreateDelivery(nextCreate),
                 ]
             )
         )
@@ -400,12 +531,21 @@ public enum GaryxComposerDurableNoticeProjector {
             return []
         }
         var notices: [GaryxComposerDurableNotice] = []
+        let ambiguousCreateIntentIDs = Set(
+            snapshot.createDeliveries.values.lazy.filter {
+                $0.entryID == hostEntryID
+                    && $0.scope == entry.scope
+                    && $0.phase == .ambiguous
+                    && $0.userDisposition == .none
+            }.map(\.createIntentID)
+        )
         for delivery in snapshot.deliveries.values
             .filter({
                 $0.entryID == hostEntryID
                     && $0.scope == entry.scope
                     && $0.phase == .ambiguous
                     && $0.userDisposition == .none
+                    && !ambiguousCreateIntentIDs.contains($0.correlationID)
             })
             .sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             notices.append(
@@ -429,12 +569,17 @@ public enum GaryxComposerDurableNoticeProjector {
                     && $0.userDisposition == .none
             })
             .sorted(by: { $0.createIntentID < $1.createIntentID }) {
+            let chatWasAttempted = create.ambiguousAfter == .chatStartAttempted
             notices.append(
                 GaryxComposerDurableNotice(
                     id: "create:\(create.createIntentID)",
                     kind: .ambiguousCreate,
-                    title: "Conversation creation status unknown",
-                    detail: "The conversation may already exist. Rebuilding can create another conversation.",
+                    title: chatWasAttempted
+                        ? "Send status unknown"
+                        : "Conversation creation status unknown",
+                    detail: chatWasAttempted
+                        ? "The gateway may have accepted this message. Resending can create a duplicate."
+                        : "The conversation may already exist. Rebuilding can create another conversation.",
                     actions: [
                         .restoreCreate(create.key),
                         .rebuildCreateCopy(create.key),

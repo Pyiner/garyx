@@ -86,6 +86,109 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         XCTAssertEqual(committed.deliveries[duplicateID]?.evidence, GaryxDeliveryEvidence.none)
     }
 
+    func testCreateResponseLossRestoreSettlesUndispatchedEnvelopeAndConflictAtomically() async throws {
+        let fixture = try await makeAmbiguousFixture(deliveryIsAmbiguous: false)
+        var snapshot = try await fixture.store.load()
+        var create = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: "original-intent",
+            entryID: fixture.entryID
+        )
+        create.responseLost()
+        snapshot = try await fixture.store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "seed create response loss",
+                mutations: [.upsertCreateDelivery(create)]
+            )
+        )
+        let recoveredGeneration = try await fixture.store.allocatePayloadGeneration()
+        snapshot = try await fixture.store.load()
+        let recoveredID = GaryxComposerPayloadEntryID(rawValue: "create-recovered-entry")
+        let conflictID = GaryxPayloadConflictSetID(rawValue: "create-conflict")
+        let plan = try XCTUnwrap(
+            GaryxCreateDraftRecoveryPlanner.plan(
+                snapshot: snapshot,
+                key: create.key,
+                recoveredEntryID: recoveredID,
+                recoveredLifecycleNonce: "create-recovered-token",
+                recoveredGeneration: recoveredGeneration,
+                conflictSetID: conflictID
+            )
+        )
+        snapshot = try await fixture.store.commit(plan.transaction)
+
+        XCTAssertEqual(snapshot.deliveries[fixture.deliveryID]?.phase, .abandoned)
+        XCTAssertEqual(
+            snapshot.deliveries[fixture.deliveryID]?.userDisposition,
+            .restoredToDraft
+        )
+        XCTAssertEqual(
+            snapshot.createDeliveries[create.key]?.userDisposition,
+            .restoredToDraft
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(recoveredID, scope: scope)?.currentText,
+            "sealed message"
+        )
+        XCTAssertEqual(snapshot.conflicts[conflictID]?.candidates.count, 2)
+    }
+
+    func testCreateResponseLossRebuildChangesBothIntentsAndKeepsLateEvidenceIsolated() async throws {
+        let fixture = try await makeAmbiguousFixture(deliveryIsAmbiguous: false)
+        var snapshot = try await fixture.store.load()
+        var create = GaryxCreateDeliveryState(
+            scope: scope,
+            createIntentID: "original-intent",
+            entryID: fixture.entryID
+        )
+        create.responseLost()
+        snapshot = try await fixture.store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "seed create response loss for rebuild",
+                mutations: [.upsertCreateDelivery(create)]
+            )
+        )
+        let duplicateID = GaryxDeliveryRecordID(rawValue: "rebuilt-delivery")
+        let plan = try XCTUnwrap(
+            GaryxCreateDuplicateRebuildPlanner.plan(
+                snapshot: snapshot,
+                key: create.key,
+                newCreateIntentID: "rebuilt-intent",
+                newDeliveryID: duplicateID
+            )
+        )
+        snapshot = try await fixture.store.commit(plan.transaction)
+
+        XCTAssertEqual(
+            snapshot.createDeliveries[create.key]?.userDisposition,
+            .rebuildMayCreateDuplicateThread
+        )
+        XCTAssertEqual(snapshot.createDeliveries[plan.newCreateKey]?.phase, .createPending)
+        XCTAssertEqual(snapshot.deliveries[fixture.deliveryID]?.phase, .supersededByDuplicate)
+        XCTAssertEqual(snapshot.deliveries[duplicateID]?.phase, .notDispatched)
+        XCTAssertEqual(
+            snapshot.deliveries[duplicateID]?.envelope?.clientIntentID,
+            "rebuilt-intent"
+        )
+
+        let evidence = GaryxDeliveryEvidencePlanner.plan(
+            snapshot: snapshot,
+            correlationID: "original-intent",
+            authenticatedScope: scope
+        )
+        snapshot = try await fixture.store.commit(try XCTUnwrap(evidence.transaction))
+        XCTAssertEqual(
+            snapshot.deliveries[fixture.deliveryID]?.evidence,
+            .serverAcknowledged
+        )
+        XCTAssertEqual(
+            snapshot.deliveries[duplicateID]?.evidence,
+            GaryxDeliveryEvidence.none
+        )
+    }
+
     func testNoticeProjectionRequiresExactEntryInteractionOwner() async throws {
         let fixture = try await makeAmbiguousFixture()
         let snapshot = try await fixture.store.load()
@@ -205,7 +308,9 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         XCTAssertEqual(claimed.scopeRegistry.lifecycle(of: scope), .revoked)
     }
 
-    private func makeAmbiguousFixture() async throws -> (
+    private func makeAmbiguousFixture(
+        deliveryIsAmbiguous: Bool = true
+    ) async throws -> (
         store: GaryxFakeComposerDurabilityStore,
         entryID: GaryxComposerPayloadEntryID,
         deliveryID: GaryxDeliveryRecordID
@@ -261,8 +366,10 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
                 clientIntentID: "original-intent"
             )
         )
-        XCTAssertTrue(delivery.markTransportAttempted())
-        XCTAssertTrue(delivery.markAmbiguous())
+        if deliveryIsAmbiguous {
+            XCTAssertTrue(delivery.markTransportAttempted())
+            XCTAssertTrue(delivery.markAmbiguous())
+        }
         _ = try await store.commit(
             .init(
                 expectedRevision: 0,
