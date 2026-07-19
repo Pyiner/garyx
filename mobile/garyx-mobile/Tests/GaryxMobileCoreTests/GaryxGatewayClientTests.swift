@@ -2770,6 +2770,68 @@ final class GaryxGatewayClientTests: XCTestCase {
         }
     }
 
+    func testStartChatDurabilityHookSeesFinalCompatibleRequestBeforeTransport() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let boundary = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(boundary.value(), 1, "durable boundary must commit before transport")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/chat/start")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"status":"accepted","thread_id":"thread::test","run_id":"run-test"}"#.utf8)
+            )
+        }
+        let client = GaryxGatewayClient(
+            configuration: .init(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+        let request = GaryxStartChatRequest(
+            threadId: "thread::test",
+            message: "durable hello",
+            attachments: [],
+            workspacePath: nil,
+            metadata: [
+                "client": "garyx-mobile",
+                "client_intent_id": "intent-durable",
+            ]
+        )
+
+        let result = try await client.startChat(request) { finalRequest in
+            XCTAssertEqual(finalRequest.url?.path, "/api/chat/start")
+            XCTAssertEqual(finalRequest.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = try XCTUnwrap(finalRequest.httpBody)
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            let metadata = try XCTUnwrap(object["metadata"] as? [String: String])
+            XCTAssertEqual(metadata["client_intent_id"], "intent-durable")
+            XCTAssertEqual(object["message"] as? String, "durable hello")
+            XCTAssertEqual(boundary.increment(), 1)
+        }
+
+        XCTAssertEqual(result.status, "accepted")
+        XCTAssertEqual(boundary.value(), 1)
+    }
+
     func testGatewayClientDoesNotRetry503OnNonIdempotentPost() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]

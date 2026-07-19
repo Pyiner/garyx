@@ -26,6 +26,7 @@ struct GaryxPendingQueuedInput {
 struct GaryxEnsuredThread {
     var thread: GaryxThreadSummary
     var adoptedSelection: Bool
+    var createDeliveryKey: GaryxCreateDeliveryKey? = nil
 }
 
 struct GaryxGatewayRuntimeIdentity: Equatable {

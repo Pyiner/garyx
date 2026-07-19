@@ -25,7 +25,14 @@ struct GaryxComposerDeliveryHandle: Equatable, Sendable {
 struct GaryxComposerReadyPayload: Sendable {
     let text: String
     let attachments: [GaryxComposerAttachment]
+    let clientIntentID: String
     let delivery: GaryxComposerDeliveryHandle
+}
+
+struct GaryxComposerCreateRebuildPayload: Sendable {
+    let payload: GaryxComposerReadyPayload
+    let ambiguousAfter: GaryxCreateDeliveryPhase?
+    let requiresThreadCreation: Bool
 }
 
 struct GaryxComposerRuntimeTestingHooks: Sendable {
@@ -46,6 +53,7 @@ enum GaryxComposerPayloadRuntimeError: LocalizedError {
     case staleActivation
     case payloadPreparing
     case attachmentNotUploaded
+    case deliveryBackpressure
     case invalidTransition
 
     var errorDescription: String? {
@@ -58,6 +66,8 @@ enum GaryxComposerPayloadRuntimeError: LocalizedError {
             "Wait for attachments to finish preparing before sending."
         case .attachmentNotUploaded:
             "An attachment is not ready to send."
+        case .deliveryBackpressure:
+            "Too many sends are awaiting confirmation. This draft was kept."
         case .invalidTransition:
             "Composer payload state could not advance safely."
         }
@@ -83,6 +93,25 @@ private struct GaryxComposerSendPreparation: Sendable {
 private struct GaryxComposerSendCommitResult: Sendable {
     let context: GaryxComposerDurableContext
     let delivery: GaryxComposerDeliveryHandle
+}
+
+private struct GaryxComposerAmbiguousExitResult: Sendable {
+    let context: GaryxComposerDurableContext
+    let envelope: GaryxDeliveryEnvelope
+    let delivery: GaryxComposerDeliveryHandle?
+}
+
+fileprivate enum GaryxCreateDeliveryUpdate: Sendable {
+    case begin(entryID: GaryxComposerPayloadEntryID)
+    case created(threadID: String)
+    case bound
+    case acknowledged
+    case responseLost
+}
+
+private struct GaryxCreateDeliveryCommitResult: Sendable {
+    let state: GaryxCreateDeliveryState
+    let context: GaryxComposerDurableContext?
 }
 
 private struct GaryxComposerFinalizedInput: Sendable {
@@ -130,6 +159,40 @@ private actor GaryxComposerPayloadPersistenceQueue {
         defer { releaseTransactionGate() }
         try await runLaunchRecoveryIfNeeded(activeScope: scope)
         var snapshot = try await durability.load()
+        let supersededEpochs = snapshot.scopeRegistry.lifecycles.keys
+            .filter {
+                $0.identity == scope.identity
+                    && $0.epoch < scope.epoch
+                    && snapshot.scopeRegistry.lifecycle(of: $0) != .revoked
+            }
+            .sorted { $0.epoch < $1.epoch }
+        for superseded in supersededEpochs {
+            guard let settlement = GaryxGatewayScopeSettlementPlanner.revoke(
+                snapshot: snapshot,
+                scope: superseded
+            ) else { continue }
+            snapshot = try await durability.commit(settlement.transaction)
+            let recovery = GaryxComposerDurabilityLaunchRecovery(
+                durability: durability,
+                staging: staging,
+                scopes: snapshot.scopeRegistry
+            )
+            _ = try await recovery.recover()
+            snapshot = try await durability.load()
+        }
+        var scopeRegistry = snapshot.scopeRegistry
+        guard scopeRegistry.switchActive(to: scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        if scopeRegistry != snapshot.scopeRegistry {
+            snapshot = try await durability.commit(
+                .init(
+                    expectedRevision: snapshot.revision,
+                    label: "activate durable gateway scope partition",
+                    mutations: [.replaceScopeRegistry(scopeRegistry)]
+                )
+            )
+        }
         let matches = snapshot.payloadStore.entriesByScope[scope]?.values.filter {
             $0.destination == key && $0.lifecycle.phase == .active
         } ?? []
@@ -476,6 +539,25 @@ private actor GaryxComposerPayloadPersistenceQueue {
         guard attachments.allSatisfy({ $0.uploadedPath?.isEmpty == false }) else {
             throw GaryxComposerPayloadRuntimeError.attachmentNotUploaded
         }
+        let envelopeBytes = GaryxDeliveryEnvelope(
+            text: entry.currentText,
+            attachmentIDs: attachments.map(\.id),
+            attachments: attachments,
+            generation: entry.currentGeneration,
+            clientIntentID: clientIntentID
+        ).estimatedBytes
+        let quota = GaryxDeliveryQuota(rebuilding: Array(snapshot.deliveries.values))
+        guard quota.canSeal(scope: entry.scope, envelopeBytes: envelopeBytes) else {
+            if let feedback = GaryxDeliveryBackpressurePlanner.plan(
+                snapshot: snapshot,
+                entryID: entry.id,
+                envelopeBytes: envelopeBytes,
+                feedbackID: GaryxFeedbackID(rawValue: UUID().uuidString)
+            ) {
+                _ = try await durability.commit(feedback)
+            }
+            throw GaryxComposerPayloadRuntimeError.deliveryBackpressure
+        }
         let followupGeneration = try await durability.allocatePayloadGeneration()
         let reservationID = try await durability.allocateSendReservationID()
         snapshot = try await durability.load()
@@ -520,9 +602,22 @@ private actor GaryxComposerPayloadPersistenceQueue {
         let envelope = GaryxDeliveryEnvelope(
             text: envelopeText,
             attachmentIDs: preparation.attachments.map(\.id),
+            attachments: preparation.attachments,
             generation: preparation.envelopeGeneration,
             clientIntentID: preparation.clientIntentID
         )
+        let quota = GaryxDeliveryQuota(rebuilding: Array(snapshot.deliveries.values))
+        guard quota.canSeal(scope: preparation.scope, envelopeBytes: envelope.estimatedBytes) else {
+            if let feedback = GaryxDeliveryBackpressurePlanner.plan(
+                snapshot: snapshot,
+                entryID: preparation.entryID,
+                envelopeBytes: envelope.estimatedBytes,
+                feedbackID: GaryxFeedbackID(rawValue: UUID().uuidString)
+            ) {
+                _ = try await durability.commit(feedback)
+            }
+            throw GaryxComposerPayloadRuntimeError.deliveryBackpressure
+        }
         var barrier = GaryxSendCommitBarrier(
             entryID: preparation.entryID,
             scope: preparation.scope,
@@ -534,7 +629,7 @@ private actor GaryxComposerPayloadPersistenceQueue {
             envelope: envelope,
             followupGeneration: preparation.followupGeneration,
             readiness: .ready,
-            quota: GaryxDeliveryQuota(rebuilding: Array(snapshot.deliveries.values)),
+            quota: quota,
             producerPhase: .live,
             lifecycle: lifecycle
         ) == .sealed,
@@ -746,7 +841,8 @@ private actor GaryxComposerPayloadPersistenceQueue {
     }
 
     func markTransportAttempted(
-        _ handle: GaryxComposerDeliveryHandle
+        _ handle: GaryxComposerDeliveryHandle,
+        createDeliveryKey: GaryxCreateDeliveryKey? = nil
     ) async throws -> GaryxComposerDurableContext? {
         await acquireTransactionGate()
         defer { releaseTransactionGate() }
@@ -755,11 +851,26 @@ private actor GaryxComposerPayloadPersistenceQueue {
               delivery.markTransportAttempted() else {
             throw GaryxComposerPayloadRuntimeError.invalidTransition
         }
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .upsertDelivery(delivery),
+        ]
+        if let createDeliveryKey {
+            guard createDeliveryKey.scope == handle.scope,
+                  var create = snapshot.createDeliveries[createDeliveryKey],
+                  create.entryID == handle.entryID else {
+                throw GaryxComposerPayloadRuntimeError.staleActivation
+            }
+            create.chatStartAttempted()
+            guard create.phase == .chatStartAttempted else {
+                throw GaryxComposerPayloadRuntimeError.invalidTransition
+            }
+            mutations.append(.upsertCreateDelivery(create))
+        }
         let committed = try await durability.commit(
             .init(
                 expectedRevision: snapshot.revision,
-                label: "persist transportAttempted before gateway dispatch",
-                mutations: [.upsertDelivery(delivery)]
+                label: "persist message and create attempt before gateway dispatch",
+                mutations: mutations
             )
         )
         return context(for: handle, in: committed)
@@ -824,6 +935,467 @@ private actor GaryxComposerPayloadPersistenceQueue {
         return matchingDelivery(handle, in: snapshot)?.phase
     }
 
+    func restoreAmbiguousDelivery(
+        _ handle: GaryxComposerDeliveryHandle
+    ) async throws -> GaryxComposerAmbiguousExitResult {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let recoveredGeneration = try await durability.allocatePayloadGeneration()
+        let snapshot = try await durability.load()
+        let recoveredEntryID = GaryxComposerPayloadEntryID(rawValue: UUID().uuidString)
+        let conflictID = GaryxPayloadConflictSetID(
+            rawValue: "delivery-\(handle.deliveryID.rawValue)"
+        )
+        guard let plan = GaryxDeliveryDraftRecoveryPlanner.plan(
+            snapshot: snapshot,
+            deliveryID: handle.deliveryID,
+            recoveredEntryID: recoveredEntryID,
+            recoveredLifecycleNonce: UUID().uuidString,
+            recoveredGeneration: recoveredGeneration,
+            conflictSetID: conflictID
+        ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let committed = try await durability.commit(plan.transaction)
+        guard let context = context(for: handle, in: committed) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        return GaryxComposerAmbiguousExitResult(
+            context: context,
+            envelope: plan.envelope,
+            delivery: nil
+        )
+    }
+
+    func resendAmbiguousDelivery(
+        _ handle: GaryxComposerDeliveryHandle,
+        newClientIntentID: String
+    ) async throws -> GaryxComposerAmbiguousExitResult {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        let duplicateID = GaryxDeliveryRecordID(rawValue: UUID().uuidString)
+        guard let plan = GaryxDeliveryDuplicateResendPlanner.plan(
+            snapshot: snapshot,
+            deliveryID: handle.deliveryID,
+            newDeliveryID: duplicateID,
+            newClientIntentID: newClientIntentID
+        ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let committed = try await durability.commit(plan.transaction)
+        guard let entry = committed.payloadStore.entry(handle.entryID, scope: handle.scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        let lifecycle = GaryxPayloadLifecycleCapture(
+            token: entry.lifecycle.token,
+            revision: entry.lifecycle.revision
+        )
+        return GaryxComposerAmbiguousExitResult(
+            context: .init(snapshot: committed, entry: entry),
+            envelope: plan.envelope,
+            delivery: GaryxComposerDeliveryHandle(
+                deliveryID: duplicateID,
+                entryID: entry.id,
+                scope: entry.scope,
+                reservationID: handle.reservationID,
+                lifecycle: lifecycle
+            )
+        )
+    }
+
+    func restoreAmbiguousCreate(
+        _ key: GaryxCreateDeliveryKey
+    ) async throws -> GaryxComposerAmbiguousExitResult {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let recoveredGeneration = try await durability.allocatePayloadGeneration()
+        let snapshot = try await durability.load()
+        let recoveredEntryID = GaryxComposerPayloadEntryID(rawValue: UUID().uuidString)
+        let conflictID = GaryxPayloadConflictSetID(
+            rawValue: "create-\(key.createIntentID)"
+        )
+        guard let plan = GaryxCreateDraftRecoveryPlanner.plan(
+            snapshot: snapshot,
+            key: key,
+            recoveredEntryID: recoveredEntryID,
+            recoveredLifecycleNonce: UUID().uuidString,
+            recoveredGeneration: recoveredGeneration,
+            conflictSetID: conflictID
+        ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let committed = try await durability.commit(plan.transaction)
+        guard let create = committed.createDeliveries[key],
+              let entryID = create.entryID,
+              let entry = committed.payloadStore.entry(entryID, scope: key.scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        return GaryxComposerAmbiguousExitResult(
+            context: .init(snapshot: committed, entry: entry),
+            envelope: plan.envelope,
+            delivery: nil
+        )
+    }
+
+    func rebuildAmbiguousCreate(
+        _ key: GaryxCreateDeliveryKey,
+        newClientIntentID: String
+    ) async throws -> (GaryxComposerAmbiguousExitResult, GaryxCreateDeliveryPhase?) {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        let duplicateID = GaryxDeliveryRecordID(rawValue: UUID().uuidString)
+        guard let plan = GaryxCreateDuplicateRebuildPlanner.plan(
+            snapshot: snapshot,
+            key: key,
+            newCreateIntentID: newClientIntentID,
+            newDeliveryID: duplicateID
+        ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let committed = try await durability.commit(plan.transaction)
+        let destinationCreate = plan.newCreateKey.flatMap {
+            committed.createDeliveries[$0]
+        } ?? committed.createDeliveries[key]
+        guard let entryID = destinationCreate?.entryID,
+              let entry = committed.payloadStore.entry(entryID, scope: key.scope),
+              let duplicate = committed.deliveries[duplicateID] else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        let lifecycle = GaryxPayloadLifecycleCapture(
+            token: entry.lifecycle.token,
+            revision: entry.lifecycle.revision
+        )
+        return (
+            GaryxComposerAmbiguousExitResult(
+                context: .init(snapshot: committed, entry: entry),
+                envelope: plan.envelope,
+                delivery: GaryxComposerDeliveryHandle(
+                    deliveryID: duplicateID,
+                    entryID: entry.id,
+                    scope: entry.scope,
+                    reservationID: duplicate.reservationID,
+                    lifecycle: lifecycle
+                )
+            ),
+            plan.ambiguousAfter
+        )
+    }
+
+    func resolveRecoveredDraft(
+        conflictSetID: GaryxPayloadConflictSetID,
+        recoveredEntryID: GaryxComposerPayloadEntryID,
+        host: GaryxComposerDurableContext,
+        useRecovered: Bool
+    ) async throws -> GaryxComposerDurableContext {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let replacementGeneration: UInt64?
+        if useRecovered {
+            replacementGeneration = try await durability.allocatePayloadGeneration()
+        } else {
+            replacementGeneration = nil
+        }
+        let snapshot = try await durability.load()
+        let plan: GaryxRecoveredDraftResolutionPlan?
+        if let replacementGeneration {
+            plan = GaryxRecoveredDraftResolutionPlanner.useRecoveredDraft(
+                snapshot: snapshot,
+                conflictSetID: conflictSetID,
+                hostEntryID: host.entry.id,
+                recoveredEntryID: recoveredEntryID,
+                replacementGeneration: replacementGeneration
+            )
+        } else {
+            plan = GaryxRecoveredDraftResolutionPlanner.keepCurrentDraft(
+                snapshot: snapshot,
+                conflictSetID: conflictSetID,
+                hostEntryID: host.entry.id,
+                recoveredEntryID: recoveredEntryID
+            )
+        }
+        guard let plan else { throw GaryxComposerPayloadRuntimeError.invalidTransition }
+        let committed = try await durability.commit(plan.transaction)
+        guard let entry = committed.payloadStore.entry(host.entry.id, scope: host.entry.scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        return .init(snapshot: committed, entry: entry)
+    }
+
+    func ingestDeliveryEvidence(
+        correlationID: String,
+        authenticatedScope: GaryxGatewayScope
+    ) async throws -> GaryxComposerDurableContext? {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        let plan = GaryxDeliveryEvidencePlanner.plan(
+            snapshot: snapshot,
+            correlationID: correlationID,
+            authenticatedScope: authenticatedScope
+        )
+        guard let transaction = plan.transaction else { return nil }
+        let committed = try await durability.commit(transaction)
+        guard case .updated(let deliveryID) = plan.disposition,
+              let record = committed.deliveries[deliveryID],
+              let entry = committed.payloadStore.entry(record.entryID, scope: record.scope) else {
+            return nil
+        }
+        return .init(snapshot: committed, entry: entry)
+    }
+
+    func presentFeedback(
+        hostEntryID: GaryxComposerPayloadEntryID,
+        hasInteractionOwner: Bool
+    ) async throws -> GaryxComposerDurableContext? {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        guard let transaction = GaryxFeedbackPresentationPlanner.plan(
+            snapshot: snapshot,
+            hostEntryID: hostEntryID,
+            hasInteractionOwner: hasInteractionOwner
+        ) else { return nil }
+        let committed = try await durability.commit(transaction)
+        guard let scoped = committed.payloadStore.entriesByScope.first(where: {
+            $0.value[hostEntryID] != nil
+        }), let entry = scoped.value[hostEntryID] else { return nil }
+        return .init(snapshot: committed, entry: entry)
+    }
+
+    func acknowledgeFeedback(
+        feedbackID: GaryxFeedbackID,
+        host: GaryxComposerDurableContext
+    ) async throws -> GaryxComposerDurableContext {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        guard let transaction = GaryxFeedbackAcknowledgementPlanner.plan(
+            snapshot: snapshot,
+            feedbackID: feedbackID,
+            hostEntryID: host.entry.id
+        ) else { throw GaryxComposerPayloadRuntimeError.invalidTransition }
+        let committed = try await durability.commit(transaction)
+        guard let entry = committed.payloadStore.entry(host.entry.id, scope: host.entry.scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        return .init(snapshot: committed, entry: entry)
+    }
+
+    func retryUpload(
+        feedbackID: GaryxFeedbackID,
+        host: GaryxComposerDurableContext
+    ) async throws -> (GaryxComposerDurableContext, GaryxComposerStagedUpload) {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        guard let feedback = snapshot.feedback[feedbackID],
+              feedback.entryID == host.entry.id,
+              feedback.scope == host.entry.scope,
+              feedback.kind == .uploadRetryable,
+              let operationID = feedback.operationID else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let matches = snapshot.operations.filter {
+            $0.key.scope == feedback.scope
+                && $0.key.entryID == feedback.entryID
+                && $0.key.operationID == operationID
+        }
+        guard matches.count == 1,
+              let (oldKey, oldOperation) = matches.first,
+              let assetID = oldOperation.stagedAssetID,
+              let attachment = host.entry.attachments.values.first(where: {
+                  $0.stagedAssetID == assetID
+              }) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        let successorContext = oldOperation.context.replacingOperationID(
+            GaryxOperationID(rawValue: UUID().uuidString)
+        )
+        let successor = GaryxOperationCapability(
+            context: successorContext,
+            state: .requested
+        )
+        guard let plan = GaryxReplacementFeedbackSwapPlanner.planRetry(
+            snapshot: snapshot,
+            oldOperationKey: oldKey,
+            successor: successor,
+            replacementID: GaryxReplacementID(rawValue: UUID().uuidString),
+            feedbackID: feedbackID,
+            scopes: snapshot.scopeRegistry,
+            beginUpload: true
+        ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let committed = try await durability.commit(plan.transaction)
+        guard let entry = committed.payloadStore.entry(host.entry.id, scope: host.entry.scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        return (
+            .init(snapshot: committed, entry: entry),
+            GaryxComposerStagedUpload(
+                attachmentID: attachment.id,
+                operationKey: plan.successorOperation.context.key,
+                fileURL: staging.rootURL.appendingPathComponent(
+                    plan.successorManifest.stagedPath,
+                    isDirectory: false
+                ),
+                metadata: GaryxComposerAttachmentMetadata(
+                    kind: attachment.kind ?? "file",
+                    name: attachment.name ?? "attachment",
+                    mediaType: attachment.mediaType ?? "application/octet-stream",
+                    previewDataURL: attachment.previewDataURL
+                )
+            )
+        )
+    }
+
+    func removeFailedUpload(
+        feedbackID: GaryxFeedbackID,
+        host: GaryxComposerDurableContext
+    ) async throws -> GaryxComposerDurableContext {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        guard let feedback = snapshot.feedback[feedbackID],
+              feedback.entryID == host.entry.id,
+              feedback.scope == host.entry.scope,
+              let operationID = feedback.operationID else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let matchingKeys = snapshot.operations.keys.filter {
+            $0.scope == feedback.scope
+                && $0.entryID == feedback.entryID
+                && $0.operationID == operationID
+        }
+        guard matchingKeys.count == 1,
+              let operationKey = matchingKeys.first,
+              let plan = GaryxOperationRemovalFeedbackPlanner.plan(
+                snapshot: snapshot,
+                operationKey: operationKey,
+                feedbackID: feedbackID,
+                scopes: snapshot.scopeRegistry
+              ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        _ = try await durability.commit(plan.transaction)
+        let settled = try await staging.settleCondemnedFiles()
+        guard let entry = settled.payloadStore.entry(host.entry.id, scope: host.entry.scope) else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        return .init(snapshot: settled, entry: entry)
+    }
+
+    func suspendScope(_ scope: GaryxGatewayScope) async throws {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        var registry = snapshot.scopeRegistry
+        guard registry.activeScope == scope else { return }
+        _ = registry.suspendActive()
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "suspend durable gateway scope partition",
+                mutations: [.replaceScopeRegistry(registry)]
+            )
+        )
+    }
+
+    func revokeScope(_ scope: GaryxGatewayScope) async throws {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        guard let plan = GaryxGatewayScopeSettlementPlanner.revoke(
+            snapshot: snapshot,
+            scope: scope
+        ) else { return }
+        let committed = try await durability.commit(plan.transaction)
+        let recovery = GaryxComposerDurabilityLaunchRecovery(
+            durability: durability,
+            staging: staging,
+            scopes: committed.scopeRegistry
+        )
+        _ = try await recovery.recover()
+    }
+
+    func updateCreateDelivery(
+        key: GaryxCreateDeliveryKey,
+        update: GaryxCreateDeliveryUpdate
+    ) async throws -> GaryxCreateDeliveryCommitResult {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        var state: GaryxCreateDeliveryState
+        switch update {
+        case .begin(let entryID):
+            if let existing = snapshot.createDeliveries[key] {
+                let context = existing.entryID.flatMap {
+                    snapshot.payloadStore.entry($0, scope: key.scope)
+                }.map { GaryxComposerDurableContext(snapshot: snapshot, entry: $0) }
+                return .init(state: existing, context: context)
+            }
+            let scoped = snapshot.createDeliveries.values.filter {
+                $0.scope == key.scope && !$0.isTerminalCorrelation
+            }
+            let global = snapshot.createDeliveries.values.filter { !$0.isTerminalCorrelation }
+            guard scoped.count < GaryxCreateDeliveryState.nonTerminalPerScopeLimit,
+                  global.count < GaryxCreateDeliveryState.nonTerminalGlobalLimit else {
+                throw GaryxComposerPayloadRuntimeError.deliveryBackpressure
+            }
+            state = GaryxCreateDeliveryState(
+                scope: key.scope,
+                createIntentID: key.createIntentID,
+                entryID: entryID
+            )
+        case .created(let threadID):
+            guard var current = snapshot.createDeliveries[key] else {
+                throw GaryxComposerPayloadRuntimeError.staleActivation
+            }
+            current.created(threadID: threadID)
+            state = current
+        case .bound:
+            guard var current = snapshot.createDeliveries[key] else {
+                throw GaryxComposerPayloadRuntimeError.staleActivation
+            }
+            current.bound()
+            state = current
+        case .acknowledged:
+            guard var current = snapshot.createDeliveries[key] else {
+                throw GaryxComposerPayloadRuntimeError.staleActivation
+            }
+            current.acknowledged()
+            state = current
+        case .responseLost:
+            guard var current = snapshot.createDeliveries[key] else {
+                throw GaryxComposerPayloadRuntimeError.staleActivation
+            }
+            current.responseLost()
+            state = current
+        }
+        let committed = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "advance durable multi-stage conversation creation",
+                mutations: [.upsertCreateDelivery(state)]
+            )
+        )
+        let persisted = committed.createDeliveries[key] ?? state
+        let context = persisted.entryID.flatMap {
+            committed.payloadStore.entry($0, scope: key.scope)
+        }.map { GaryxComposerDurableContext(snapshot: committed, entry: $0) }
+        return .init(state: persisted, context: context)
+    }
+
+    func createDeliveryPhase(
+        for key: GaryxCreateDeliveryKey
+    ) async throws -> GaryxCreateDeliveryPhase? {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        return try await durability.load().createDeliveries[key]?.phase
+    }
+
     func discardReclaimable(
         scope: GaryxGatewayScope,
         key: GaryxComposerKey
@@ -858,7 +1430,7 @@ private actor GaryxComposerPayloadPersistenceQueue {
         knownScopes.formUnion(snapshot.deliveries.values.map(\.scope))
         knownScopes.insert(activeScope)
 
-        var recoveryScopes = GaryxGatewayScopeRegistry()
+        var recoveryScopes = snapshot.scopeRegistry
         for scope in knownScopes.sorted(by: Self.scopeSort) {
             _ = recoveryScopes.switchActive(to: scope)
         }
@@ -988,6 +1560,7 @@ private actor GaryxComposerPayloadPersistenceQueue {
 final class GaryxComposerPayloadCoordinator: ObservableObject {
     struct Snapshot: Equatable {
         var projection: GaryxComposerPayloadProjection?
+        var notices: [GaryxComposerDurableNotice] = []
         var isReadOnly = true
         var revision: UInt64 = 0
 
@@ -1009,6 +1582,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     private var routeActivation: RouteActivation?
     private var finalizationTask: Task<Void, Never>?
     private var sendCommitInFlightSessionID: GaryxComposerInputSessionID?
+    private var feedbackPresentationTask: Task<Void, Never>?
     private var pendingActivation: (scope: GaryxGatewayScope, key: GaryxComposerKey, ticket: UInt64)?
     private var deferredScopeRevocation: GaryxGatewayScope?
     private var deferredRouteActivation: (
@@ -1048,6 +1622,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
 
     var currentText: String { snapshot.projection?.text ?? "" }
     var currentAttachments: [GaryxComposerAttachment] { snapshot.projection?.attachments ?? [] }
+    var durableNotices: [GaryxComposerDurableNotice] { snapshot.notices }
     var canSend: Bool { snapshot.projection?.readiness == .ready && !snapshot.isReadOnly }
     var activeKey: GaryxComposerKey? { snapshot.projection?.key }
 
@@ -1096,6 +1671,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     func suspendScope(_ scope: GaryxGatewayScope) {
         guard scopes.activeScope == scope else { return }
         _ = scopes.suspendActive()
+        Task { try? await persistence.suspendScope(scope) }
         activationTicket &+= 1
         pendingActivation = nil
         if routeActivation == nil, finalizationTask == nil {
@@ -1120,6 +1696,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
 
     private func completeScopeRevocation(_ scope: GaryxGatewayScope) {
         _ = scopes.revoke(scope)
+        Task { try? await persistence.revokeScope(scope) }
         if durableContext?.entry.scope == scope {
             activationTicket &+= 1
             durableContext = nil
@@ -1199,6 +1776,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 adapter.makeReadOnly()
             }
             grantPendingFocusIfReady()
+            scheduleFeedbackPresentationIfNeeded()
         } else {
             adapter.makeReadOnly()
         }
@@ -1509,10 +2087,25 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         guard let initialContext = durableContext else {
             throw GaryxComposerPayloadRuntimeError.unavailable
         }
-        let preparation = try await persistence.prepareSend(
-            context: initialContext,
-            clientIntentID: clientIntentID
-        )
+        let preparation: GaryxComposerSendPreparation
+        do {
+            preparation = try await persistence.prepareSend(
+                context: initialContext,
+                clientIntentID: clientIntentID
+            )
+        } catch {
+            let restored = try? await persistence.activate(
+                scope: initialContext.entry.scope,
+                key: initialContext.entry.destination
+            )
+            if let restored {
+                durableContext = restored
+                installInputState(for: restored.entry)
+                publish(context: restored, readOnly: false)
+                grantCurrentConfigurationToLiveAdapter()
+            }
+            throw error
+        }
         // `prepareSend` allocates durable identities off-main-actor. Re-read
         // the reducer afterwards so ordered UIKit events admitted during that
         // suspension are part of the envelope linearized by `beginSend`.
@@ -1615,20 +2208,288 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         return GaryxComposerReadyPayload(
             text: envelopeText,
             attachments: preparation.attachments,
+            clientIntentID: preparation.clientIntentID,
             delivery: committed.delivery
         )
     }
 
-    func markTransportAttempted(_ delivery: GaryxComposerDeliveryHandle) async throws {
-        _ = try await persistence.markTransportAttempted(delivery)
+    func markTransportAttempted(
+        _ delivery: GaryxComposerDeliveryHandle,
+        createDeliveryKey: GaryxCreateDeliveryKey? = nil
+    ) async throws {
+        if let updated = try await persistence.markTransportAttempted(
+            delivery,
+            createDeliveryKey: createDeliveryKey
+        ),
+           durableContext?.entry.id == updated.entry.id {
+            durableContext = updated
+            publish(context: updated, readOnly: snapshot.isReadOnly)
+        }
     }
 
     func markDeliveryAmbiguous(_ delivery: GaryxComposerDeliveryHandle) async throws {
-        _ = try await persistence.markDeliveryAmbiguous(delivery)
+        if let updated = try await persistence.markDeliveryAmbiguous(delivery),
+           durableContext?.entry.id == updated.entry.id {
+            durableContext = updated
+            publish(context: updated, readOnly: snapshot.isReadOnly)
+        }
     }
 
     func acknowledgeDelivery(_ delivery: GaryxComposerDeliveryHandle) async throws {
-        _ = try await persistence.acknowledgeDelivery(delivery)
+        if let updated = try await persistence.acknowledgeDelivery(delivery),
+           durableContext?.entry.id == updated.entry.id {
+            durableContext = updated
+            publish(context: updated, readOnly: snapshot.isReadOnly)
+        }
+    }
+
+    func ingestDeliveryEvidence(
+        correlationID: String,
+        authenticatedScope: GaryxGatewayScope
+    ) async {
+        guard !correlationID.isEmpty else { return }
+        guard let updated = try? await persistence.ingestDeliveryEvidence(
+            correlationID: correlationID,
+            authenticatedScope: authenticatedScope
+        ), durableContext?.entry.id == updated.entry.id else { return }
+        durableContext = updated
+        publish(context: updated, readOnly: snapshot.isReadOnly)
+    }
+
+    func restoreAmbiguousDelivery(
+        _ deliveryID: GaryxDeliveryRecordID
+    ) async throws -> GaryxDeliveryEnvelope {
+        guard let context = durableContext,
+              let record = context.snapshot.deliveries[deliveryID] else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let handle = GaryxComposerDeliveryHandle(
+            deliveryID: deliveryID,
+            entryID: record.entryID,
+            scope: record.scope,
+            reservationID: record.reservationID,
+            lifecycle: .init(
+                token: context.entry.lifecycle.token,
+                revision: context.entry.lifecycle.revision
+            )
+        )
+        let result = try await persistence.restoreAmbiguousDelivery(handle)
+        guard durableContext?.entry.id == result.context.entry.id else {
+            return result.envelope
+        }
+        durableContext = result.context
+        publish(context: result.context, readOnly: snapshot.isReadOnly)
+        return result.envelope
+    }
+
+    func resendAmbiguousDelivery(
+        _ deliveryID: GaryxDeliveryRecordID
+    ) async throws -> (payload: GaryxComposerReadyPayload, originalClientIntentID: String) {
+        guard let context = durableContext,
+              let record = context.snapshot.deliveries[deliveryID] else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let handle = GaryxComposerDeliveryHandle(
+            deliveryID: deliveryID,
+            entryID: record.entryID,
+            scope: record.scope,
+            reservationID: record.reservationID,
+            lifecycle: .init(
+                token: context.entry.lifecycle.token,
+                revision: context.entry.lifecycle.revision
+            )
+        )
+        let newIntentID = "mobile-\(UUID().uuidString)"
+        let result = try await persistence.resendAmbiguousDelivery(
+            handle,
+            newClientIntentID: newIntentID
+        )
+        guard let duplicate = result.delivery else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        if durableContext?.entry.id == result.context.entry.id {
+            durableContext = result.context
+            publish(context: result.context, readOnly: snapshot.isReadOnly)
+        }
+        return (
+            GaryxComposerReadyPayload(
+                text: result.envelope.text,
+                attachments: result.envelope.attachments,
+                clientIntentID: newIntentID,
+                delivery: duplicate
+            ),
+            record.correlationID
+        )
+    }
+
+    func restoreAmbiguousCreate(
+        _ key: GaryxCreateDeliveryKey
+    ) async throws -> GaryxDeliveryEnvelope {
+        let result = try await persistence.restoreAmbiguousCreate(key)
+        guard durableContext?.entry.id == result.context.entry.id else {
+            return result.envelope
+        }
+        durableContext = result.context
+        publish(context: result.context, readOnly: snapshot.isReadOnly)
+        return result.envelope
+    }
+
+    func rebuildAmbiguousCreate(
+        _ key: GaryxCreateDeliveryKey
+    ) async throws -> GaryxComposerCreateRebuildPayload {
+        let newIntentID = "mobile-\(UUID().uuidString)"
+        let (result, ambiguousAfter) = try await persistence.rebuildAmbiguousCreate(
+            key,
+            newClientIntentID: newIntentID
+        )
+        guard let duplicate = result.delivery else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        if durableContext?.entry.id == result.context.entry.id {
+            durableContext = result.context
+            publish(context: result.context, readOnly: snapshot.isReadOnly)
+        }
+        return GaryxComposerCreateRebuildPayload(
+            payload: GaryxComposerReadyPayload(
+                text: result.envelope.text,
+                attachments: result.envelope.attachments,
+                clientIntentID: newIntentID,
+                delivery: duplicate
+            ),
+            ambiguousAfter: ambiguousAfter,
+            requiresThreadCreation: result.context.snapshot.createDeliveries.values.contains {
+                $0.createIntentID == newIntentID && $0.phase == .createPending
+            }
+        )
+    }
+
+    func resolveRecoveredDraft(
+        conflictSetID: GaryxPayloadConflictSetID,
+        recoveredEntryID: GaryxComposerPayloadEntryID,
+        useRecovered: Bool
+    ) async throws {
+        guard let context = durableContext else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let updated = try await persistence.resolveRecoveredDraft(
+            conflictSetID: conflictSetID,
+            recoveredEntryID: recoveredEntryID,
+            host: context,
+            useRecovered: useRecovered
+        )
+        guard durableContext?.entry.id == updated.entry.id else { return }
+        durableContext = updated
+        installInputState(for: updated.entry)
+        publish(context: updated, readOnly: snapshot.isReadOnly)
+        replaceLiveText(updated.entry.currentText)
+        grantCurrentConfigurationToLiveAdapter()
+    }
+
+    func acknowledgeFeedback(_ feedbackID: GaryxFeedbackID) async throws {
+        guard let context = durableContext else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let updated = try await persistence.acknowledgeFeedback(
+            feedbackID: feedbackID,
+            host: context
+        )
+        guard durableContext?.entry.id == updated.entry.id else { return }
+        durableContext = updated
+        publish(context: updated, readOnly: snapshot.isReadOnly)
+    }
+
+    func retryUpload(_ feedbackID: GaryxFeedbackID) async throws -> GaryxComposerStagedUpload {
+        guard let context = durableContext else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let (updated, staged) = try await persistence.retryUpload(
+            feedbackID: feedbackID,
+            host: context
+        )
+        guard durableContext?.entry.id == updated.entry.id else { return staged }
+        durableContext = updated
+        publish(context: updated, readOnly: snapshot.isReadOnly)
+        return staged
+    }
+
+    func removeFailedUpload(_ feedbackID: GaryxFeedbackID) async throws {
+        guard let context = durableContext else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let updated = try await persistence.removeFailedUpload(
+            feedbackID: feedbackID,
+            host: context
+        )
+        guard durableContext?.entry.id == updated.entry.id else { return }
+        durableContext = updated
+        publish(context: updated, readOnly: snapshot.isReadOnly)
+    }
+
+    func makeCreateDeliveryKey(createIntentID: String) throws -> GaryxCreateDeliveryKey {
+        guard let context = durableContext else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        return GaryxCreateDeliveryKey(
+            scope: context.entry.scope,
+            createIntentID: createIntentID
+        )
+    }
+
+    func beginCreateDelivery(_ key: GaryxCreateDeliveryKey) async throws {
+        guard let context = durableContext,
+              context.entry.scope == key.scope else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        let result = try await persistence.updateCreateDelivery(
+            key: key,
+            update: .begin(entryID: context.entry.id)
+        )
+        adoptCreateDeliveryResult(result)
+    }
+
+    func recordCreatedThread(
+        _ threadID: String,
+        for key: GaryxCreateDeliveryKey
+    ) async throws {
+        adoptCreateDeliveryResult(
+            try await persistence.updateCreateDelivery(
+                key: key,
+                update: .created(threadID: threadID)
+            )
+        )
+    }
+
+    func recordCreateBindingCompleted(for key: GaryxCreateDeliveryKey) async throws {
+        adoptCreateDeliveryResult(
+            try await persistence.updateCreateDelivery(key: key, update: .bound)
+        )
+    }
+
+    func createDeliveryPhase(
+        for key: GaryxCreateDeliveryKey
+    ) async -> GaryxCreateDeliveryPhase? {
+        try? await persistence.createDeliveryPhase(for: key)
+    }
+
+    func acknowledgeCreateDelivery(_ key: GaryxCreateDeliveryKey) async throws {
+        adoptCreateDeliveryResult(
+            try await persistence.updateCreateDelivery(key: key, update: .acknowledged)
+        )
+    }
+
+    func markCreateDeliveryAmbiguous(_ key: GaryxCreateDeliveryKey) async {
+        guard let result = try? await persistence.updateCreateDelivery(
+            key: key,
+            update: .responseLost
+        ) else { return }
+        adoptCreateDeliveryResult(result)
+    }
+
+    private func adoptCreateDeliveryResult(_ result: GaryxCreateDeliveryCommitResult) {
+        guard let updated = result.context,
+              durableContext?.entry.id == updated.entry.id else { return }
+        durableContext = updated
+        publish(context: updated, readOnly: snapshot.isReadOnly)
     }
 
     func deliveryPhase(
@@ -1737,9 +2598,36 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         }
         snapshot = Snapshot(
             projection: projection,
+            notices: GaryxComposerDurableNoticeProjector.project(
+                snapshot: context.snapshot,
+                hostEntryID: entry.id,
+                hasInteractionOwner: liveOccurrenceID != nil && !readOnly
+            ),
             isReadOnly: readOnly,
             revision: snapshot.revision &+ 1
         )
+        scheduleFeedbackPresentationIfNeeded()
+    }
+
+    private func scheduleFeedbackPresentationIfNeeded() {
+        guard feedbackPresentationTask == nil,
+              let context = durableContext,
+              liveOccurrenceID != nil,
+              !snapshot.isReadOnly,
+              context.snapshot.feedback.values.contains(where: {
+                  $0.entryID == context.entry.id && $0.phase == .pending
+              }) else { return }
+        let entryID = context.entry.id
+        feedbackPresentationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { feedbackPresentationTask = nil }
+            guard let updated = try? await persistence.presentFeedback(
+                hostEntryID: entryID,
+                hasInteractionOwner: true
+            ), durableContext?.entry.id == updated.entry.id else { return }
+            durableContext = updated
+            publish(context: updated, readOnly: snapshot.isReadOnly)
+        }
     }
 
     private func advanceRouteActivationIfReady() {

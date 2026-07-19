@@ -217,13 +217,116 @@ extension GaryxMobileModel {
             await send(
                 text,
                 attachments: attachments,
-                clientIntentId: clientIntentID,
+                clientIntentId: payload.clientIntentID,
                 delivery: payload.delivery
             )
             return true
         } catch {
             lastError = displayMessage(for: error)
             return false
+        }
+    }
+
+    func performComposerDurableNoticeAction(
+        _ action: GaryxComposerDurableNoticeAction
+    ) async {
+        do {
+            switch action {
+            case .restoreDelivery(let deliveryID):
+                let envelope = try await composerPayloadCoordinator
+                    .restoreAmbiguousDelivery(deliveryID)
+                removeOptimisticDelivery(clientIntentID: envelope.clientIntentID)
+            case .resendDeliveryCopy(let deliveryID):
+                let result = try await composerPayloadCoordinator
+                    .resendAmbiguousDelivery(deliveryID)
+                removeOptimisticDelivery(clientIntentID: result.originalClientIntentID)
+                try await dispatchDurablePayload(result.payload)
+            case .restoreCreate(let key):
+                _ = try await composerPayloadCoordinator.restoreAmbiguousCreate(key)
+                removeOptimisticDelivery(clientIntentID: key.createIntentID)
+            case .rebuildCreateCopy(let key):
+                let rebuilt = try await composerPayloadCoordinator.rebuildAmbiguousCreate(key)
+                removeOptimisticDelivery(clientIntentID: key.createIntentID)
+                try await dispatchDurablePayload(rebuilt.payload)
+            case .useRecoveredDraft(let conflictSetID, let recoveredEntryID):
+                try await composerPayloadCoordinator.resolveRecoveredDraft(
+                    conflictSetID: conflictSetID,
+                    recoveredEntryID: recoveredEntryID,
+                    useRecovered: true
+                )
+            case .keepCurrentDraft(let conflictSetID, let recoveredEntryID):
+                try await composerPayloadCoordinator.resolveRecoveredDraft(
+                    conflictSetID: conflictSetID,
+                    recoveredEntryID: recoveredEntryID,
+                    useRecovered: false
+                )
+            case .acknowledgeFeedback(let feedbackID):
+                try await composerPayloadCoordinator.acknowledgeFeedback(feedbackID)
+            case .retryUpload(let feedbackID):
+                let staged = try await composerPayloadCoordinator.retryUpload(feedbackID)
+                do {
+                    let uploaded = try await Self.upload(staged, using: client())
+                    try await composerPayloadCoordinator.completeUpload(staged, uploaded: uploaded)
+                } catch {
+                    await composerPayloadCoordinator.failUpload(staged)
+                    throw error
+                }
+            case .removeUpload(let feedbackID):
+                try await composerPayloadCoordinator.removeFailedUpload(feedbackID)
+            }
+            lastError = nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    private func dispatchDurablePayload(
+        _ payload: GaryxComposerReadyPayload
+    ) async throws {
+        let attachments = try payload.attachments.map { attachment in
+            guard let path = attachment.uploadedPath, !path.isEmpty else {
+                throw GaryxComposerPayloadRuntimeError.attachmentNotUploaded
+            }
+            return GaryxMobileComposerAttachment(
+                id: attachment.id.rawValue,
+                kind: attachment.kind ?? "file",
+                name: attachment.name ?? "attachment",
+                mediaType: attachment.mediaType ?? "application/octet-stream",
+                path: path,
+                previewDataUrl: attachment.previewDataURL
+            )
+        }
+        await send(
+            payload.text,
+            attachments: attachments,
+            clientIntentId: payload.clientIntentID,
+            delivery: payload.delivery
+        )
+    }
+
+    private func removeOptimisticDelivery(clientIntentID: String) {
+        let messageID = Self.userOriginMessageId(clientIntentID)
+        for threadID in Array(messagesByThread.keys) {
+            guard cachedMessages(for: threadID).contains(where: {
+                $0.id == messageID && $0.localState == .optimistic
+            }) else { continue }
+            mutateMessages(for: threadID) { messages in
+                messages.removeAll {
+                    $0.id == messageID && $0.localState == .optimistic
+                }
+            }
+            pendingDirectFollowUpsByThread[threadID]?.removeAll {
+                $0.userId == messageID
+            }
+            if pendingDirectFollowUpsByThread[threadID]?.isEmpty == true {
+                pendingDirectFollowUpsByThread[threadID] = nil
+            }
+        }
+        if selectedThread == nil {
+            messages.removeAll {
+                $0.id == messageID && $0.localState == .optimistic
+            }
         }
     }
 
@@ -283,7 +386,9 @@ extension GaryxMobileModel {
         }
 
         do {
-            let ensuredThread = try await ensureSelectedThreadForDraftCreation()
+            let ensuredThread = try await ensureSelectedThreadForDraftCreation(
+                createIntentID: clientIntentId
+            )
             try Task.checkCancellation()
             guard runtimeGeneration == gatewayRequestToken else { return }
             let thread = ensuredThread.thread
@@ -328,7 +433,8 @@ extension GaryxMobileModel {
                 clientIntentId: clientIntentId,
                 workspacePath: workspacePath,
                 assistantMessageId: assistantId,
-                delivery: delivery
+                delivery: delivery,
+                createDeliveryKey: ensuredThread.createDeliveryKey
             )
         } catch {
             guard runtimeGeneration == gatewayRequestToken else { return }
@@ -564,29 +670,36 @@ extension GaryxMobileModel {
         clientIntentId: String,
         workspacePath: String?,
         assistantMessageId: String,
-        delivery: GaryxComposerDeliveryHandle? = nil
+        delivery: GaryxComposerDeliveryHandle? = nil,
+        createDeliveryKey: GaryxCreateDeliveryKey? = nil
     ) async throws {
         let runtimeGeneration = gatewayRequestToken
-        var crossedTransportBoundary = false
-        if let delivery {
-            try await composerPayloadCoordinator.markTransportAttempted(delivery)
-            crossedTransportBoundary = true
-        }
         let result: GaryxStartChatResult
         do {
-            result = try await client().startChat(
-                GaryxStartChatRequest(
-                    threadId: threadId,
-                    message: message,
-                    attachments: attachments.map(\.promptAttachment),
-                    workspacePath: workspacePath,
-                    metadata: [
-                        "client": "garyx-mobile",
-                        "client_intent_id": clientIntentId,
-                        "client_timestamp_local": Self.localChatTimestamp(),
-                    ]
-                )
+            let request = GaryxStartChatRequest(
+                threadId: threadId,
+                message: message,
+                attachments: attachments.map(\.promptAttachment),
+                workspacePath: workspacePath,
+                metadata: [
+                    "client": "garyx-mobile",
+                    "client_intent_id": clientIntentId,
+                    "client_timestamp_local": Self.localChatTimestamp(),
+                ]
             )
+            if let delivery {
+                result = try await client().startChat(
+                    request,
+                    beforeDispatch: { [composerPayloadCoordinator] _ in
+                        try await composerPayloadCoordinator.markTransportAttempted(
+                            delivery,
+                            createDeliveryKey: createDeliveryKey
+                        )
+                    }
+                )
+            } else {
+                result = try await client().startChat(request)
+            }
             guard Self.isSuccessfulStreamInputStatus(result.status) else {
                 throw GaryxGatewayError.encodingFailed(
                     result.status.isEmpty ? "Chat start was not accepted." : result.status
@@ -595,9 +708,20 @@ extension GaryxMobileModel {
             if let delivery {
                 try await composerPayloadCoordinator.acknowledgeDelivery(delivery)
             }
+            if let createDeliveryKey {
+                try await composerPayloadCoordinator.acknowledgeCreateDelivery(createDeliveryKey)
+            }
         } catch {
-            if crossedTransportBoundary, let delivery {
+            if let delivery,
+               let phase = try? await composerPayloadCoordinator.deliveryPhase(for: delivery),
+               phase == .transportAttempted {
                 try? await composerPayloadCoordinator.markDeliveryAmbiguous(delivery)
+            }
+            if let createDeliveryKey,
+               await composerPayloadCoordinator.createDeliveryPhase(
+                   for: createDeliveryKey
+               ) == .chatStartAttempted {
+                await composerPayloadCoordinator.markCreateDeliveryAmbiguous(createDeliveryKey)
             }
             throw error
         }
@@ -696,11 +820,19 @@ extension GaryxMobileModel {
         try await ensureThreadForCurrentDraft(adoptIfDraftStillCurrent: false).thread
     }
 
-    func ensureSelectedThreadForDraftCreation() async throws -> GaryxEnsuredThread {
-        try await ensureThreadForCurrentDraft(adoptIfDraftStillCurrent: true)
+    func ensureSelectedThreadForDraftCreation(
+        createIntentID: String
+    ) async throws -> GaryxEnsuredThread {
+        try await ensureThreadForCurrentDraft(
+            adoptIfDraftStillCurrent: true,
+            createIntentID: createIntentID
+        )
     }
 
-    func ensureThreadForCurrentDraft(adoptIfDraftStillCurrent: Bool) async throws -> GaryxEnsuredThread {
+    func ensureThreadForCurrentDraft(
+        adoptIfDraftStillCurrent: Bool,
+        createIntentID: String? = nil
+    ) async throws -> GaryxEnsuredThread {
         if let selectedThread {
             return GaryxEnsuredThread(thread: selectedThread, adoptedSelection: true)
         }
@@ -722,8 +854,15 @@ extension GaryxMobileModel {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let serviceTierOverride = newThreadServiceTierOverride
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let thread = try await client().createThread(
-            GaryxCreateThreadRequest(
+        let createDeliveryKey: GaryxCreateDeliveryKey?
+        if let createIntentID {
+            createDeliveryKey = try composerPayloadCoordinator.makeCreateDeliveryKey(
+                createIntentID: createIntentID
+            )
+        } else {
+            createDeliveryKey = nil
+        }
+        let createRequest = GaryxCreateThreadRequest(
                 workspaceDir: workspace.isEmpty ? nil : workspace,
                 workspaceMode: workspaceMode,
                 agentId: agentId.isEmpty ? nil : agentId,
@@ -732,7 +871,34 @@ extension GaryxMobileModel {
                 modelServiceTier: serviceTierOverride.isEmpty ? nil : serviceTierOverride,
                 metadata: ["client": "garyx-mobile"]
             )
-        )
+        let thread: GaryxThreadSummary
+        do {
+            if createDeliveryKey != nil {
+                thread = try await client().createThread(
+                    createRequest,
+                    beforeDispatch: { [composerPayloadCoordinator] _ in
+                        if let createDeliveryKey {
+                            try await composerPayloadCoordinator.beginCreateDelivery(
+                                createDeliveryKey
+                            )
+                        }
+                    }
+                )
+            } else {
+                thread = try await client().createThread(createRequest)
+            }
+            if let createDeliveryKey {
+                try await composerPayloadCoordinator.recordCreatedThread(
+                    thread.id,
+                    for: createDeliveryKey
+                )
+            }
+        } catch {
+            if let createDeliveryKey {
+                await composerPayloadCoordinator.markCreateDeliveryAmbiguous(createDeliveryKey)
+            }
+            throw error
+        }
         try Task.checkCancellation()
         guard runtimeGeneration == gatewayRequestToken else {
             throw CancellationError()
@@ -769,7 +935,19 @@ extension GaryxMobileModel {
             clearNewThreadModelOverride()
         }
         if !pendingBotIdForThread.isEmpty {
-            _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
+            do {
+                _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
+                if let createDeliveryKey {
+                    try await composerPayloadCoordinator.recordCreateBindingCompleted(
+                        for: createDeliveryKey
+                    )
+                }
+            } catch {
+                if let createDeliveryKey {
+                    await composerPayloadCoordinator.markCreateDeliveryAmbiguous(createDeliveryKey)
+                }
+                throw error
+            }
             try Task.checkCancellation()
             guard runtimeGeneration == gatewayRequestToken else {
                 throw CancellationError()
@@ -786,7 +964,11 @@ extension GaryxMobileModel {
                 throw CancellationError()
             }
         }
-        return GaryxEnsuredThread(thread: thread, adoptedSelection: canAdoptSelection)
+        return GaryxEnsuredThread(
+            thread: thread,
+            adoptedSelection: canAdoptSelection,
+            createDeliveryKey: createDeliveryKey
+        )
     }
 
     func currentPendingBotDraft() -> (botId: String, workspace: String, agentId: String)? {

@@ -233,7 +233,7 @@ public struct GaryxCreateDuplicateRebuildPlan: Equatable, Sendable {
     public let envelope: GaryxDeliveryEnvelope
     public let originalDeliveryID: GaryxDeliveryRecordID
     public let newDeliveryID: GaryxDeliveryRecordID
-    public let newCreateKey: GaryxCreateDeliveryKey
+    public let newCreateKey: GaryxCreateDeliveryKey?
     public let ambiguousAfter: GaryxCreateDeliveryPhase?
     public let transaction: GaryxComposerDurabilityTransaction
 }
@@ -263,7 +263,7 @@ public enum GaryxCreateDuplicateRebuildPlanner {
         }
         guard matches.count == 1,
               let delivery = matches.first,
-              let nextCreate = create.rebuildWithDuplicateRisk(
+              let duplicateRiskCreate = create.rebuildWithDuplicateRisk(
                 newCreateIntentID: newCreateIntentID
               ),
               let deliveryPlan = GaryxDeliveryDuplicateResendPlanner.plan(
@@ -275,19 +275,26 @@ public enum GaryxCreateDuplicateRebuildPlanner {
               ) else {
             return nil
         }
+        // Only create-response loss lacks a known thread. Once threadID is
+        // durable, the duplicate-risk copy reuses that known destination and
+        // must not leave an orphan createPending record behind.
+        let nextCreate = create.threadID == nil ? duplicateRiskCreate : nil
+        var createMutations: [GaryxComposerDurabilityMutation] = [
+            .upsertCreateDelivery(create),
+        ]
+        if let nextCreate {
+            createMutations.append(.upsertCreateDelivery(nextCreate))
+        }
         return GaryxCreateDuplicateRebuildPlan(
             envelope: deliveryPlan.envelope,
             originalDeliveryID: delivery.id,
             newDeliveryID: newDeliveryID,
-            newCreateKey: nextCreate.key,
+            newCreateKey: nextCreate?.key,
             ambiguousAfter: create.ambiguousAfter,
             transaction: .init(
                 expectedRevision: snapshot.revision,
                 label: "supersede ambiguous create with duplicate-risk copy",
-                mutations: deliveryPlan.transaction.mutations + [
-                    .upsertCreateDelivery(create),
-                    .upsertCreateDelivery(nextCreate),
-                ]
+                mutations: deliveryPlan.transaction.mutations + createMutations
             )
         )
     }

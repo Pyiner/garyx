@@ -12,6 +12,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
     public var operationSettlements: Int
     public var replacementSettlements: Int
     public var discardSettlements: Int
+    public var createSettlements: Int
     public var deliveryDispositions: [
         GaryxDeliveryRecordID: GaryxDurableDeliveryRecoveryDisposition
     ]
@@ -22,6 +23,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
         operationSettlements: Int = 0,
         replacementSettlements: Int = 0,
         discardSettlements: Int = 0,
+        createSettlements: Int = 0,
         deliveryDispositions: [
             GaryxDeliveryRecordID: GaryxDurableDeliveryRecoveryDisposition
         ] = [:],
@@ -31,6 +33,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
         self.operationSettlements = operationSettlements
         self.replacementSettlements = replacementSettlements
         self.discardSettlements = discardSettlements
+        self.createSettlements = createSettlements
         self.deliveryDispositions = deliveryDispositions
         self.retryableOperationKeys = retryableOperationKeys
     }
@@ -82,6 +85,10 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 if let staging { _ = try await staging.settleCondemnedFiles() }
                 continue
             }
+            if try await recoverOneCreateDelivery() {
+                report.createSettlements += 1
+                continue
+            }
             if let staging {
                 let before = try await durability.load()
                 if !before.pendingFileCleanup.isEmpty {
@@ -101,6 +108,37 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             return report
         }
         throw GaryxComposerDurabilityRecoveryError.recoveryDidNotConverge
+    }
+
+    /// A process boundary destroys the only in-memory proof that a multi-stage
+    /// create request did not cross its current transport edge. Every
+    /// unacknowledged stage therefore becomes honestly ambiguous on relaunch;
+    /// no gateway uniqueness/query capability is assumed.
+    private func recoverOneCreateDelivery() async throws -> Bool {
+        let snapshot = try await durability.load()
+        guard var state = snapshot.createDeliveries.values
+            .filter({ $0.phase != .ambiguous && $0.phase != .acknowledged })
+            .sorted(by: {
+                if $0.scope.identity != $1.scope.identity {
+                    return $0.scope.identity < $1.scope.identity
+                }
+                if $0.scope.epoch != $1.scope.epoch {
+                    return $0.scope.epoch < $1.scope.epoch
+                }
+                return $0.createIntentID < $1.createIntentID
+            })
+            .first else {
+            return false
+        }
+        state.responseLost()
+        _ = try await durability.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "recover multi-stage create as ambiguous",
+                mutations: [.upsertCreateDelivery(state)]
+            )
+        )
+        return true
     }
 
     private func recoverOneSyntheticReservation() async throws -> Bool {

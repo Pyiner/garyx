@@ -17,6 +17,7 @@ extension GaryxMobileModel {
         }
         let threadId = selectedThread.id
         let requestId = UUID()
+        let authenticatedScope = gatewayRequestToken.scope
         selectedThreadHistoryRequestId = requestId
         isLoadingSelectedThreadHistory = true
         if selectedThreadHistoryRetryThreadId != threadId {
@@ -34,6 +35,10 @@ extension GaryxMobileModel {
             // otherwise load the most recent few turns. The persisted window was
             // already shown by the caller, so this just brings it current.
             let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
+            await reconcileDeliveryEvidence(
+                from: transcript.messages,
+                authenticatedScope: authenticatedScope
+            )
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             await applySelectedThreadTranscript(transcript, threadId: threadId)
         } catch {
@@ -42,6 +47,19 @@ extension GaryxMobileModel {
                 messages = []
             }
             handleSelectedThreadHistoryLoadFailure(threadId: threadId, error: error)
+        }
+    }
+
+    func reconcileDeliveryEvidence(
+        from messages: [GaryxTranscriptMessage],
+        authenticatedScope: GaryxGatewayScope
+    ) async {
+        let originIDs = Set(messages.compactMap(\.originId))
+        for originID in originIDs.sorted() {
+            await composerPayloadCoordinator.ingestDeliveryEvidence(
+                correlationID: originID,
+                authenticatedScope: authenticatedScope
+            )
         }
     }
 

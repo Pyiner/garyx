@@ -587,6 +587,13 @@ public final class GaryxGatewayClient {
         try await post("/api/threads", body: request)
     }
 
+    public func createThread(
+        _ request: GaryxCreateThreadRequest,
+        beforeDispatch: @escaping (URLRequest) async throws -> Void
+    ) async throws -> GaryxThreadSummary {
+        try await post("/api/threads", body: request, beforeDispatch: beforeDispatch)
+    }
+
     public func updateThread(
         threadId: String,
         label: String? = nil,
@@ -707,12 +714,38 @@ public final class GaryxGatewayClient {
         try await post("/api/chat/start", body: request)
     }
 
+    /// The callback runs after the endpoint, headers, and encoded body are
+    /// final, immediately before URLSession can observe the request. Durable
+    /// clients use it to publish `transportAttempted` at the exact transport
+    /// boundary without changing the gateway payload contract.
+    public func startChat(
+        _ request: GaryxStartChatRequest,
+        beforeDispatch: @escaping (URLRequest) async throws -> Void
+    ) async throws -> GaryxStartChatResult {
+        try await post(
+            "/api/chat/start",
+            body: request,
+            beforeDispatch: beforeDispatch
+        )
+    }
+
     public func interruptThread(threadId: String) async throws -> GaryxInterruptResult {
         try await post("/api/chat/interrupt", body: GaryxInterruptRequest(threadId: threadId))
     }
 
     public func streamInput(_ request: GaryxStreamInputRequest) async throws -> GaryxStreamInputResult {
         try await post("/api/chat/stream-input", body: request)
+    }
+
+    public func streamInput(
+        _ request: GaryxStreamInputRequest,
+        beforeDispatch: @escaping (URLRequest) async throws -> Void
+    ) async throws -> GaryxStreamInputResult {
+        try await post(
+            "/api/chat/stream-input",
+            body: request,
+            beforeDispatch: beforeDispatch
+        )
     }
 
     public func listAgentCatalog() async throws -> GaryxAgentsPage {
@@ -1176,12 +1209,14 @@ public final class GaryxGatewayClient {
     private func post<Response: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        beforeDispatch: ((URLRequest) async throws -> Void)? = nil
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "POST", timeoutInterval: timeoutInterval)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
+        try await beforeDispatch?(request)
         return try await send(request, semantics: .mutationSingleAttempt)
     }
 

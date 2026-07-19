@@ -318,6 +318,72 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         XCTAssertEqual(committed.replacements[replacement.id]?.phase, .committed)
     }
 
+    func testFeedbackRetryAndRemoveOwnTheirAcknowledgementsAndAttachmentAtomically() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            quotaLimitBytes: 1_024 * 1_024
+        )
+        let scope = GaryxGatewayScope(identity: "feedback-action-gateway", epoch: 1)
+        let request = GaryxGatewayRequestToken(scope: scope, activationSequence: 1)
+        await coordinator.activate(scope: scope, key: .draft("feedback-action"))
+        let sourceURL = directory.appendingPathComponent("feedback-action.txt")
+        try Data("retry then remove".utf8).write(to: sourceURL)
+        let staged = try await coordinator.stageAttachment(
+            sourceURL: sourceURL,
+            metadata: .init(
+                kind: "file",
+                name: "feedback-action.txt",
+                mediaType: "text/plain",
+                previewDataURL: nil
+            ),
+            requestToken: request
+        )
+        await coordinator.failUpload(staged)
+
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        var snapshot = try await durability.load()
+        let firstFeedback = try XCTUnwrap(snapshot.feedback.values.first(where: {
+            $0.operationID == staged.operationKey.operationID
+        }))
+
+        let retry = try await coordinator.retryUpload(firstFeedback.id)
+        snapshot = try await durability.load()
+        XCTAssertNotEqual(retry.operationKey, staged.operationKey)
+        XCTAssertEqual(snapshot.operations[staged.operationKey]?.state, .superseded)
+        XCTAssertEqual(snapshot.operations[retry.operationKey]?.state, .uploading)
+        XCTAssertEqual(snapshot.operations[retry.operationKey]?.uploadAttempted, true)
+        XCTAssertEqual(snapshot.feedback[firstFeedback.id]?.phase, .acknowledged)
+        XCTAssertEqual(
+            snapshot.stagedAssetOwners.values.first,
+            retry.operationKey,
+            "retry must transfer the single physical-file owner"
+        )
+
+        await coordinator.failUpload(retry)
+        snapshot = try await durability.load()
+        let retryFeedback = try XCTUnwrap(snapshot.feedback.values.first(where: {
+            $0.operationID == retry.operationKey.operationID && !$0.isTerminal
+        }))
+        try await coordinator.removeFailedUpload(retryFeedback.id)
+        snapshot = try await durability.load()
+
+        XCTAssertNil(snapshot.operations[retry.operationKey])
+        XCTAssertNil(snapshot.manifests[retry.operationKey])
+        XCTAssertEqual(snapshot.feedback[retryFeedback.id]?.phase, .acknowledged)
+        XCTAssertEqual(snapshot.reservedBytes, 0)
+        XCTAssertTrue(
+            snapshot.payloadStore.entry(retry.operationKey.entryID, scope: scope)?
+                .attachments.isEmpty == true
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: retry.fileURL.path))
+    }
+
     func testPresentationContextKeepsUploadOnOriginGatewayAfterScopeSwitch() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -775,6 +841,11 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         let payload = try await coordinator.takeReadyPayload(
             clientIntentID: "delivery-model-intent"
         )
+        let createKey = try coordinator.makeCreateDeliveryKey(
+            createIntentID: "delivery-model-intent"
+        )
+        try await coordinator.beginCreateDelivery(createKey)
+        try await coordinator.recordCreatedThread("delivery-thread", for: createKey)
         XCTAssertTrue(
             model.runTracker.beginLocalDispatch(
                 threadId: "delivery-thread",
@@ -791,17 +862,26 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
                 clientIntentId: "delivery-model-intent",
                 workspacePath: nil,
                 assistantMessageId: "delivery-assistant",
-                delivery: payload.delivery
+                delivery: payload.delivery,
+                createDeliveryKey: createKey
             )
         }
         await fulfillment(of: [requestStarted], timeout: 2)
         let attemptedPhase = try await coordinator.deliveryPhase(for: payload.delivery)
+        let attemptedCreatePhase = await coordinator.createDeliveryPhase(for: createKey)
         XCTAssertEqual(attemptedPhase, .transportAttempted)
+        XCTAssertEqual(
+            attemptedCreatePhase,
+            .chatStartAttempted,
+            "the message and multi-stage create attempt cross one durable boundary"
+        )
 
         responseGate.signal()
         try await dispatch.value
         let acknowledgedPhase = try await coordinator.deliveryPhase(for: payload.delivery)
+        let acknowledgedCreatePhase = await coordinator.createDeliveryPhase(for: createKey)
         XCTAssertEqual(acknowledgedPhase, .acknowledged)
+        XCTAssertEqual(acknowledgedCreatePhase, .acknowledged)
     }
 
     func testRapidOrderedUIKitInputNeverRegressesToAnOlderDurableCompletion() async throws {

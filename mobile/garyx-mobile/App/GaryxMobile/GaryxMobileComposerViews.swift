@@ -333,6 +333,10 @@ struct GaryxComposer: View {
 
     private var composerCardContent: some View {
         VStack(spacing: 0) {
+            if !payload.snapshot.notices.isEmpty {
+                GaryxComposerDurableNoticeStack(notices: payload.snapshot.notices)
+            }
+
             if !routePayloadItems.isEmpty {
                 composerPayloadItemsPreview
             }

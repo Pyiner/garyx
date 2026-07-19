@@ -165,7 +165,8 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             snapshot.createDeliveries[create.key]?.userDisposition,
             .rebuildMayCreateDuplicateThread
         )
-        XCTAssertEqual(snapshot.createDeliveries[plan.newCreateKey]?.phase, .createPending)
+        let newCreateKey = try XCTUnwrap(plan.newCreateKey)
+        XCTAssertEqual(snapshot.createDeliveries[newCreateKey]?.phase, .createPending)
         XCTAssertEqual(snapshot.deliveries[fixture.deliveryID]?.phase, .supersededByDuplicate)
         XCTAssertEqual(snapshot.deliveries[duplicateID]?.phase, .notDispatched)
         XCTAssertEqual(

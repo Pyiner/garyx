@@ -267,10 +267,67 @@ public enum GaryxReplacementFeedbackSwapPlanner {
         successor: GaryxOperationCapability,
         replacementID: GaryxReplacementID,
         feedbackID: GaryxFeedbackID,
-        scopes: GaryxGatewayScopeRegistry
+        scopes: GaryxGatewayScopeRegistry,
+        beginUpload: Bool = false
     ) -> GaryxReplacementFeedbackSwapPlan? {
-        guard var replacement = snapshot.replacements[replacementID],
-              var old = snapshot.operations[replacement.oldKey],
+        guard let replacement = snapshot.replacements[replacementID] else { return nil }
+        return makePlan(
+            snapshot: snapshot,
+            successor: successor,
+            replacement: replacement,
+            feedbackID: feedbackID,
+            scopes: scopes,
+            beginUpload: beginUpload
+        )
+    }
+
+    /// Starts an explicit retry from the retained staged asset. Journal
+    /// admission, owner transfer, feedback acknowledgement, and (optionally)
+    /// the new upload-attempt boundary publish in one transaction.
+    public static func planRetry(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        oldOperationKey: GaryxOperationCapabilityKey,
+        successor: GaryxOperationCapability,
+        replacementID: GaryxReplacementID,
+        feedbackID: GaryxFeedbackID,
+        scopes: GaryxGatewayScopeRegistry,
+        beginUpload: Bool = true
+    ) -> GaryxReplacementFeedbackSwapPlan? {
+        guard let old = snapshot.operations[oldOperationKey],
+              old.state == .failedRetryable,
+              let stagedAssetID = old.stagedAssetID else {
+            return nil
+        }
+        let replacement = GaryxReplacementRecord(
+            id: replacementID,
+            scope: oldOperationKey.scope,
+            entryID: oldOperationKey.entryID,
+            oldKey: oldOperationKey,
+            reservationID: oldOperationKey.reservationID,
+            branch: oldOperationKey.branch,
+            stagedAssetID: stagedAssetID,
+            reservedBytes: old.reservedBytes
+        )
+        return makePlan(
+            snapshot: snapshot,
+            successor: successor,
+            replacement: replacement,
+            feedbackID: feedbackID,
+            scopes: scopes,
+            beginUpload: beginUpload
+        )
+    }
+
+    private static func makePlan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        successor: GaryxOperationCapability,
+        replacement: GaryxReplacementRecord,
+        feedbackID: GaryxFeedbackID,
+        scopes: GaryxGatewayScopeRegistry,
+        beginUpload: Bool
+    ) -> GaryxReplacementFeedbackSwapPlan? {
+        var replacement = replacement
+        guard var old = snapshot.operations[replacement.oldKey],
               var feedback = snapshot.feedback[feedbackID],
               var entry = snapshot.payloadStore.entry(
                   replacement.entryID,
@@ -298,6 +355,22 @@ public enum GaryxReplacementFeedbackSwapPlanner {
         }
 
         entry.addOperation(successor.context.key)
+        if beginUpload {
+            guard successor.transition(
+                expectedKey: successor.context.key,
+                to: .uploading,
+                lifecycle: entry.lifecycle.snapshot,
+                scopes: scopes
+            ) == .applied,
+            successor.markUploadAttempted(
+                expectedKey: successor.context.key,
+                authoritativeEntry: entry,
+                lifecycle: entry.lifecycle.snapshot,
+                scopes: scopes
+            ) == .applied else {
+                return nil
+            }
+        }
         let successorManifest = GaryxOperationManifest(
             key: successor.context.key,
             stagedPath: oldManifest.stagedPath,
@@ -763,6 +836,11 @@ public enum GaryxOperationRemovalFeedbackPlanner {
         ]
         var pendingFileCleanupAssetID: GaryxStagedAssetID?
         if let assetID = snapshot.operations[operationKey]?.stagedAssetID {
+            for attachmentID in entry.attachments.values
+                .filter({ $0.stagedAssetID == assetID })
+                .map(\.id) {
+                entry.removeAttachment(attachmentID)
+            }
             if snapshot.stagedAssetOwners[assetID] == operationKey {
                 if snapshot.pendingFileCleanup[assetID] == nil {
                     mutations.append(.registerFileCleanup(assetID: assetID, owner: operationKey))

@@ -121,6 +121,7 @@ extension GaryxMobileModel {
     }
 
     func runSelectedThreadStream(threadId: String, generation: UUID) async {
+        let authenticatedScope = gatewayRequestToken.scope
         let configuration: GaryxGatewayConfiguration
         do {
             configuration = try client().configuration
@@ -139,7 +140,12 @@ extension GaryxMobileModel {
                 await self?.isSelectedThreadStreamCurrent(threadId: threadId, generation: generation) ?? false
             },
             actionHandler: { [weak self] action in
-                await self?.applySelectedThreadStreamAction(action, threadId: threadId, generation: generation) ?? .none
+                await self?.applySelectedThreadStreamAction(
+                    action,
+                    threadId: threadId,
+                    generation: generation,
+                    authenticatedScope: authenticatedScope
+                ) ?? .none
             }
         )
     }
@@ -175,13 +181,18 @@ extension GaryxMobileModel {
     private func applySelectedThreadStreamAction(
         _ action: GatewayStreamAction,
         threadId: String,
-        generation: UUID
+        generation: UUID,
+        authenticatedScope: GaryxGatewayScope
     ) async -> GatewayStreamActionResult {
         guard isSelectedThreadStreamCurrent(threadId: threadId, generation: generation) else {
             return .none
         }
         switch action {
         case .applyCommittedMessages(let messages):
+            await reconcileDeliveryEvidence(
+                from: messages,
+                authenticatedScope: authenticatedScope
+            )
             await applyStreamedCommittedMessages(messages, threadId: threadId)
             return .none
         case .resetCommittedCacheBelow(let floorSeq):
