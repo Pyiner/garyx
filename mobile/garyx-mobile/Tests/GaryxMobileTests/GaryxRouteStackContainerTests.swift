@@ -82,10 +82,54 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         )
     }
 
+    func testPromotionRebuildsMountedHostForSameOccurrenceWithThreadDestination() {
+        let draftID = "draft-mounted"
+        let threadID = "thread-promoted"
+        let draft = entry(
+            1,
+            destination: .conversationDraft(draftID: draftID)
+        )
+        let harness = Harness(path: [draft])
+        let initialBuildCount = harness.hostBuildProbe.buildCount(for: draft.id)
+        let mountedIdentity = GaryxRoutePresentationIdentity.entry(draft.id)
+        let initialMountCount = harness.probe.mounted.filter { $0 == mountedIdentity }.count
+
+        XCTAssertGreaterThan(initialBuildCount, 0)
+        XCTAssertTrue(
+            harness.container.promoteVisibleDraft(
+                instanceID: draft.id,
+                draftID: draftID,
+                threadID: threadID
+            )
+        )
+        harness.pumpUI()
+
+        XCTAssertEqual(harness.container.path.last?.id, draft.id)
+        XCTAssertEqual(
+            harness.container.path.last?.destination,
+            .conversation(threadID: threadID)
+        )
+        XCTAssertGreaterThan(
+            harness.hostBuildProbe.buildCount(for: draft.id),
+            initialBuildCount,
+            "promotion must rebuild the already-mounted host for the stable occurrence"
+        )
+        XCTAssertEqual(
+            harness.hostBuildProbe.lastDestination(for: draft.id),
+            .conversation(threadID: threadID)
+        )
+        XCTAssertEqual(
+            harness.probe.mounted.filter { $0 == mountedIdentity }.count,
+            initialMountCount,
+            "root replacement must preserve occurrence and host mount identity"
+        )
+    }
+
     func testPromotionDuringInteractivePopIsAppliedAfterCancellationWithoutInvalidatingGesture() {
         var draft = entry(2)
         draft.replacePayload(with: .conversationDraft(draftID: "draft-in-flight"))
         let harness = Harness(path: [entry(1), draft])
+        let initialBuildCount = harness.hostBuildProbe.buildCount(for: draft.id)
 
         XCTAssertTrue(harness.container.beginInteractivePop())
         harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.20)
@@ -103,6 +147,15 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 
         XCTAssertEqual(
             harness.container.path.last?.destination,
+            .conversation(threadID: "thread-after-cancel")
+        )
+        XCTAssertGreaterThan(
+            harness.hostBuildProbe.buildCount(for: draft.id),
+            initialBuildCount,
+            "queued promotion must rebuild the surviving mounted host after cancel settle"
+        )
+        XCTAssertEqual(
+            harness.hostBuildProbe.lastDestination(for: draft.id),
             .conversation(threadID: "thread-after-cancel")
         )
         XCTAssertEqual(harness.probe.terminals.last, .init(outcome: .cancelled, visibility: .visible))
@@ -582,6 +635,30 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         func record() { count += 1 }
     }
 
+    private final class HostBuildProbe {
+        private(set) var nodes: [GaryxRoutePresentationNode] = []
+
+        func record(_ node: GaryxRoutePresentationNode) {
+            nodes.append(node)
+        }
+
+        func buildCount(for instanceID: GaryxRouteInstanceID) -> Int {
+            nodes.reduce(into: 0) { count, node in
+                guard case .entry(let entry) = node, entry.id == instanceID else { return }
+                count += 1
+            }
+        }
+
+        func lastDestination(
+            for instanceID: GaryxRouteInstanceID
+        ) -> GaryxRouteDestination? {
+            nodes.reversed().compactMap { node in
+                guard case .entry(let entry) = node, entry.id == instanceID else { return nil }
+                return entry.destination
+            }.first
+        }
+    }
+
     private struct CountingRouteView: View {
         let node: GaryxRoutePresentationNode
         let counter: BodyCounter
@@ -632,6 +709,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         let width: CGFloat = 393
         let probe = Probe()
         let bodyCounter = BodyCounter()
+        let hostBuildProbe = HostBuildProbe()
         let clock = ManualTimeSource()
         let frames = ManualFrameSource()
         let container: GaryxRouteStackContainer
@@ -663,8 +741,9 @@ final class GaryxRouteStackContainerTests: XCTestCase {
                 ),
                 callbacks: callbacks,
                 preferencesProvider: { preferences },
-                hostBuilder: { [bodyCounter] node in
-                    AnyView(CountingRouteView(node: node, counter: bodyCounter))
+                hostBuilder: { [bodyCounter, hostBuildProbe] node in
+                    hostBuildProbe.record(node)
+                    return AnyView(CountingRouteView(node: node, counter: bodyCounter))
                 }
             )
             window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: width, height: 852))

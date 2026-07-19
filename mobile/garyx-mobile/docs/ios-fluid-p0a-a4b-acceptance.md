@@ -155,6 +155,21 @@ A4b keeps those writes serialized and off MainActor, and its existing frame-gap
 and rapid-input non-regression gates remain mandatory. The dormant chat case
 inside the panel compatibility host now renders no fallback conversation.
 
+## Adversarial R2 regression closure
+
+R2 independently reproduced every R1 closure but found that the mounted-host
+side of conversation promotion was not itself mutation-pinned. The container
+regression harness now records every route node passed through `hostBuilder`.
+It proves both an immediate draft-to-thread promotion and a promotion queued
+during interactive pop cancellation rebuild the already-mounted host with the
+thread destination while preserving the same occurrence and mount identity.
+
+The reviewer mutation was replayed locally: deleting only the mounted hosting
+controller's `rootView` replacement makes both tests fail even though the
+canonical path still contains the promoted thread. Restoring that one line
+makes both pass. This closes the exact blank-conversation survivor without a
+production-code, timeout, retry, or assertion-threshold change.
+
 ## A4d-1 reviewer follow-up
 
 - Generic durability validation now rejects a durable-committed send barrier
@@ -207,7 +222,7 @@ identity, attachment A-to-B-to-A restoration, gateway partition restoration,
 send locking, promotion, concrete durability validation, and the persisted
 replacement-swap fixture.
 
-The app-hosted run passed 114 of 114 tests with zero failures. Its real runtime
+The app-hosted run passed 115 of 115 tests with zero failures. Its real runtime
 fixtures cover:
 
 - a real `UITextView` CJK marked range, `unmarkText()` commit, and exact final
@@ -223,8 +238,11 @@ fixtures cover:
   continuation, autonomous finalization retry, and process-death alias release;
 - latest-text sealing across a suspended preparation await, 65 acknowledged
   sends in one scope, and a real model/URLSession gateway request proving the
-  attempted-before-request and accepted-response acknowledgement phases; and
-- production route occurrence behavior for A-to-panel-to-A and repeated A.
+  attempted-before-request and accepted-response acknowledgement phases;
+- production route occurrence behavior for A-to-panel-to-A and repeated A; and
+- stable-occurrence mounted-host rebuilding for both immediate promotion and
+  promotion queued through cancel settle, with the canonical path and rendered
+  route node asserted independently.
 
 The focused `GaryxMobileFluidRoutes` run passed 13 of 13 XCUITests with no
 skips or expected failures. Ten A4a fake-host tests re-exercised the frozen
