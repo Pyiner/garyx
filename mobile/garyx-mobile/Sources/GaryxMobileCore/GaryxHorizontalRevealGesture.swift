@@ -37,7 +37,7 @@ public enum GaryxHorizontalRevealInvalidation: String, CaseIterable, Codable, Se
     case geometryChanged
     case routeInvalidated
     case gatewayForced
-    case hostTeardown
+    case presentationBarrier
 }
 
 public struct GaryxHorizontalRevealSettle: Equatable, Sendable {
@@ -145,7 +145,7 @@ public struct GaryxHorizontalRevealState: Equatable, Sendable {
              .geometryChanged,
              .routeInvalidated,
              .gatewayForced,
-             .hostTeardown:
+             .presentationBarrier:
             synchronize(to: position, extent: extent)
         }
         return hadResidue

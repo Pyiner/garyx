@@ -381,6 +381,31 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         model.assertGlobalRevealInteractionsHaveZeroResidue()
     }
 
+    func testPresentationBarrierAcquisitionTerminatesEveryGlobalRevealInteraction() {
+        let model = routePreparationModel(session: .shared)
+        let store = model.productionRouteStore
+        let container = makeContainer(path: [], store: store)
+        store.attach(container)
+        model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
+        model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .open)
+        model.drawerRevealInteraction.beginGesture()
+        model.drawerRevealInteraction.updateGesture(logicalTranslation: 140)
+        model.taskTreeRevealInteraction.setTarget(.closed, animated: true)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation.phase, .settling(.closed))
+
+        XCTAssertTrue(store.presentationCoordinator.acquire(
+            .init(rawValue: "reveal-barrier"),
+            parent: nil,
+            resultBearing: false
+        ))
+
+        XCTAssertTrue(store.hasPresentationBarrier)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .idle)
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation.phase, .idle)
+        model.assertGlobalRevealInteractionsHaveZeroResidue()
+    }
+
     func testModalBarrierQueuesWholeChainUntilExactlyOnceReleaseThenHardSnaps() {
         let current = entry("current-modal", .panel("agents"))
         let store = GaryxProductionRouteStore()

@@ -36,6 +36,7 @@ final class GaryxProductionRouteStore: ObservableObject {
     private var intentCoordinator = GaryxNavigationIntentCoordinator()
     private var pendingPlans: [GaryxNavigationIntentID: PendingRoutePlan] = [:]
     private var activePlan: PendingRoutePlan?
+    var presentationBarrierActivated: @MainActor () -> Void = {}
     private var navigationScopes: @MainActor () -> GaryxGatewayScopeRegistry = {
         GaryxGatewayScopeRegistry(
             initialActiveScope: GaryxGatewayScope(identity: "route-runtime", epoch: 1)
@@ -311,6 +312,9 @@ final class GaryxProductionRouteStore: ObservableObject {
     func presentationBarrierStateChanged(_ active: Bool) {
         guard hasPresentationBarrier != active else { return }
         hasPresentationBarrier = active
+        if active {
+            presentationBarrierActivated()
+        }
     }
 
     func sceneDidBecomeInactive() {

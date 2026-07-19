@@ -646,6 +646,9 @@ final class GaryxMobileModel: ObservableObject {
         homeProjectionGateway.setResultHandler { [weak self] result in
             self?.applyHomeProjectionResult(result)
         }
+        productionRouteStore.presentationBarrierActivated = { [weak self] in
+            self?.forceTerminalGlobalRevealInteractions(.presentationBarrier)
+        }
         refreshHomeObservationSnapshot()
         refreshShellChromeSnapshot()
         refreshNavigationDrawerSnapshot()

@@ -258,28 +258,6 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         }
     }
 
-    func testStoreDeinitInvalidatesAnActiveSettleDriver() {
-        let clock = ManualTimeSource()
-        let frames = ManualFrameSource()
-        var store: GaryxHorizontalRevealInteractionStore? = GaryxHorizontalRevealInteractionStore(
-            projection: .fullScreenNavigation,
-            settleDriver: GaryxGestureSettleDriver(
-                timeSource: clock,
-                frameSource: frames
-            )
-        )
-        weak var releasedStore = store
-        store?.configure(extent: 330, restingPosition: .closed)
-        store?.setTarget(.open, animated: true)
-        XCTAssertTrue(frames.isRunning)
-
-        store = nil
-
-        XCTAssertNil(releasedStore)
-        XCTAssertFalse(frames.isRunning)
-        XCTAssertNil(frames.onFrame)
-    }
-
     @MainActor
     private final class Harness {
         let clock = ManualTimeSource()

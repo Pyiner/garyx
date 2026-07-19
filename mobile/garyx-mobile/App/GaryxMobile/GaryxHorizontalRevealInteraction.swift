@@ -53,18 +53,6 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         )
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            settleDriver.invalidate()
-            activeCurve = nil
-            _ = state.forceTerminal(
-                .hostTeardown,
-                to: requestedPosition,
-                extent: extent
-            )
-        }
-    }
-
     var reveal: CGFloat { presentation.reveal }
     var progress: CGFloat {
         guard extent > 0 else { return requestedPosition == .open ? 1 : 0 }
