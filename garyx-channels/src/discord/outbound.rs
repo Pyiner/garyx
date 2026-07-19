@@ -707,3 +707,11 @@ impl OutboundChannelSender for DiscordChannelSender {
         }))
     }
 }
+
+impl crate::outbound_registry::AccountRegistration for DiscordSender {
+    type Host = DiscordChannelSender;
+
+    fn register_into(self, host: &mut DiscordChannelSender) {
+        host.register(self);
+    }
+}

@@ -668,7 +668,14 @@ fn b2b_guard_stripper_strips_comments_and_keeps_strings() {
 fn dispatcher_has_no_downcast_vocabulary() {
     let production = include_str!("../dispatcher.rs");
     let stripped = strip_comments_keeping_strings(production);
-    for forbidden in ["as_any", "downcast", "builtin_ref", "builtin_mut"] {
+    for forbidden in [
+        "as_any",
+        "downcast",
+        "builtin_ref",
+        "builtin_mut",
+        "with_mut",
+        "register::<",
+    ] {
         assert!(
             !stripped.contains(forbidden),
             "dispatcher.rs must not carry downcast vocabulary; found `{forbidden}`"

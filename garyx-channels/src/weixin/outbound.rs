@@ -212,3 +212,11 @@ impl OutboundChannelSender for WeixinChannelSender {
         }))
     }
 }
+
+impl crate::outbound_registry::AccountRegistration for WeixinSender {
+    type Host = WeixinChannelSender;
+
+    fn register_into(self, host: &mut WeixinChannelSender) {
+        host.register(self);
+    }
+}

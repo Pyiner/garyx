@@ -279,11 +279,15 @@ pub const RESERVED_CHANNEL_NAMES: &[&str] =
 /// [`crate::dispatcher::OutboundChannelSender`] in the channel's own
 /// module. The downcast capability stays sealed inside
 /// [`crate::outbound_registry::BuiltinSenderRegistry`].
-pub(crate) fn builtin_sender_registry() -> crate::outbound_registry::BuiltinSenderRegistry {
+pub(crate) fn builtin_sender_registry(
+    weixin_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> crate::outbound_registry::BuiltinSenderRegistry {
     let mut registry = crate::outbound_registry::BuiltinSenderRegistry::new();
     registry.push(crate::telegram::outbound::TelegramChannelSender::default());
     registry.push(crate::discord::outbound::DiscordChannelSender::default());
     registry.push(crate::feishu::outbound::FeishuChannelSender::default());
-    registry.push(crate::weixin::outbound::WeixinChannelSender::default());
+    registry.push(crate::weixin::outbound::WeixinChannelSender::with_running(
+        weixin_running,
+    ));
     registry
 }

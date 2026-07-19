@@ -82,17 +82,44 @@ impl BuiltinSenderRegistry {
             .map(|sender| sender.as_ref() as &dyn OutboundChannelSender)
     }
 
-    /// Typed access for registration/config seeding. `&mut self` on
-    /// purpose: `&self` dispatch paths cannot express this. Panics
-    /// only on a construction bug (catalog did not register `T`).
-    pub(crate) fn with_mut<T: 'static, R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R {
-        let sender = self
+    /// Register one per-account sender into its host wrapper. This is
+    /// the ONLY typed mutation surface, and it is exfiltration-free by
+    /// construction: no caller-supplied closure ever runs against the
+    /// concrete wrapper, the account value is consumed, and nothing is
+    /// returned — so cloning the registry from a `&self` context gains
+    /// an attacker nothing (round-3 review: a Clone + closure-based
+    /// `with_mut` allowed recovering a concrete sender from dispatch
+    /// paths). Panics only on a construction bug (catalog did not
+    /// register the host wrapper).
+    pub(crate) fn register<A: AccountRegistration>(&mut self, account: A) {
+        let host = self
             .senders
             .iter_mut()
-            .find_map(|sender| sender.as_any_mut().downcast_mut::<T>())
+            .find_map(|sender| sender.as_any_mut().downcast_mut::<A::Host>())
             .expect("builtin sender registered at construction");
-        f(sender)
+        account.register_into(host);
     }
+}
+
+/// Implemented by each channel's per-account sender in the channel's
+/// own module: names the registry wrapper it registers into and
+/// performs the registration. The trait deliberately consumes the
+/// account and returns nothing, and it is SEALED: only the account
+/// types listed in [`private`] below may implement it, so dispatcher
+/// code cannot smuggle a concrete wrapper out through an ad-hoc
+/// implementation with side-channel state.
+pub(crate) trait AccountRegistration: private::Sealed {
+    type Host: OutboundChannelSender + Clone + 'static;
+    fn register_into(self, host: &mut Self::Host);
+}
+
+mod private {
+    pub trait Sealed {}
+
+    impl Sealed for crate::telegram::outbound::TelegramSender {}
+    impl Sealed for crate::discord::outbound::DiscordSender {}
+    impl Sealed for crate::feishu::outbound::FeishuSender {}
+    impl Sealed for crate::weixin::outbound::WeixinSender {}
 }
 
 impl Clone for BuiltinSenderRegistry {

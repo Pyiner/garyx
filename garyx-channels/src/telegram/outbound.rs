@@ -391,3 +391,11 @@ fn compact_text_after_telegram_markdown_image_removal(text: &str) -> String {
 
     lines.join("\n").trim().to_owned()
 }
+
+impl crate::outbound_registry::AccountRegistration for TelegramSender {
+    type Host = TelegramChannelSender;
+
+    fn register_into(self, host: &mut TelegramChannelSender) {
+        host.register(self);
+    }
+}

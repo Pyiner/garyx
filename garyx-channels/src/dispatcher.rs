@@ -679,8 +679,12 @@ pub struct ChannelDispatcherImpl {
 
 impl ChannelDispatcherImpl {
     pub fn new() -> Self {
+        Self::with_weixin_running(Arc::new(AtomicBool::new(false)))
+    }
+
+    fn with_weixin_running(weixin_running: Arc<AtomicBool>) -> Self {
         Self {
-            builtin_senders: crate::builtin_catalog::builtin_sender_registry(),
+            builtin_senders: crate::builtin_catalog::builtin_sender_registry(weixin_running),
             plugin_senders: HashMap::new(),
         }
     }
@@ -709,12 +713,7 @@ impl ChannelDispatcherImpl {
         channels: &ChannelsConfig,
         weixin_running: Arc<AtomicBool>,
     ) -> Self {
-        let mut dispatcher = Self::new();
-        dispatcher
-            .builtin_senders
-            .with_mut::<WeixinChannelSender, _>(|weixin| {
-                *weixin = WeixinChannelSender::with_running(weixin_running);
-            });
+        let mut dispatcher = Self::with_weixin_running(weixin_running.clone());
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -787,10 +786,9 @@ impl ChannelDispatcherImpl {
             if !account.enabled {
                 continue;
             }
-            let running = dispatcher
-                .builtin_senders
-                .with_mut::<WeixinChannelSender, _>(|weixin| weixin.running_handle())
-                .expect("weixin channel sender always exposes a running handle");
+            // The registry's weixin wrapper was constructed with this
+            // exact handle above; per-account senders share it.
+            let running = weixin_running.clone();
             dispatcher.register_weixin(WeixinSender {
                 account_id: account_id.clone(),
                 account: account.clone(),
@@ -812,8 +810,7 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Telegram sender for dispatch"
         );
-        self.builtin_senders
-            .with_mut::<TelegramChannelSender, _>(|channel| channel.register(sender));
+        self.builtin_senders.register(sender);
     }
 
     pub fn register_discord(&mut self, sender: DiscordSender) {
@@ -821,8 +818,7 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Discord sender for dispatch"
         );
-        self.builtin_senders
-            .with_mut::<DiscordChannelSender, _>(|channel| channel.register(sender));
+        self.builtin_senders.register(sender);
     }
 
     pub fn register_feishu(&mut self, sender: FeishuSender) {
@@ -830,8 +826,7 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Feishu sender for dispatch"
         );
-        self.builtin_senders
-            .with_mut::<FeishuChannelSender, _>(|channel| channel.register(sender));
+        self.builtin_senders.register(sender);
     }
 
     pub fn register_weixin(&mut self, sender: WeixinSender) {
@@ -839,8 +834,7 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Weixin sender for dispatch"
         );
-        self.builtin_senders
-            .with_mut::<WeixinChannelSender, _>(|channel| channel.register(sender));
+        self.builtin_senders.register(sender);
     }
 
     /// Register a plugin-backed outbound sender (§9.4). The handle's

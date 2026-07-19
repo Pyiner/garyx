@@ -676,3 +676,11 @@ fn resolve_feishu_reply_target(reply_to: Option<&str>, thread_id: Option<&str>) 
             .map(ToOwned::to_owned)
     })
 }
+
+impl crate::outbound_registry::AccountRegistration for FeishuSender {
+    type Host = FeishuChannelSender;
+
+    fn register_into(self, host: &mut FeishuChannelSender) {
+        host.register(self);
+    }
+}
