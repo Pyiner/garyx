@@ -167,6 +167,39 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         XCTAssertEqual(model.newThreadAgentTargetId(), "agent-before")
     }
 
+    func testSameThreadReopenImmediatelyDrainsSupersededActivationWaiter() async {
+        let model = routePreparationModel(session: .shared)
+        let thread = GaryxMobileModel.placeholderThreadSummary(id: "thread-1")
+        let first = entry("occurrence-1", .conversation(threadID: thread.id))
+        let second = entry("occurrence-2", .conversation(threadID: thread.id))
+        model.selectedThread = thread
+        model.productionRouteStore.applyCanonicalPath([second])
+        model.conversationContentActivationOccurrenceID = first.id
+        model.conversationContentActivationTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+        }
+
+        let registered = expectation(description: "first occurrence waiter registered")
+        let resumed = expectation(description: "superseded occurrence waiter resumed")
+        let waiterTask = Task { @MainActor in
+            await withCheckedContinuation { continuation in
+                model.conversationContentActivationWaiters[first.id, default: []]
+                    .append(continuation)
+                registered.fulfill()
+            }
+            resumed.fulfill()
+        }
+        await fulfillment(of: [registered], timeout: 1)
+
+        model.conversationRouteContentPreparationBegan(second) {}
+
+        XCTAssertNil(model.conversationContentActivationWaiters[first.id])
+        XCTAssertEqual(model.conversationContentActivationOccurrenceID, second.id)
+        model.cancelConversationContentActivation()
+        await fulfillment(of: [resumed], timeout: 1)
+        waiterTask.cancel()
+    }
+
     func testProductionLeaseBridgeJoinsNestedDismissalsAndBothResultOrders() throws {
         let store = GaryxProductionRouteStore()
         let container = makeContainer(path: [], store: store)

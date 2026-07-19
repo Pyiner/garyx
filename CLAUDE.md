@@ -147,6 +147,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   state changes. Gate actions inside an always-attached modifier instead of
   conditionally replacing modifier branches, which can tear down an in-flight
   system presentation.
+- Occurrence-scoped async route preparation must release waiters immediately
+  when an occurrence is superseded. A stale completion may clean up its own
+  waiters, but must never mutate the current occurrence bookkeeping.
 
 Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 

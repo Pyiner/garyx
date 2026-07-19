@@ -228,7 +228,11 @@ extension GaryxMobileModel {
               conversationContentActivationOccurrenceID != entry.id
         else { return }
 
+        let supersededOccurrenceID = conversationContentActivationOccurrenceID
         conversationContentActivationTask?.cancel()
+        if let supersededOccurrenceID {
+            resumeConversationContentActivationWaiters(for: supersededOccurrenceID)
+        }
         conversationContentActivationOccurrenceID = entry.id
         completedConversationContentActivationOccurrenceID = nil
         conversationContentActivationTask = Task { @MainActor [weak self] in
@@ -287,9 +291,16 @@ extension GaryxMobileModel {
     private func finishConversationContentActivation(
         _ occurrenceID: GaryxRouteInstanceID
     ) {
-        guard conversationContentActivationOccurrenceID == occurrenceID else { return }
-        conversationContentActivationTask = nil
-        completedConversationContentActivationOccurrenceID = occurrenceID
+        if conversationContentActivationOccurrenceID == occurrenceID {
+            conversationContentActivationTask = nil
+            completedConversationContentActivationOccurrenceID = occurrenceID
+        }
+        resumeConversationContentActivationWaiters(for: occurrenceID)
+    }
+
+    private func resumeConversationContentActivationWaiters(
+        for occurrenceID: GaryxRouteInstanceID
+    ) {
         let waiters = conversationContentActivationWaiters.removeValue(forKey: occurrenceID) ?? []
         for waiter in waiters {
             waiter.resume()
