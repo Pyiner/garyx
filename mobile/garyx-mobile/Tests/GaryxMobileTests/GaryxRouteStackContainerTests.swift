@@ -23,6 +23,46 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertEqual(wrapper.scrimView.alpha, 0)
     }
 
+    func testProductionRouteCanvasOccupiesTheFullWindowBeyondSafeAreas() throws {
+        let suiteName = "GaryxRouteCanvasTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = GaryxProductionRouteStore()
+        let model = GaryxMobileModel(defaults: defaults)
+        let root = UIHostingController(
+            rootView: GaryxProductionRouteCanvas(
+                store: store,
+                model: model,
+                homeContent: AnyView(Color.blue),
+                routeContent: { _ in AnyView(Color.green) },
+                onOpenDrawer: {}
+            )
+        )
+        root.additionalSafeAreaInsets = UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0)
+        let window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = root
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        root.view.frame = window.bounds
+        root.view.setNeedsLayout()
+        root.view.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+
+        let container = try XCTUnwrap(
+            descendants(of: root).compactMap { $0 as? GaryxRouteStackContainer }.first
+        )
+        let canvasFrame = container.view.convert(container.view.bounds, to: root.view)
+        XCTAssertGreaterThan(root.view.safeAreaInsets.top, 0)
+        XCTAssertGreaterThan(root.view.safeAreaInsets.bottom, 0)
+        XCTAssertEqual(canvasFrame.minY, root.view.bounds.minY, accuracy: 0.5)
+        XCTAssertEqual(canvasFrame.maxY, root.view.bounds.maxY, accuracy: 0.5)
+    }
+
     func testFakeRouteHostRequiresExplicitDebugEnvironmentOptIn() throws {
         XCTAssertNil(GaryxFluidFakeRouteDebugFixture.Configuration.load(environment: [:]))
         let configuration = try XCTUnwrap(
@@ -1117,6 +1157,13 @@ private func makeTestWindow(frame: CGRect) -> UIWindow {
     let window = UIWindow(windowScene: scene)
     window.frame = frame
     return window
+}
+
+@MainActor
+private func descendants(of controller: UIViewController) -> [UIViewController] {
+    controller.children.flatMap { child in
+        [child] + descendants(of: child)
+    }
 }
 
 private extension Array where Element: Equatable {

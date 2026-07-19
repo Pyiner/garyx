@@ -36,7 +36,7 @@ struct GaryxRootNavigationView: View, Equatable {
         #if DEBUG
         let _ = GaryxHomeScrollPerformanceProbe.shared.markRootBody()
         #endif
-        GaryxProductionRouteStack(
+        GaryxProductionRouteCanvas(
             store: routeStore,
             model: model,
             homeContent: AnyView(homeContent),

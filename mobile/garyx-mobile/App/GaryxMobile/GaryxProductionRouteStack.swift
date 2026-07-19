@@ -394,7 +394,31 @@ final class GaryxProductionRouteStore: ObservableObject {
     }
 }
 
-struct GaryxProductionRouteStack: UIViewControllerRepresentable {
+/// Full-screen SwiftUI boundary for the UIKit route renderer.
+///
+/// SwiftUI otherwise proposes only the safe-area-sized region to an embedded
+/// view-controller representable. That clips every route host, including page
+/// content and glass materials which intentionally render behind system chrome.
+struct GaryxProductionRouteCanvas: View {
+    @ObservedObject var store: GaryxProductionRouteStore
+    let model: GaryxMobileModel
+    let homeContent: AnyView
+    let routeContent: @MainActor (GaryxRoutePresentationNode) -> AnyView
+    let onOpenDrawer: @MainActor () -> Void
+
+    var body: some View {
+        GaryxProductionRouteStack(
+            store: store,
+            model: model,
+            homeContent: homeContent,
+            routeContent: routeContent,
+            onOpenDrawer: onOpenDrawer
+        )
+        .ignoresSafeArea(.container)
+    }
+}
+
+private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
     @ObservedObject var store: GaryxProductionRouteStore
     let model: GaryxMobileModel
     let homeContent: AnyView
