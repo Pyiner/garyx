@@ -8,8 +8,9 @@ have been folded in: the terminal notification is
 `inbound/stream_end` (never `inbound/end`), `deliver_inbound`'s
 `local_reply` is always `null` with local replies delivered via
 `dispatch_outbound` (§7.1), and the native `dispatch_stream_event`
-generation is documented in §7.1a. Sections describing explicitly
-deferred work (e.g. built-in dispatcher unification, §12.6
+generation is documented in §7.1a. Built-in dispatcher
+unification shipped in Phase-6 B2 (§9.1a / §9.4 describe the unified
+registry). Sections describing explicitly deferred work (e.g. §12.6
 host-proxied ingress) say so inline.
 **Owner:** garyx core
 **Protocol version:** 1 (`plugin_host::PROTOCOL_VERSION`)

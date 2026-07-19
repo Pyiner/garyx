@@ -654,3 +654,52 @@ fn b2b_guard_stripper_strips_comments_and_keeps_strings() {
         "string literals must be kept"
     );
 }
+
+/// The typed-access escape hatch (`builtin_ref`/`builtin_mut`,
+/// `as_any*`, downcast) exists for the registration/construction
+/// layer only. If it ever appears inside the routing surfaces —
+/// `fn route` or the `impl ChannelDispatcher for ChannelDispatcherImpl`
+/// block — a channel special-case has been smuggled back into the
+/// dispatch path.
+#[test]
+fn routing_surfaces_are_downcast_free() {
+    let production = include_str!("../dispatcher.rs");
+    let stripped = strip_comments_keeping_strings(production);
+
+    fn block_of<'a>(source: &'a str, needle: &str) -> &'a str {
+        let start = source.find(needle).expect("block start present");
+        let body = &source[start..];
+        let open = body.find('{').expect("block opens");
+        let mut depth = 0usize;
+        for (offset, ch) in body[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &body[..open + offset + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced block for {needle}");
+    }
+
+    let route_body = block_of(&stripped, "fn route(");
+    let dispatcher_impl = block_of(
+        &stripped,
+        "impl ChannelDispatcher for ChannelDispatcherImpl",
+    );
+    for (surface, body) in [
+        ("fn route", route_body),
+        ("ChannelDispatcher impl", dispatcher_impl),
+    ] {
+        for forbidden in ["builtin_ref", "builtin_mut", "as_any", "downcast"] {
+            assert!(
+                !body.contains(forbidden),
+                "{surface} must stay downcast-free; found `{forbidden}`"
+            );
+        }
+    }
+}
