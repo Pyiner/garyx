@@ -386,8 +386,12 @@ extension GaryxMobileModel {
         }
 
         do {
+            // A create-delivery record extends the already committed message
+            // delivery. Legacy low-level sends have no durable envelope and
+            // must retain the gateway's existing request-token semantics.
+            let createIntentID = delivery == nil ? nil : clientIntentId
             let ensuredThread = try await ensureSelectedThreadForDraftCreation(
-                createIntentID: clientIntentId
+                createIntentID: createIntentID
             )
             try Task.checkCancellation()
             guard runtimeGeneration == gatewayRequestToken else { return }
@@ -821,7 +825,7 @@ extension GaryxMobileModel {
     }
 
     func ensureSelectedThreadForDraftCreation(
-        createIntentID: String
+        createIntentID: String?
     ) async throws -> GaryxEnsuredThread {
         try await ensureThreadForCurrentDraft(
             adoptIfDraftStillCurrent: true,
