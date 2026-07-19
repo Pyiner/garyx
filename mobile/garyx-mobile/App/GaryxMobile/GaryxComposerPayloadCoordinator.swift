@@ -38,13 +38,16 @@ struct GaryxComposerCreateRebuildPayload: Sendable {
 struct GaryxComposerRuntimeTestingHooks: Sendable {
     var beforePrepareSendReturns: (@Sendable () async -> Void)?
     var finalizationFailuresBeforeSuccess: Int
+    var durabilityBoundaryHook: GaryxSQLiteComposerDurabilityStore.BoundaryHook
 
     init(
         beforePrepareSendReturns: (@Sendable () async -> Void)? = nil,
-        finalizationFailuresBeforeSuccess: Int = 0
+        finalizationFailuresBeforeSuccess: Int = 0,
+        durabilityBoundaryHook: @escaping GaryxSQLiteComposerDurabilityStore.BoundaryHook = { _ in }
     ) {
         self.beforePrepareSendReturns = beforePrepareSendReturns
         self.finalizationFailuresBeforeSuccess = finalizationFailuresBeforeSuccess
+        self.durabilityBoundaryHook = durabilityBoundaryHook
     }
 }
 
@@ -140,7 +143,10 @@ private actor GaryxComposerPayloadPersistenceQueue {
             .appendingPathComponent("Garyx", isDirectory: true)
             .appendingPathComponent("ComposerPayload", isDirectory: true)
             .appendingPathComponent("composer.sqlite", isDirectory: false)
-        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        let durability = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: databaseURL,
+            boundaryHook: testingHooks.durabilityBoundaryHook
+        )
         self.durability = durability
         staging = try GaryxComposerStagedAssetStore(
             applicationSupportDirectory: applicationSupportDirectory,
@@ -873,6 +879,29 @@ private actor GaryxComposerPayloadPersistenceQueue {
                 mutations: mutations
             )
         )
+        return context(for: handle, in: committed)
+    }
+
+    func recoverUndispatchedDelivery(
+        _ handle: GaryxComposerDeliveryHandle
+    ) async throws -> GaryxComposerDurableContext? {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let recoveredGeneration = try await durability.allocatePayloadGeneration()
+        let snapshot = try await durability.load()
+        guard let delivery = matchingDelivery(handle, in: snapshot),
+              delivery.phase == .notDispatched,
+              delivery.userDisposition == .none else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        guard let plan = GaryxUndispatchedDeliveryRecoveryPlanner.automaticPlan(
+            snapshot: snapshot,
+            deliveryID: handle.deliveryID,
+            recoveredGeneration: recoveredGeneration
+        ) else {
+            throw GaryxComposerPayloadRuntimeError.invalidTransition
+        }
+        let committed = try await durability.commit(plan.transaction)
         return context(for: handle, in: committed)
     }
 
@@ -2221,6 +2250,16 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
             delivery,
             createDeliveryKey: createDeliveryKey
         ),
+           durableContext?.entry.id == updated.entry.id {
+            durableContext = updated
+            publish(context: updated, readOnly: snapshot.isReadOnly)
+        }
+    }
+
+    func recoverUndispatchedDelivery(
+        _ delivery: GaryxComposerDeliveryHandle
+    ) async throws {
+        if let updated = try await persistence.recoverUndispatchedDelivery(delivery),
            durableContext?.entry.id == updated.entry.id {
             durableContext = updated
             publish(context: updated, readOnly: snapshot.isReadOnly)

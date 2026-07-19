@@ -940,6 +940,120 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         XCTAssertEqual(acknowledgedCreatePhase, .acknowledged)
     }
 
+    func testLiveAttemptCommitFailureRestoresBareDeliveryAndNeverStartsRequest() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requestStarted = expectation(description: "chat request must not reach URL loading")
+        requestStarted.isInverted = true
+        GaryxComposerDeliveryURLProtocolStub.requestHandler = { request in
+            requestStarted.fulfill()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url ?? URL(string: "http://gateway.example.test")!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"status":"accepted","thread_id":"delivery-thread"}"#.utf8)
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxComposerDeliveryURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxComposerDeliveryURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let failureGate = GaryxDurabilityBoundaryFailureGate()
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            testingHooks: .init(
+                durabilityBoundaryHook: { boundary in
+                    try failureGate.observe(boundary)
+                }
+            )
+        )
+        let suiteName = "GaryxComposerAttemptFailure-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.set(
+            "http://gateway.example.test",
+            forKey: GaryxMobileSettingsKeys.gatewayUrl
+        )
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            gatewayClientFactory: { gatewayConfiguration in
+                GaryxGatewayClient(
+                    configuration: gatewayConfiguration,
+                    session: session,
+                    retryPolicy: .disabled
+                )
+            },
+            composerPayloadCoordinator: coordinator
+        )
+        let scope = model.gatewayRequestToken.scope
+        try await waitUntil { coordinator.inputConfiguration() != nil }
+        await coordinator.activate(scope: scope, key: .thread("delivery-thread"))
+        try await waitUntil { coordinator.activeKey == .thread("delivery-thread") }
+        try await persistText("recover before dispatch", in: coordinator)
+        let payload = try await coordinator.takeReadyPayload(
+            clientIntentID: "attempt-failure-intent"
+        )
+
+        failureGate.arm()
+        do {
+            try await model.startChatRunViaGateway(
+                threadId: "delivery-thread",
+                message: payload.text,
+                attachments: [],
+                clientIntentId: payload.clientIntentID,
+                workspacePath: nil,
+                assistantMessageId: "attempt-failure-assistant",
+                delivery: payload.delivery
+            )
+            XCTFail("the injected durable attempt commit must fail")
+        } catch let error as GaryxSQLiteComposerDurabilityError {
+            XCTAssertEqual(error, .injectedFsyncFailure(.beforeCommit))
+        }
+        await fulfillment(of: [requestStarted], timeout: 0.5)
+
+        let recoveredPhase = try await coordinator.deliveryPhase(for: payload.delivery)
+        XCTAssertEqual(recoveredPhase, .abandoned)
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        let snapshot = try await durability.load()
+        XCTAssertEqual(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: payload.delivery.entryID,
+                hasInteractionOwner: true
+            ).map(\.kind),
+            [.payloadConflict]
+        )
+        let recoveredEntryID = GaryxComposerPayloadEntryID(
+            rawValue: "undispatched-recovery-\(payload.delivery.deliveryID.rawValue)"
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(recoveredEntryID, scope: scope)?.currentText,
+            "recover before dispatch"
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(payload.delivery.entryID, scope: scope)?
+                .deliveryReferences.count,
+            0
+        )
+        let quota = GaryxDeliveryQuota(rebuilding: Array(snapshot.deliveries.values))
+        XCTAssertEqual(quota.nonTerminalGlobal, 0)
+        XCTAssertEqual(quota.nonTerminalByScope[scope] ?? 0, 0)
+    }
+
     func testRapidOrderedUIKitInputNeverRegressesToAnOlderDurableCompletion() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1233,6 +1347,27 @@ private actor ComposerAsyncGate {
     func resume() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private final class GaryxDurabilityBoundaryFailureGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed = false
+
+    func arm() {
+        lock.lock()
+        armed = true
+        lock.unlock()
+    }
+
+    func observe(_ boundary: GaryxComposerDurabilityStorageBoundary) throws {
+        lock.lock()
+        let shouldFail = armed && boundary == .beforeCommit
+        if shouldFail { armed = false }
+        lock.unlock()
+        if shouldFail {
+            throw GaryxSQLiteComposerDurabilityError.injectedFsyncFailure(boundary)
+        }
     }
 }
 

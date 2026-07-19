@@ -716,18 +716,35 @@ extension GaryxMobileModel {
                 try await composerPayloadCoordinator.acknowledgeCreateDelivery(createDeliveryKey)
             }
         } catch {
+            let requestError = error
             if let delivery,
-               let phase = try? await composerPayloadCoordinator.deliveryPhase(for: delivery),
-               phase == .transportAttempted {
-                try? await composerPayloadCoordinator.markDeliveryAmbiguous(delivery)
+               let phase = try? await composerPayloadCoordinator.deliveryPhase(for: delivery) {
+                switch phase {
+                case .transportAttempted:
+                    try? await composerPayloadCoordinator.markDeliveryAmbiguous(delivery)
+                case .notDispatched where createDeliveryKey == nil:
+                    // The before-dispatch durability gate failed, so transport
+                    // provably did not run. Reclaim the outbox quota and
+                    // recover the envelope through PayloadConflictSet before
+                    // returning the request failure to the caller.
+                    try await composerPayloadCoordinator.recoverUndispatchedDelivery(delivery)
+                case .notDispatched:
+                    if let createDeliveryKey {
+                        await composerPayloadCoordinator.markCreateDeliveryAmbiguous(
+                            createDeliveryKey
+                        )
+                    }
+                default:
+                    break
+                }
             }
             if let createDeliveryKey,
                await composerPayloadCoordinator.createDeliveryPhase(
                    for: createDeliveryKey
-               ) == .chatStartAttempted {
+            ) == .chatStartAttempted {
                 await composerPayloadCoordinator.markCreateDeliveryAmbiguous(createDeliveryKey)
             }
-            throw error
+            throw requestError
         }
         try Task.checkCancellation()
         guard runtimeGeneration == gatewayRequestToken else {

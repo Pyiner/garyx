@@ -42,6 +42,46 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         )
         let failedSnapshot = try await failedRelaunch.load()
         XCTAssertEqual(failedSnapshot.deliveries[send.delivery.id]?.phase, .notDispatched)
+        let failedRecovery = GaryxComposerDurabilityLaunchRecovery(
+            durability: failedRelaunch,
+            scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
+        )
+        let failedReport = try await failedRecovery.recover()
+        XCTAssertEqual(failedReport.undispatchedDeliverySettlements, 1)
+        XCTAssertEqual(failedReport.deliveryDispositions[send.delivery.id], .terminal)
+        let recoveredSnapshot = try await failedRelaunch.load()
+        XCTAssertEqual(recoveredSnapshot.deliveries[send.delivery.id]?.phase, .abandoned)
+        XCTAssertEqual(
+            recoveredSnapshot.deliveries[send.delivery.id]?.userDisposition,
+            .restoredToDraft
+        )
+        XCTAssertEqual(
+            recoveredSnapshot.payloadStore.entry(entryID, scope: scope)?.currentText,
+            "next"
+        )
+        let recoveredEntryID = GaryxComposerPayloadEntryID(
+            rawValue: "undispatched-recovery-\(send.delivery.id.rawValue)"
+        )
+        XCTAssertEqual(
+            recoveredSnapshot.payloadStore.entry(recoveredEntryID, scope: scope)?.currentText,
+            "message"
+        )
+        XCTAssertEqual(recoveredSnapshot.conflicts.count, 1)
+        let recoveredQuota = GaryxDeliveryQuota(
+            rebuilding: Array(recoveredSnapshot.deliveries.values)
+        )
+        XCTAssertEqual(recoveredQuota.nonTerminalGlobal, 0)
+        XCTAssertEqual(recoveredQuota.nonTerminalByScope[scope] ?? 0, 0)
+        XCTAssertEqual(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: recoveredSnapshot,
+                hostEntryID: entryID,
+                hasInteractionOwner: true
+            ).map(\.kind),
+            [.payloadConflict]
+        )
+        let idempotentReport = try await failedRecovery.recover()
+        XCTAssertEqual(idempotentReport.undispatchedDeliverySettlements, 0)
 
         let successfulFixture = try makeFixture()
         let successfulStore = try GaryxSQLiteComposerDurabilityStore(

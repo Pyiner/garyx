@@ -1151,6 +1151,7 @@ public enum GaryxOperationFeedbackKind: String, Codable, Sendable {
     case uploadTerminal
     case quotaExceeded
     case deliveryBackpressure
+    case deliveryAttachmentRecoveryIncomplete
 }
 
 public enum GaryxOperationFeedbackPhase: String, Codable, Sendable {

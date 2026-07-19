@@ -4,6 +4,117 @@ import XCTest
 final class GaryxDurableDeliveryActionsTests: XCTestCase {
     private let scope = GaryxGatewayScope(identity: "test-gateway", epoch: 4)
 
+    func testUndispatchedRecoveryRestoresConflictAndReclaimsQuota() async throws {
+        let fixture = try await makeAmbiguousFixture(deliveryIsAmbiguous: false)
+        var snapshot = try await fixture.store.load()
+        let generation = try await fixture.store.allocatePayloadGeneration()
+        snapshot = try await fixture.store.load()
+        let recoveredID = GaryxComposerPayloadEntryID(rawValue: "undispatched-recovered")
+        let conflictID = GaryxPayloadConflictSetID(rawValue: "undispatched-conflict")
+        let plan = try XCTUnwrap(
+            GaryxUndispatchedDeliveryRecoveryPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: fixture.deliveryID,
+                recoveredEntryID: recoveredID,
+                recoveredLifecycleNonce: "undispatched-token",
+                recoveredGeneration: generation,
+                conflictSetID: conflictID,
+                incompleteAttachmentFeedbackID: .init(rawValue: "undispatched-feedback")
+            )
+        )
+        snapshot = try await fixture.store.commit(plan.transaction)
+
+        XCTAssertEqual(snapshot.deliveries[fixture.deliveryID]?.phase, .abandoned)
+        XCTAssertEqual(
+            snapshot.deliveries[fixture.deliveryID]?.userDisposition,
+            .restoredToDraft
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(fixture.entryID, scope: scope)?.currentText,
+            "live follow-up"
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(recoveredID, scope: scope)?.currentText,
+            "sealed message"
+        )
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(recoveredID, scope: scope)?.attachments.values
+                .first?.uploadedPath,
+            "prompt/file.png"
+        )
+        XCTAssertEqual(snapshot.conflicts[conflictID]?.candidates.count, 2)
+        let quota = GaryxDeliveryQuota(rebuilding: Array(snapshot.deliveries.values))
+        XCTAssertEqual(quota.nonTerminalGlobal, 0)
+        XCTAssertEqual(quota.nonTerminalByScope[scope] ?? 0, 0)
+        XCTAssertEqual(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID,
+                hasInteractionOwner: true
+            ).map(\.kind),
+            [.payloadConflict]
+        )
+    }
+
+    func testLegacyUndispatchedAttachmentRecoveryKeepsTextAndWarnsDurably() async throws {
+        let fixture = try await makeAmbiguousFixture(
+            deliveryIsAmbiguous: false,
+            includeAttachmentSnapshot: false
+        )
+        var snapshot = try await fixture.store.load()
+        let generation = try await fixture.store.allocatePayloadGeneration()
+        snapshot = try await fixture.store.load()
+        let recoveredID = GaryxComposerPayloadEntryID(rawValue: "legacy-recovered")
+        let feedbackID = GaryxFeedbackID(rawValue: "legacy-recovery-feedback")
+        let plan = try XCTUnwrap(
+            GaryxUndispatchedDeliveryRecoveryPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: fixture.deliveryID,
+                recoveredEntryID: recoveredID,
+                recoveredLifecycleNonce: "legacy-recovered-token",
+                recoveredGeneration: generation,
+                conflictSetID: .init(rawValue: "legacy-conflict"),
+                incompleteAttachmentFeedbackID: feedbackID
+            )
+        )
+        XCTAssertEqual(plan.unrestoredAttachmentIDs, [.init(rawValue: "attachment-1")])
+        snapshot = try await fixture.store.commit(plan.transaction)
+
+        XCTAssertEqual(snapshot.deliveries[fixture.deliveryID]?.phase, .abandoned)
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(recoveredID, scope: scope)?.currentText,
+            "sealed message"
+        )
+        XCTAssertTrue(
+            snapshot.payloadStore.entry(recoveredID, scope: scope)?.attachments.isEmpty == true
+        )
+        XCTAssertEqual(
+            snapshot.feedback[feedbackID]?.kind,
+            .deliveryAttachmentRecoveryIncomplete
+        )
+        XCTAssertTrue(
+            snapshot.payloadStore.entry(fixture.entryID, scope: scope)?
+                .feedbackReferences.contains(feedbackID) == true
+        )
+        let notices = GaryxComposerDurableNoticeProjector.project(
+            snapshot: snapshot,
+            hostEntryID: fixture.entryID,
+            hasInteractionOwner: true
+        )
+        XCTAssertEqual(notices.map(\.kind), [.payloadConflict, .feedback])
+        XCTAssertEqual(notices.last?.title, "Some attachments could not be restored")
+
+        let acknowledgement = try XCTUnwrap(
+            GaryxFeedbackAcknowledgementPlanner.plan(
+                snapshot: snapshot,
+                feedbackID: feedbackID,
+                hostEntryID: fixture.entryID
+            )
+        )
+        snapshot = try await fixture.store.commit(acknowledgement)
+        XCTAssertEqual(snapshot.feedback[feedbackID]?.phase, .acknowledged)
+    }
+
     func testRestoreExitPublishesConflictWithoutOverwritingFollowupThenResolvesAtomically() async throws {
         let fixture = try await makeAmbiguousFixture()
         var snapshot = try await fixture.store.load()
@@ -310,7 +421,8 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
     }
 
     private func makeAmbiguousFixture(
-        deliveryIsAmbiguous: Bool = true
+        deliveryIsAmbiguous: Bool = true,
+        includeAttachmentSnapshot: Bool = true
     ) async throws -> (
         store: GaryxFakeComposerDurabilityStore,
         entryID: GaryxComposerPayloadEntryID,
@@ -362,7 +474,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             envelope: .init(
                 text: "sealed message",
                 attachmentIDs: [attachment.id],
-                attachments: [attachment],
+                attachments: includeAttachmentSnapshot ? [attachment] : [],
                 generation: 10,
                 clientIntentID: "original-intent"
             )

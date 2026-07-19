@@ -13,6 +13,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
     public var replacementSettlements: Int
     public var discardSettlements: Int
     public var createSettlements: Int
+    public var undispatchedDeliverySettlements: Int
     public var deliveryDispositions: [
         GaryxDeliveryRecordID: GaryxDurableDeliveryRecoveryDisposition
     ]
@@ -24,6 +25,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
         replacementSettlements: Int = 0,
         discardSettlements: Int = 0,
         createSettlements: Int = 0,
+        undispatchedDeliverySettlements: Int = 0,
         deliveryDispositions: [
             GaryxDeliveryRecordID: GaryxDurableDeliveryRecoveryDisposition
         ] = [:],
@@ -34,6 +36,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
         self.replacementSettlements = replacementSettlements
         self.discardSettlements = discardSettlements
         self.createSettlements = createSettlements
+        self.undispatchedDeliverySettlements = undispatchedDeliverySettlements
         self.deliveryDispositions = deliveryDispositions
         self.retryableOperationKeys = retryableOperationKeys
     }
@@ -42,6 +45,7 @@ public struct GaryxComposerDurabilityRecoveryReport: Equatable, Sendable {
 public enum GaryxComposerDurabilityRecoveryError: Error, Equatable, Sendable {
     case syntheticReservationCannotConverge(GaryxReservationLedgerKey)
     case operationEntryMissing(GaryxOperationCapabilityKey)
+    case undispatchedDeliveryCannotConverge(GaryxDeliveryRecordID)
     case recoveryDidNotConverge
 }
 
@@ -92,6 +96,10 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 report.createSettlements += 1
                 continue
             }
+            if try await recoverOneUndispatchedDelivery() {
+                report.undispatchedDeliverySettlements += 1
+                continue
+            }
             if let staging {
                 let before = try await durability.load()
                 if !before.pendingFileCleanup.isEmpty {
@@ -102,7 +110,7 @@ public actor GaryxComposerDurabilityLaunchRecovery {
             let snapshot = try await durability.load()
             report.deliveryDispositions = Dictionary(
                 uniqueKeysWithValues: snapshot.deliveries.map { id, delivery in
-                    (id, Self.deliveryDisposition(delivery))
+                    (id, Self.deliveryDisposition(delivery, snapshot: snapshot))
                 }
             )
             report.retryableOperationKeys = Set(snapshot.operations.compactMap { key, operation in
@@ -163,6 +171,47 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 mutations: [.upsertCreateDelivery(state)]
             )
         )
+        return true
+    }
+
+    /// A bare message that never crossed the durable attempt gate is known not
+    /// to have reached transport. Restore it through the conflict domain and
+    /// terminalize its outbox record in one transaction, reclaiming quota
+    /// without risking a duplicate send. Multi-stage creates keep their own
+    /// honest create-ambiguity exit instead.
+    private func recoverOneUndispatchedDelivery() async throws -> Bool {
+        let beforeAllocation = try await durability.load()
+        guard let candidate = beforeAllocation.deliveries.values
+            .filter({
+                $0.phase == .notDispatched
+                    && $0.userDisposition == .none
+                    && !GaryxUndispatchedDeliveryRecoveryPlanner.isOwnedByCreate(
+                        $0,
+                        snapshot: beforeAllocation
+                    )
+            })
+            .sorted(by: { $0.id.rawValue < $1.id.rawValue })
+            .first else {
+            return false
+        }
+        let recoveredGeneration = try await durability.allocatePayloadGeneration()
+        let snapshot = try await durability.load()
+        guard let current = snapshot.deliveries[candidate.id] else {
+            return true
+        }
+        guard current.phase == .notDispatched,
+              current.userDisposition == .none else {
+            return true
+        }
+        guard let plan = GaryxUndispatchedDeliveryRecoveryPlanner.automaticPlan(
+            snapshot: snapshot,
+            deliveryID: candidate.id,
+            recoveredGeneration: recoveredGeneration
+        ) else {
+            throw GaryxComposerDurabilityRecoveryError
+                .undispatchedDeliveryCannotConverge(candidate.id)
+        }
+        _ = try await durability.commit(plan.transaction)
         return true
     }
 
@@ -938,11 +987,15 @@ public actor GaryxComposerDurabilityLaunchRecovery {
     }
 
     private static func deliveryDisposition(
-        _ delivery: GaryxDeliveryRecord
+        _ delivery: GaryxDeliveryRecord,
+        snapshot: GaryxComposerDurabilitySnapshot
     ) -> GaryxDurableDeliveryRecoveryDisposition {
         switch delivery.phase {
         case .notDispatched:
-            .safeToRetry
+            GaryxUndispatchedDeliveryRecoveryPlanner.isOwnedByCreate(
+                delivery,
+                snapshot: snapshot
+            ) ? .userTerminable : .safeToRetry
         case .transportAttempted, .ambiguous:
             .userTerminable
         case .acknowledged:

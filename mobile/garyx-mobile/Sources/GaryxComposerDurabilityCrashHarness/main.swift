@@ -1385,11 +1385,16 @@ private struct HarnessSummary: Codable {
     let currentText: String?
     let currentGeneration: UInt64?
     let entryCount: Int
+    let recoveredEntryTexts: [String]
+    let hostDeliveryReferenceCount: Int
     let aliasCount: Int
     let deliveryPhases: [String: String]
     let deliveryEvidence: [String: String]
     let deliveryUserDispositions: [String: String]
     let deliveryDispositions: [String: String]
+    let nonTerminalDeliveryGlobal: Int
+    let nonTerminalDeliveryForScope: Int
+    let durableNoticeKinds: [String]
     let ledgerOutcomes: [String: String]
     let targetGenerations: [String: UInt64]
     let operationStates: [String: String]
@@ -1430,6 +1435,14 @@ private struct HarnessSummary: Codable {
         entryCount = snapshot.payloadStore.entriesByScope.values.reduce(0) {
             $0 + $1.count
         }
+        let scopedEntries = snapshot.payloadStore.entriesByScope[scope].map {
+            Array($0.values)
+        } ?? []
+        recoveredEntryTexts = scopedEntries
+            .filter { $0.id != entryID }
+            .map(\.currentText)
+            .sorted()
+        hostDeliveryReferenceCount = entry?.deliveryReferences.count ?? 0
         aliasCount = snapshot.aliases.aliasCount
         deliveryPhases = Dictionary(uniqueKeysWithValues: snapshot.deliveries.map {
             ($0.key.rawValue, $0.value.phase.rawValue)
@@ -1443,6 +1456,16 @@ private struct HarnessSummary: Codable {
         deliveryDispositions = Dictionary(uniqueKeysWithValues: (report?.deliveryDispositions ?? [:]).map {
             ($0.key.rawValue, $0.value.rawValue)
         })
+        let deliveryQuota = GaryxDeliveryQuota(rebuilding: Array(snapshot.deliveries.values))
+        nonTerminalDeliveryGlobal = deliveryQuota.nonTerminalGlobal
+        nonTerminalDeliveryForScope = deliveryQuota.nonTerminalByScope[scope] ?? 0
+        durableNoticeKinds = entry.map {
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: $0.id,
+                hasInteractionOwner: true
+            ).map { $0.kind.rawValue }
+        } ?? []
         ledgerOutcomes = Dictionary(uniqueKeysWithValues: snapshot.ledgers.map {
             (String($0.key.reservationID.rawValue), $0.value.terminalOutcome?.rawValue ?? "none")
         })

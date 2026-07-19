@@ -47,6 +47,26 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         }
     }
 
+    func testUndispatchedRecoveryExitIsAtomicAtEverySQLiteBoundaryAndReclaimsQuota() throws {
+        for boundary in undispatchedRecoveryBoundaries {
+            let fixture = try makeFixture(label: "undispatched-recovery-\(boundary.name)")
+            try seedCommitted(fixture)
+            _ = try run(
+                "recover",
+                fixture: fixture,
+                extra: [
+                    "--kill", boundary.name,
+                    "--occurrence", String(boundary.occurrence),
+                ],
+                expecting: .killed
+            )
+            var summary = try recover(fixture)
+            assertUndispatchedRecovered(summary, context: boundary.name)
+            summary = try recover(fixture)
+            assertUndispatchedRecovered(summary, context: "second:\(boundary.name)")
+        }
+    }
+
     func testRealSQLiteFullRollsBackAndRelaunchesWithoutPartialState() throws {
         let fixture = try makeFixture(label: "true-sqlite-full")
         let result = try run("true-sqlite-full", fixture: fixture)
@@ -71,8 +91,8 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                 setupActions: [],
                 action: "attempt",
                 extra: ["--kill", "beforeCommit"],
-                expectedPhase: "notDispatched",
-                expectedDisposition: "safeToRetry"
+                expectedPhase: "abandoned",
+                expectedDisposition: "terminal"
             ),
             .init(
                 setupActions: [],
@@ -141,6 +161,9 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                 crashCase.expectedDisposition,
                 "case \(index)"
             )
+            if crashCase.expectedPhase == "abandoned" {
+                assertUndispatchedRecovered(summary, context: "case \(index)")
+            }
         }
     }
 
@@ -178,8 +201,13 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                         summary.deliveryUserDispositions[Self.deliveryID],
                         "resentAsDuplicate"
                     )
-                    XCTAssertEqual(summary.deliveryPhases["crash-delivery-copy"], "notDispatched")
-                    XCTAssertEqual(summary.conflictCount, 0)
+                    XCTAssertEqual(summary.deliveryPhases["crash-delivery-copy"], "abandoned")
+                    XCTAssertEqual(
+                        summary.deliveryUserDispositions["crash-delivery-copy"],
+                        "restoredToDraft"
+                    )
+                    XCTAssertEqual(summary.conflictCount, 1)
+                    XCTAssertEqual(summary.nonTerminalDeliveryGlobal, 0)
                 }
             }
 
@@ -269,7 +297,7 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
             )
             XCTAssertEqual(
                 rebuilt.deliveryPhases["crash-create-delivery-copy"],
-                "notDispatched"
+                stage.name == "create" ? "notDispatched" : "abandoned"
             )
             XCTAssertEqual(
                 rebuilt.createDeliveryDispositions["crash-correlation"],
@@ -282,6 +310,9 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
                     "ambiguous",
                     "a crash before duplicate-risk create dispatch remains user-terminable"
                 )
+            } else {
+                XCTAssertEqual(rebuilt.conflictCount, 1)
+                XCTAssertEqual(rebuilt.nonTerminalDeliveryGlobal, 0)
             }
         }
     }
@@ -764,18 +795,33 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
             XCTAssertEqual(summary.currentText, "U", context)
             XCTAssertEqual(summary.currentGeneration, 11, context)
             XCTAssertEqual(summary.ledgerOutcomes[Self.reservationID], "committed", context)
-            XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], "notDispatched", context)
-            XCTAssertEqual(
-                summary.deliveryDispositions[Self.deliveryID],
-                "safeToRetry",
-                context
-            )
+            assertUndispatchedRecovered(summary, context: context)
         } else {
             XCTAssertEqual(summary.currentText, "TU", context)
             XCTAssertGreaterThan(summary.currentGeneration ?? 0, 11, context)
             XCTAssertEqual(summary.ledgerOutcomes[Self.reservationID], "revoked", context)
             XCTAssertTrue(summary.deliveryPhases.isEmpty, context)
         }
+    }
+
+    private func assertUndispatchedRecovered(
+        _ summary: HarnessSummary,
+        context: String
+    ) {
+        XCTAssertEqual(summary.deliveryPhases[Self.deliveryID], "abandoned", context)
+        XCTAssertEqual(
+            summary.deliveryUserDispositions[Self.deliveryID],
+            "restoredToDraft",
+            context
+        )
+        XCTAssertEqual(summary.deliveryDispositions[Self.deliveryID], "terminal", context)
+        XCTAssertEqual(summary.recoveredEntryTexts, ["T"], context)
+        XCTAssertEqual(summary.entryCount, 2, context)
+        XCTAssertEqual(summary.conflictCount, 1, context)
+        XCTAssertEqual(summary.hostDeliveryReferenceCount, 0, context)
+        XCTAssertEqual(summary.nonTerminalDeliveryGlobal, 0, context)
+        XCTAssertEqual(summary.nonTerminalDeliveryForScope, 0, context)
+        XCTAssertEqual(summary.durableNoticeKinds, ["payloadConflict"], context)
     }
 
     private func assertSyntheticRevocation(_ summary: HarnessSummary, context: String) {
@@ -963,6 +1009,23 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
             ("metadata", false),
             ("beforeCommit", false),
             ("afterCommit", true),
+        ]
+    }
+
+    private var undispatchedRecoveryBoundaries: [(name: String, occurrence: Int)] {
+        [
+            ("transactionBegan", 2),
+            ("mutation:0", 2),
+            ("mutation:1", 1),
+            ("mutation:2", 1),
+            ("mutation:3", 1),
+            ("mutation:4", 1),
+        ] + GaryxComposerDurabilityRecordFamily.allCases.map {
+            ("family:\($0.rawValue)", 2)
+        } + [
+            ("metadata", 2),
+            ("beforeCommit", 2),
+            ("afterCommit", 2),
         ]
     }
 
@@ -1159,11 +1222,16 @@ private struct HarnessSummary: Decodable {
     let currentText: String?
     let currentGeneration: UInt64?
     let entryCount: Int
+    let recoveredEntryTexts: [String]
+    let hostDeliveryReferenceCount: Int
     let aliasCount: Int
     let deliveryPhases: [String: String]
     let deliveryEvidence: [String: String]
     let deliveryUserDispositions: [String: String]
     let deliveryDispositions: [String: String]
+    let nonTerminalDeliveryGlobal: Int
+    let nonTerminalDeliveryForScope: Int
+    let durableNoticeKinds: [String]
     let ledgerOutcomes: [String: String]
     let targetGenerations: [String: UInt64]
     let operationStates: [String: String]

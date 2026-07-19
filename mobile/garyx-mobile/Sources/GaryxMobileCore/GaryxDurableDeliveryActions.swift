@@ -6,6 +6,7 @@ public struct GaryxDeliveryDraftRecoveryPlan: Equatable, Sendable {
     public let envelope: GaryxDeliveryEnvelope
     public let recoveredEntryID: GaryxComposerPayloadEntryID
     public let conflictSetID: GaryxPayloadConflictSetID
+    public let unrestoredAttachmentIDs: [GaryxAttachmentID]
     public let transaction: GaryxComposerDurabilityTransaction
 }
 
@@ -20,16 +21,14 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
         recoveredLifecycleNonce: String,
         recoveredGeneration: UInt64,
         conflictSetID: GaryxPayloadConflictSetID,
-        allowingUndispatchedCreate: Bool = false
+        allowingUndispatched: Bool = false,
+        incompleteAttachmentFeedbackID: GaryxFeedbackID? = nil
     ) -> GaryxDeliveryDraftRecoveryPlan? {
         guard recoveredGeneration > snapshot.generationClaimFloor,
               recoveredGeneration <= snapshot.generationHighWatermark,
               !snapshot.claimedGenerations.contains(recoveredGeneration),
               var record = snapshot.deliveries[deliveryID],
               let originalEnvelope = record.envelope,
-              originalEnvelope.attachmentIDs.isEmpty
-                || Set(originalEnvelope.attachments.map(\.id))
-                    == Set(originalEnvelope.attachmentIDs),
               var hostEntry = snapshot.payloadStore.entry(
                 record.entryID,
                 scope: record.scope
@@ -37,6 +36,16 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
               hostEntry.lifecycle.phase == .active,
               snapshot.payloadStore.entry(recoveredEntryID, scope: record.scope) == nil,
               !recoveredLifecycleNonce.isEmpty else {
+            return nil
+        }
+        let envelopeAttachmentIDs = Set(originalEnvelope.attachmentIDs)
+        let snapshotAttachmentIDs = Set(originalEnvelope.attachments.map(\.id))
+        let unrestoredAttachmentIDs = originalEnvelope.attachmentIDs.filter {
+            !snapshotAttachmentIDs.contains($0)
+        }
+        guard snapshotAttachmentIDs.isSubset(of: envelopeAttachmentIDs),
+              unrestoredAttachmentIDs.isEmpty || incompleteAttachmentFeedbackID != nil,
+              incompleteAttachmentFeedbackID.map({ snapshot.feedback[$0] == nil }) ?? true else {
             return nil
         }
 
@@ -61,7 +70,7 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
             conflictSet: &conflict,
             candidate: recoveredCandidate,
             membershipDurabilityAvailable: true,
-            allowingUndispatchedCreate: allowingUndispatchedCreate
+            allowingUndispatched: allowingUndispatched
         ) else {
             return nil
         }
@@ -93,22 +102,103 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
             )
         }
         hostEntry.removeDeliveryReference(deliveryID)
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .claimGeneration(recoveredGeneration),
+            .upsertEntry(hostEntry),
+            .upsertEntry(recoveredEntry),
+            .upsertConflict(conflict),
+            .upsertDelivery(record),
+        ]
+        if !unrestoredAttachmentIDs.isEmpty,
+           let feedbackID = incompleteAttachmentFeedbackID {
+            let feedback = GaryxOperationFeedback(
+                id: feedbackID,
+                scope: record.scope,
+                entryID: hostEntry.id,
+                operationID: nil,
+                kind: .deliveryAttachmentRecoveryIncomplete
+            )
+            hostEntry.addFeedbackReference(feedbackID)
+            mutations[1] = .upsertEntry(hostEntry)
+            mutations.append(.upsertFeedback(feedback))
+        }
         return GaryxDeliveryDraftRecoveryPlan(
             envelope: envelope,
             recoveredEntryID: recoveredEntryID,
             conflictSetID: conflictSetID,
+            unrestoredAttachmentIDs: unrestoredAttachmentIDs,
             transaction: GaryxComposerDurabilityTransaction(
                 expectedRevision: snapshot.revision,
-                label: "restore ambiguous delivery through payload conflict",
-                mutations: [
-                    .claimGeneration(recoveredGeneration),
-                    .upsertEntry(hostEntry),
-                    .upsertEntry(recoveredEntry),
-                    .upsertConflict(conflict),
-                    .upsertDelivery(record),
-                ]
+                label: "restore delivery through payload conflict",
+                mutations: mutations
             )
         )
+    }
+}
+
+public enum GaryxUndispatchedDeliveryRecoveryPlanner {
+    /// A bare `notDispatched` record has not crossed the transport gate. It is
+    /// therefore safe to restore without duplicate risk. Deliveries owned by
+    /// an unfinished multi-stage create retain that create's explicit exit.
+    public static func plan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        deliveryID: GaryxDeliveryRecordID,
+        recoveredEntryID: GaryxComposerPayloadEntryID,
+        recoveredLifecycleNonce: String,
+        recoveredGeneration: UInt64,
+        conflictSetID: GaryxPayloadConflictSetID,
+        incompleteAttachmentFeedbackID: GaryxFeedbackID
+    ) -> GaryxDeliveryDraftRecoveryPlan? {
+        guard let delivery = snapshot.deliveries[deliveryID],
+              delivery.phase == .notDispatched,
+              delivery.userDisposition == .none,
+              !isOwnedByCreate(delivery, snapshot: snapshot) else {
+            return nil
+        }
+        return GaryxDeliveryDraftRecoveryPlanner.plan(
+            snapshot: snapshot,
+            deliveryID: deliveryID,
+            recoveredEntryID: recoveredEntryID,
+            recoveredLifecycleNonce: recoveredLifecycleNonce,
+            recoveredGeneration: recoveredGeneration,
+            conflictSetID: conflictSetID,
+            allowingUndispatched: true,
+            incompleteAttachmentFeedbackID: incompleteAttachmentFeedbackID
+        )
+    }
+
+    /// Automatic recovery identities are derived from the durable delivery so
+    /// a crash before or after the recovery transaction can retry the same
+    /// logical exit without creating duplicate conflict candidates or chips.
+    public static func automaticPlan(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        deliveryID: GaryxDeliveryRecordID,
+        recoveredGeneration: UInt64
+    ) -> GaryxDeliveryDraftRecoveryPlan? {
+        let component = deliveryID.rawValue
+        return plan(
+            snapshot: snapshot,
+            deliveryID: deliveryID,
+            recoveredEntryID: .init(rawValue: "undispatched-recovery-\(component)"),
+            recoveredLifecycleNonce: "undispatched-recovery-token-\(component)",
+            recoveredGeneration: recoveredGeneration,
+            conflictSetID: .init(rawValue: "undispatched-recovery-\(component)"),
+            incompleteAttachmentFeedbackID: .init(
+                rawValue: "undispatched-recovery-attachments-\(component)"
+            )
+        )
+    }
+
+    public static func isOwnedByCreate(
+        _ delivery: GaryxDeliveryRecord,
+        snapshot: GaryxComposerDurabilitySnapshot
+    ) -> Bool {
+        snapshot.createDeliveries.values.contains {
+            $0.scope == delivery.scope
+                && $0.entryID == delivery.entryID
+                && $0.createIntentID == delivery.correlationID
+                && !$0.isTerminalCorrelation
+        }
     }
 }
 
@@ -136,7 +226,7 @@ public enum GaryxDeliveryDuplicateResendPlanner {
               let envelope = original.resendAsDuplicate(
                 newRecordID: newDeliveryID,
                 newClientIntentID: newClientIntentID,
-                allowingUndispatchedCreate: allowingUndispatchedCreate
+                allowingUndispatched: allowingUndispatchedCreate
               ) else {
             return nil
         }
@@ -211,7 +301,7 @@ public enum GaryxCreateDraftRecoveryPlanner {
                 recoveredLifecycleNonce: recoveredLifecycleNonce,
                 recoveredGeneration: recoveredGeneration,
                 conflictSetID: conflictSetID,
-                allowingUndispatchedCreate: true
+                allowingUndispatched: true
               ) else {
             return nil
         }
@@ -666,6 +756,12 @@ public enum GaryxComposerDurableNoticeProjector {
                 "Remove it or choose a replacement.",
                 [.removeUpload(feedback.id)]
             )
+        case .deliveryAttachmentRecoveryIncomplete:
+            return (
+                "Some attachments could not be restored",
+                "The unsent message text was recovered. Reattach the missing files before sending.",
+                [.acknowledgeFeedback(feedback.id)]
+            )
         }
     }
 }
@@ -703,7 +799,9 @@ public enum GaryxFeedbackAcknowledgementPlanner {
     ) -> GaryxComposerDurabilityTransaction? {
         guard var feedback = snapshot.feedback[feedbackID],
               feedback.entryID == hostEntryID,
-              feedback.kind == .deliveryBackpressure || feedback.kind == .quotaExceeded,
+              feedback.kind == .deliveryBackpressure
+                || feedback.kind == .quotaExceeded
+                || feedback.kind == .deliveryAttachmentRecoveryIncomplete,
               var entry = snapshot.payloadStore.entry(hostEntryID, scope: feedback.scope),
               !feedback.isTerminal else {
             return nil

@@ -358,10 +358,10 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
 
     @discardableResult
     fileprivate mutating func restoreToDraftAfterConflictAdmission(
-        allowingUndispatchedCreate: Bool
+        allowingUndispatched: Bool
     ) -> GaryxDeliveryEnvelope? {
         guard (phase == .ambiguous
-                || (allowingUndispatchedCreate && phase == .notDispatched)),
+                || (allowingUndispatched && phase == .notDispatched)),
               userDisposition == .none else { return nil }
         let restored = envelope
         userDisposition = .restoredToDraft
@@ -374,10 +374,10 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
     public mutating func resendAsDuplicate(
         newRecordID: GaryxDeliveryRecordID,
         newClientIntentID: String,
-        allowingUndispatchedCreate: Bool = false
+        allowingUndispatched: Bool = false
     ) -> GaryxDeliveryEnvelope? {
         guard (phase == .ambiguous
-                || (allowingUndispatchedCreate && phase == .notDispatched)),
+                || (allowingUndispatched && phase == .notDispatched)),
               userDisposition == .none,
               let envelope,
               newRecordID != id,
@@ -531,10 +531,10 @@ public enum GaryxDeliveryDraftRecoveryReducer {
         conflictSet: inout GaryxPayloadConflictSet,
         candidate: GaryxPayloadConflictCandidate,
         membershipDurabilityAvailable: Bool,
-        allowingUndispatchedCreate: Bool = false
+        allowingUndispatched: Bool = false
     ) -> GaryxDeliveryDraftRecoveryDisposition {
         guard (record.phase == .ambiguous
-                || (allowingUndispatchedCreate && record.phase == .notDispatched)),
+                || (allowingUndispatched && record.phase == .notDispatched)),
               record.userDisposition == .none else {
             return .rejectedNotAmbiguous
         }
@@ -548,7 +548,7 @@ public enum GaryxDeliveryDraftRecoveryReducer {
             return .rejectedConflictDurability
         }
         guard let envelope = nextRecord.restoreToDraftAfterConflictAdmission(
-            allowingUndispatchedCreate: allowingUndispatchedCreate
+            allowingUndispatched: allowingUndispatched
         ) else {
             return .rejectedNotAmbiguous
         }
