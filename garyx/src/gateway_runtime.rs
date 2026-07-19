@@ -799,7 +799,7 @@ pub(crate) async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeAssembler, RuntimeAssembly, install_channel_plugin_rebuilder};
+    use super::{RuntimeAssembler, RuntimeAssembly};
     use super::{TeardownStack, register_shutdown_teardowns};
     use garyx_channels::ChannelPluginManager;
     use garyx_gateway::CronService;
@@ -840,17 +840,16 @@ mod tests {
     }
 
     /// Production-wiring guard (Phase-7 review rounds 1-2): consumes the
-    /// REAL RuntimeAssembler output. The rebuilder hook is installed
-    /// inside the mandatory assembly phase — the only way to obtain a
-    /// RuntimeAssembly — so removing the installation turns this red
-    /// with no synthetic re-wiring in the test body. Channels are
-    /// disabled for the assembly so the rebuild skips discovery
-    /// (plugin_root_paths always includes the machine-global
-    /// ~/.garyx/plugins install root; a test must never spawn the real
-    /// subprocess plugins). The rebuild's signature move — stop_all()
-    /// replacing the old manager — is observed via a pre-registered
-    /// stub plugin's state transitions, which the accounts-only reload
-    /// path never emits.
+    /// REAL RuntimeAssembler output and drives the hook the assembly
+    /// phase installed — the only way to obtain a RuntimeAssembly — so
+    /// removing the installation turns this red with no synthetic
+    /// re-wiring in the test body. Channels are disabled for the
+    /// assembly so the rebuild skips discovery (plugin_root_paths
+    /// always includes the machine-global ~/.garyx/plugins install
+    /// root; a test must never spawn the real subprocess plugins). The
+    /// rebuild's signature move — stop_all() replacing the old
+    /// manager — is observed via a pre-registered stub plugin's state
+    /// transitions, which the accounts-only reload path never emits.
     #[tokio::test]
     async fn assembled_runtime_rebuilds_the_real_manager_on_rebuild_input_change() {
         use garyx_channels::channel_trait::{Channel, ChannelError};
@@ -916,30 +915,21 @@ mod tests {
             });
         }
 
-        // A disabled account still changes the rebuild inputs without
-        // starting any built-in runtime loop.
-        config
-            .channels
-            .plugin_channel_mut("telegram")
-            .accounts
-            .insert(
-                "probe".to_owned(),
-                garyx_models::config::telegram_account_to_plugin_entry(
-                    &garyx_models::config::TelegramAccount {
-                        token: "unused".to_owned(),
-                        enabled: false,
-                        name: None,
-                        agent_id: None,
-                        workspace_dir: None,
-                        owner_target: None,
-                        groups: std::collections::HashMap::new(),
-                    },
-                ),
-            );
-        state
-            .apply_runtime_config(config)
-            .await
-            .expect("apply must succeed");
+        // Drive the assembly-installed hook directly. The other half
+        // of the chain — apply_runtime_config invoking whatever hook is
+        // installed, gated on the rebuild-inputs projection — is pinned
+        // by the garyx-gateway contract tests
+        // (test_apply_runtime_config_invokes_rebuilder_only_on_channels_change,
+        // public_url_change_triggers_plugin_rebuild). Composing the two
+        // keeps this test free of apply's unrelated provider reload,
+        // whose cold-start cost is minutes on a fresh machine.
+        let rebuilder = state
+            .integration
+            .channel_plugin_rebuilder
+            .get()
+            .expect("the assembly phase must install the production rebuilder")
+            .clone();
+        rebuilder(config).await.expect("real rebuild must succeed");
 
         let events = observed.lock().expect("sentinel lock").clone();
         assert!(
