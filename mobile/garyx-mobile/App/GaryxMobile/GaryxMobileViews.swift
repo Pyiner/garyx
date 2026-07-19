@@ -5,11 +5,6 @@ import UniformTypeIdentifiers
 
 enum GaryxMobileMotion {
     static let sidebarDrilldown = Animation.easeOut(duration: 0.16)
-    static let rowSwipe = Animation.interactiveSpring(
-        response: 0.22,
-        dampingFraction: 0.92,
-        blendDuration: 0.04
-    )
 }
 
 struct GaryxRootView: View {

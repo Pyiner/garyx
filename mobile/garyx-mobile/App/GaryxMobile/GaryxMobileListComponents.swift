@@ -260,7 +260,12 @@ struct GaryxSwipeActionRow<Content: View>: View {
     let actions: [GaryxRowAction]
     let content: Content
     @Environment(\.garyxOpenSwipeActionRowId) private var openSwipeActionRowId
-    @GestureState private var dragTranslation: CGFloat = 0
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @StateObject private var revealInteraction = GaryxHorizontalRevealInteractionStore(
+        projection: .shortTravelDismiss
+    )
     @State private var localIsOpen = false
     @State private var didPlayFullRevealFeedback = false
 
@@ -279,7 +284,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
             content
         } else {
             ZStack(alignment: .trailing) {
-                if currentOffset < 0 {
+                if revealInteraction.reveal > 0 {
                     actionButtons
                         .allowsHitTesting(isOpen)
                         .zIndex(isOpen ? 1 : 0)
@@ -287,18 +292,38 @@ struct GaryxSwipeActionRow<Content: View>: View {
 
                 content
                     .background(GaryxTheme.surface)
-                    .offset(x: currentOffset)
-                    .animation(GaryxMobileMotion.rowSwipe, value: isOpen)
+                    .offset(x: physicalContentOffset)
             }
             .contentShape(Rectangle())
             .clipped()
-            .simultaneousGesture(rowDragGesture)
+            .gesture(rowPanGesture)
+            .onAppear {
+                revealInteraction.configure(
+                    extent: maxRevealWidth,
+                    restingPosition: isOpen ? .open : .closed
+                )
+            }
+            .onChange(of: maxRevealWidth) { oldWidth, newWidth in
+                guard oldWidth != newWidth else { return }
+                revealInteraction.configure(
+                    extent: newWidth,
+                    restingPosition: isOpen ? .open : .closed
+                )
+            }
             .onChange(of: isOpen) { _, open in
+                revealInteraction.setTarget(
+                    open ? .open : .closed,
+                    animated: animatesTransitions
+                )
                 if !open {
                     didPlayFullRevealFeedback = false
                 }
             }
-            .accessibilityHint("Swipe left for thread actions.")
+            .accessibilityHint(
+                layoutDirection == .leftToRight
+                    ? "Swipe left for thread actions."
+                    : "Swipe right for thread actions."
+            )
             .modifier(GaryxRowMenuAccessibilityActions(actions: actions, onAction: perform))
         }
     }
@@ -325,39 +350,55 @@ struct GaryxSwipeActionRow<Content: View>: View {
         .frame(width: maxRevealWidth)
     }
 
-    private var rowDragGesture: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .local)
-            .updating($dragTranslation) { value, state, _ in
-                state = horizontalSwipeTranslation(value.translation)
-            }
-            .onChanged { value in
-                let translation = horizontalSwipeTranslation(value.translation)
-                closeOtherOpenRowIfNeeded(translation: translation)
-                updateFullRevealFeedback(for: clampedOffset(baseOffset + translation))
-            }
-            .onEnded { value in
-                let translation = horizontalSwipeTranslation(value.translation)
-                guard translation != 0 || isOpen else { return }
-                let predicted = horizontalSwipeTranslation(value.predictedEndTranslation)
-                let projectedOffset = clampedOffset(baseOffset + (predicted == 0 ? translation : predicted))
-                let nextIsOpen = projectedOffset < -maxRevealWidth * 0.35
-                withAnimation(GaryxMobileMotion.rowSwipe) {
-                    setOpen(nextIsOpen)
-                }
+    private var rowPanGesture: GaryxHorizontalPanGesture {
+        GaryxHorizontalPanGesture(
+            shouldBegin: { translation, velocity in
+                let intent = velocity == .zero ? translation.width : velocity.width
+                let logicalIntent = GaryxRouteEdgeGestureArbitrator.logicalTranslation(
+                    physicalTranslationX: intent,
+                    edge: .trailing,
+                    layoutDirection: routeLayoutDirection
+                )
+                return revealInteraction.acceptedDirection.accepts(logicalIntent)
+            },
+            onBegan: {
+                revealInteraction.beginGesture()
+            },
+            onChanged: { translation, _ in
+                let logicalTranslation = logicalRevealTranslation(translation.width)
+                closeOtherOpenRowIfNeeded(translation: logicalTranslation)
+                revealInteraction.updateGesture(logicalTranslation: logicalTranslation)
+                updateFullRevealFeedback(for: revealInteraction.reveal)
+            },
+            onEnded: { translation, velocity in
+                revealInteraction.updateGesture(
+                    logicalTranslation: logicalRevealTranslation(translation.width)
+                )
+                guard let target = revealInteraction.endGesture(
+                    logicalVelocity: logicalRevealTranslation(velocity.width)
+                ) else { return }
+                let nextIsOpen = target == .open
+                setOpen(nextIsOpen)
                 if nextIsOpen {
                     playFullRevealFeedbackIfNeeded()
                 } else {
                     didPlayFullRevealFeedback = false
                 }
+            },
+            onCancelled: {
+                guard let target = revealInteraction.cancelGesture() else { return }
+                setOpen(target == .open)
             }
+        )
     }
 
-    private var currentOffset: CGFloat {
-        clampedOffset(baseOffset + dragTranslation)
+    private var physicalContentOffset: CGFloat {
+        let leadingSign: CGFloat = layoutDirection == .leftToRight ? 1 : -1
+        return -leadingSign * revealInteraction.reveal
     }
 
-    private var baseOffset: CGFloat {
-        isOpen ? -maxRevealWidth : 0
+    private var routeLayoutDirection: GaryxRouteLayoutDirection {
+        layoutDirection == .leftToRight ? .leftToRight : .rightToLeft
     }
 
     private var isOpen: Bool {
@@ -373,26 +414,17 @@ struct GaryxSwipeActionRow<Content: View>: View {
             + actionTrailingPadding
     }
 
-    private func horizontalSwipeTranslation(_ translation: CGSize) -> CGFloat {
-        let horizontal = translation.width
-        let vertical = translation.height
-        let horizontalMagnitude = abs(horizontal)
-        let verticalMagnitude = abs(vertical)
-        guard horizontalMagnitude > verticalMagnitude * 1.15 else { return 0 }
-        if !isOpen {
-            return min(0, horizontal)
-        }
-        return horizontal
-    }
-
-    private func clampedOffset(_ value: CGFloat) -> CGFloat {
-        min(0, max(-maxRevealWidth, value))
+    private func logicalRevealTranslation(_ physicalTranslation: CGFloat) -> CGFloat {
+        GaryxRouteEdgeGestureArbitrator.logicalTranslation(
+            physicalTranslationX: physicalTranslation,
+            edge: .trailing,
+            layoutDirection: routeLayoutDirection
+        )
     }
 
     private func perform(_ action: GaryxRowAction) {
-        withAnimation(GaryxMobileMotion.rowSwipe) {
-            setOpen(false)
-        }
+        revealInteraction.setTarget(.closed, animated: animatesTransitions)
+        setOpen(false)
         action.action()
     }
 
@@ -410,22 +442,27 @@ struct GaryxSwipeActionRow<Content: View>: View {
 
     private func closeOtherOpenRowIfNeeded(translation: CGFloat) {
         guard let id,
-              translation < -4,
+              translation > 4,
               let openId = openSwipeActionRowId.wrappedValue,
               openId != id else {
             return
         }
-        withAnimation(GaryxMobileMotion.rowSwipe) {
-            openSwipeActionRowId.wrappedValue = nil
+        openSwipeActionRowId.wrappedValue = nil
+    }
+
+    private func updateFullRevealFeedback(for reveal: CGFloat) {
+        if reveal >= maxRevealWidth - 0.5 {
+            playFullRevealFeedbackIfNeeded()
+        } else if reveal < maxRevealWidth - 8 {
+            didPlayFullRevealFeedback = false
         }
     }
 
-    private func updateFullRevealFeedback(for offset: CGFloat) {
-        if offset <= -maxRevealWidth + 0.5 {
-            playFullRevealFeedbackIfNeeded()
-        } else if offset > -maxRevealWidth + 8 {
-            didPlayFullRevealFeedback = false
-        }
+    private var animatesTransitions: Bool {
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
     }
 
     private func playFullRevealFeedbackIfNeeded() {
