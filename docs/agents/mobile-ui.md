@@ -47,9 +47,19 @@
 - Mobile top-left controls and leading-edge gestures must share the same route
   action.
 - The home root is the pinned+recent thread list; conversations and module
-  panels push above it in a navigation stack and pop back to home. Bot,
+  panels are `RouteEntry` occurrences on the canonical route path rendered by
+  `GaryxRouteStackContainer` (the root content layer does not use
+  `NavigationStack`; modal/form sheets keep their own native stacks). Bot,
   workspace, and automation-thread drilldowns go back to whatever opened them
   (home or the originating page), never to an overview list.
+- Root-content navigation goes through `NavigationIntent` admission and the
+  four-phase `PresentationTransaction`; back gesture and top-left button share
+  the same coordinator. Edge gestures are container-owned (leading = pop /
+  drawer, trailing = task tree); never attach competing edge recognizers or
+  write the route path directly. Composer drafts/attachments are per-key,
+  scope-partitioned `ComposerPayloadStore` state (gateway switch preserves,
+  logout clears); sending goes through the durable send barrier/outbox.
+  Authoritative spec: `mobile/garyx-mobile/docs/ios-fluid-p0a-gesture-physics-design.md`.
 - Mobile entry points that open an existing thread by row tap, widget link,
   task, automation, bot conversation, or deep link should route through the
   shared `GaryxMobileModel.openThread` path; home-list behavior is the
