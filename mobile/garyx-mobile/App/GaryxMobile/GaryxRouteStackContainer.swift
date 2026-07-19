@@ -47,11 +47,14 @@ final class GaryxRouteTransitionWrapperView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        isOpaque = true
-        backgroundColor = .systemBackground
+        // Wrappers own only transition geometry. Route content owns the one
+        // full-screen page background, including both safe areas.
+        isOpaque = false
+        backgroundColor = .clear
         contentView.frame = bounds
         contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        contentView.backgroundColor = .systemBackground
+        contentView.isOpaque = false
+        contentView.backgroundColor = .clear
         contentView.clipsToBounds = true
         addSubview(contentView)
 
@@ -292,7 +295,8 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.isOpaque = false
+        view.backgroundColor = .clear
         view.clipsToBounds = true
         installEdgeRecognizers(on: view)
         applyLayoutDirectionOverride()
@@ -1288,7 +1292,8 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         let controller = UIHostingController(
             rootView: wrappedHost(node: node, contextStore: contextStore)
         )
-        controller.view.backgroundColor = .systemBackground
+        controller.view.isOpaque = false
+        controller.view.backgroundColor = .clear
         addChild(controller)
         wrapper.attachHostedView(controller.view)
         view.addSubview(wrapper)

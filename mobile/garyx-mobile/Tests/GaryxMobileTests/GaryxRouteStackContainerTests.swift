@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class GaryxRouteStackContainerTests: XCTestCase {
+    func testRendererInfrastructureDoesNotOwnPageBackground() throws {
+        let harness = Harness(path: [entry(1)])
+        let wrapper = try XCTUnwrap(harness.visibleWrapper())
+        let hostedView = try XCTUnwrap(wrapper.contentView.subviews.first)
+
+        XCTAssertEqual(harness.container.view.backgroundColor, UIColor.clear)
+        XCTAssertFalse(harness.container.view.isOpaque)
+        XCTAssertEqual(wrapper.backgroundColor, UIColor.clear)
+        XCTAssertFalse(wrapper.isOpaque)
+        XCTAssertEqual(wrapper.contentView.backgroundColor, UIColor.clear)
+        XCTAssertFalse(wrapper.contentView.isOpaque)
+        XCTAssertEqual(hostedView.backgroundColor, UIColor.clear)
+        XCTAssertFalse(hostedView.isOpaque)
+
+        XCTAssertEqual(wrapper.scrimView.backgroundColor, UIColor.black)
+        XCTAssertEqual(wrapper.scrimView.alpha, 0)
+    }
+
     func testFakeRouteHostRequiresExplicitDebugEnvironmentOptIn() throws {
         XCTAssertNil(GaryxFluidFakeRouteDebugFixture.Configuration.load(environment: [:]))
         let configuration = try XCTUnwrap(
