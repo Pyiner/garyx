@@ -46,6 +46,12 @@ struct GaryxMobileTurnRowsView: View {
                 onNearHistoryBoundary()
             }
         }
+        .onAppear {
+            GaryxRoutePushPerformanceProbe.shared?.markConversationContent(rowCount: rows.count)
+        }
+        .onChange(of: rows.count) { _, count in
+            GaryxRoutePushPerformanceProbe.shared?.markConversationContent(rowCount: count)
+        }
     }
 
     @ViewBuilder

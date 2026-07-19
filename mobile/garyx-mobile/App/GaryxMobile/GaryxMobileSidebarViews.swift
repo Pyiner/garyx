@@ -44,7 +44,7 @@ struct GaryxRootNavigationView: View, Equatable {
                 guard case .entry(let entry) = node else {
                     return AnyView(EmptyView())
                 }
-                return AnyView(GaryxRootRouteContentView(destination: entry.destination))
+                return AnyView(GaryxRootRouteContentView(entry: entry))
             },
             onOpenDrawer: onOpenDrawer
         )
@@ -83,12 +83,15 @@ struct GaryxRootNavigationView: View, Equatable {
 }
 
 private struct GaryxRootRouteContentView: View {
-    let destination: GaryxRouteDestination
+    let entry: GaryxRouteEntry
 
     var body: some View {
-        switch destination {
+        switch entry.destination {
         case .conversation, .conversationDraft:
-            GaryxConversationView(destination: destination)
+            GaryxStagedConversationRouteView(
+                destination: entry.destination,
+                occurrenceID: entry.id
+            )
         case .panel(let rawPanel):
             panelContent(for: GaryxMobilePanel(rawValue: rawPanel) ?? .chat)
         case .settingsDetail(let rawTab):

@@ -111,23 +111,21 @@ extension GaryxMobileModel {
         // full history roundtrip (TASK-1786), and starting at show can never
         // tear down a live stream (startSelectedThreadStream early-returns
         // for an owned, alive stream).
-        showSelectedThread(
+        let entry = showSelectedThread(
             thread,
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
             source: source
         )
-        // Bound the open to the newest ~threadHistoryUserQueryLimit user turns: always
-        // refresh from the gateway, which returns the forward delta when the cached
-        // cursor is within that window, or the newest window + `reset` when the cursor
-        // is older (the client overwrites its cache). With no cache it seeds the newest
-        // window. The stream then resumes near the tail (live only); older history
-        // pages in on scroll-up. The stream supersedes the reconcile poll and falls
-        // back to it (and the after_index HTTP path) on failure.
-        await loadSelectedThreadHistory()
-        // Recovery net, not the primary start: no-op while the stream is
-        // owned and alive; picks the stream up when the show-time start was
-        // skipped (e.g. connection not yet ready at show).
-        ensureSelectedThreadStreamForVisibleConversation()
+        // History, persisted-window restore, and stream activation are started
+        // by `conversationRouteContentPreparationBegan` after the Core route
+        // policy has delivered terminal placeholder frames. This keeps every
+        // response mapping and subscription callback out of the push window.
+        if productionRouteStore.isAttached {
+            await waitForConversationContentActivation(entry.id)
+        } else {
+            await loadSelectedThreadHistory()
+            ensureSelectedThreadStreamForVisibleConversation()
+        }
     }
 
     /// Completes a deep-link open after the container has committed and made
@@ -136,21 +134,20 @@ extension GaryxMobileModel {
     func activatePreparedThread(_ thread: GaryxThreadSummary) async {
         let resolvedThread = summaryWithCommittedRunState(thread)
         cacheThreadSummaries([resolvedThread])
-        applySelectedThreadRouteProjection(resolvedThread)
-        await loadSelectedThreadHistory()
-        ensureSelectedThreadStreamForVisibleConversation()
+        applySelectedThreadRouteProjection(resolvedThread, preparesContent: false)
     }
 
+    @discardableResult
     func showSelectedThread(
         _ thread: GaryxThreadSummary,
         invalidatesPendingThreadOpen: Bool = true,
         source: GaryxMobilePanelOpenSource = .replace
-    ) {
+    ) -> GaryxRouteEntry {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
         cacheThreadSummaries([thread])
-        _ = productionRouteStore.open(
+        let entry = productionRouteStore.open(
             .conversation(threadID: thread.id),
             source: source
         )
@@ -158,13 +155,18 @@ extension GaryxMobileModel {
         if !productionRouteStore.isAttached {
             applySelectedThreadRouteProjection(thread)
         }
+        return entry
     }
 
     /// Selection is a compatibility projection of the canonical route top.
     /// It is never consulted to decide which route the container renders.
-    func applySelectedThreadRouteProjection(_ thread: GaryxThreadSummary) {
+    func applySelectedThreadRouteProjection(
+        _ thread: GaryxThreadSummary,
+        preparesContent: Bool = true
+    ) {
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
+            cancelConversationContentActivation()
             advanceSelectedThreadDraftGeneration()
             // Bump the cold-open generation so any in-flight restore task for the
             // previous thread (or a prior open of this one) aborts (TASK-1751 P1).
@@ -202,12 +204,95 @@ extension GaryxMobileModel {
                 // isAwaitingInitialHistory is true) and restore asynchronously; the
                 // network refresh below (loadSelectedThreadHistory) races and wins.
                 messages = []
-                spawnColdOpenTranscriptRestore(threadId: thread.id)
+                if preparesContent {
+                    spawnColdOpenTranscriptRestore(threadId: thread.id)
+                }
             } else {
                 messages = inMemory
                 // Warm open: lock the window floor for the already-present rows.
                 lockSelectedTurnRowsWindowFloorIfNeeded()
             }
+        }
+    }
+
+    /// Starts conversation runtime work only after the route's Core-owned
+    /// staged presentation reaches `.preparingLiveContent`. At this point the
+    /// navigation settle is terminal and an opaque UIKit snapshot masks first
+    /// transcript mapping and render-pipeline materialization.
+    func conversationRouteContentPreparationBegan(
+        _ entry: GaryxRouteEntry,
+        contentDidBecomeReady: @escaping @MainActor () -> Void
+    ) {
+        guard case .conversation(let threadID) = entry.destination,
+              selectedThread?.id == threadID,
+              conversationContentActivationOccurrenceID != entry.id
+        else { return }
+
+        conversationContentActivationTask?.cancel()
+        conversationContentActivationOccurrenceID = entry.id
+        completedConversationContentActivationOccurrenceID = nil
+        conversationContentActivationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.finishConversationContentActivation(entry.id) }
+            guard !Task.isCancelled,
+                  self.selectedThread?.id == threadID,
+                  self.productionRouteStore.path.last?.id == entry.id
+            else { return }
+
+            let hasRenderableCachedSnapshot = !self.cachedMessages(for: threadID).isEmpty
+            if !hasRenderableCachedSnapshot {
+                self.spawnColdOpenTranscriptRestore(threadId: threadID)
+            }
+            self.ensureSelectedThreadStreamForVisibleConversation()
+
+            // Bound the open to the newest committed window. Mapping remains
+            // off-main; applying its result is now safely behind the snapshot.
+            // Even with a renderable cache, keep the cover until this initial
+            // refresh is applied. Revealing the cache first lets the refresh's
+            // deferred AttributeGraph preference pass hitch a later visible
+            // frame.
+            await self.loadSelectedThreadHistory()
+            guard !Task.isCancelled,
+                  self.selectedThread?.id == threadID,
+                  self.productionRouteStore.path.last?.id == entry.id
+            else { return }
+            self.ensureSelectedThreadStreamForVisibleConversation()
+            contentDidBecomeReady()
+        }
+    }
+
+    func cancelConversationContentActivation() {
+        conversationContentActivationTask?.cancel()
+        conversationContentActivationTask = nil
+        conversationContentActivationOccurrenceID = nil
+        completedConversationContentActivationOccurrenceID = nil
+        let pendingWaiters = conversationContentActivationWaiters.values.flatMap { $0 }
+        conversationContentActivationWaiters.removeAll(keepingCapacity: false)
+        for waiter in pendingWaiters {
+            waiter.resume()
+        }
+    }
+
+    private func waitForConversationContentActivation(
+        _ occurrenceID: GaryxRouteInstanceID
+    ) async {
+        guard completedConversationContentActivationOccurrenceID != occurrenceID else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            conversationContentActivationWaiters[occurrenceID, default: []].append(continuation)
+        }
+    }
+
+    private func finishConversationContentActivation(
+        _ occurrenceID: GaryxRouteInstanceID
+    ) {
+        guard conversationContentActivationOccurrenceID == occurrenceID else { return }
+        conversationContentActivationTask = nil
+        completedConversationContentActivationOccurrenceID = occurrenceID
+        let waiters = conversationContentActivationWaiters.removeValue(forKey: occurrenceID) ?? []
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -291,6 +376,7 @@ extension GaryxMobileModel {
         freezesAgentTarget: Bool = false
     ) {
         invalidatePendingThreadOpen()
+        cancelConversationContentActivation()
         advanceSelectedThreadDraftGeneration()
         selectedThreadColdOpenGeneration &+= 1
         resetSelectedTurnRowsWindow()

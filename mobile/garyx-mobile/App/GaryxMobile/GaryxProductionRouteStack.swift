@@ -448,12 +448,36 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> GaryxRouteStackContainer {
+        let pushProbe = GaryxRoutePushPerformanceProbe.shared
+        let routeLifecycleRegistry = GaryxRouteLifecycleRegistry()
         #if DEBUG
         let diagnostics = GaryxProductionRouteDiagnostics.makeIfEnabled()
         #endif
         var callbacks = GaryxRouteStackContainerCallbacks()
+        callbacks.hostMounted = { identity in
+            routeLifecycleRegistry.hostMounted(identity)
+        }
+        callbacks.hostUnmounted = { identity in
+            routeLifecycleRegistry.hostUnmounted(identity)
+        }
+        callbacks.hostLifecycleChanged = { identity, lifecycle in
+            routeLifecycleRegistry.update(identity, lifecycle: lifecycle)
+        }
+        callbacks.hasPresentedFrameDemand = {
+            routeLifecycleRegistry.hasPresentedFrameDemand
+        }
+        callbacks.presentedFrame = {
+            routeLifecycleRegistry.presentedFrame()
+        }
+        callbacks.transitionWillBegin = { kind in
+            pushProbe?.transitionWillBegin(kind: kind)
+        }
+        callbacks.transitionHostsMounted = {
+            pushProbe?.transitionHostsMounted()
+        }
         callbacks.phaseChanged = { [weak store] phase in
             store?.routePhaseChanged(phase)
+            pushProbe?.transitionPhaseChanged(phase)
             #if DEBUG
             diagnostics?.transitionPhaseChanged(phase)
             #endif
@@ -467,8 +491,10 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             )
         }
         callbacks.canonicalPathChanged = { [weak store, weak model] path in
+            pushProbe?.canonicalProjectionWillApply()
             store?.applyCanonicalPath(path)
             model?.applyCanonicalRouteProjection(path)
+            pushProbe?.canonicalProjectionDidApply()
             #if DEBUG
             diagnostics?.canonicalPathChanged(path)
             #endif
@@ -481,6 +507,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         }
         callbacks.visibleRouteActivated = { [weak store] node in
             store?.visibleRouteActivated(node)
+            pushProbe?.visibleRouteActivated()
         }
         callbacks.rendererBecameIdle = { [weak store] in
             store?.rendererBecameIdle()
@@ -510,14 +537,33 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                         store: store,
                         node: node,
                         content: content,
+                        routeLifecycleRegistry: routeLifecycleRegistry,
                         onOpenDrawer: onOpenDrawer
                     )
                 )
             }
         )
+        routeLifecycleRegistry.presentedFrameDemandDidBecomeActive = { [weak container] in
+            container?.ensurePresentedFrames()
+        }
+        routeLifecycleRegistry.contentPreparationDidBegin = {
+            [weak model, weak store, weak routeLifecycleRegistry] identity in
+            guard let routeLifecycleRegistry else { return }
+            guard case .entry(let occurrenceID) = identity,
+                  let entry = store?.path.first(where: { $0.id == occurrenceID })
+            else { return }
+            guard case .conversation = entry.destination, let model else {
+                routeLifecycleRegistry.contentDidBecomeReady(identity)
+                return
+            }
+            model.conversationRouteContentPreparationBegan(entry) {
+                routeLifecycleRegistry.contentDidBecomeReady(identity)
+            }
+        }
         container.layoutDirectionOverride = layoutDirection == .rightToLeft
             ? .rightToLeft
             : .leftToRight
+        pushProbe?.install(in: container)
         let drawerInteraction = model.drawerRevealInteraction
         container.homeLeadingEdgeInteraction = GaryxRouteEdgePanInteraction(
             isEligible: {
@@ -882,6 +928,7 @@ private struct GaryxProductionRouteHostEnvironment: View {
     @Environment(\.garyxRouteContext) private var routeContext
     let node: GaryxRoutePresentationNode
     let content: AnyView
+    let routeLifecycleRegistry: GaryxRouteLifecycleRegistry
     let onOpenDrawer: @MainActor () -> Void
 
     var body: some View {
@@ -890,6 +937,7 @@ private struct GaryxProductionRouteHostEnvironment: View {
             .environment(model.homeObservationStore)
             .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
             .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
+            .environment(\.garyxRouteLifecycleRegistry, routeLifecycleRegistry)
             .environment(\.garyxOpenSidebar, onOpenDrawer)
             .environment(\.garyxRouteNavigationActions, navigationActions)
             .environment(

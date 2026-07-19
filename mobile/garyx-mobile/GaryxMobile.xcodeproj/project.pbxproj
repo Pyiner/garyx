@@ -20,6 +20,7 @@
 		0BF096E6C91A874D4DC2ACF6 /* GaryxTurnRowsWindowPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48743DBE262CE01F50990D7B /* GaryxTurnRowsWindowPlanner.swift */; };
 		0C8EEC6E3601D856E97E2C22 /* GaryxMobileModel+Automations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B46E89610EAD5F23085F197 /* GaryxMobileModel+Automations.swift */; };
 		0D8A5DD9B7F12B0E4B268E0E /* GaryxMobilePresentationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33E8C959491E3144A41F7F3F /* GaryxMobilePresentationModels.swift */; };
+		0E3C00CD0911BB73FFA8ABF5 /* GaryxRoutePushPerformanceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC24FF935285A732CD8E4AB6 /* GaryxRoutePushPerformanceProbe.swift */; };
 		0FBE8E663A65F47AD2280EC8 /* GaryxMobileModel+Navigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70D050C692EDB77E3A0219E1 /* GaryxMobileModel+Navigation.swift */; };
 		107B8BE0CC6725287F7265A2 /* GaryxAgentAvailabilityPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF137CC382723B6C1F71F0FF /* GaryxAgentAvailabilityPresentation.swift */; };
 		1095B79003743CD89CE19F42 /* GaryxMobileModel+ProviderAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8BC6E6FCDC1F3E392B53091 /* GaryxMobileModel+ProviderAuth.swift */; };
@@ -145,6 +146,7 @@
 		89ACBAD2904C0B643748C30D /* GaryxProductionRouteStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5255F67DF750ED686CBC8DD0 /* GaryxProductionRouteStack.swift */; };
 		8B477CBB47660A8DA3EC783E /* GaryxMobileConversationStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB13514C8328A69FB50B9F58 /* GaryxMobileConversationStatusViews.swift */; };
 		8DAF7706E0B0B3146E4FE916 /* GaryxMobileModel+Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4EDA1FB6AE1D9DFA4A361F /* GaryxMobileModel+Composer.swift */; };
+		8DC2D7C5A76E258496C11B20 /* GaryxConversationRoutePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC2C69C7E2572DAD607D6542 /* GaryxConversationRoutePresentation.swift */; };
 		8E060D57B0AB2C2B3261ED53 /* GaryxMobileCatalogCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 652B1EA6A38559202A4E8053 /* GaryxMobileCatalogCache.swift */; };
 		8E4F71C50B3A2847F0380F2C /* GaryxGatewayChannelBotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468D0CF236DF7A543E3E5429 /* GaryxGatewayChannelBotModels.swift */; };
 		8EC63D7C77B8B96D12F5E703 /* GaryxCapsuleThumbnailScrollbarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5223B0AAC0643559494DE7A /* GaryxCapsuleThumbnailScrollbarTests.swift */; };
@@ -178,6 +180,7 @@
 		B202E26A03F9867EDABEC2FA /* GaryxAgentTargetListPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6D78ABB2D49B6D297185E8 /* GaryxAgentTargetListPresentation.swift */; };
 		B312AAA3A73883FD5559840A /* GaryxGatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B755A88B709E9FC317101B90 /* GaryxGatewayClient.swift */; };
 		B3E8F01788FEBF05F580CDB5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3C34CAC1B1FA773A38C5D1F4 /* Assets.xcassets */; };
+		B45156469608E344D8F8D577 /* GaryxStagedConversationRouteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53E001C275D8B74866C2D5B1 /* GaryxStagedConversationRouteView.swift */; };
 		B55212B78D7561BD5EB7DE98 /* GaryxAvatarCatalogWriteThrough.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F934958AF375BD10CFAC196 /* GaryxAvatarCatalogWriteThrough.swift */; };
 		B6784187B3722B41C26C7297 /* GaryxCapsuleFocusedPreviewLoadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2A0FFBBDB8131BEC2537044 /* GaryxCapsuleFocusedPreviewLoadingTests.swift */; };
 		B7F73A32BF807FDA21208B89 /* GaryxMobileCommandsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E194B12283F49B424015FC62 /* GaryxMobileCommandsViews.swift */; };
@@ -390,6 +393,7 @@
 		51D8B445EDFA596C429355E9 /* GaryxCapsulePreviewLoading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxCapsulePreviewLoading.swift; sourceTree = "<group>"; };
 		520BD227F8AC76C7D928E315 /* GaryxComposerPayloadLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxComposerPayloadLifecycle.swift; sourceTree = "<group>"; };
 		5255F67DF750ED686CBC8DD0 /* GaryxProductionRouteStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxProductionRouteStack.swift; sourceTree = "<group>"; };
+		53E001C275D8B74866C2D5B1 /* GaryxStagedConversationRouteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxStagedConversationRouteView.swift; sourceTree = "<group>"; };
 		54BE544447A1FB8F2E733993 /* GaryxGatewaySwitcherViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxGatewaySwitcherViews.swift; sourceTree = "<group>"; };
 		54C062092D7F46A13B65E609 /* GaryxMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GaryxMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		55229844D778C1F196E79ED7 /* GaryxMobileToolTraceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileToolTraceViews.swift; sourceTree = "<group>"; };
@@ -527,6 +531,7 @@
 		DB4EDA1FB6AE1D9DFA4A361F /* GaryxMobileModel+Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GaryxMobileModel+Composer.swift"; sourceTree = "<group>"; };
 		DBAD33BBC650B5E92952AA75 /* GaryxRecentThreadFeeds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxRecentThreadFeeds.swift; sourceTree = "<group>"; };
 		DBE242D7680E7E6E29F2E577 /* GaryxSelectedThreadStreamPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxSelectedThreadStreamPolicy.swift; sourceTree = "<group>"; };
+		DC2C69C7E2572DAD607D6542 /* GaryxConversationRoutePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxConversationRoutePresentation.swift; sourceTree = "<group>"; };
 		DC31DCF1A25C25FB8EC7AADC /* GaryxMobileMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileMotion.swift; sourceTree = "<group>"; };
 		DCDB927CE8B5E3A0FE4E7678 /* GaryxComposerInputProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxComposerInputProtocol.swift; sourceTree = "<group>"; };
 		DE3E9D2CD37099FC32981108 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -540,6 +545,7 @@
 		E494DEE9C0C03BCBD8BD5ED0 /* GaryxMobileFormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileFormComponents.swift; sourceTree = "<group>"; };
 		E7756DA7ED6B097C398A0C67 /* GaryxMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = GaryxMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		EB9F4BD3510DA7B99FFBB153 /* GaryxMobileModel+JSONSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GaryxMobileModel+JSONSupport.swift"; sourceTree = "<group>"; };
+		EC24FF935285A732CD8E4AB6 /* GaryxRoutePushPerformanceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxRoutePushPerformanceProbe.swift; sourceTree = "<group>"; };
 		EE5601E1E802633EBF0D1CBD /* GaryxRecentThreadsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxRecentThreadsWidget.swift; sourceTree = "<group>"; };
 		EED5E82635D525863297D9B9 /* GaryxRecentThreadFilterStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxRecentThreadFilterStorage.swift; sourceTree = "<group>"; };
 		EF2A0A5FAF8EAAF49D80BF83 /* GaryxGestureSettleDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxGestureSettleDriver.swift; sourceTree = "<group>"; };
@@ -738,7 +744,9 @@
 				5255F67DF750ED686CBC8DD0 /* GaryxProductionRouteStack.swift */,
 				46A559996C462FF1CFA503EA /* GaryxRecentThreadFilterMenu.swift */,
 				4CD6F1CA998BB668325CB3F6 /* GaryxRouteContext.swift */,
+				EC24FF935285A732CD8E4AB6 /* GaryxRoutePushPerformanceProbe.swift */,
 				9C754FF792781E60C691CEE3 /* GaryxRouteStackContainer.swift */,
+				53E001C275D8B74866C2D5B1 /* GaryxStagedConversationRouteView.swift */,
 				19D56E8DCC914DA3B685C997 /* GaryxThreadListDrilldownViews.swift */,
 				3E3C0EDF6104E67C0EFAFA69 /* GaryxThreadListRowButton.swift */,
 				D97E066072087A1089BFFA23 /* Info.plist */,
@@ -778,6 +786,7 @@
 				520BD227F8AC76C7D928E315 /* GaryxComposerPayloadLifecycle.swift */,
 				FE309FB0A3268438AC2F877D /* GaryxComposerPresentation.swift */,
 				18D16ED9A1F18CA08370E313 /* GaryxComposerStagedAssetStore.swift */,
+				DC2C69C7E2572DAD607D6542 /* GaryxConversationRoutePresentation.swift */,
 				1143E0E399AA0B069FCE2846 /* GaryxConversationRunTracker.swift */,
 				06E33FD257CEF25AB8BD3971 /* GaryxConversationScrollPolicy.swift */,
 				97B7102FD5063F3C602C95B2 /* GaryxConversationStateMachine.swift */,
@@ -1112,6 +1121,7 @@
 				C4684E460921CC83C1C2335D /* GaryxComposerStagedAssetStore.swift in Sources */,
 				5BACBA9FFD7BA73792778673 /* GaryxComposerUIKitAdapter.swift in Sources */,
 				37CCFCB481EB0D9812F7A291 /* GaryxConversationLiveStore.swift in Sources */,
+				8DC2D7C5A76E258496C11B20 /* GaryxConversationRoutePresentation.swift in Sources */,
 				08D28E9544EA1D3B5D416551 /* GaryxConversationRunTracker.swift in Sources */,
 				D4097D47FE2C952F35604421 /* GaryxConversationScrollPolicy.swift in Sources */,
 				CD7F5630F5FC4B5777652A7A /* GaryxConversationStateMachine.swift in Sources */,
@@ -1268,11 +1278,13 @@
 				74CE2CBA6DC35B622709308A /* GaryxRelativeTimestamp.swift in Sources */,
 				C33CBE2FC9E94B68B8A9F80A /* GaryxRestartNoticePresentation.swift in Sources */,
 				897B4EF70C68AB7693850734 /* GaryxRouteContext.swift in Sources */,
+				0E3C00CD0911BB73FFA8ABF5 /* GaryxRoutePushPerformanceProbe.swift in Sources */,
 				C54254453EFEC30CFC66BBE7 /* GaryxRouteRendererState.swift in Sources */,
 				B04C7402F2E1033904C26786 /* GaryxRouteStackContainer.swift in Sources */,
 				B0AE379D2A2A89AFE93E9916 /* GaryxRuntimePanelPager.swift in Sources */,
 				76DED7024430BB702C37195F /* GaryxSQLiteComposerDurabilityStore.swift in Sources */,
 				CC49F9DCCB1A6BCA4DCF9406 /* GaryxSelectedThreadStreamPolicy.swift in Sources */,
+				B45156469608E344D8F8D577 /* GaryxStagedConversationRouteView.swift in Sources */,
 				5B99F197FC9EA6958F44A032 /* GaryxTaskNotificationPresentation.swift in Sources */,
 				19468849C652D246D0D84D49 /* GaryxTaskTreeSidebarPresentation.swift in Sources */,
 				7A705CCD224F45927229F337 /* GaryxThreadArchiveRequestBuilder.swift in Sources */,
@@ -1435,6 +1447,65 @@
 			};
 			name = Debug;
 		};
+		28F4A6594AAC28BC64B8A852 /* Performance */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Performance;
+		};
 		73FB948FA9166B5560629A3E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1519,6 +1590,49 @@
 			};
 			name = Release;
 		};
+		A35B36F94DA5C0F05931F7A3 /* Performance */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.garyx.mobile.Tests;
+				PRODUCT_NAME = GaryxMobileTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Gary X.app/Gary X";
+				TEST_TARGET_NAME = GaryxMobile;
+			};
+			name = Performance;
+		};
+		A5105B74D36A87AF3D2FC37A /* Performance */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.garyx.mobile.UITests;
+				PRODUCT_NAME = GaryxMobileUITests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = GaryxMobile;
+			};
+			name = Performance;
+		};
 		B66B662A0340EC8B5965A989 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1543,6 +1657,28 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		BC4AD02CC16733E92B2998A0 /* Performance */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widget/GaryxRecentThreadsWidget/GaryxRecentThreadsWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = Widget/GaryxRecentThreadsWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.garyx.mobile.RecentThreadsWidget;
+				PRODUCT_NAME = GaryxRecentThreadsWidget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Performance;
 		};
 		BC91F52173FA85105F47EE78 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1610,6 +1746,31 @@
 			};
 			name = Debug;
 		};
+		EF097B28F6BB15463D0E91F2 /* Performance */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/GaryxMobile/GaryxMobile.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/GaryxMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.garyx.mobile;
+				PRODUCT_MODULE_NAME = GaryxMobile;
+				PRODUCT_NAME = "Gary X";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG GARYX_PERFORMANCE_TESTING";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Performance;
+		};
 		F62F6D3454801C942C30AF8B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1641,6 +1802,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0B3E0C5A782CB2E9A36EB8C7 /* Debug */,
+				A5105B74D36A87AF3D2FC37A /* Performance */,
 				0FF3D2089A0085D724C380D4 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1650,6 +1812,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				73FB948FA9166B5560629A3E /* Debug */,
+				EF097B28F6BB15463D0E91F2 /* Performance */,
 				B66B662A0340EC8B5965A989 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1659,6 +1822,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				049FAE091AA98CA8A6EBBA24 /* Debug */,
+				BC4AD02CC16733E92B2998A0 /* Performance */,
 				F62F6D3454801C942C30AF8B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1668,6 +1832,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BC91F52173FA85105F47EE78 /* Debug */,
+				28F4A6594AAC28BC64B8A852 /* Performance */,
 				831DE8B21AD3C5F887DB92FD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1677,6 +1842,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				2357EA5ABF1A36119C9F7DD4 /* Debug */,
+				A35B36F94DA5C0F05931F7A3 /* Performance */,
 				0D503956DB9BE17CEE9BD09B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;

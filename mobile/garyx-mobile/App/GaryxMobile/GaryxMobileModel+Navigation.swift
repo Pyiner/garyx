@@ -41,6 +41,7 @@ extension GaryxMobileModel {
         }
 
         guard let top = path.last else {
+            cancelConversationContentActivation()
             stopSelectedThreadStreamForHome()
             cancelSelectedThreadReconcileLoop()
             selectedThread = nil
@@ -50,9 +51,9 @@ extension GaryxMobileModel {
         case .conversation(let threadID):
             let summary = cachedThreadSummary(for: threadID)
                 ?? Self.placeholderThreadSummary(id: threadID)
-            applySelectedThreadRouteProjection(summary)
-            ensureSelectedThreadStreamForVisibleConversation()
+            applySelectedThreadRouteProjection(summary, preparesContent: false)
         case .conversationDraft:
+            cancelConversationContentActivation()
             if selectedThread != nil {
                 resetSelectedTurnRowsWindow()
             }
@@ -62,6 +63,7 @@ extension GaryxMobileModel {
             messages = []
             draftThreadTitle = ""
         case .panel, .settingsDetail, .workspaceDrilldown:
+            cancelConversationContentActivation()
             stopSelectedThreadStreamForHome()
             cancelSelectedThreadReconcileLoop()
             selectedThread = nil
@@ -94,6 +96,7 @@ extension GaryxMobileModel {
     func returnHome() {
         guard !productionRouteStore.path.isEmpty else { return }
         invalidatePendingThreadOpen()
+        cancelConversationContentActivation()
         stopSelectedThreadStreamForHome()
         cancelSelectedThreadReconcileLoop()
         productionRouteStore.resetToHome()
@@ -119,6 +122,9 @@ extension GaryxMobileModel {
             invalidatePendingThreadOpen()
         }
         let resolved = panel == .bots ? GaryxMobilePanel.workspaceBots : panel
+        if resolved != .chat {
+            cancelConversationContentActivation()
+        }
         let destination: GaryxRouteDestination
         if resolved == .chat {
             destination = selectedThread.map {
@@ -136,7 +142,7 @@ extension GaryxMobileModel {
         if !productionRouteStore.isAttached {
             applyCanonicalRouteProjection(productionRouteStore.path)
         }
-        if resolved == .chat {
+        if resolved == .chat, !productionRouteStore.isAttached {
             ensureSelectedThreadStreamForVisibleConversation()
         }
     }
@@ -155,12 +161,15 @@ extension GaryxMobileModel {
         if !productionRouteStore.isAttached {
             applyCanonicalRouteProjection(productionRouteStore.path)
         }
-        ensureSelectedThreadStreamForVisibleConversation()
+        if !productionRouteStore.isAttached {
+            ensureSelectedThreadStreamForVisibleConversation()
+        }
         setSidebarVisible(false)
     }
 
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
         invalidatePendingThreadOpen()
+        cancelConversationContentActivation()
         let resolved = panel == .bots ? GaryxMobilePanel.workspaceBots : panel
         _ = productionRouteStore.open(.panel(resolved.rawValue), source: source)
         if !productionRouteStore.isAttached {
@@ -171,6 +180,7 @@ extension GaryxMobileModel {
 
     func openSettings(tab: GaryxMobileSettingsTab = .manage, source: GaryxMobilePanelOpenSource = .sidebar) {
         invalidatePendingThreadOpen()
+        cancelConversationContentActivation()
         let overview = GaryxRouteDestination.settingsDetail(
             GaryxMobileSettingsTab.manage.rawValue
         )
@@ -787,6 +797,32 @@ extension GaryxMobileModel {
                 isStreaming: false
             )
         ]
+        if ProcessInfo.processInfo.environment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] == "long" {
+            messages = (0..<24).flatMap { turn in
+                [
+                    GaryxMobileMessage(
+                        id: "route-push-user-\(turn)",
+                        role: .user,
+                        text: "Review route transition sample \(turn) and keep the transcript responsive.",
+                        timestamp: "08:\(String(format: "%02d", turn))",
+                        isStreaming: false
+                    ),
+                    GaryxMobileMessage(
+                        id: "route-push-assistant-\(turn)",
+                        role: .assistant,
+                        text: """
+                        Sample \(turn) is ready
+
+                        - The cached row is deterministic.
+                        - **Markdown** and `inline code` exercise the production renderer.
+                        - The route-entry frame budget remains independent of transcript length.
+                        """,
+                        timestamp: "08:\(String(format: "%02d", turn))",
+                        isStreaming: false
+                    ),
+                ]
+            }
+        }
         if let selectedThread {
             messagesByThread[selectedThread.id] = messages
             messageSignaturesByThread[selectedThread.id] = GaryxMessageListSignature.make(for: messages)

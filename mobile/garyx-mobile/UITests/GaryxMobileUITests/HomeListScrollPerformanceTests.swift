@@ -7,6 +7,18 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         let worstFrameDelta: Double
     }
 
+    private struct RoutePushProbeReport {
+        let frameBudgetMilliseconds: Double
+        let transitionFrameCount: Double
+        let transitionHitchCount: Double
+        let transitionMaximumIntervalMilliseconds: Double
+        let beginToFirstTickMilliseconds: Double
+        let maskedHitchCount: Double
+        let postRevealHitchCount: Double
+        let perceptibleHitchCount: Double
+        let revealObserved: Double
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -53,6 +65,77 @@ final class HomeListScrollPerformanceTests: XCTestCase {
             scrollView.swipeUp(velocity: .fast)
             Thread.sleep(forTimeInterval: 2.0)
             scrollView.swipeDown(velocity: .fast)
+        }
+    }
+
+    /// A4a route-entry gate: the existing scroll profile covers steady-state
+    /// List drag, while this profile brackets the first and repeated
+    /// list-to-conversation pushes with the production Release-capable frame
+    /// probe. Expensive live transcript preparation may be reported as masked
+    /// work behind the static staged surface. Retained moving transitions and
+    /// every post-reveal window remain zero-budget; the cold open has an
+    /// explicit two-cadence simulator ceiling for the XCTest/AX transaction.
+    func testListToLongConversationPushStaysWithinFrameBudget() {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SIDEBAR"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] = "long"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_PROBE"] = "1"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Garyx"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Thread History"].waitForExistence(timeout: 10))
+
+        var reports: [RoutePushProbeReport] = []
+        var expectedTransaction = 0
+        let options = XCTMeasureOptions()
+        // The cold push has its own in-app CADisplayLink budget below. Start
+        // XCTHitchMetric only after it so metric-collector bootstrap cannot be
+        // mistaken for app work in the first route transaction.
+        options.iterationCount = 2
+
+        let openAndReturn: () -> Void = {
+            expectedTransaction += 1
+            let row = app.staticTexts["Thread History"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            row.tap()
+
+            guard let report = self.waitForRoutePushReport(
+                transaction: expectedTransaction,
+                in: app
+            ) else {
+                XCTFail("route push probe did not finish transaction \(expectedTransaction)")
+                return
+            }
+            reports.append(report)
+
+            let back = app.buttons["Back"]
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+            XCTAssertTrue(app.staticTexts["Thread History"].waitForExistence(timeout: 5))
+        }
+
+        openAndReturn()
+        measure(
+            metrics: [
+                XCTHitchMetric(application: app),
+                XCTClockMetric(),
+                XCTCPUMetric(application: app),
+            ],
+            options: options
+        ) {
+            openAndReturn()
+        }
+
+        // XCTest adds one discarded warm-up invocation to the two measured
+        // repeats, in addition to the explicit cold push above.
+        XCTAssertEqual(reports.count, options.iterationCount + 2)
+        for (index, report) in reports.enumerated() {
+            let profile = index == 0 ? "cold" : "repeat_\(index)"
+            print(
+                "PROFILE route_push_\(profile) budget_ms=\(report.frameBudgetMilliseconds) begin_to_first_tick_ms=\(report.beginToFirstTickMilliseconds) transition_frames=\(report.transitionFrameCount) transition_hitches=\(report.transitionHitchCount) transition_max_ms=\(report.transitionMaximumIntervalMilliseconds) masked_hitches=\(report.maskedHitchCount) post_reveal_hitches=\(report.postRevealHitchCount) perceptible_hitches=\(report.perceptibleHitchCount)"
+            )
+            assertRoutePushArchitectureGate(report, profile: profile)
         }
     }
 
@@ -127,6 +210,114 @@ final class HomeListScrollPerformanceTests: XCTestCase {
             hitchTimeRatio: try XCTUnwrap(fields["hitch_time_ratio"]),
             maxFrameInterval: try XCTUnwrap(fields["max_frame_interval"]),
             worstFrameDelta: try XCTUnwrap(fields["worst_frame_delta"])
+        )
+    }
+
+    private func waitForRoutePushReport(
+        transaction: Int,
+        in app: XCUIApplication
+    ) -> RoutePushProbeReport? {
+        let reportElement = app.staticTexts["route-push-probe-report"]
+        guard reportElement.waitForExistence(timeout: 5) else { return nil }
+        let transactionMarker = "transaction=\(transaction) "
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            let line = (reportElement.value as? String) ?? reportElement.label
+            if line.contains(transactionMarker), line.contains("perceptible_hitch_count=") {
+                print("PROFILE route_push_raw \(line)")
+                let fields = Dictionary(
+                    uniqueKeysWithValues: line.split(separator: " ").compactMap {
+                        field -> (String, Double)? in
+                        let parts = field.split(separator: "=", maxSplits: 1)
+                        guard parts.count == 2, let value = Double(parts[1]) else { return nil }
+                        return (String(parts[0]), value)
+                    }
+                )
+                guard let frameBudget = fields["frame_budget_ms"],
+                      let transitionFrames = fields["transition_frame_count"],
+                      let transitionHitches = fields["transition_hitch_count"],
+                      let transitionMaximum = fields["transition_max_interval_ms"],
+                      let beginToFirstTick = fields["begin_to_first_tick_ms"],
+                      let maskedHitches = fields["masked_hitch_count"],
+                      let postRevealHitches = fields["post_reveal_hitch_count"],
+                      let perceptibleHitches = fields["perceptible_hitch_count"],
+                      let revealObserved = fields["reveal_observed"] else {
+                    return nil
+                }
+                return RoutePushProbeReport(
+                    frameBudgetMilliseconds: frameBudget,
+                    transitionFrameCount: transitionFrames,
+                    transitionHitchCount: transitionHitches,
+                    transitionMaximumIntervalMilliseconds: transitionMaximum,
+                    beginToFirstTickMilliseconds: beginToFirstTick,
+                    maskedHitchCount: maskedHitches,
+                    postRevealHitchCount: postRevealHitches,
+                    perceptibleHitchCount: perceptibleHitches,
+                    revealObserved: revealObserved
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return nil
+    }
+
+    private func assertRoutePushArchitectureGate(
+        _ report: RoutePushProbeReport,
+        profile: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let isCold = profile == "cold"
+        // The first simulator push is also the first CoreAnimation transaction
+        // observed by the connected XCUI/AX process. Give that one sample a
+        // hard two-cadence ceiling; retained pushes remain zero-hitch gates.
+        // A regression to the former 173 ms stall still exceeds this budget by
+        // more than 5x. Release real-gateway captures enforce the zero-hitch
+        // product target independently of this instrumented simulator bound.
+        let firstTickMultiplier = isCold ? 2.25 : 1.5
+        let maximumIntervalMultiplier = isCold ? 2.0 : 1.5
+        let allowedHitches: Double = isCold ? 1 : 0
+
+        XCTAssertGreaterThanOrEqual(
+            report.transitionFrameCount,
+            12,
+            "\(profile) push did not sample the complete transition",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            report.beginToFirstTickMilliseconds,
+            report.frameBudgetMilliseconds * firstTickMultiplier + 0.25,
+            "\(profile) push missed its first presentation budget",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            report.transitionHitchCount,
+            allowedHitches,
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            report.transitionMaximumIntervalMilliseconds,
+            report.frameBudgetMilliseconds * maximumIntervalMultiplier + 0.25,
+            "\(profile) push exceeded the delivered-frame hitch threshold",
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(report.postRevealHitchCount, 0, file: file, line: line)
+        XCTAssertLessThanOrEqual(
+            report.perceptibleHitchCount,
+            allowedHitches,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            report.revealObserved,
+            1,
+            "\(profile) push never presented prepared content",
+            file: file,
+            line: line
         )
     }
 

@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.garyx
   deploymentTarget:
     iOS: "26.0"
+configs:
+  Debug: debug
+  Release: release
+  Performance: release
 settings:
   base:
     MARKETING_VERSION: 0.1.0
@@ -26,7 +30,10 @@ schemes:
         GaryxMobile: all
         GaryxMobileUITests: [test]
     test:
-      config: Debug
+      # Frame budgets must exercise Release code generation. DEBUG remains an
+      # active compilation condition only in this non-shipping configuration
+      # so the deterministic UI-test snapshot and probes stay available.
+      config: Performance
       targets:
         - GaryxMobileUITests
   GaryxMobileFluidRoutes:
@@ -73,6 +80,9 @@ targets:
         Debug:
           CODE_SIGN_IDENTITY: iPhone Developer
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Performance:
+          CODE_SIGN_IDENTITY: iPhone Developer
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG GARYX_PERFORMANCE_TESTING
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution

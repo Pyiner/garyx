@@ -76,6 +76,60 @@ final class GaryxGestureSettleDriverTests: XCTestCase {
         XCTAssertFalse(harness.frames.isRunning)
     }
 
+    func testTerminalReusesSettleFrameSourceForSupplementalFrames() {
+        let harness = Harness()
+        var supplementalActive = false
+        var supplementalFrameCount = 0
+        harness.driver.setSupplementalFrameObserver(
+            isActive: { supplementalActive },
+            onFrame: {
+                supplementalFrameCount += 1
+                supplementalActive = false
+            }
+        )
+        harness.driver.settle(
+            from: 40,
+            to: 0,
+            initialVelocity: 300,
+            curve: .init(response: 0.22, dampingRatio: 0.88),
+            onUpdate: { _ in },
+            onCompletion: { supplementalActive = true }
+        )
+
+        harness.advance(to: 10 + 1)
+
+        XCTAssertFalse(harness.driver.isSettling)
+        XCTAssertTrue(harness.frames.isRunning)
+        XCTAssertEqual(harness.frames.startCount, 1)
+        XCTAssertEqual(supplementalFrameCount, 0)
+
+        harness.frames.fire()
+
+        XCTAssertEqual(supplementalFrameCount, 1)
+        XCTAssertFalse(harness.frames.isRunning)
+        XCTAssertEqual(harness.frames.startCount, 1)
+    }
+
+    func testSupplementalFramesCanStartWithoutASettle() {
+        let harness = Harness()
+        var supplementalActive = true
+        var supplementalFrameCount = 0
+        harness.driver.setSupplementalFrameObserver(
+            isActive: { supplementalActive },
+            onFrame: {
+                supplementalFrameCount += 1
+                supplementalActive = false
+            }
+        )
+
+        harness.driver.ensureSupplementalFrames()
+        harness.frames.fire()
+
+        XCTAssertEqual(supplementalFrameCount, 1)
+        XCTAssertEqual(harness.frames.startCount, 1)
+        XCTAssertFalse(harness.frames.isRunning)
+    }
+
     func testInvalidateAndDeinitAlwaysStopFrameCallbacks() {
         let clock = ManualTimeSource(now: 10)
         let frames = ManualFrameSource()
@@ -133,8 +187,10 @@ final class GaryxGestureSettleDriverTests: XCTestCase {
         var onFrame: (() -> Void)?
         private(set) var isRunning = false
         private(set) var invalidationCount = 0
+        private(set) var startCount = 0
 
         func start() {
+            startCount += 1
             isRunning = true
         }
 

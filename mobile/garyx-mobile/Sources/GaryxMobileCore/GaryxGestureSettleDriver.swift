@@ -25,6 +25,11 @@ public protocol GaryxGestureSettleFrameSource: AnyObject {
 public final class GaryxGestureSettleDriver {
     public typealias MotionSample = GaryxMotionPhysics.MotionSample
 
+    private struct SupplementalFrameObserver {
+        let isActive: () -> Bool
+        let onFrame: () -> Void
+    }
+
     private struct ActiveSettle {
         let trajectory: GaryxMotionPhysics.SettleTrajectory
         let startTime: TimeInterval
@@ -35,6 +40,8 @@ public final class GaryxGestureSettleDriver {
     private let timeSource: any GaryxGestureSettleTimeSource
     private let frameSource: any GaryxGestureSettleFrameSource
     private var activeSettle: ActiveSettle?
+    private var supplementalFrameObserver: SupplementalFrameObserver?
+    private var isFrameSourceRunning = false
 
     public init(
         timeSource: any GaryxGestureSettleTimeSource,
@@ -46,6 +53,31 @@ public final class GaryxGestureSettleDriver {
 
     public var isSettling: Bool {
         activeSettle != nil
+    }
+
+    /// Shares the driver's existing presented-frame source with lightweight
+    /// work that must begin immediately after a settle reaches terminal.
+    ///
+    /// The observer is deliberately demand-driven. If `isActive` becomes true
+    /// from the settle completion callback, the current frame source remains
+    /// installed instead of invalidating and recreating a CADisplayLink at the
+    /// navigation boundary.
+    public func setSupplementalFrameObserver(
+        isActive: @escaping () -> Bool,
+        onFrame: @escaping () -> Void
+    ) {
+        supplementalFrameObserver = SupplementalFrameObserver(
+            isActive: isActive,
+            onFrame: onFrame
+        )
+    }
+
+    /// Starts the shared frame source when supplemental work becomes active
+    /// without an in-flight settle, such as an immediate or initially mounted
+    /// route.
+    public func ensureSupplementalFrames() {
+        guard supplementalFrameObserver?.isActive() == true else { return }
+        startFrameSourceIfNeeded()
     }
 
     public func settle(
@@ -70,10 +102,7 @@ public final class GaryxGestureSettleDriver {
             onCompletion: onCompletion
         )
         onUpdate(trajectory.sample(elapsedTime: 0))
-        frameSource.onFrame = { [weak self] in
-            self?.handleFrame()
-        }
-        frameSource.start()
+        startFrameSourceIfNeeded()
     }
 
     /// Stops the active settle and analytically resolves its current physical
@@ -98,16 +127,24 @@ public final class GaryxGestureSettleDriver {
     }
 
     private func handleFrame() {
-        guard let activeSettle else { return }
+        if supplementalFrameObserver?.isActive() == true {
+            supplementalFrameObserver?.onFrame()
+        }
+
+        guard let activeSettle else {
+            stopFrameSourceIfIdle()
+            return
+        }
         let elapsedTime = max(0, timeSource.now - activeSettle.startTime)
         if elapsedTime >= activeSettle.trajectory.settlingDuration {
             let finalSample = MotionSample(
                 value: activeSettle.trajectory.targetValue,
                 velocity: 0
             )
-            clearActiveSettle()
+            self.activeSettle = nil
             activeSettle.onUpdate(finalSample)
             activeSettle.onCompletion()
+            stopFrameSourceIfIdle()
             return
         }
         activeSettle.onUpdate(activeSettle.trajectory.sample(elapsedTime: elapsedTime))
@@ -119,7 +156,29 @@ public final class GaryxGestureSettleDriver {
 
     private func clearActiveSettle() {
         activeSettle = nil
+        stopFrameSource()
+    }
+
+    private func startFrameSourceIfNeeded() {
+        guard !isFrameSourceRunning else { return }
+        frameSource.onFrame = { [weak self] in
+            self?.handleFrame()
+        }
+        frameSource.start()
+        isFrameSourceRunning = true
+    }
+
+    private func stopFrameSourceIfIdle() {
+        guard activeSettle == nil,
+              supplementalFrameObserver?.isActive() != true
+        else { return }
+        stopFrameSource()
+    }
+
+    private func stopFrameSource() {
+        guard isFrameSourceRunning || frameSource.onFrame != nil else { return }
         frameSource.onFrame = nil
         frameSource.invalidate()
+        isFrameSourceRunning = false
     }
 }

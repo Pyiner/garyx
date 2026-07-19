@@ -3,12 +3,16 @@ import SwiftUI
 import UIKit
 
 struct GaryxRouteStackContainerCallbacks {
+    var transitionWillBegin: @MainActor (GaryxRouteTransitionKind) -> Void = { _ in }
+    var transitionHostsMounted: @MainActor () -> Void = {}
     var hostMounted: @MainActor (GaryxRoutePresentationIdentity) -> Void = { _ in }
     var hostUnmounted: @MainActor (GaryxRoutePresentationIdentity) -> Void = { _ in }
     var hostLifecycleChanged: @MainActor (
         GaryxRoutePresentationIdentity,
         GaryxRouteHostLifecyclePhase
     ) -> Void = { _, _ in }
+    var hasPresentedFrameDemand: @MainActor () -> Bool = { false }
+    var presentedFrame: @MainActor () -> Void = {}
     var phaseChanged: @MainActor (GaryxPresentationTransactionPhase) -> Void = { _ in }
     var commitReleased: @MainActor (
         GaryxRoutePresentationNode,
@@ -270,6 +274,15 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         self.hostBuilder = hostBuilder
         super.init(nibName: nil, bundle: nil)
 
+        self.settleDriver.setSupplementalFrameObserver(
+            isActive: { [weak self] in
+                self?.callbacks.hasPresentedFrameDemand() == true
+            },
+            onFrame: { [weak self] in
+                self?.callbacks.presentedFrame()
+            }
+        )
+
         leadingEdgePanGestureRecognizer.addTarget(
             self,
             action: #selector(handleLeadingEdgePan(_:))
@@ -504,6 +517,12 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         self.transition = transition
         applyTransitionVisualState()
         finishTransition(visibility: currentSceneVisibility)
+    }
+
+    /// Starts the container's existing frame source for post-terminal staged
+    /// presentation work when no animated settle is currently driving it.
+    func ensurePresentedFrames() {
+        settleDriver.ensureSupplementalFrames()
     }
 
     func sceneDidBecomeInactive() {
@@ -971,11 +990,13 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
                   preferences: preferencesProvider()
               )
         else { return false }
+        callbacks.transitionWillBegin(kind)
         // A new accepted transaction permanently supersedes any inactive
         // terminal effects that have not yet become visible.
         deferredTerminalEffects = nil
         let sourceHost = ensureMounted(source)
         let destinationHost = ensureMounted(destination)
+        callbacks.transitionHostsMounted()
         pendingMutation = mutation
         committedRemovedIdentities = []
         transition = newTransition
@@ -1083,7 +1104,6 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         _ terminal: GaryxPresentationTerminalState,
         transition completedTransition: GaryxRouteTransitionSession
     ) {
-        settleDriver.invalidate()
         callbacks.terminalReached(terminal)
         interactionFrozenAfterTerminal = terminal.visibility != .visible
 
@@ -1096,7 +1116,12 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
                 disappearAndUnmount(removedHost)
             }
             if terminal.visibility == .visible, let destination {
-                activate(destination)
+                // The destination is still an opaque transition surface at
+                // this boundary. Publish its final route context once instead
+                // of invalidating the complete hosting tree for both the
+                // transient `.appeared` and final `.active` states in the
+                // last presented push frame.
+                activate(destination, coalescingInitialContext: true)
                 visibleCommittedDestination = destination
             } else if terminal.visibility == .inactive {
                 deferredTerminalEffects = terminal
@@ -1125,6 +1150,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         }
         assertTerminalHasZeroResidue()
         callbacks.rendererBecameIdle()
+        settleDriver.ensureSupplementalFrames()
     }
 
     private func commitPendingCanonicalMutation() {
