@@ -64,6 +64,16 @@ binding, and chat start as multiple requests. Losing the create response leaves
 a real thread that cannot be claimed by create intent because the list response
 does not expose metadata and there is no unique mapping.
 
+An endpoint move also exposes a pre-existing lost-update seam that this command
+cannot inherit. Bridge streaming/final persistence and its runtime-snapshot and
+title helpers read a complete thread body before one or more awaits, then call
+`ThreadStore::set` with that stale complete body. The SQLite `key_lock` covers
+only the final full-body write, not the earlier read. If a binding moves away in
+between, that stale write can restore `channel_bindings` on the previous owner
+and make the endpoint projection point back to it. The atomic command therefore
+requires the record-mutation contract in Section 4.6; sharing locks only at the
+new transaction is not sufficient.
+
 `upload_chat_attachments` writes random files below the global temporary
 directory and returns their paths. It records neither an owner nor an expiry,
 so an abandoned upload and a completed run both leave an orphan.
@@ -486,15 +496,92 @@ writes together with admission, create-claim, and attachment rows in the same
 SQLite transaction. They do not open a second database, create a parallel
 key-lock map, or derive a competing truth source.
 
-Sharing only `GaryxDbService` is insufficient: ordinary `set`, `update`, and
-`update_many_atomic` writers already serialize their read-merge-write cycle
-through the store's key locks before taking the SQLite writer. The admission
-repository must participate in that same lock identity and ordering.
+Sharing only `GaryxDbService` is insufficient. `update` and
+`update_many_atomic` serialize their read-merge-write cycle through the store's
+key locks before taking the SQLite writer, but current `set` serializes only its
+final full-body write; a caller may have read that body earlier without the
+lock. The admission repository and the new field-mutation path must participate
+in the same lock identity and ordering.
 `AppStateBuilder` publishes delivery capabilities only when the thread store
 and admission repository share both domains. Tests that inject a custom
 non-SQL store either inject a matching atomic write domain or run without
 these capabilities; they may not silently combine that store with an unrelated
 SQLite ledger or lock table.
+
+### 4.6 Existing-record mutation and endpoint-owned fields
+
+The router adds an object-safe, fail-closed single-record operation:
+
+```text
+ThreadRecordPatch {
+    set_fields: Map<String, Value>,
+    remove_fields: Set<String>,
+}
+
+ThreadStore::patch(thread_id, patch) -> Applied | Unchanged
+```
+
+`ThreadRecordPatch::from_diff(observed, desired, allowed_fields)` has private
+fields and produces only allowed changed top-level keys, including explicit
+removals; set/removal sets are disjoint and it never carries the observed whole
+body. SQLite `patch` acquires the existing `key_lock(thread_id)`, rejects an
+archived/deleted or absent record, re-reads the current object under that guard,
+applies the set/removal operations, derives projections, and commits the record
+plus projections in one transaction. In-memory storage applies the same
+contract under its write guard. A successful changed write calls the
+`run_coordinator.record_written(thread_id)` hook used by the current bridge
+`set` path; an unchanged patch does not. The trait default returns an
+unsupported error before touching storage; there is no `get + set` fallback
+for injected stores.
+
+`channel_bindings` is endpoint-mutator-owned. Ordinary `patch` and `update`
+reject a patch containing that key. As a second belt, `set` of an existing
+record re-reads under the same key guard and returns a typed
+`ProtectedFieldConflict` without writing if the supplied body's
+`channel_bindings` differs from the current value (including add/remove).
+Comparison uses a validated map keyed by canonical endpoint key (missing and
+an empty list are equivalent); malformed or duplicate bindings fail closed.
+Thus any unconverted or future stale full-body writer fails instead of
+resurrecting an endpoint. The endpoint mutator's sorted multi-record primitive
+is the only production path allowed to change that field and its registry and
+projection together. If a stale `set` wins the key guard first, the later move
+removes the binding; if the move wins first, the stale `set` is rejected.
+
+This batch migrates every production multi-provider full-body update to
+`patch`: streaming persistence, terminal persistence, provider runtime/model
+snapshot persistence, agent runtime snapshot persistence, and provider title
+persistence. Their exact allowed write sets are:
+
+- streaming/terminal: `pending_user_inputs`,
+  `provider_sdk_session_ids`, `provider_type`, `provider_key`,
+  `sdk_session_id`, `history`, `last_user_preview`,
+  `last_assistant_preview`, and `updated_at`;
+- model/agent runtime snapshots: `metadata` and `updated_at`;
+- provider title: `label`, `provider_thread_title`,
+  `thread_title_source`, and `updated_at`.
+
+`active_run_id` and `run_state` are deliberately absent: they are projection
+outputs derived from the active-run probe on each record write, not fields the
+bridge persists in the record body.
+
+Each helper builds or validates its diff against that allowlist; an unexpected
+key is an error before storage. Merge-sensitive runtime values such as pending
+inputs, provider-scoped session IDs, and recent committed run IDs are based on
+the current runtime writer's observation, but the final patch contains only
+the listed fields and is merged into the post-move body under `key_lock`.
+Snapshot/title callers treat only `Applied` as a successful change, and the
+provider-title caller publishes its applied event only then; none writes an
+observed whole body.
+
+A repository-wide audit converts other production `get -> mutate -> set`
+updates of existing live thread records in router/gateway code to `patch` where
+they need retry-free field updates. The inventory includes router navigation,
+dispatch-state, delivery-context, and task mutations; gateway chat title,
+thread-update/history, and task-agent mutations; and the five bridge writers
+above. Whole-body `set` remains for absent-record creation, boot-time import,
+and explicit authoritative replacement; the protected-field comparison still
+makes any accidental concurrent endpoint change fail closed. This is an
+internal store contract change with no wire or persisted-schema version.
 
 ## 5. Dispatch admission and provider handoff
 
@@ -548,6 +635,10 @@ than being bypassed. Previous owner, new owner, known-endpoint registry,
 That entry point delegates to the extended `SqliteThreadStore` atomic primitive
 and therefore shares its sorted record-key locks; the endpoint mutation lock is
 an additional uniqueness fence, not a substitute for record-write exclusion.
+Post-admission bridge and router persistence uses Section 4.6 field patches,
+never a stale complete record. The existing-record `set` protected-field check
+is the final guard against an unconverted writer, so the previous owner cannot
+reacquire a moved binding after the endpoint transaction releases its locks.
 
 ### 5.2 Detached owner and duplicate join
 
@@ -779,10 +870,11 @@ Lock order is fixed and tested:
 
 The new primitive acquires every record guard before the SQLite writer and
 never calls `update_many_atomic` from inside an already-open transaction.
-Existing `update_many_atomic` paths enter at step 4 with the same shared locks,
-so no path can hold the writer while waiting for a record guard and no parallel
-lock map can create false mutual exclusion. No record guard or SQLite writer
-is held while waiting for a provider or filesystem operation.
+Existing `update`, `update_many_atomic`, `patch`, and protected `set` writes
+enter at step 4 with the same shared locks, so no path can hold the writer while
+waiting for a record guard and no parallel lock map can create false mutual
+exclusion. No record guard or SQLite writer is held while waiting for a
+provider or filesystem operation.
 
 ### 6.4 Response loss and process loss
 
@@ -958,6 +1050,11 @@ Client impact:
   the advertised expiry or its owning run settles.
 - Internal dispatchers without a client intent do not accidentally accumulate
   ledger rows or change semantics.
+- The record patch/fence is wire-neutral and applies to every client because it
+  sits below HTTP, WS, router, and bridge writers. Shipped SQLite and in-memory
+  stores implement it. A custom store that does not implement atomic patching
+  gets an explicit unsupported persistence error; the bridge never falls back
+  to a stale full-body write.
 
 An old binary can read the same database because it ignores the additive
 tables. It cannot honor new admissions or serve the new route. Therefore
@@ -976,11 +1073,18 @@ After design approval, implementation is split into independently reviewable
 commits:
 
 1. dispatch migration/service/bridge supplied IDs and HTTP+WS contract;
-2. create-intent migration, point query, and atomic create-and-dispatch;
+2. create-and-dispatch prerequisite: atomic record patch/protected-field
+   contract, bridge/router/gateway existing-record writer migration, and stale
+   bridge-write regression tests; then create-intent migration, point query,
+   and atomic create-and-dispatch;
 3. attachment migration, managed upload root, claims, lifecycle worker, and GC;
 4. cross-path/restart/fault integration tests and capability publication;
 5. Mac canonical durable-delivery consumer plus the cross-platform shared
    fixture marker/assertion/documentation update.
+
+Item 2 lands as two consecutive commits (`2a` mutation foundation, `2b` atomic
+command) so the prerequisite and its regression proof are reviewable without
+mixing another requested subitem into that commit.
 
 The required deterministic evidence is:
 
@@ -1010,15 +1114,29 @@ The required deterministic evidence is:
   duplicate provider handoff.
 - Unique-index collision, same-key fingerprint conflict, preparing query,
   committed query, and archived/deleted query are covered.
-- A deterministic two-order race moves an endpoint during
-  `create_and_dispatch` while production `update_many_atomic` updates run state
-  on the previous owner. A barrier after either side's locked read/merge and
-  before its writer transaction forces each acquisition order. Both operations
-  must finish under a timeout; the previous owner retains the concurrent
-  `active_run_id`/run-state update but loses the binding, the new target and SQL
-  endpoint projection have exactly one holder, the registry agrees, and no
-  deadlock or stale-body overwrite occurs. The test uses the real shared
-  `SqliteThreadStore` lock domain, not independent test mutexes.
+- A real bridge streaming-persistence tick runs against previous owner `P`
+  while endpoint `B` moves to the new target `T`. A deterministic barrier fires
+  immediately after the tick's existing record observation returns a body that
+  still contains `B`, and before its runtime-field patch is submitted. While
+  blocked, the real `create_and_dispatch` endpoint transaction commits the move;
+  then the tick resumes and its patch commits. Both finish under a timeout.
+  Runtime evidence such as the new history/message count and pending/provider
+  fields proves the tick really persisted; `P`'s body has no `B`, `T`'s body is
+  the sole body holder, `thread_channel_endpoints[B]` points only to `T`, and
+  the known-endpoint registry agrees. The test uses production
+  `SqliteThreadStore` plus the real bridge persistence helper, not a fictional
+  run-state `update_many_atomic` writer or independent test mutex.
+- The inverse lock-order case pauses a real field patch after it acquires
+  `key_lock(P)`, starts the endpoint move, then releases the patch. Both finish
+  under a timeout and the later move is authoritative. A negative-control
+  stale full-body `set` captured before the move is rejected with
+  `ProtectedFieldConflict` after the move and cannot change either body or the
+  endpoint projection.
+- Streaming and terminal persistence, both runtime-snapshot writers, and
+  provider-title persistence each have a contract test asserting their patch
+  changes only the Section 4.6 allowlist. A deliberately malformed ordinary
+  patch that includes `channel_bindings` is rejected without a record or
+  projection write.
 - Every SQLite failpoint in the multi-record commit leaves either none of the
   thread/claim/admission/binding/attachment changes or all of them.
 - Managed workspace/worktree/transcript preparation crash points prove owner
@@ -1108,6 +1226,9 @@ volatile desktop queue into a durable one.
   attachment claims share one transaction.
 - Endpoint uniqueness still has one mutator domain, and every affected record
   reuses the sorted `SqliteThreadStore` key-lock domain before the writer.
+- Live bridge/router updates carry explicit field patches rather than observed
+  whole bodies; ordinary patch/update cannot name `channel_bindings`, and an
+  existing-record `set` cannot change it after an endpoint move.
 - Queries are indexed SQL point reads; no record enumeration or read repair.
 - Every marker is same-transaction with schema creation and validates marked
   databases fail-closed.
