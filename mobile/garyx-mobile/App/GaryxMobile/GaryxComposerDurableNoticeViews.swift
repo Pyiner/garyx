@@ -3,9 +3,18 @@ import SwiftUI
 struct GaryxComposerDurableNoticeStack: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let notices: [GaryxComposerDurableNotice]
+    private let actionHandler: (@MainActor (GaryxComposerDurableNoticeAction) async -> Void)?
 
     @State private var pendingDuplicateRiskAction: GaryxComposerDurableNoticeAction?
     @State private var inFlightActionID: String?
+
+    init(
+        notices: [GaryxComposerDurableNotice],
+        actionHandler: (@MainActor (GaryxComposerDurableNoticeAction) async -> Void)? = nil
+    ) {
+        self.notices = notices
+        self.actionHandler = actionHandler
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -105,7 +114,9 @@ struct GaryxComposerDurableNoticeStack: View {
                 Text(actionTitle(action))
                     .font(.caption.weight(.semibold))
             }
-            .frame(minHeight: 44)
+            // Keep the semantic button frame safely above the 44 pt minimum
+            // after SwiftUI converts between logical and simulator pixels.
+            .frame(minHeight: 46)
             .padding(.horizontal, 10)
             .contentShape(Rectangle())
         }
@@ -122,7 +133,11 @@ struct GaryxComposerDurableNoticeStack: View {
         guard inFlightActionID == nil else { return }
         inFlightActionID = identifier
         Task { @MainActor in
-            await model.performComposerDurableNoticeAction(action)
+            if let actionHandler {
+                await actionHandler(action)
+            } else {
+                await model.performComposerDurableNoticeAction(action)
+            }
             inFlightActionID = nil
         }
     }
