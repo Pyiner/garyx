@@ -13,11 +13,21 @@ extension EnvironmentValues {
 }
 
 private struct GaryxAccessibilityPreferencesModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var prefersCrossFadeTransitions = UIAccessibility.prefersCrossFadeTransitions
 
     func body(content: Content) -> some View {
         content
             .environment(\.garyxPrefersCrossFadeTransitions, prefersCrossFadeTransitions)
+            .environment(
+                \.garyxMotion,
+                GaryxMotionContext(
+                    preferences: .init(
+                        reduceMotion: reduceMotion,
+                        prefersCrossFadeTransitions: prefersCrossFadeTransitions
+                    )
+                )
+            )
             .task {
                 prefersCrossFadeTransitions = UIAccessibility.prefersCrossFadeTransitions
                 for await _ in NotificationCenter.default.notifications(
