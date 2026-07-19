@@ -18,6 +18,18 @@
       }
     },
     {
+      "name": "relaunch reclaims a bare undispatched delivery as a draft",
+      "actions": ["recoverUndispatchedDraft"],
+      "expect": {
+        "delivery": {
+          "state": "abandoned",
+          "evidence": "none",
+          "userDisposition": "restoredToDraft",
+          "envelopePresent": false
+        }
+      }
+    },
+    {
       "name": "lost transport response becomes ambiguous",
       "actions": ["attempt", "ambiguous"],
       "expect": {

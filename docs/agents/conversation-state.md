@@ -129,6 +129,14 @@ message body. Evidence arriving after a user exit advances the evidence axis
 without undoing the user's disposition. Scope revocation settles every record
 by its own state and preserves only bounded evidence for attempted sends.
 
+`notDispatched` means transport provably did not run; it does not authorize a
+silent network retry. On iOS relaunch, a bare message in that state is restored
+through `PayloadConflictSet` and terminalized as
+`abandoned`/`restoredToDraft`, which preserves the message and releases live
+delivery quota. The same settlement runs when the live attempt-marker commit
+fails. A record owned by an unfinished multi-stage create is excluded because
+the create correlation must retain its explicit, honest ambiguity exit.
+
 Multi-stage conversation creation uses the companion canonical vocabularies
 `durableCreateDeliveryPhase` and `durableCreateUserDisposition` from
 `states.json`. `createPending`, `threadCreated`, optional `bindingCompleted`,

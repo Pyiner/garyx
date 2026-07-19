@@ -378,6 +378,25 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
                 return XCTFail("\(label): restore was rejected: \(disposition)")
             }
             records["delivery"] = delivery
+        case "recoverUndispatchedDraft":
+            var conflict = GaryxPayloadConflictSet(
+                id: .init(rawValue: "fixture-undispatched-conflict"),
+                scope: durableFixtureScope
+            )
+            let disposition = GaryxDeliveryDraftRecoveryReducer.restore(
+                record: &delivery,
+                conflictSet: &conflict,
+                candidate: .init(
+                    entryID: .init(rawValue: "fixture-undispatched-entry"),
+                    label: "Recovered unsent message"
+                ),
+                membershipDurabilityAvailable: true,
+                allowingUndispatched: true
+            )
+            guard case .restored = disposition else {
+                return XCTFail("\(label): undispatched recovery was rejected: \(disposition)")
+            }
+            records["delivery"] = delivery
         case "resendCopy":
             let copyID = GaryxDeliveryRecordID(rawValue: "delivery-copy")
             guard let envelope = delivery.resendAsDuplicate(

@@ -39,6 +39,14 @@ code or endpoint contract changes are part of this slice.
   attempt gate records ambiguity; relaunch recovery also promotes an
   interrupted `transportAttempted` record to `ambiguous`. Pre-encoding and
   other pre-dispatch failures never claim that transport was attempted.
+- A bare message killed after `commitSend` but before the attempt marker is not
+  left as a hidden `notDispatched` record and is never silently sent. Relaunch,
+  or a live attempt-marker storage failure, atomically restores the immutable
+  envelope through `PayloadConflictSet`, terminalizes the delivery as
+  `abandoned/restoredToDraft`, removes its host reference, and releases both
+  delivery quotas. Multi-stage create ownership remains on its explicit create
+  ambiguity path. Legacy A4d-1 envelopes lacking attachment snapshots recover
+  their text and publish a durable warning to reattach the missing files.
 - The gateway paths and request bodies remain compatible: start-chat still
   carries the existing message, attachments, workspace, and metadata fields,
   including `client_intent_id`. Existing low-level sends without a durable
@@ -101,8 +109,12 @@ opens the same main/WAL files in a newly launched process.
 The complete retained A4d-1 matrix remains green. A4d-2 adds and pins:
 
 - all 24 physical commit-send boundaries under SIGKILL, ENOSPC, and fsync
-  failure, with recovery restricted to acknowledged, safe retry, or an
-  explicit user-terminable state;
+  failure, with every post-commit bare `notDispatched` message reclaimed as a
+  visible conflict draft and its live quota released;
+- every SQLite boundary of that automatic recovery transaction under real
+  process death, followed by a second idempotent relaunch asserting recovered
+  text, conflict visibility, zero host delivery references, and zero live
+  delivery quota;
 - a real SQLite page-limit exhaustion that returns primary result code 13
   (`SQLITE_FULL`), rolls back revision zero atomically, and reopens with no
   Entry or delivery residue;
@@ -115,10 +127,11 @@ The complete retained A4d-1 matrix remains green. A4d-2 adds and pins:
 - scope revoke before/after commit for not-dispatched, attempted, ambiguous,
   and acknowledged records, followed by epoch-gate and late-evidence checks.
 
-The full SwiftPM run executes all 21 real-process durability suites. No case
+The full SwiftPM run executes all 22 real-process durability suites. No case
 uses an in-memory reconstruction as a relaunch substitute, and every recovered
-delivery reaches acknowledged, safe retry, or an explicit user exit rather
-than remaining in `transportAttempted`.
+delivery reaches acknowledged, a surfaced/reclaimed safe retry, or an explicit
+user exit rather than remaining hidden in `notDispatched` or
+`transportAttempted`.
 
 ## Canonical cross-platform contract
 
@@ -183,13 +196,14 @@ npm run test:unit -- \
 
 Final results:
 
-- SwiftPM passed 1,398 of 1,398 tests with zero failures, including all 21
+- SwiftPM passed 1,401 of 1,401 tests with zero failures, including all 22
   real-process durability suites and the true `SQLITE_FULL` case.
-- The complete app-hosted `GaryxMobile` suite passed 132 of 132 tests with zero
+- The complete app-hosted `GaryxMobile` suite passed 133 of 133 tests with zero
   failures, including a production SQLite attachment send/ambiguity/restore
-  round trip.
+  round trip and a live attempt-marker failure that proves URLSession never
+  starts before the envelope is reclaimed.
 - The focused durable UI/VoiceOver suite passed 5 of 5 tests with zero failures
-  in 76.593 seconds.
+  in 80.596 seconds.
 - The desktop canonical conformance suite passed all 27 tests.
 - Generic simulator Debug and Release builds both completed successfully with
   code signing disabled.
