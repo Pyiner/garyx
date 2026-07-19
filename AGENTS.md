@@ -143,6 +143,10 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
 - Mobile page backgrounds and bottom floating controls should use the shared
   safe-area chrome helpers (`garyxPageBackground`, `garyxFloatingBottomChrome`)
   instead of local `ignoresSafeArea` / `Color.clear` patches.
+- Keep SwiftUI presentation-anchor structure stable while lease or modal-barrier
+  state changes. Gate actions inside an always-attached modifier instead of
+  conditionally replacing modifier branches, which can tear down an in-flight
+  system presentation.
 
 Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 
