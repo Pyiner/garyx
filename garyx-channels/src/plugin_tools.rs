@@ -309,6 +309,25 @@ pub fn tool_call_display_name(message: &ProviderMessage) -> String {
         .unwrap_or_else(|| "tool".to_owned())
 }
 
+/// Item types that never render as user-visible tool rows, on any
+/// channel. Matching is case-insensitive and also consults
+/// `tool_name`, superseding the per-channel variants (Feishu CoT's
+/// reasoning check folded in here in Phase-6 B3).
+const HIDDEN_TOOL_ITEM_TYPES: &[&str] = &[
+    "hookPrompt",
+    "reasoning",
+    "plan",
+    "enteredReviewMode",
+    "exitedReviewMode",
+    "contextCompaction",
+];
+
+fn is_hidden_tool_item_type(value: &str) -> bool {
+    HIDDEN_TOOL_ITEM_TYPES
+        .iter()
+        .any(|hidden| value.eq_ignore_ascii_case(hidden))
+}
+
 pub fn should_hide_tool_call_display(message: &ProviderMessage) -> bool {
     if ["agent_id", "parent_tool_use_id"].iter().any(|key| {
         message
@@ -321,29 +340,70 @@ pub fn should_hide_tool_call_display(message: &ProviderMessage) -> bool {
         return true;
     }
 
-    matches!(
-        provider_message_item_type(message),
-        Some(
-            "hookPrompt"
-                | "reasoning"
-                | "plan"
-                | "enteredReviewMode"
-                | "exitedReviewMode"
-                | "contextCompaction"
-        )
-    )
+    if provider_message_item_type(message).is_some_and(is_hidden_tool_item_type) {
+        return true;
+    }
+
+    message
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(is_hidden_tool_item_type)
 }
 
 pub fn render_tool_call_placeholder(index: usize, name: &str) -> String {
     format!("🔧 #{index} {name}")
 }
 
+/// Channel-blind text-flush gate: owns the DECISION values and rule
+/// for "is this buffered delta worth a user-visible update now" in
+/// live-edit streaming channels. The channel supplies its own
+/// measurements (pending visible chars, sentence termination,
+/// elapsed-since-last-send) because visibility transforms
+/// (markdown→plain, media stripping) are channel rendering concerns —
+/// decision in the engine, measurement in the channel (Phase-6 B3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextFlushGate {
+    /// Minimum spacing between user-visible updates.
+    pub min_flush_interval: Duration,
+    /// Minimum pending visible characters before an update is
+    /// worthwhile…
+    pub min_delta_chars: usize,
+    /// …unless the pending tail ends a sentence, which flushes below
+    /// the char threshold.
+    pub flush_on_sentence_terminator: bool,
+}
+
+impl TextFlushGate {
+    pub fn should_flush(
+        &self,
+        elapsed_since_last_send: Option<Duration>,
+        pending_chars: usize,
+        sentence_terminated: bool,
+    ) -> bool {
+        let enough_text = pending_chars >= self.min_delta_chars
+            || (self.flush_on_sentence_terminator && sentence_terminated);
+        if !enough_text {
+            return false;
+        }
+        elapsed_since_last_send.is_none_or(|elapsed| elapsed >= self.min_flush_interval)
+    }
+}
+
 fn provider_message_item_type(message: &ProviderMessage) -> Option<&str> {
     message
         .metadata
         .get("item_type")
+        .or_else(|| message.metadata.get("itemType"))
         .and_then(|value| value.as_str())
-        .or_else(|| message.content.get("type").and_then(|value| value.as_str()))
+        .or_else(|| {
+            message
+                .content
+                .get("type")
+                .or_else(|| message.content.get("item_type"))
+                .or_else(|| message.content.get("itemType"))
+                .and_then(|value| value.as_str())
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
@@ -573,5 +633,61 @@ mod tests {
                 content_text: "🔧 #3 Write".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn text_flush_gate_gates_on_chars_interval_and_sentence() {
+        let gate = TextFlushGate {
+            min_flush_interval: Duration::from_millis(800),
+            min_delta_chars: 12,
+            flush_on_sentence_terminator: true,
+        };
+        // Below char threshold, no sentence end: never flush.
+        assert!(!gate.should_flush(None, 5, false));
+        // Char threshold met, first send (no elapsed): flush.
+        assert!(gate.should_flush(None, 12, false));
+        // Char threshold met but interval not elapsed: hold.
+        assert!(!gate.should_flush(Some(Duration::from_millis(200)), 40, false));
+        // Interval elapsed: flush.
+        assert!(gate.should_flush(Some(Duration::from_millis(800)), 40, false));
+        // Sentence terminator bypasses the char threshold…
+        assert!(gate.should_flush(Some(Duration::from_millis(900)), 3, true));
+        // …but never the interval.
+        assert!(!gate.should_flush(Some(Duration::from_millis(100)), 3, true));
+        // Sentence bypass off: chars rule only.
+        let strict = TextFlushGate {
+            flush_on_sentence_terminator: false,
+            ..gate
+        };
+        assert!(!strict.should_flush(None, 3, true));
+    }
+
+    #[test]
+    fn hidden_tool_display_matches_case_insensitively_and_via_tool_name() {
+        let mut message = ProviderMessage {
+            role: garyx_models::provider::ProviderMessageRole::ToolUse,
+            content: json!({}),
+            text: None,
+            timestamp: None,
+            metadata: std::collections::HashMap::new(),
+            tool_use_id: Some("call-1".to_owned()),
+            tool_name: Some("Reasoning".to_owned()),
+            is_error: None,
+        };
+        // tool_name source, case-insensitive (Feishu CoT parity).
+        assert!(should_hide_tool_call_display(&message));
+        // camelCase metadata key source.
+        message.tool_name = Some("Bash".to_owned());
+        message
+            .metadata
+            .insert("itemType".to_owned(), json!("reasoning"));
+        assert!(should_hide_tool_call_display(&message));
+        // content item_type source.
+        message.metadata.clear();
+        message.content = json!({"item_type": "PLAN"});
+        assert!(should_hide_tool_call_display(&message));
+        // ordinary tool stays visible.
+        message.content = json!({});
+        assert!(!should_hide_tool_call_display(&message));
     }
 }

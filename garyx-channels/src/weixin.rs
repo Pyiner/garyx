@@ -52,6 +52,17 @@ const STREAM_UPDATE_TICK_MS: u64 = 200;
 const STREAM_UPDATE_MIN_INTERVAL_MS: u64 = 800;
 const STREAM_UPDATE_MIN_DELTA_CHARS: usize = 12;
 const STREAM_UPDATE_INACTIVITY_FORCE_FINISH_MS: u64 = 15_000;
+
+/// The one production construction point of Weixin's streaming text
+/// flush decision values (Phase-6 B3): the rule lives in the shared
+/// engine, the measurements stay channel-side.
+fn weixin_streaming_text_flush_gate() -> crate::plugin_tools::TextFlushGate {
+    crate::plugin_tools::TextFlushGate {
+        min_flush_interval: Duration::from_millis(STREAM_UPDATE_MIN_INTERVAL_MS),
+        min_delta_chars: STREAM_UPDATE_MIN_DELTA_CHARS,
+        flush_on_sentence_terminator: true,
+    }
+}
 const LIVE_MESSAGE_MAX_GENERATING_SENDS: u8 = 7;
 type ContextTokenStore = Arc<Mutex<HashMap<String, String>>>;
 type Aes128EcbEnc = Encryptor<Aes128>;
@@ -695,14 +706,11 @@ impl LiveMessage {
         if !self.has_buffered_visible() || self.has_unterminated_markdown_image_ref_tail() {
             return false;
         }
-        let enough_text = self.pending_delta_chars() >= STREAM_UPDATE_MIN_DELTA_CHARS
-            || self.sentence_terminated_since_last_send();
-        if !enough_text {
-            return false;
-        }
-        self.last_sent_at.is_none_or(|last| {
-            now.duration_since(last) >= Duration::from_millis(STREAM_UPDATE_MIN_INTERVAL_MS)
-        })
+        weixin_streaming_text_flush_gate().should_flush(
+            self.last_sent_at.map(|last| now.duration_since(last)),
+            self.pending_delta_chars(),
+            self.sentence_terminated_since_last_send(),
+        )
     }
 
     fn should_force_inactivity_finish(&self, now: Instant) -> bool {

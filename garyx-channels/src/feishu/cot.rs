@@ -372,27 +372,14 @@ fn tool_name(message: &ProviderMessage) -> String {
         .unwrap_or_else(|| "tool".to_owned())
 }
 
+/// Tool-row visibility is the shared engine decision
+/// ([`crate::plugin_tools::should_hide_tool_call_display`]) as of
+/// Phase-6 B3 — a DECLARED unification: Feishu previously hid only
+/// `reasoning` items; it now also hides the engine's full internal
+/// set (subagent-tagged rows, hookPrompt/plan/review/compaction),
+/// matching Telegram and Discord.
 fn is_hidden_cot_tool(message: &ProviderMessage) -> bool {
-    let tool_name = message.tool_name.as_deref().unwrap_or_default().trim();
-    let metadata_item_type = message
-        .metadata
-        .get("item_type")
-        .or_else(|| message.metadata.get("itemType"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
-    let content_type = message
-        .content
-        .get("type")
-        .or_else(|| message.content.get("item_type"))
-        .or_else(|| message.content.get("itemType"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
-
-    [tool_name, metadata_item_type, content_type]
-        .iter()
-        .any(|value| value.eq_ignore_ascii_case("reasoning"))
+    crate::plugin_tools::should_hide_tool_call_display(message)
 }
 
 fn summarize_tool_args(message: &ProviderMessage) -> String {
