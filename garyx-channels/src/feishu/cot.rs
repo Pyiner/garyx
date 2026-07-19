@@ -1,6 +1,7 @@
 use super::cot_render::{
-    readable_tool_argument, sanitize_event_id_part, split_utf8_bytes, stringify_event_content,
-    summarize_tool_args, tool_icon, tool_parameter_result_content, tool_title,
+    MAX_EVENT_CONTENT_BYTES, MAX_TOOL_ARG_DISPLAY_CHARS, readable_tool_argument,
+    sanitize_event_id_part, split_utf8_bytes, stringify_event_content, summarize_tool_args,
+    tool_icon, tool_name, tool_parameter_result_content, tool_title,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,10 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use garyx_models::provider::ProviderMessage;
 use serde_json::{Value, json};
 
-pub(super) const MAX_EVENT_CONTENT_BYTES: usize = 4096;
 const MAX_TEXT_DELTA_BYTES: usize = 3500;
-pub(super) const MAX_TOOL_ARG_DISPLAY_CHARS: usize = 120;
-pub(super) const TRUNCATED_SUFFIX: &str = "\n...[truncated]";
 
 pub(super) const EVENT_RUN_STARTED: &str = "RUN_STARTED";
 pub(super) const EVENT_RUN_FINISHED: &str = "RUN_FINISHED";
@@ -305,25 +303,6 @@ fn tool_call_id(message: &ProviderMessage, fallback: u64) -> String {
         .filter(|value| !value.is_empty())
         .map(sanitize_event_id_part)
         .unwrap_or_else(|| format!("tool-call-{fallback}"))
-}
-
-pub(super) fn tool_name(message: &ProviderMessage) -> String {
-    message
-        .tool_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            message
-                .content
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "tool".to_owned())
 }
 
 /// Tool-row visibility is the shared engine decision

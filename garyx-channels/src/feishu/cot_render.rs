@@ -7,9 +7,9 @@
 use garyx_models::provider::ProviderMessage;
 use serde_json::{Map, Value, json};
 
-use super::cot::{
-    MAX_EVENT_CONTENT_BYTES, MAX_TOOL_ARG_DISPLAY_CHARS, TRUNCATED_SUFFIX, tool_name,
-};
+pub(super) const MAX_EVENT_CONTENT_BYTES: usize = 4096;
+pub(super) const MAX_TOOL_ARG_DISPLAY_CHARS: usize = 120;
+const TRUNCATED_SUFFIX: &str = "\n...[truncated]";
 
 pub(super) fn stringify_event_content(content: Value) -> String {
     let serialized = serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_owned());
@@ -57,7 +57,7 @@ fn shrink_longest_string_fields(map: &mut Map<String, Value>) {
     }
 }
 
-pub(super) fn fits_event_content(text: &str) -> bool {
+fn fits_event_content(text: &str) -> bool {
     text.len() <= MAX_EVENT_CONTENT_BYTES
 }
 
@@ -93,7 +93,7 @@ pub(super) fn tool_parameter_result_content(message: &ProviderMessage, args: &st
     })
 }
 
-pub(super) fn is_image_view_message(message: &ProviderMessage) -> bool {
+fn is_image_view_message(message: &ProviderMessage) -> bool {
     let metadata_type = message
         .metadata
         .get("item_type")
@@ -115,7 +115,7 @@ pub(super) fn is_image_view_message(message: &ProviderMessage) -> bool {
             .is_some_and(|value| value.eq_ignore_ascii_case("imageView"))
 }
 
-pub(super) fn image_view_summary(message: &ProviderMessage) -> String {
+fn image_view_summary(message: &ProviderMessage) -> String {
     let Some(path) = message.content.get("path").and_then(Value::as_str) else {
         return "查看图片".to_owned();
     };
@@ -265,7 +265,7 @@ fn is_path_like_key(key: &str) -> bool {
     )
 }
 
-pub(super) fn truncate_path_for_display(path: &str, max_bytes: usize) -> String {
+fn truncate_path_for_display(path: &str, max_bytes: usize) -> String {
     if path.len() <= max_bytes {
         return path.to_owned();
     }
@@ -295,7 +295,7 @@ pub(super) fn truncate_path_for_display(path: &str, max_bytes: usize) -> String 
     )
 }
 
-pub(super) fn command_from_value(value: &Value) -> Option<String> {
+fn command_from_value(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => {
             let trimmed = text.trim();
@@ -404,7 +404,7 @@ fn is_command_like_tool(message: &ProviderMessage) -> bool {
     contains_any(&content_type, &["command", "bash", "shell", "exec", "run"])
 }
 
-pub(super) fn preview_json(value: &Value, max_bytes: usize) -> String {
+fn preview_json(value: &Value, max_bytes: usize) -> String {
     match value {
         Value::Null => String::new(),
         Value::String(text) => truncate_utf8_bytes(text.trim(), max_bytes),
@@ -480,7 +480,7 @@ pub(super) fn sanitize_event_id_part(value: &str) -> String {
     }
 }
 
-pub(super) fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> String {
+fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
@@ -519,7 +519,7 @@ pub(super) fn split_utf8_bytes(text: &str, max_bytes: usize) -> Vec<String> {
     chunks
 }
 
-pub(super) fn truncate_utf8_bytes_with_suffix(text: &str, max_bytes: usize) -> String {
+fn truncate_utf8_bytes_with_suffix(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
@@ -531,7 +531,7 @@ pub(super) fn truncate_utf8_bytes_with_suffix(text: &str, max_bytes: usize) -> S
     format!("{}{}", &text[..end], TRUNCATED_SUFFIX)
 }
 
-pub(super) fn middle_elide_utf8_bytes(text: &str, max_bytes: usize) -> String {
+fn middle_elide_utf8_bytes(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
@@ -551,4 +551,23 @@ pub(super) fn middle_elide_utf8_bytes(text: &str, max_bytes: usize) -> String {
         tail -= 1;
     }
     format!("{}{}{}", &text[..head], MARKER, &text[text.len() - tail..])
+}
+
+pub(super) fn tool_name(message: &ProviderMessage) -> String {
+    message
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            message
+                .content
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "tool".to_owned())
 }

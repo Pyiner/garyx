@@ -37,6 +37,7 @@ use crate::meeting_sink::{MeetingEventSink, MeetingPlatformClient};
 mod auth_flow_executor;
 mod client;
 mod cot;
+mod cot_render;
 mod device_auth;
 mod mentions;
 mod message;
@@ -627,7 +628,6 @@ pub enum FeishuError {
 // Tests
 // ---------------------------------------------------------------------------
 
-mod cot_render;
 pub mod outbound;
 #[cfg(test)]
 mod tests;
