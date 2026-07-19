@@ -25,10 +25,14 @@ extension GaryxMobileModel {
 
     func setThreadFavorite(_ threadId: String, desired: Bool) {
         ensureThreadFavoritesScope()
+        let previous = threadIsFavorite(threadId)
         runThreadFavoritesEffects(
             threadFavoritesProvider.toggle(threadId: threadId, desired: desired)
         )
         publishThreadSummaryState()
+        if threadIsFavorite(threadId) != previous {
+            GaryxMobileHaptics.shared.play(.threadFavoriteChanged)
+        }
     }
 
     func toggleThreadFavorite(_ threadId: String) {

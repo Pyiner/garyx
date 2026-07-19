@@ -997,8 +997,6 @@ private struct GaryxAvatarStyleSheet: View {
     @State private var waitTask: Task<Void, Never>?
     @State private var generationEpoch = 0
     @State private var showsLongWaitMessage = false
-    @State private var successFeedback = 0
-    @State private var failureFeedback = 0
     @AccessibilityFocusState private var failureIsFocused: Bool
     @AccessibilityFocusState private var useAvatarIsFocused: Bool
 
@@ -1133,8 +1131,6 @@ private struct GaryxAvatarStyleSheet: View {
             }
         }
         .tint(GaryxTheme.controlTint)
-        .sensoryFeedback(.success, trigger: successFeedback)
-        .sensoryFeedback(.error, trigger: failureFeedback)
         .onDisappear {
             cancelGeneration(announces: false)
         }
@@ -1193,6 +1189,8 @@ private struct GaryxAvatarStyleSheet: View {
         guard let requestId = state.beginGeneration() else { return }
         let stylePrompt = state.activeStylePrompt
         showsLongWaitMessage = false
+        GaryxMobileHaptics.shared.prepare(.avatarGenerationSucceeded)
+        GaryxMobileHaptics.shared.prepare(.avatarGenerationFailed)
         announce("Generating avatar")
 
         waitTask?.cancel()
@@ -1221,11 +1219,11 @@ private struct GaryxAvatarStyleSheet: View {
             showsLongWaitMessage = false
             switch outcome {
             case .success:
-                successFeedback += 1
+                GaryxMobileHaptics.shared.play(.avatarGenerationSucceeded)
                 useAvatarIsFocused = true
                 announce("Avatar ready")
             case .failure(let failure):
-                failureFeedback += 1
+                GaryxMobileHaptics.shared.play(.avatarGenerationFailed)
                 failureIsFocused = true
                 onError(failure.message)
                 announce("Couldn’t generate avatar")

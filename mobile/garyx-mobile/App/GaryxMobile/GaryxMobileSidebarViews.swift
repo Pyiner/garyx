@@ -156,7 +156,6 @@ struct GaryxHomeThreadListView: View, Equatable {
     @Environment(\.garyxMotion) private var motion
     @StateObject private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
     @State private var threadMenuDismissToken = 0
-    @State private var completedDropHapticTrigger = 0
     #if DEBUG
     @ObservedObject private var performanceProbe = GaryxHomeScrollPerformanceProbe.shared
     @State private var dragBaselineOrder: [String] = []
@@ -218,7 +217,6 @@ struct GaryxHomeThreadListView: View, Equatable {
             .overlay {
                 pinnedDragLifecycleAdapter
             }
-            .sensoryFeedback(.selection, trigger: completedDropHapticTrigger)
             .onAppear {
                 configurePinnedDragLifecycle()
             }
@@ -504,6 +502,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     }
 
     private func beginPinnedDragSession() {
+        GaryxMobileHaptics.shared.prepare(.pinnedOrderDropCommitted)
         #if DEBUG
         if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
             beginArchitectureSpikePinnedDragSession()
@@ -546,7 +545,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             dragPreviewOrder = nil
             dragBaselineOrder = []
             spikeCommitCount += 1
-            completedDropHapticTrigger &+= 1
+            GaryxMobileHaptics.shared.play(.pinnedOrderDropCommitted)
             return
         }
         #endif
@@ -554,7 +553,7 @@ struct GaryxHomeThreadListView: View, Equatable {
         // final SwiftUI onMove arrived on the deferred classification turn.
         onPreviewPinnedOrderDrag(previewOrder)
         onAcceptPinnedOrderDrop()
-        completedDropHapticTrigger &+= 1
+        GaryxMobileHaptics.shared.play(.pinnedOrderDropCommitted)
     }
 
     private func cancelPinnedDragSession() {

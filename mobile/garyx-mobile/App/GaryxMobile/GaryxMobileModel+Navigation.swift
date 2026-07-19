@@ -100,13 +100,14 @@ extension GaryxMobileModel {
 
     func setSidebarVisible(_ visible: Bool, animated: Bool = true) {
         guard sidebarVisible != visible else { return }
-        // A light tick on open and close so the drawer state change is felt.
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         drawerRevealInteraction.setTarget(
             visible ? .open : .closed,
             animated: animated
         )
         sidebarVisible = visible
+        if animated {
+            GaryxMobileHaptics.shared.play(.drawerVisibilityCommitted)
+        }
     }
 
     func setActivePanel(

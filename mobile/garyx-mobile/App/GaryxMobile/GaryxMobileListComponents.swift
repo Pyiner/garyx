@@ -361,6 +361,8 @@ struct GaryxSwipeActionRow<Content: View>: View {
                 return revealInteraction.acceptedDirection.accepts(logicalIntent)
             },
             onBegan: {
+                GaryxMobileHaptics.shared.prepare(.rowSwipeFullyRevealed)
+                GaryxMobileHaptics.shared.prepare(.threadPinChanged)
                 revealInteraction.beginGesture()
             },
             onChanged: { translation, _ in
@@ -464,7 +466,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
     private func playFullRevealFeedbackIfNeeded() {
         guard !didPlayFullRevealFeedback else { return }
         didPlayFullRevealFeedback = true
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        GaryxMobileHaptics.shared.play(.rowSwipeFullyRevealed)
     }
 }
 

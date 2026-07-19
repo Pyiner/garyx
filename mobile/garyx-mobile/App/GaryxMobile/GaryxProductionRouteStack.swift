@@ -502,6 +502,7 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                 drawerInteraction.acceptedDirection
             },
             began: {
+                GaryxMobileHaptics.shared.prepare(.drawerVisibilityCommitted)
                 drawerInteraction.beginGesture()
             },
             changed: { translation, _ in
@@ -539,6 +540,7 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                 taskTreeInteraction.acceptedDirection
             },
             began: {
+                GaryxMobileHaptics.shared.prepare(.taskTreeVisibilityCommitted)
                 taskTreeInteraction.beginGesture()
             },
             changed: { translation, _ in

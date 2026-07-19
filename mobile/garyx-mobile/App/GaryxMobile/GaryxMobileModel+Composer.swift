@@ -381,8 +381,12 @@ extension GaryxMobileModel {
                 markStreamingAssistantComplete(for: optimisticThreadId, removeEmpty: true)
                 return
             }
+            // The optimistic row/run state and its haptic commit in this same
+            // main-run-loop transaction, before the first network suspension.
+            GaryxMobileHaptics.shared.play(.messageSendCommitted)
         } else {
             messages = draftOptimisticMessages
+            GaryxMobileHaptics.shared.play(.messageSendCommitted)
         }
 
         do {

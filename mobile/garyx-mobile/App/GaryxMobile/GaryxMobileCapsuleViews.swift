@@ -683,6 +683,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
     private func handleGestureChanged(startX: CGFloat, translation: CGSize) {
         if !dragGestureActive {
             dragGestureActive = true
+            GaryxMobileHaptics.shared.prepare(.capsuleDismissCommitted)
             if let interrupted = settleDriver.interrupt() {
                 dragState.translation = capsuleTranslation(
                     phase: dragState.phase,
@@ -721,6 +722,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
         case .dismiss:
             settleDriver.invalidate()
             dragState = next
+            GaryxMobileHaptics.shared.play(.capsuleDismissCommitted)
             loader.cancelForDismiss(model: model)
             dismiss()
         case .snapBack:
@@ -804,12 +806,12 @@ struct GaryxCapsuleFocusedPreviewView: View {
 
     private func copyLink() {
         if let url = GaryxMobileRouteLink.make(.capsule(selection.id)) {
-            UIPasteboard.general.string = url.absoluteString
+            GaryxClipboard.copyString(url.absoluteString)
         }
     }
 
     private func copyID() {
-        UIPasteboard.general.string = selection.id
+        GaryxClipboard.copyString(selection.id)
     }
 }
 

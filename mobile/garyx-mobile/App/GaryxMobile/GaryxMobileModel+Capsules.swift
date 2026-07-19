@@ -165,6 +165,7 @@ extension GaryxMobileModel {
         )
         applyCapsuleFavoriteTransition(transition)
         guard var effect = transition.effect else { return }
+        GaryxMobileHaptics.shared.play(.capsuleFavoriteChanged)
 
         let runtimeGeneration = gatewayRequestToken
         while true {

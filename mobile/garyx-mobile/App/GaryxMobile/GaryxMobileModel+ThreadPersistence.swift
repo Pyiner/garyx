@@ -96,6 +96,9 @@ extension GaryxMobileModel {
             refreshResidentThreadListStores()
             return
         }
+        // beginPinnedOrderMembershipChange publishes the optimistic placement;
+        // emit the selection tick before yielding to transport.
+        GaryxMobileHaptics.shared.play(.threadPinChanged)
 
         let runtimeGeneration = gatewayRequestToken
         Task { [weak self] in

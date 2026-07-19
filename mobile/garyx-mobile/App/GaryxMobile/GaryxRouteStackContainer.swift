@@ -422,6 +422,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             mutation: .pop(1)
         ) else { return false }
         gestureBaseProgress = 0
+        GaryxMobileHaptics.shared.prepare(.interactiveBackCommitted)
         return true
     }
 
@@ -448,6 +449,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         self.transition = transition
         callbacks.phaseChanged(transition.coordinator.phase)
         if outcome == .committed {
+            GaryxMobileHaptics.shared.play(.interactiveBackCommitted)
             callbacks.commitReleased(transition.source, transition.destination)
             commitPendingCanonicalMutation()
             deactivateSourceAtCommitBoundary()

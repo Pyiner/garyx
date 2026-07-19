@@ -96,11 +96,9 @@ extension GaryxMobileModel {
     func openTaskTreeSidebar() {
         guard !isTaskTreeSidebarOpen else { return }
         dismissKeyboardForTaskTreeSidebar()
-        // A light tick on open and close so the panel state change is felt,
-        // matching the left navigation drawer.
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         taskTreeRevealInteraction.setTarget(.open, animated: true)
         isTaskTreeSidebarOpen = true
+        GaryxMobileHaptics.shared.play(.taskTreeVisibilityCommitted)
         Task { [weak self] in
             await self?.refreshSelectedThreadTaskForest()
         }
@@ -108,9 +106,9 @@ extension GaryxMobileModel {
 
     func closeTaskTreeSidebar() {
         guard isTaskTreeSidebarOpen else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         taskTreeRevealInteraction.setTarget(.closed, animated: true)
         isTaskTreeSidebarOpen = false
+        GaryxMobileHaptics.shared.play(.taskTreeVisibilityCommitted)
     }
 
     /// Row tap: the current thread's row only closes the panel; any other row

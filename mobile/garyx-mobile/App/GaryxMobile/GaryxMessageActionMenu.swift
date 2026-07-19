@@ -88,7 +88,7 @@ private struct GaryxInPlaceMessageMenuModifier: ViewModifier {
                     .onEnded { _ in
                         let items = itemsProvider()
                         guard !items.isEmpty else { return }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        GaryxMobileHaptics.shared.play(.messageActionMenuPresented)
                         presented = PresentedMenu(token: UUID(), items: items)
                     }
             )
@@ -356,7 +356,8 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
         guard isEnabled else { return }
         let items = itemsProvider()
         guard items.contains(where: \.isEnabled) else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        GaryxMobileHaptics.shared.prepare(.threadPinChanged)
+        GaryxMobileHaptics.shared.play(.messageActionMenuPresented)
         presented = PresentedMenu(token: UUID(), items: items)
     }
 

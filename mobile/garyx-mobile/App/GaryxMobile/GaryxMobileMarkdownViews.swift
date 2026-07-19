@@ -4,15 +4,16 @@ import UIKit
 
 typealias GaryxMarkdownImagePreviewResolver = @MainActor (String) async -> GaryxWorkspaceFilePreview?
 
+@MainActor
 enum GaryxClipboard {
     static func copyString(_ value: String) {
         UIPasteboard.general.string = value
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        GaryxMobileHaptics.shared.play(.clipboardCopySucceeded)
     }
 
     static func copyImage(_ image: UIImage) {
         UIPasteboard.general.image = image
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        GaryxMobileHaptics.shared.play(.clipboardCopySucceeded)
     }
 }
 
