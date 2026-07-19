@@ -80,6 +80,10 @@
 
 ### P1-D 触觉 + 按压反馈
 
+> 完成审计（2026-07-20）：触觉事件/预热/同帧路径、119 个 App 按压样式点、
+> 2 个 WidgetKit 豁免及验证记录见
+> [`ios-fluid-p1d-feedback-audit.md`](ios-fluid-p1d-feedback-audit.md)。
+
 - 补触觉：发送消息（`sendLocalDraft`，`GaryxMobileComposerViews.swift:631`）、pin/收藏切换、capsule dismiss 越过阈值时刻；关键 generator 加 `.prepare()` 预热（现在零处，首次触觉可能迟滞）。原则：**只加在有意义的提交时刻**（成功/错误/落位），不过度。
 - 建共享 `GaryxPressableRowStyle`（scale ~0.97 + opacity，reduceMotion gated，参照现有 `GaryxItemActionMenuButtonStyle`），铺到 ~50 处 `.buttonStyle(.plain)` 的可点行。
 
