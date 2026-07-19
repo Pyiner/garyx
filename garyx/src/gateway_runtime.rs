@@ -618,6 +618,26 @@ pub(crate) async fn run(
     let plugin_manager = state.channel_plugin_manager();
     register_plugin_state_logging(&mut *plugin_manager.lock().await);
 
+    // Phase-7: install the channel-plugin rebuilder so
+    // `apply_runtime_config` is the single derivation point for
+    // channel hot-reload. Both the HTTP settings path and the file
+    // watcher below converge on it (gated on an actual channels
+    // change inside apply_runtime_config).
+    {
+        let plugin_manager = plugin_manager.clone();
+        let state_for_rebuild = state.clone();
+        let bridge_for_rebuild = bridge.clone();
+        state.set_channel_plugin_rebuilder(Arc::new(move |config: GaryxConfig| {
+            let plugin_manager = plugin_manager.clone();
+            let state = state_for_rebuild.clone();
+            let bridge = bridge_for_rebuild.clone();
+            Box::pin(async move {
+                rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels)
+                    .await
+            })
+        }));
+    }
+
     // Teardown mirrors startup: the single production registration point
     // records each phase's inverse and shutdown drains the stack in reverse
     // order, so the two sequences cannot drift apart.
@@ -638,17 +658,13 @@ pub(crate) async fn run(
         let reloader = ConfigHotReloader::start(config_path.clone(), config.clone(), options);
 
         let state_cb = state.clone();
-        let bridge_cb = bridge.clone();
-        let plugin_manager_cb = plugin_manager.clone();
         let tokio_handle = tokio::runtime::Handle::current();
         reloader.register_callback(move |new_config, diagnostics| {
             print_diagnostics(&diagnostics);
             let state = state_cb.clone();
-            let bridge = bridge_cb.clone();
-            let plugin_manager = plugin_manager_cb.clone();
             tokio_handle.spawn(async move {
                 let _settings_guard = state.ops.settings_mutex.lock().await;
-                if let Err(error) = state.apply_runtime_config(new_config.clone()).await {
+                if let Err(error) = state.apply_runtime_config(new_config).await {
                     tracing::warn!(
                         error = %error,
                         "Failed to fully apply hot-reloaded config"
@@ -656,20 +672,12 @@ pub(crate) async fn run(
                     return;
                 }
 
-                if let Err(error) = rebuild_channel_plugins(
-                    &plugin_manager,
-                    &new_config,
-                    &state,
-                    &bridge,
-                    no_channels,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        "Failed to rebuild channel plugins after hot-reloaded config"
-                    );
-                }
+                // The channel plugin rebuild now runs inside
+                // apply_runtime_config through the boot-installed
+                // rebuilder hook (Phase-7 single derivation point),
+                // gated on an actual channels change — so an external
+                // edit of unrelated config sections no longer bounces
+                // live channel connections.
             });
         });
 

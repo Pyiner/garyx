@@ -8,7 +8,9 @@ use garyx_models::thread_logs::ThreadLogSink;
 use garyx_router::{
     KnownChannelEndpoint, MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
 };
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -75,6 +77,16 @@ pub struct ChannelEndpointSnapshotCache {
 
 const GATEWAY_SYNC_SNAPSHOT_TTL: Duration = Duration::from_secs(5);
 
+/// Boot-installed hook that rebuilds the channel plugin manager
+/// (built-in runtime restart + subprocess discovery/respawn) for a
+/// freshly applied config. The rebuild implementation lives in the
+/// binary crate; injecting it here makes `apply_runtime_config` the
+/// single derivation point both the HTTP settings path and the config
+/// file watcher converge on (Phase-7).
+pub type ChannelPluginRebuilder = Arc<
+    dyn Fn(GaryxConfig) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+>;
+
 pub struct IntegrationState {
     pub bridge: Arc<MultiProviderBridge>,
     pub channel_dispatcher: Arc<ChannelDispatcherCell>,
@@ -91,6 +103,10 @@ pub struct IntegrationState {
     /// subprocess plugins (e.g. `GET /api/channels/plugins` returns
     /// the schema-driven catalog the desktop UI renders).
     pub channel_plugin_manager: Arc<Mutex<ChannelPluginManager>>,
+    /// See [`ChannelPluginRebuilder`]. `None` until the binary installs
+    /// it at boot; embedded/test states without a plugin runtime simply
+    /// never set it. Shared across state re-compositions.
+    pub channel_plugin_rebuilder: Arc<std::sync::OnceLock<ChannelPluginRebuilder>>,
 }
 
 pub struct AppState {
@@ -111,6 +127,12 @@ impl AppState {
 
     pub fn replace_config(&self, config: GaryxConfig) {
         self.runtime.live_config.replace(config);
+    }
+
+    /// Install the boot-time channel plugin rebuilder. First caller
+    /// wins; later calls are ignored (the hook is process-lifetime).
+    pub fn set_channel_plugin_rebuilder(&self, rebuilder: ChannelPluginRebuilder) {
+        let _ = self.integration.channel_plugin_rebuilder.set(rebuilder);
     }
 
     pub fn provider_runtime_ready(&self) -> bool {
@@ -283,6 +305,11 @@ impl AppState {
     }
 
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
+        // Channels-diff gate for the plugin rebuild below: unrelated
+        // config saves (shortcuts, MCP servers, …) must not bounce
+        // live channel connections.
+        let channels_changed = serde_json::to_value(&self.config_snapshot().channels).ok()
+            != serde_json::to_value(&config.channels).ok();
         let projection = RuntimeConfigProjection::from_config(&config);
         self.integration
             .bridge
@@ -372,6 +399,22 @@ impl AppState {
                 .await;
         }
         self.mark_provider_runtime_ready();
+        // Phase-7 single derivation point: when the channels section
+        // actually changed, run the boot-installed plugin-manager
+        // rebuild (built-in runtime restart + subprocess
+        // discovery/respawn). Both the HTTP settings path and the
+        // file watcher reach it through this one hook; failures are
+        // logged, matching the historical watcher-path semantics —
+        // the applied dispatcher/bridge state above is already live.
+        if channels_changed
+            && let Some(rebuilder) = self.integration.channel_plugin_rebuilder.get()
+            && let Err(error) = rebuilder(config).await
+        {
+            tracing::warn!(
+                error = %error,
+                "channel plugin rebuild after config apply failed"
+            );
+        }
         Ok(())
     }
 
@@ -427,6 +470,7 @@ impl AppState {
                 channel_dispatcher: self.integration.channel_dispatcher.clone(),
                 channel_swap: self.integration.channel_swap.clone(),
                 channel_plugin_manager: self.integration.channel_plugin_manager.clone(),
+                channel_plugin_rebuilder: self.integration.channel_plugin_rebuilder.clone(),
             },
         }
     }

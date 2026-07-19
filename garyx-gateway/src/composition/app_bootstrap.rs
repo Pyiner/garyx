@@ -446,6 +446,7 @@ impl AppStateBuilder {
                 channel_dispatcher: Arc::new(ChannelDispatcherCell::new(self.channel_dispatcher)),
                 channel_swap: self.channel_swap,
                 channel_plugin_manager: self.channel_plugin_manager,
+                channel_plugin_rebuilder: Arc::new(std::sync::OnceLock::new()),
             },
         });
 

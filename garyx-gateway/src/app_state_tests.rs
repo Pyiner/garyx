@@ -258,6 +258,69 @@ async fn test_apply_runtime_config_refreshes_meeting_ingestion_window() {
 }
 
 #[tokio::test]
+async fn test_apply_runtime_config_invokes_rebuilder_only_on_channels_change() {
+    use std::sync::atomic::AtomicUsize;
+
+    let state = test_state();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_hook = calls.clone();
+    state.set_channel_plugin_rebuilder(Arc::new(move |_config| {
+        let calls = calls_hook.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }));
+
+    // First apply: channels differ from the default snapshot -> rebuild.
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(&TelegramAccount {
+                token: "token".to_owned(),
+                enabled: true,
+                name: None,
+                agent_id: Some("claude".to_owned()),
+                workspace_dir: None,
+                owner_target: None,
+                groups: HashMap::new(),
+            }),
+        );
+    state.apply_runtime_config(config.clone()).await.unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a channels change must trigger exactly one plugin rebuild"
+    );
+
+    // Second apply: identical channels, unrelated section changed ->
+    // the rebuild hook must NOT fire (live connections don't bounce).
+    let mut unrelated = config.clone();
+    unrelated.gateway.port = unrelated.gateway.port.wrapping_add(1);
+    state.apply_runtime_config(unrelated).await.unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "an unrelated config save must not bounce channel plugins"
+    );
+
+    // Third apply: channels change again -> rebuild fires again.
+    config
+        .channels
+        .plugins
+        .get_mut("telegram")
+        .unwrap()
+        .accounts
+        .remove("main");
+    state.apply_runtime_config(config).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn test_apply_runtime_config_reconciles_bridge_and_dispatcher() {
     let state = test_state();
     let mut config = GaryxConfig::default();
