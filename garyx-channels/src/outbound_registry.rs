@@ -9,9 +9,9 @@
 //!
 //! - [`BuiltinSenderRegistry::route`] / [`BuiltinSenderRegistry::iter`]
 //!   — type-erased, `&self`, suitable for dispatch paths;
-//! - [`BuiltinSenderRegistry::with_mut`] — typed access for the
-//!   registration/construction layer, deliberately `&mut self` so it
-//!   is inexpressible inside `&self` routing contexts.
+//! - [`BuiltinSenderRegistry::register`] — the consume-only sealed
+//!   registration entry: no caller closure, no return value, so even
+//!   a cloned registry yields nothing recoverable.
 //!
 //! [`crate::dispatcher::OutboundChannelSender`] itself carries no
 //! `Any`/downcast/clone-box surface, so holding a
@@ -87,9 +87,10 @@ impl BuiltinSenderRegistry {
     /// construction: no caller-supplied closure ever runs against the
     /// concrete wrapper, the account value is consumed, and nothing is
     /// returned — so cloning the registry from a `&self` context gains
-    /// an attacker nothing (round-3 review: a Clone + closure-based
-    /// `with_mut` allowed recovering a concrete sender from dispatch
-    /// paths). Panics only on a construction bug (catalog did not
+    /// an attacker nothing (round-3 review: the former Clone +
+    /// closure-based generic accessor allowed recovering a concrete
+    /// sender from dispatch paths, so the generic accessor was
+    /// deleted). Panics only on a construction bug (catalog did not
     /// register the host wrapper).
     pub(crate) fn register<A: AccountRegistration>(&mut self, account: A) {
         let host = self

@@ -665,9 +665,9 @@ pub struct ChannelDispatcherImpl {
     /// downcast capability lives inside
     /// [`crate::outbound_registry::BuiltinSenderRegistry`] (private
     /// trait + private field): the dispatcher core can only `route`,
-    /// `iter`, or — with `&mut self`, i.e. never in dispatch paths —
-    /// `with_mut` for registration. Adding a built-in touches the
-    /// catalog and the channel module only.
+    /// `iter`, or feed consume-only sealed registrations through
+    /// `register`. Adding a built-in channel touches the catalog, the
+    /// channel's own module, and the registry's `Sealed` allowlist.
     builtin_senders: crate::outbound_registry::BuiltinSenderRegistry,
     /// Plugin-backed senders keyed by their manifest `plugin.id`. The
     /// manager registers one entry per plugin whose lifecycle state is

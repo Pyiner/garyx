@@ -655,15 +655,18 @@ fn b2b_guard_stripper_strips_comments_and_keeps_strings() {
     );
 }
 
-/// Structural seal (round-2 review): the downcast capability lives
+/// Structural seal (rounds 2-3 review): the downcast capability lives
 /// only in `outbound_registry` (private trait + private field), and
 /// `OutboundChannelSender` carries no `Any`/clone-box surface — so a
 /// `&dyn OutboundChannelSender` obtained from `route()` cannot be
-/// turned back into a concrete channel type, and typed access
-/// (`with_mut`) requires `&mut self`, inexpressible in `&self`
-/// dispatch paths. This lexical check is only the tripwire on top of
-/// that privacy boundary: dispatcher.rs must contain no downcast
-/// vocabulary at all.
+/// turned back into a concrete channel type. The registry's only
+/// typed mutation surface is the consume-only sealed
+/// `register(AccountRegistration)`: no caller closure, no return
+/// value, and the sealed supertrait blocks ad-hoc smuggling impls —
+/// so even cloning the registry from a `&self` dispatch path yields
+/// nothing recoverable. This lexical check is only the tripwire on
+/// top of that privacy boundary: dispatcher.rs must contain no
+/// downcast vocabulary at all.
 #[test]
 fn dispatcher_has_no_downcast_vocabulary() {
     let production = include_str!("../dispatcher.rs");

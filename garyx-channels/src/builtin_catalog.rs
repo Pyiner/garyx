@@ -275,9 +275,11 @@ pub const RESERVED_CHANNEL_NAMES: &[&str] =
 /// Construction-layer injection point for the dispatcher's
 /// type-erased built-in sender registry. The dispatcher core never
 /// names a concrete channel type; adding a built-in channel means
-/// registering its wrapper here and implementing
-/// [`crate::dispatcher::OutboundChannelSender`] in the channel's own
-/// module. The downcast capability stays sealed inside
+/// registering its wrapper here, implementing
+/// [`crate::dispatcher::OutboundChannelSender`] plus the sealed
+/// account registration in the channel's own module, and adding the
+/// account type to the registry's `Sealed` allowlist. The downcast
+/// capability stays sealed inside
 /// [`crate::outbound_registry::BuiltinSenderRegistry`].
 pub(crate) fn builtin_sender_registry(
     weixin_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
