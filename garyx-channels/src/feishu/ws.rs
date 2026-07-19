@@ -1479,8 +1479,8 @@ pub(super) async fn handle_im_message_event(
             request,
             response_callback,
             Some(ledger_event),
-            |thread_id| {
-                let _ = thread_id_tx.send(thread_id.to_owned());
+            |thread_id| async move {
+                let _ = thread_id_tx.send(thread_id);
             },
         )
         .await;

@@ -1636,8 +1636,8 @@ impl DiscordChannel {
             dispatcher: &runtime.dispatcher,
         };
         let dispatch_result = pipeline
-            .dispatch(request, response_callback, None, |thread_id| {
-                let _ = thread_id_tx.send(thread_id.to_owned());
+            .dispatch(request, response_callback, None, |thread_id| async move {
+                let _ = thread_id_tx.send(thread_id);
             })
             .await;
         match dispatch_result {

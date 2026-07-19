@@ -405,12 +405,20 @@ impl HostInboundHandler {
                     chat_id: parsed.thread_binding_key.clone(),
                     stream_id: stream_id.clone(),
                     run_id: run_id.clone(),
-                    endpoint_identity: origin_endpoint_identity.clone(),
+                    endpoint_identity: origin_endpoint_identity,
                     dispatcher: self.swap.clone(),
                     streams: self.streams.clone(),
                     live_streams: self.live_streams.clone(),
                 })
             });
+        // NOTE: live_streams.remove is owned by the spawned callback
+        // task in `build_response_callback` (or the native stream's
+        // consumer worker). Doing it here would clear the entry the
+        // moment the dispatch returns, but the actual agent stream
+        // often keeps running in the background — leaving the
+        // auto-update stream-idle gate blind to in-flight provider
+        // runs. The callback task drains its mpsc on its own schedule
+        // and removes the id on exit, which is the true end-of-stream.
         let response_callback = if let Some(origin_native_stream) = origin_native_stream.as_ref() {
             origin_native_stream.consumer()
         } else {
@@ -425,63 +433,48 @@ impl HostInboundHandler {
                 live_streams: self.live_streams.clone(),
             })
         };
-        let deferred_fanout = garyx_channels::bound_fanout::DeferredBoundStreamFanout::new(
-            self.router.clone(),
-            self.swap.clone(),
-            run_id.clone(),
-            origin_endpoint_identity,
-        );
-        let fanout_consumer = deferred_fanout.consumer(response_callback);
 
-        // Read this run's stream from the durable committed transcript. The
-        // origin frame-emitting worker is unchanged; it still produces
-        // inbound/stream_frame + inbound/stream_end with local stream_id/seq.
-        // Bound non-origin endpoints attach after `route_and_dispatch` returns
-        // the canonical thread id, with early events buffered by the deferred
-        // fanout.
-        let replay_subscription = garyx_channels::committed_replay::committed_callback(
-            &self.bridge,
-            &run_id,
-            fanout_consumer,
-        )
-        .await
-        .map_err(|error| (PluginErrorCode::InternalError.as_i32(), error.to_string()))?;
-        let dispatch_callback = replay_subscription.callback();
-
-        // `route_and_dispatch` resolves the thread and kicks off the
-        // agent run. The committed replay adapter streams events back in; we pin
-        // the thread id so the Done-handler can tag its outbound back through the
-        // dispatcher with the right chat.
-        let thread_store = {
-            let router = self.router.lock().await;
-            router.thread_store()
+        // Shared inbound sequence: deferred bound-endpoint fanout,
+        // committed-transcript subscription (subscribe before dispatch),
+        // `route_and_dispatch`, thread attach, and replay settle all live
+        // in `garyx_channels::inbound::InboundPipeline` — the same
+        // pipeline the four built-in runtimes use. The origin
+        // frame-emitting worker is unchanged; it still produces
+        // inbound/stream_frame + inbound/stream_end with local
+        // stream_id/seq. The async resolve hook pins the thread id so
+        // the Done-handler can tag its outbound through the dispatcher
+        // with the right chat, and attaches the deferred origin native
+        // stream at the same point.
+        let dispatcher: Arc<dyn ChannelDispatcher> = self.swap.clone();
+        let pipeline = garyx_channels::inbound::InboundPipeline {
+            router: &self.router,
+            bridge: &self.bridge,
+            dispatcher: &dispatcher,
         };
-        let dispatch_delegate = garyx_channels::bound_fanout::DeferredFanoutAgentDispatcher::new(
-            self.bridge.as_ref(),
-            deferred_fanout.clone(),
-            thread_store,
-        );
+        let thread_holder_for_resolved = thread_holder.clone();
+        let origin_stream_for_resolved = origin_native_stream.clone();
+        let dispatch_result = pipeline
+            .dispatch(
+                inbound_request,
+                response_callback,
+                None,
+                move |thread_id| async move {
+                    if let Ok(mut holder) = thread_holder_for_resolved.lock() {
+                        *holder = Some(thread_id.clone());
+                    }
+                    if let Some(origin_native_stream) = origin_stream_for_resolved.as_ref() {
+                        origin_native_stream.attach_thread(&thread_id).await;
+                    }
+                },
+            )
+            .await;
 
-        let result = {
-            let mut router = self.router.lock().await;
-            router
-                .route_and_dispatch(inbound_request, &dispatch_delegate, dispatch_callback)
-                .await
-        };
-
-        // NOTE: live_streams.remove is owned by the spawned callback
-        // task in `build_response_callback`. Doing it here would
-        // clear the entry the moment `route_and_dispatch` returns,
-        // but the actual agent stream often keeps running in the
-        // background — leaving the auto-update stream-idle gate
-        // blind to in-flight provider runs. The callback
-        // task drains its mpsc on its own schedule and removes the
-        // id on exit, which is the true end-of-stream.
-
-        let result = match result {
+        let result = match dispatch_result {
             Ok(result) => result,
-            Err(err) => {
-                replay_subscription.abort();
+            Err(garyx_channels::inbound::InboundDispatchFailure::CommittedReplay(error)) => {
+                return Err((PluginErrorCode::InternalError.as_i32(), error.to_string()));
+            }
+            Err(garyx_channels::inbound::InboundDispatchFailure::Dispatch(err)) => {
                 if let Some(origin_native_stream) = origin_native_stream.as_ref() {
                     origin_native_stream.finish_without_stream();
                 }
@@ -489,20 +482,10 @@ impl HostInboundHandler {
             }
         };
 
-        if let Ok(mut holder) = thread_holder.lock() {
-            *holder = Some(result.thread_id.clone());
-        }
-        if let Some(origin_native_stream) = origin_native_stream.as_ref() {
-            origin_native_stream.attach_thread(&result.thread_id).await;
-        }
-        deferred_fanout.attach_thread(&result.thread_id).await;
-        if result.local_reply.is_some() {
-            replay_subscription.abort();
-            if let Some(origin_native_stream) = origin_native_stream.as_ref() {
-                origin_native_stream.finish_without_stream();
-            }
-        } else {
-            replay_subscription.detach();
+        if result.local_reply.is_some()
+            && let Some(origin_native_stream) = origin_native_stream.as_ref()
+        {
+            origin_native_stream.finish_without_stream();
         }
 
         // If route_and_dispatch produced a synchronous `local_reply`,

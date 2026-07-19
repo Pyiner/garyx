@@ -826,7 +826,7 @@ impl TelegramChannel {
                 request,
                 response_callback,
                 Some(ledger_event),
-                |_thread_id| {},
+                |_thread_id| async {},
             )
             .await;
 

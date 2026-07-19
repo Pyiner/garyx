@@ -9,6 +9,7 @@
 //! assembly, response callbacks, ledger payloads, and reply delivery stay with
 //! each runtime.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use garyx_bridge::MultiProviderBridge;
@@ -51,14 +52,21 @@ impl InboundPipeline<'_> {
     ///   without an inbound ledger pass `None`).
     /// * `on_thread_resolved` runs right after the origin fanout attaches the
     ///   canonical thread id, before the replay subscription settles; runtimes
-    ///   use it to hand the thread id to their streaming callbacks.
-    pub async fn dispatch(
+    ///   use it to hand the thread id to their streaming callbacks. The hook
+    ///   is async so callers with deferred origin streams (the subprocess
+    ///   plugin host's native stream) can attach them at the same point; sync
+    ///   callers wrap their body in `async move {}`.
+    pub async fn dispatch<F, Fut>(
         &self,
         request: InboundRequest,
         response_callback: Arc<dyn Fn(StreamEvent) + Send + Sync>,
         ledger_event: Option<MessageLedgerEvent>,
-        on_thread_resolved: impl FnOnce(&str) + Send,
-    ) -> Result<InboundResult, InboundDispatchFailure> {
+        on_thread_resolved: F,
+    ) -> Result<InboundResult, InboundDispatchFailure>
+    where
+        F: FnOnce(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
+    {
         let origin_endpoint_identity = endpoint_key(
             &request.channel,
             &request.account_id,
@@ -112,7 +120,7 @@ impl InboundPipeline<'_> {
                 // delegate performs before provider dispatch; it is idempotent
                 // when both run.
                 deferred_fanout.attach_thread(&result.thread_id).await;
-                on_thread_resolved(&result.thread_id);
+                on_thread_resolved(result.thread_id.clone()).await;
                 if result.local_reply.is_some() {
                     replay_subscription.abort();
                 } else {
@@ -220,11 +228,11 @@ mod tests {
                 test_request("run-no-bus"),
                 Arc::new(|_event: StreamEvent| {}),
                 None,
-                move |thread_id| {
+                move |thread_id| async move {
                     resolved_sink
                         .lock()
                         .expect("resolved lock")
-                        .push(thread_id.to_owned());
+                        .push(thread_id);
                 },
             )
             .await;
@@ -268,11 +276,11 @@ mod tests {
                 request,
                 Arc::new(|_event: StreamEvent| {}),
                 Some(event),
-                move |thread_id| {
+                move |thread_id| async move {
                     resolved_sink
                         .lock()
                         .expect("resolved lock")
-                        .push(thread_id.to_owned());
+                        .push(thread_id);
                 },
             )
             .await;
@@ -326,7 +334,7 @@ mod tests {
                 request,
                 Arc::new(|_event: StreamEvent| {}),
                 None,
-                |_thread_id| {},
+                |_thread_id| async {},
             )
             .await;
         assert!(matches!(result, Ok(_)));

@@ -535,3 +535,31 @@ async fn deliver_inbound_ignores_deprecated_reply_id_and_uses_current_binding() 
     assert!(reply.contains("Recent threads · page 2/2 (11 total)"));
     assert!(reply.contains("11. Recent thread 11"));
 }
+
+/// Source guard: the subprocess plugin host must route inbound
+/// dispatches through the shared `InboundPipeline`, never hand-roll
+/// the fanout → committed-replay → route_and_dispatch → attach →
+/// settle sequence again. Every marker below names one piece of the
+/// formerly duplicated orchestration; if any of them reappears in
+/// this file, the fifth inbound copy is being reintroduced.
+#[test]
+fn host_inbound_goes_through_shared_pipeline_only() {
+    let source = include_str!("../channel_plugin_host.rs");
+    assert!(
+        source.contains("inbound::InboundPipeline"),
+        "the host must dispatch through garyx_channels::inbound::InboundPipeline"
+    );
+    for forbidden in [
+        "route_and_dispatch(",
+        "committed_replay::committed_callback",
+        "DeferredBoundStreamFanout",
+        "DeferredFanoutAgentDispatcher",
+        "replay_subscription",
+    ] {
+        let occurrences = source.matches(forbidden).count();
+        assert_eq!(
+            occurrences, 0,
+            "channel_plugin_host.rs must not hand-roll the inbound sequence; found `{forbidden}` {occurrences} time(s)"
+        );
+    }
+}
