@@ -189,6 +189,18 @@ impl TelegramChannelSender {
 
 #[async_trait]
 impl OutboundChannelSender for TelegramChannelSender {
+    fn clone_box(&self) -> Box<dyn OutboundChannelSender> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn channel_id(&self) -> &str {
         "telegram"
     }
@@ -240,7 +252,7 @@ impl OutboundChannelSender for TelegramChannelSender {
     }
 }
 
-pub(crate) fn parse_telegram_id(field: &str, value: &str) -> Result<i64, ChannelError> {
+fn parse_telegram_id(field: &str, value: &str) -> Result<i64, ChannelError> {
     value.parse().map_err(|error| {
         ChannelError::Config(format!("Invalid Telegram {field} '{value}': {error}"))
     })

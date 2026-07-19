@@ -271,3 +271,18 @@ pub fn weixin_schema() -> Value {
 /// literals must not appear in the dispatcher itself.
 pub const RESERVED_CHANNEL_NAMES: &[&str] =
     &["telegram", "discord", "feishu", "lark", "weixin", "wechat"];
+
+/// Construction-layer injection point for the dispatcher's
+/// type-erased built-in sender registry. The dispatcher core never
+/// names a concrete channel type; adding a built-in channel means
+/// adding its wrapper here and implementing
+/// [`crate::dispatcher::OutboundChannelSender`] in the channel's own
+/// module.
+pub(crate) fn builtin_outbound_senders() -> Vec<Box<dyn crate::dispatcher::OutboundChannelSender>> {
+    vec![
+        Box::new(crate::telegram::outbound::TelegramChannelSender::default()),
+        Box::new(crate::discord::outbound::DiscordChannelSender::default()),
+        Box::new(crate::feishu::outbound::FeishuChannelSender::default()),
+        Box::new(crate::weixin::outbound::WeixinChannelSender::default()),
+    ]
+}

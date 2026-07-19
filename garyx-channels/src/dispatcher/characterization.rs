@@ -525,6 +525,39 @@ async fn build_stream_dispatch_callback_composes_the_matrix() {
     }
 }
 
+/// Phase-6 B2 deliberate unification (a DECLARED behavior change, not
+/// conservation): alias spellings now resolve streaming callbacks
+/// exactly like their canonical ids. Pre-B2, `send_message` accepted
+/// `lark`/`wechat` but `build_stream_event_callback` silently returned
+/// `None` for them, so a persisted binding carrying an alias channel
+/// value got no native streaming. The registry routes every surface
+/// through the same alias-aware lookup; `supports_legacy` stays false
+/// for built-ins under both spellings.
+#[tokio::test]
+async fn aliases_resolve_streaming_callbacks_like_canonical_ids() {
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_feishu(feishu_sender("main"));
+    dispatcher.register_weixin(weixin_sender("main", Arc::new(AtomicBool::new(true))));
+    for (alias, canonical) in [("lark", "feishu"), ("wechat", "weixin")] {
+        assert!(
+            dispatcher
+                .build_stream_event_callback(stream_target(canonical, "main", "chat-1"))
+                .is_some(),
+            "{canonical}: canonical id must stream"
+        );
+        assert!(
+            dispatcher
+                .build_stream_event_callback(stream_target(alias, "main", "chat-1"))
+                .is_some(),
+            "{alias} must stream like {canonical} (B2 alias unification)"
+        );
+        assert!(
+            !dispatcher.supports_legacy_stream_adapter(&stream_target(alias, "main", "chat-1")),
+            "{alias}: built-ins never use the legacy adapter"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // B2b source guard
 // ---------------------------------------------------------------------------

@@ -1149,28 +1149,26 @@ Lives in `garyx-channels/src/plugin.rs`. Method groups:
   subprocess plugins return a `SubprocessAuthFlowExecutor` bridge
   over the child's RPC.
 
-**Outbound dispatch**
+**Outbound dispatch (unified as of Phase-6 B2)**
 - `dispatch_outbound(OutboundMessage) -> SendMessageResult` —
   channel-blind send. Subprocess plugins forward over
-  `PluginSenderHandle.dispatch()` end-to-end. Built-ins **currently
-  still route through the legacy `SwappableDispatcher` map** — the
-  trait method exists (`ManagedChannelPlugin` returns
-  `Unsupported`), but the dispatcher's per-channel sender maps
-  (`telegram_senders`, `feishu_senders`, `weixin_senders`) have
-  not yet been unified.
-- **Why this wasn't finished in the Scheme-A migration**: the
-  clean path is to add an `async fn send(&self, msg)` method to
-  the existing `Channel` trait and implement it on `TelegramChannel`
-  / `FeishuChannel` / `WeixinChannel`. Each channel impl already
-  has the HTTP client, tokens, and per-channel wire-format
-  concerns (Telegram's numeric-id parsing, Feishu's reply-target
-  encoding, Weixin's context_token retry loop) — they'd just move
-  a few hundred lines each from the dispatcher into the channel
-  where they architecturally belong. Until then, the dispatcher's
-  `send_message` keeps branching by `channel` string and trait
-  callers cannot dispatch to built-ins through `dispatch_outbound`.
-  Subprocess plugins, which have no such legacy senders, work
-  uniformly today.
+  `PluginSenderHandle.dispatch()` end-to-end. Built-ins are now the
+  in-process implementations of the same contract: every channel —
+  built-in or plugin — implements the
+  `OutboundChannelSender` trait (dispatch / stream-event callback /
+  accounts / running handle / capability-driven legacy selection),
+  whose method set mirrors this wire protocol. The former
+  per-channel sender maps and `channel`-string match arms are gone.
+- Each built-in channel's per-account sender and its registry-facing
+  wrapper live in that channel's own module
+  (`<channel>/outbound.rs`), owning the HTTP client, tokens, and
+  per-channel wire-format concerns (Telegram's numeric-id parsing,
+  Feishu's reply-target encoding, Weixin's shared running flag).
+  The dispatcher core is channel-blind: the built-in sender set is
+  injected at construction from
+  `builtin_catalog::builtin_outbound_senders()` as a type-erased
+  collection, and a source guard rejects any channel-name string
+  literal in dispatcher code.
 
 **Account CRUD** (trait surface only; wire protocol pending)
 - `list_accounts() -> Vec<AccountDescriptor>` — enumerate what the
@@ -1305,11 +1303,15 @@ Behavior:
   This also resolves the tension with §6.4: the child is
   terminated, but only after the drain window, and in-flight
   requests at that moment fail loudly rather than silently.
-- **Routing.** `ChannelDispatcherImpl::send_message` matches on
-  `channel` in this order:
-  1. Built-in match (`telegram` / `feishu` / `weixin`) — unchanged.
-  2. `self.plugin_senders.get(channel)` — routes via RPC.
-  3. Otherwise `ChannelError::Config("unknown channel type")`.
+- **Routing (unified as of Phase-6 B2).**
+  `ChannelDispatcherImpl::send_message` performs one data-driven
+  registry lookup: the injected built-in senders are matched on
+  their declared `channel_id()` / `aliases()` (`lark` -> feishu,
+  `wechat` -> weixin), then the plugin map is consulted by
+  `plugin_id`, and an unknown name is
+  `ChannelError::Config("Unknown channel type: ...")`. The built-in
+  and plugin key spaces are disjoint by construction:
+  `register_plugin` rejects `RESERVED_CHANNEL_NAMES`.
 - **Error mapping.** The plugin's `dispatch_outbound` RPC result
   maps to `ChannelDispatcher` semantics:
   - JSON-RPC `result` → `SendMessageResult`.
@@ -1329,16 +1331,17 @@ Behavior:
     `ChannelError::Connection("plugin X unavailable")`; the caller's
     retry policy applies, the supervisor restarts the child, and
     subsequent calls succeed once the handle is re-published.
-- **Streaming callback for plugin-backed channels.**
-  `build_streaming_callback` currently returns `Some` only for
-  `telegram`. For plugin-backed channels, the host-side streaming
-  contract is different: the AGENT streams back to the *plugin* via
-  the `inbound/stream_frame` path (§7.1), and the plugin decides
-  what to do with it. `build_streaming_callback` therefore returns
-  `None` for plugin ids. If a future plugin wants the host to drive
-  outbound streaming, we extend the protocol with an
-  `outbound/stream_frame` pair, additive, guarded by a capability
-  flag.
+- **Streaming callbacks (unified as of Phase-6 B2).** All four
+  built-in channels expose native stream-event callbacks; account
+  resolution happens at callback construction, and alias spellings
+  resolve identically to their canonical ids (a declared B2
+  unification — previously `lark`/`wechat` silently got no
+  streaming callback). Plugin-backed channels are gated by
+  capability: `dispatch_stream_event: true` yields the native
+  envelope callback (§7.1a); outbound-only plugins yield `None`
+  here and are served by the host-rendered legacy adapter instead.
+  Origin streaming to the plugin's own upstream continues over the
+  `inbound/stream_frame` path (§7.1) regardless.
 
 ### 9.5 Desktop gateway surface
 
