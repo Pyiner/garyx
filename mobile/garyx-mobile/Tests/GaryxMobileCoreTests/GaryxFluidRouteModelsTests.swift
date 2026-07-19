@@ -2,6 +2,12 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxFluidRouteModelsTests: XCTestCase {
+    func testCanonicalPredecessorLabelsComeFromTypedRouteValues() {
+        XCTAssertEqual(GaryxRouteDestination.panel("workspaceBots").backNavigationLabel, "Workspaces")
+        XCTAssertEqual(GaryxRouteDestination.panel("automations").backNavigationLabel, "Automation")
+        XCTAssertEqual(GaryxRouteDestination.settingsDetail("manage").backNavigationLabel, "All Settings")
+    }
+
     private let scope1 = GaryxGatewayScope(identity: "gateway-1", epoch: 1)
     private let scope2 = GaryxGatewayScope(identity: "gateway-2", epoch: 1)
 

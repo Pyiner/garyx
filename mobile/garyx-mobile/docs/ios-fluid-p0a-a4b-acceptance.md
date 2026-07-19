@@ -23,6 +23,10 @@ domain is connected to the user-facing input and attachment path.
   `GaryxRouteStackContainer`. Every hosted route receives a route-local
   `GaryxRouteContext`, `GaryxConversationLiveStore`, focus coordinator, and
   composer occurrence.
+- The conversation live store is an immutable route value rather than a
+  retained SwiftUI object. Draft promotion therefore rebuilds destination
+  reads against the promoted thread immediately, while view-local scrolling
+  state remains attached to the same route occurrence.
 - A committed pop releases the source composer, resigns focus, updates the
   canonical path, and transfers activation only after input finalization is
   durable. A cancelled pop restores the same route occurrence, adapter, live
@@ -44,6 +48,22 @@ second root conversation writer, no dual conversation renderer, and no
 feature loss at this merge point. A4c owns deletion of that one panel
 compatibility host and its old path store, as required by the design split.
 
+Panel, settings-detail, and workspace/bot/automation drilldown entry points
+now also write typed destinations into the canonical stack before entering
+that compatibility host. Re-projecting the complete canonical path preserves
+the exact drilldown that opened a conversation. Workspace files remain the
+file-browser panel, and settings details carry a real settings-overview
+predecessor so the header and leading-edge gesture perform the same pop. A
+direct settings-detail entry appends the overview and detail as one canonical
+batch, so no transient intermediate route is mounted or published.
+
+The production edge recognizer resolves ownership from the touched view's
+actual view-controller ancestry. A presented sheet or native Form therefore
+keeps its own leading-edge controls, while route-owned conversation content
+still receives interactive pop. Full-width Form menu rows use the native cell
+surface, including the visual leading inset, so their label and trailing
+control have one coherent hit target.
+
 ## Composer input and activation
 
 - `GaryxComposerOrderedTextView` is the UIKit source of truth for focus and
@@ -59,6 +79,10 @@ compatibility host and its old path store, as required by the design split.
   advances through live, finalizing input, and closing; the next occurrence
   receives only a read-only snapshot until the durable close boundary has
   completed.
+- A rebuilt UIKit adapter resumes at the reducer-provided next input sequence;
+  a draft-to-thread alias rebind keeps the same session/epoch and cannot reset
+  deduplication. Non-live hosts read their own scope/key projection instead of
+  the active top payload.
 - Producer drain and reservation terminal are joined in the A3 finalization
   state machine. The finalization lease survives focus resignation and route
   release, and all six cancellation reasons deterministically terminate the
@@ -66,12 +90,16 @@ compatibility host and its old path store, as required by the design split.
 - Ordered persistence is serialized by an explicit transaction gate. A late
   completion may advance the durable revision but cannot project an older text
   value over a newer UIKit sequence.
+- A committed presentation terminal supplies the settle-terminal or
+  superseded cancellation event, bounding a producer whose UIKit callback
+  never arrives. Transient close persistence failures retry autonomously with
+  bounded backoff while the old host remains pinned and read-only.
 
 ## Concrete payload behavior
 
 - The coordinator opens the A4d-1 SQLite store and protected staging directory,
   with per-scope and per-key entries, quota reservation, durable staged-file
-  ownership, and activation-bound request tokens.
+  ownership, and scope/entry/lifecycle-token request admission.
 - Text, attachment metadata, upload operation state, and staged files are
   stored under the stable payload entry. Switching A to B and back restores
   A's text and attachment; empty text does not erase an attachment-bearing
@@ -82,6 +110,50 @@ compatibility host and its old path store, as required by the design split.
 - A pending or retryable upload returns `.payloadPreparing` without advancing
   text or generation. Promotion preserves the payload entry while changing
   the route key, including concurrent ordered input.
+- Launch recovery runs before the first activation. Core convergence settles
+  staged durability work, then one transaction acknowledges process-dead
+  input sessions, releases their promotion aliases, and removes materialized
+  close rows without touching payload text.
+
+## Adversarial R1 correction closure
+
+The first cross-model review found eight merge blockers that the original
+green matrix did not exercise. This revision closes each with a production
+seam regression:
+
+- draft promotion replaces the route-indexed conversation store, so the sent
+  turn and streamed response render without leaving and re-entering;
+- promotion rebinds the existing input session to the thread key, preserves
+  the UIKit host, and a later pop can perform a virtual ordered close if the
+  adapter is temporarily absent;
+- every route-composer delivery durably records transport-attempted immediately
+  before the gateway call, then records acknowledgement and releases the Entry
+  reference on the accepted response. Failed/unknown responses become
+  ambiguous evidence; 65 consecutive acknowledged sends prove quota release;
+- settings, workspace files, drawer drilldowns, automation thread rows, and
+  mobile route links all reach typed canonical destinations, and projection of
+  the whole stack preserves their back target;
+- both presentation-terminal cancellation reasons have real app call sites;
+- send sealing re-reads the reducer after asynchronous preparation and uses
+  that exact latest text/sequence, preserving edits admitted during the await;
+  and
+- close persistence retries itself after transient failure rather than waiting
+  for an unrelated scene, producer, or route event.
+
+Promotion requested during an active pop is queued by occurrence. Cancellation
+applies it to the still-mounted occurrence after settle; a committed pop does
+not reinsert the removed route. Reopening an existing conversation deliberately
+creates a fresh occurrence, including A-to-A, as required by design section
+1.1; it is not a deduplication defect.
+
+The remaining cross-slice items are explicitly registered with their design
+owners: scope-revoke settlement of every delivery/evidence phase and its quota
+release belong to A4d-2; picker-to-staging Entry identity freezing belongs to
+A4c presentation-to-operation bridging; row-level/incremental SQLite writes
+for the current full-snapshot backend are an A4d-2 performance hardening item.
+A4b keeps those writes serialized and off MainActor, and its existing frame-gap
+and rapid-input non-regression gates remain mandatory. The dormant chat case
+inside the panel compatibility host now renders no fallback conversation.
 
 ## A4d-1 reviewer follow-up
 
@@ -127,7 +199,7 @@ Both assertions completed with zero matches.
 
 ## Functional acceptance
 
-The clean SwiftPM run passed 1,386 of 1,386 tests with zero failures. Its Core
+The clean SwiftPM run passed 1,387 of 1,387 tests with zero failures. Its Core
 coverage includes the full input-product reducer, both producer/reservation
 terminal orders, exact close idempotence, six cancellation reasons, host
 activation phases, payload lifecycle, A-to-panel-to-A and A-to-A occurrence
@@ -135,7 +207,7 @@ identity, attachment A-to-B-to-A restoration, gateway partition restoration,
 send locking, promotion, concrete durability validation, and the persisted
 replacement-swap fixture.
 
-The app-hosted run passed 102 of 102 tests with zero failures. Its real runtime
+The app-hosted run passed 114 of 114 tests with zero failures. Its real runtime
 fixtures cover:
 
 - a real `UITextView` CJK marked range, `unmarkText()` commit, and exact final
@@ -147,7 +219,11 @@ fixtures cover:
 - unique live adapter handoff, promotion concurrent with ordered typing, and a
   rapid-input durability completion that cannot regress visible text;
 - durable close before destination activation for all six cancellation events;
-  and
+- draft promotion followed by an adapter-absent pop, adapter rebuild sequence
+  continuation, autonomous finalization retry, and process-death alias release;
+- latest-text sealing across a suspended preparation await, 65 acknowledged
+  sends in one scope, and a real model/URLSession gateway request proving the
+  attempted-before-request and accepted-response acknowledgement phases; and
 - production route occurrence behavior for A-to-panel-to-A and repeated A.
 
 The focused `GaryxMobileFluidRoutes` run passed 13 of 13 XCUITests with no
@@ -166,9 +242,21 @@ conversation and UIKit composer:
   to home, drains adapter/focus ownership, passes the system-frame oracle, and
   records zero backwards frames.
 
-Debug and Release generic iOS Simulator builds both passed. The build warnings
-were pre-existing app-source iOS 26 deprecations; the A4b sources emitted no
-compiler warnings.
+An additional whole-scheme stress audit exercised all 42 UI tests. Its first
+run passed 41 and produced one isolated Home-list frame-gap sample above the
+existing threshold; the exact performance test immediately passed alone with
+an 80.74 ms maximum interval against the unchanged 90 ms gate. A second run
+passed 40 and missed two XCUI gesture injections that had passed in the first
+run; those exact production-regrab and Home-filter cases then passed together,
+2 of 2, without a code, timeout, retry, or threshold change. Thus every UI test
+has a green current-code result, while the canonical A4b route run remains the
+single-command 13-of-13 gate. The non-deterministic whole-scheme simulator
+orchestration is recorded here rather than represented as a branch regression
+or a 42-of-42 invocation.
+
+Debug and Release generic iOS Simulator builds both passed. The emitted
+warnings are pre-existing app-source iOS 26 deprecations or unrelated async
+cleanup diagnostics; this revision introduced no new warning site.
 
 ## Reproduction
 

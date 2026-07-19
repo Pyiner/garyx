@@ -200,6 +200,315 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(coordinator.currentText, "typed while promoting")
         XCTAssertEqual(coordinator.activeKey, .thread("thread"))
+        let promotedConfiguration = try XCTUnwrap(coordinator.inputConfiguration())
+        XCTAssertEqual(promotedConfiguration.composerKey, .thread("thread"))
+        XCTAssertEqual(promotedConfiguration.sessionID, configuration.sessionID)
+        XCTAssertEqual(promotedConfiguration.epoch, configuration.epoch)
+
+        // Reproduce the production seam that used to wedge when promotion had
+        // unmounted the adapter: a committed pop must virtually release the
+        // still-valid reducer and permit the next activation.
+        coordinator.routeCommitReleased(
+            sourceOccurrenceID: .init(rawValue: "promoted-source"),
+            sourceKey: .thread("thread"),
+            destinationOccurrenceID: nil,
+            destinationKey: nil
+        )
+        coordinator.routeReachedTerminal(.init(outcome: .committed, visibility: .visible))
+        try await waitUntil { coordinator.inputConfiguration() == nil }
+        await coordinator.activate(scope: scope, key: .draft("next"))
+        try await waitUntil { coordinator.activeKey == .draft("next") }
+    }
+
+    func testAdapterRebuildWithinOneSessionResumesOrderedSequenceSpace() throws {
+        let firstView = makeTextView()
+        var events: [GaryxComposerInputEventIdentity] = []
+        firstView.onOrderedText = { _, identity in events.append(identity) }
+        let draft = configuration(key: .draft("promoted-sequence"))
+        firstView.grantLive(draft)
+        firstView.replaceLiveText("one")
+
+        let rebuiltView = makeTextView()
+        rebuiltView.onOrderedText = { _, identity in events.append(identity) }
+        rebuiltView.grantLive(
+            .init(
+                composerKey: .thread("promoted-sequence"),
+                sessionID: draft.sessionID,
+                epoch: draft.epoch,
+                payloadGeneration: draft.payloadGeneration,
+                reservationID: nil,
+                nextInputSequence: 2,
+                initialText: "one",
+                isReadOnly: false
+            )
+        )
+        rebuiltView.replaceLiveText("two")
+
+        let close = rebuiltView.finalizeInput()
+        XCTAssertEqual(events.map(\.inputSequence), [1, 2, 3])
+        XCTAssertEqual(close.finalSequence, 3)
+    }
+
+    func testRelaunchReleasesDeadPromotionAliasBeforeReclaim() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let scope = GaryxGatewayScope(identity: "alias-relaunch-gateway", epoch: 1)
+
+        let firstProcess = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        await firstProcess.activate(scope: scope, key: .draft("alias-relaunch"))
+        try await firstProcess.promoteActive(to: .thread("alias-relaunch"))
+        XCTAssertEqual(firstProcess.activeKey, .thread("alias-relaunch"))
+
+        let relaunched = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        await relaunched.activate(scope: scope, key: .thread("alias-relaunch"))
+        try await relaunched.discard(key: .thread("alias-relaunch"))
+
+        XCTAssertNil(relaunched.activeKey)
+    }
+
+    func testCommittedTerminalCancelsPendingDictationWithoutExternalCallback() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let scope = GaryxGatewayScope(identity: "terminal-cancel-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("terminal-cancel")
+        await coordinator.activate(scope: scope, key: key)
+        let source = GaryxComposerOrderedTextView(
+            occurrenceID: .init(rawValue: "terminal-cancel-source"),
+            composerKey: key
+        )
+        let destination = GaryxComposerOrderedTextView(
+            occurrenceID: .init(rawValue: "terminal-cancel-destination"),
+            composerKey: key
+        )
+        source.onOrderedText = coordinator.acceptText
+        source.onProducerTerminal = { producer in
+            coordinator.producerReachedTerminal(producer, occurrenceID: source.occurrenceID)
+        }
+        coordinator.register(source, isCanonicalTop: true)
+        coordinator.register(destination, isCanonicalTop: false)
+        source.beginDictationRecognitionForTesting()
+
+        coordinator.routeCommitReleased(
+            sourceOccurrenceID: source.occurrenceID,
+            sourceKey: key,
+            destinationOccurrenceID: destination.occurrenceID,
+            destinationKey: key
+        )
+        coordinator.routeReachedTerminal(.init(outcome: .committed, visibility: .visible))
+
+        try await waitUntil { destination.isLive }
+        XCTAssertNil(coordinator.finalizationFailureDescription)
+    }
+
+    func testTransientFinalizationFailureRetriesWithoutAnotherLifecycleEvent() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            testingHooks: .init(finalizationFailuresBeforeSuccess: 1)
+        )
+        let scope = GaryxGatewayScope(identity: "finalization-retry-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("finalization-retry")
+        await coordinator.activate(scope: scope, key: key)
+        let source = GaryxComposerOrderedTextView(
+            occurrenceID: .init(rawValue: "finalization-retry-source"),
+            composerKey: key
+        )
+        let destination = GaryxComposerOrderedTextView(
+            occurrenceID: .init(rawValue: "finalization-retry-destination"),
+            composerKey: key
+        )
+        source.onOrderedText = coordinator.acceptText
+        source.onProducerTerminal = { producer in
+            coordinator.producerReachedTerminal(producer, occurrenceID: source.occurrenceID)
+        }
+        coordinator.register(source, isCanonicalTop: true)
+        coordinator.register(destination, isCanonicalTop: false)
+
+        coordinator.routeCommitReleased(
+            sourceOccurrenceID: source.occurrenceID,
+            sourceKey: key,
+            destinationOccurrenceID: destination.occurrenceID,
+            destinationKey: key
+        )
+        coordinator.routeReachedTerminal(.init(outcome: .committed, visibility: .visible))
+
+        try await waitUntil { destination.isLive }
+        XCTAssertNil(coordinator.finalizationFailureDescription)
+    }
+
+    func testSendSealUsesLatestReducerStateAcrossPrepareSuspension() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = ComposerAsyncGate()
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            testingHooks: .init(beforePrepareSendReturns: { await gate.suspend() })
+        )
+        let scope = GaryxGatewayScope(identity: "send-race-gateway", epoch: 1)
+        await coordinator.activate(scope: scope, key: .draft("send-race"))
+        try await persistText("before suspension", in: coordinator)
+
+        let send = Task {
+            try await coordinator.takeReadyPayload(clientIntentID: "send-race-intent")
+        }
+        await gate.waitUntilSuspended()
+        let configuration = try XCTUnwrap(coordinator.inputConfiguration())
+        coordinator.acceptText(
+            "typed during suspension",
+            identity: .init(
+                composerKey: configuration.composerKey,
+                sessionID: configuration.sessionID,
+                inputSessionEpoch: configuration.epoch,
+                payloadGeneration: configuration.payloadGeneration,
+                reservationID: nil,
+                inputSequence: 2
+            )
+        )
+        await gate.resume()
+
+        let payload = try await send.value
+        XCTAssertEqual(payload.text, "typed during suspension")
+        try await coordinator.markTransportAttempted(payload.delivery)
+        try await coordinator.acknowledgeDelivery(payload.delivery)
+    }
+
+    func testAcknowledgedDeliverySettlementDoesNotBrickSixtyFifthSend() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let scope = GaryxGatewayScope(identity: "delivery-quota-gateway", epoch: 1)
+        await coordinator.activate(scope: scope, key: .draft("delivery-quota"))
+
+        for sequence in 1...65 {
+            let configuration = try XCTUnwrap(coordinator.inputConfiguration())
+            coordinator.acceptText(
+                "message \(sequence)",
+                identity: .init(
+                    composerKey: configuration.composerKey,
+                    sessionID: configuration.sessionID,
+                    inputSessionEpoch: configuration.epoch,
+                    payloadGeneration: configuration.payloadGeneration,
+                    reservationID: configuration.reservationID,
+                    inputSequence: UInt64(sequence)
+                )
+            )
+            let payload = try await coordinator.takeReadyPayload(
+                clientIntentID: "delivery-intent-\(sequence)"
+            )
+            XCTAssertEqual(payload.text, "message \(sequence)")
+            try await coordinator.markTransportAttempted(payload.delivery)
+            try await coordinator.acknowledgeDelivery(payload.delivery)
+            let phase = try await coordinator.deliveryPhase(for: payload.delivery)
+            XCTAssertEqual(phase, .acknowledged)
+        }
+    }
+
+    func testProductionGatewayDispatchMarksAttemptBeforeRequestThenAcknowledges() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requestStarted = expectation(description: "chat request reached URL loading")
+        let responseGate = DispatchSemaphore(value: 0)
+        GaryxComposerDeliveryURLProtocolStub.requestHandler = { request in
+            guard request.url?.path == "/api/chat/start" else {
+                throw URLError(.badURL)
+            }
+            requestStarted.fulfill()
+            guard responseGate.wait(timeout: .now() + 5) == .success else {
+                throw URLError(.timedOut)
+            }
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url ?? URL(string: "http://gateway.example.test")!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    #"{"status":"accepted","run_id":"delivery-run","thread_id":"delivery-thread"}"#.utf8
+                )
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxComposerDeliveryURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            responseGate.signal()
+            GaryxComposerDeliveryURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let suiteName = "GaryxComposerDeliveryRuntime-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.set(
+            "http://gateway.example.test",
+            forKey: GaryxMobileSettingsKeys.gatewayUrl
+        )
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            gatewayClientFactory: { gatewayConfiguration in
+                GaryxGatewayClient(
+                    configuration: gatewayConfiguration,
+                    session: session,
+                    retryPolicy: .disabled
+                )
+            },
+            composerPayloadCoordinator: coordinator
+        )
+        let scope = model.gatewayRequestToken.scope
+        // Model initialization schedules the gateway scope's default draft
+        // activation. Let that ticket settle before selecting this test's
+        // thread entry so it cannot supersede the explicit activation.
+        try await waitUntil { coordinator.inputConfiguration() != nil }
+        await coordinator.activate(scope: scope, key: .thread("delivery-thread"))
+        try await waitUntil { coordinator.activeKey == .thread("delivery-thread") }
+        try await persistText("delivery body", in: coordinator)
+        let payload = try await coordinator.takeReadyPayload(
+            clientIntentID: "delivery-model-intent"
+        )
+        XCTAssertTrue(
+            model.runTracker.beginLocalDispatch(
+                threadId: "delivery-thread",
+                intentId: "delivery-model-intent",
+                text: payload.text
+            )
+        )
+
+        let dispatch = Task { @MainActor in
+            try await model.startChatRunViaGateway(
+                threadId: "delivery-thread",
+                message: payload.text,
+                attachments: [],
+                clientIntentId: "delivery-model-intent",
+                workspacePath: nil,
+                assistantMessageId: "delivery-assistant",
+                delivery: payload.delivery
+            )
+        }
+        await fulfillment(of: [requestStarted], timeout: 2)
+        let attemptedPhase = try await coordinator.deliveryPhase(for: payload.delivery)
+        XCTAssertEqual(attemptedPhase, .transportAttempted)
+
+        responseGate.signal()
+        try await dispatch.value
+        let acknowledgedPhase = try await coordinator.deliveryPhase(for: payload.delivery)
+        XCTAssertEqual(acknowledgedPhase, .acknowledged)
     }
 
     func testRapidOrderedUIKitInputNeverRegressesToAnOlderDurableCompletion() async throws {
@@ -310,6 +619,70 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         XCTAssertEqual(store.path.filter { $0.destination == .conversationDraft(draftID: "D") }.count, 1)
     }
 
+    func testConversationLiveStoreIsRebuiltFromPromotedRouteValue() {
+        var entry = GaryxRouteEntry(
+            id: .init(rawValue: "promoted-live-store"),
+            destination: .conversationDraft(draftID: "draft-live-store")
+        )
+        XCTAssertNil(GaryxConversationLiveStore(destination: entry.destination).threadID)
+
+        entry.replacePayload(with: .conversation(threadID: "thread-live-store"))
+
+        let promoted = GaryxConversationLiveStore(destination: entry.destination)
+        XCTAssertEqual(promoted.threadID, "thread-live-store")
+        XCTAssertEqual(promoted.routeIdentity, "thread:thread-live-store")
+    }
+
+    func testTypedDrilldownAndWorkspaceFileRoutesPreserveTheirCanonicalBackTargets() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let suiteName = "GaryxNavigationRuntime-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            composerPayloadCoordinator: coordinator
+        )
+
+        model.openPanel(.automations, source: .replace)
+        model.openWorkspaceBotsDrilldown(.automationThreads("automation-a"), source: .current)
+        XCTAssertEqual(model.productionRouteStore.path.map(\.destination), [
+            .panel(GaryxMobilePanel.automations.rawValue),
+            .workspaceDrilldown(.automationThreads(automationID: "automation-a")),
+        ])
+        XCTAssertEqual(model.workspaceBotsDrilldown, .automationThreads("automation-a"))
+
+        _ = model.productionRouteStore.open(
+            .conversation(threadID: "thread-a"),
+            source: .current,
+            animated: false
+        )
+        model.applyCanonicalRouteProjection(model.productionRouteStore.path)
+        model.productionRouteStore.popOne(animated: false)
+        model.applyCanonicalRouteProjection(model.productionRouteStore.path)
+        XCTAssertEqual(model.activePanel, .workspaceBots)
+        XCTAssertEqual(model.workspaceBotsDrilldown, .automationThreads("automation-a"))
+
+        model.openWorkspaceFilesPanel(source: .replace)
+        XCTAssertEqual(
+            model.productionRouteStore.path.last?.destination,
+            .panel(GaryxMobilePanel.workspaces.rawValue)
+        )
+        XCTAssertEqual(model.activePanel, .workspaces)
+
+        model.openSettings(tab: .gateway, source: .replace)
+        XCTAssertEqual(model.productionRouteStore.path.map(\.destination), [
+            .settingsDetail(GaryxMobileSettingsTab.manage.rawValue),
+            .settingsDetail(GaryxMobileSettingsTab.gateway.rawValue),
+        ])
+        model.performMainPanelLeadingEdgeAction()
+        model.applyCanonicalRouteProjection(model.productionRouteStore.path)
+        XCTAssertEqual(model.activeSettingsTab, .manage)
+    }
+
     func testHardSnapUsesReleaseCanonicalTerminalOrder() {
         let first = entry("first", destination: .conversation(threadID: "A"))
         let second = entry("second", destination: .conversation(threadID: "B"))
@@ -346,6 +719,7 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
             epoch: 1,
             payloadGeneration: 1,
             reservationID: nil,
+            nextInputSequence: 1,
             initialText: "",
             isReadOnly: false
         )
@@ -408,4 +782,56 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
     ) -> GaryxRouteEntry {
         .init(id: .init(rawValue: id), destination: destination)
     }
+}
+
+private actor ComposerAsyncGate {
+    private var isSuspended = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        isSuspended = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        while !isSuspended {
+            await Task.yield()
+        }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private final class GaryxComposerDeliveryURLProtocolStub: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let request = request
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let (response, data) = try requestHandler(request)
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+            } catch {
+                client?.urlProtocol(self, didFailWithError: error)
+            }
+        }
+    }
+
+    override func stopLoading() {}
 }

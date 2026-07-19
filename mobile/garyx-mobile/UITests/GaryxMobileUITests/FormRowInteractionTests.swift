@@ -92,7 +92,7 @@ final class FormRowInteractionTests: XCTestCase {
     func testTextFieldRowFocusesFromLabelTap() throws {
         let app = launchCreateAutomationForm()
 
-        let nameTitle = app.staticTexts["Automation name"]
+        let nameTitle = app.staticTexts["Name"]
         XCTAssertTrue(nameTitle.waitForExistence(timeout: 10), "Automation name row title")
 
         nameTitle.tap()

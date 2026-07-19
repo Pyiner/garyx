@@ -82,6 +82,62 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         )
     }
 
+    func testPromotionDuringInteractivePopIsAppliedAfterCancellationWithoutInvalidatingGesture() {
+        var draft = entry(2)
+        draft.replacePayload(with: .conversationDraft(draftID: "draft-in-flight"))
+        let harness = Harness(path: [entry(1), draft])
+
+        XCTAssertTrue(harness.container.beginInteractivePop())
+        harness.container.updateInteractivePop(logicalTranslation: harness.width * 0.20)
+        XCTAssertTrue(
+            harness.container.promoteVisibleDraft(
+                instanceID: draft.id,
+                draftID: "draft-in-flight",
+                threadID: "thread-after-cancel"
+            )
+        )
+        XCTAssertEqual(harness.container.path.last?.destination, draft.destination)
+        XCTAssertEqual(harness.container.endInteractivePop(logicalVelocity: 0), .cancelled)
+
+        harness.completeDisplayLinkedSettle()
+
+        XCTAssertEqual(
+            harness.container.path.last?.destination,
+            .conversation(threadID: "thread-after-cancel")
+        )
+        XCTAssertEqual(harness.probe.terminals.last, .init(outcome: .cancelled, visibility: .visible))
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testBatchPushCommitsIntermediatePredecessorInOneTransaction() {
+        let first = entry(1)
+        let harness = Harness(path: [first])
+        let overview = entry(2, destination: .settingsDetail("manage"))
+        let detail = entry(3, destination: .settingsDetail("gateway"))
+
+        XCTAssertTrue(harness.container.push([overview, detail], animated: false))
+
+        XCTAssertEqual(harness.container.path, [first, overview, detail])
+        XCTAssertEqual(harness.probe.terminals, [
+            .init(outcome: .committed, visibility: .visible),
+        ])
+        XCTAssertEqual(harness.probe.screenChangedCount, 1)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testPresentedContentTouchesDoNotReachUnderlyingRouteGestures() {
+        let harness = Harness(path: [entry(1)])
+        let modal = UIViewController()
+
+        XCTAssertTrue(harness.container.routeOwnsGestureTouch(in: harness.container.view))
+        harness.container.present(modal, animated: false)
+        pumpMainRunLoop(duration: 0.05)
+
+        XCTAssertFalse(harness.container.routeOwnsGestureTouch(in: modal.view))
+
+        harness.container.dismiss(animated: false)
+    }
+
     func testHighVelocityRegrabSettleRemainsEndpointBoundedAndMonotonic() throws {
         let harness = Harness(path: [entry(1)])
         var commitProgress: [CGFloat] = []
@@ -384,7 +440,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
     }
 
     func testTwentyLayerStackAndFiveHundredChurnNeverExceedHostBudget() {
-        let deep = Harness(path: (1...20).map(entry))
+        let deep = Harness(path: (1...20).map { entry($0) })
         XCTAssertLessThanOrEqual(deep.container.metrics.mountedHostCount, 4)
         XCTAssertLessThanOrEqual(deep.container.metrics.peakMountedHostCount, 4)
 
@@ -473,7 +529,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         var window: UIWindow?
         autoreleasepool {
             var container: GaryxRouteStackContainer? = GaryxRouteStackContainer(
-                initialPath: (1...20).map(entry),
+                initialPath: (1...20).map { entry($0) },
                 preferencesProvider: {
                     .init(reduceMotion: false, prefersCrossFadeTransitions: false)
                 },
@@ -501,10 +557,13 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 
     // MARK: Fixtures
 
-    private func entry(_ index: Int) -> GaryxRouteEntry {
+    private func entry(
+        _ index: Int,
+        destination: GaryxRouteDestination? = nil
+    ) -> GaryxRouteEntry {
         GaryxRouteEntry(
             id: .init(rawValue: "synthetic-route-\(index)"),
-            destination: .panel("synthetic-panel-\(index)")
+            destination: destination ?? .panel("synthetic-panel-\(index)")
         )
     }
 

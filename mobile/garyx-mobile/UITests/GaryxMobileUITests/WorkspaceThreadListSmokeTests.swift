@@ -46,7 +46,7 @@ final class WorkspaceThreadListSmokeTests: XCTestCase {
     private func launchWorkspaceDrilldown() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
-        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "workspaces"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "workspaceBots"
         app.launch()
 
         let workspace = app.buttons["workspace-row-/workspace/garyx"]
