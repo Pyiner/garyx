@@ -16,7 +16,7 @@ struct GaryxComposerDurableNoticeDebugFixture {
 
 @MainActor
 private struct GaryxComposerDurableNoticeDebugFixtureView: View {
-    @State private var notices = Self.initialNotices
+    @State private var notices = Self.initialNoticesForEnvironment
     @State private var status = "ready"
 
     var body: some View {
@@ -32,7 +32,7 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
                         .foregroundStyle(.secondary)
 
                     Button {
-                        notices = Self.initialNotices
+                        notices = Self.initialNoticesForEnvironment
                         status = "send:ambiguous"
                     } label: {
                         Text("Send fixture message")
@@ -87,17 +87,30 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
         case .removeUpload(let id):
             notices.removeAll { $0.id == "feedback:\(id.rawValue)" }
             status = "upload:removed"
-        case .restoreCreate, .rebuildCreateCopy:
-            status = "create:handled"
+        case .restoreCreate:
+            notices.removeAll { $0.id == Self.ambiguousCreateNoticeID }
+            notices.insert(Self.conflictNotice, at: 0)
+            status = "create:restore:conflict"
+        case .rebuildCreateCopy:
+            notices.removeAll { $0.id == Self.ambiguousCreateNoticeID }
+            status = "create:rebuild:new-client-intent"
         }
     }
 
     private static let ambiguousNoticeID = "delivery:fixture-send"
+    private static let ambiguousCreateNoticeID = "create:fixture-create"
     private static let conflictNoticeID = "conflict:fixture-conflict"
     private static let backpressureFeedbackID = GaryxFeedbackID(
         rawValue: "fixture-backpressure"
     )
     private static let uploadFeedbackID = GaryxFeedbackID(rawValue: "fixture-upload")
+
+    private static var initialNoticesForEnvironment: [GaryxComposerDurableNotice] {
+        ProcessInfo.processInfo.environment["GARYX_MOBILE_DURABLE_DELIVERY_SCENARIO"]
+            == "create"
+            ? [ambiguousCreateNotice]
+            : initialNotices
+    }
 
     private static let initialNotices: [GaryxComposerDurableNotice] = [
         GaryxComposerDurableNotice(
@@ -139,6 +152,27 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
             .keepCurrentDraft(
                 .init(rawValue: "fixture-conflict"),
                 .init(rawValue: "fixture-recovered-entry")
+            ),
+        ]
+    )
+
+    private static let ambiguousCreateNotice = GaryxComposerDurableNotice(
+        id: ambiguousCreateNoticeID,
+        kind: .ambiguousCreate,
+        title: "Conversation creation status unknown",
+        detail: "The conversation may already exist. Rebuilding can create another conversation.",
+        actions: [
+            .restoreCreate(
+                .init(
+                    scope: .init(identity: "fixture-gateway", epoch: 1),
+                    createIntentID: "fixture-create"
+                )
+            ),
+            .rebuildCreateCopy(
+                .init(
+                    scope: .init(identity: "fixture-gateway", epoch: 1),
+                    createIntentID: "fixture-create"
+                )
             ),
         ]
     )

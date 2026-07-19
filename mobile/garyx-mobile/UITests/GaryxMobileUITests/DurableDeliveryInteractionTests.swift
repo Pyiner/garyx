@@ -74,6 +74,41 @@ final class DurableDeliveryInteractionTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Upload did not finish"].exists)
     }
 
+    func testAmbiguousCreateOffersConflictRestoreAndDuplicateRiskRebuild() {
+        var app = launchFixture(
+            scenario: "create",
+            expectedNoticeTitle: "Conversation creation status unknown"
+        )
+        let restore = app.buttons["Restore uncertain send as draft"]
+        let rebuild = app.buttons["Rebuild a duplicate-risk conversation copy"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 3))
+        XCTAssertTrue(rebuild.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(restore.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(rebuild.frame.height, 44)
+        XCTAssertTrue(restore.isHittable)
+        XCTAssertTrue(rebuild.isHittable)
+
+        restore.tap()
+        waitForStatus("create:restore:conflict", in: app)
+        XCTAssertTrue(app.staticTexts["Recovered message is ready"].waitForExistence(timeout: 3))
+
+        app.terminate()
+        app = launchFixture(
+            scenario: "create",
+            expectedNoticeTitle: "Conversation creation status unknown"
+        )
+        let relaunchedRebuild = app.buttons["Rebuild a duplicate-risk conversation copy"]
+        XCTAssertTrue(relaunchedRebuild.waitForExistence(timeout: 3))
+        relaunchedRebuild.tap()
+        let alert = app.alerts["This may create a duplicate"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        let confirm = alert.buttons["Send duplicate-risk copy"]
+        XCTAssertTrue(confirm.exists)
+        confirm.tap()
+        waitForStatus("create:rebuild:new-client-intent", in: app)
+        XCTAssertFalse(app.staticTexts["Conversation creation status unknown"].exists)
+    }
+
     func testSendExitAndChipSurfacesPassVoiceOverDescriptionAndHitRegionAudit() throws {
         let app = launchFixture()
         let send = app.buttons["Send fixture message"]
@@ -99,11 +134,17 @@ final class DurableDeliveryInteractionTests: XCTestCase {
         try app.performAccessibilityAudit(for: [.hitRegion, .sufficientElementDescription])
     }
 
-    private func launchFixture() -> XCUIApplication {
+    private func launchFixture(
+        scenario: String? = nil,
+        expectedNoticeTitle: String = "Send status unknown"
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DURABLE_DELIVERY_FIXTURE"] = "1"
+        if let scenario {
+            app.launchEnvironment["GARYX_MOBILE_DURABLE_DELIVERY_SCENARIO"] = scenario
+        }
         app.launch()
-        XCTAssertTrue(app.staticTexts["Send status unknown"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts[expectedNoticeTitle].waitForExistence(timeout: 10))
         return app
     }
 
