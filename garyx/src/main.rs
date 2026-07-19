@@ -9,9 +9,9 @@ mod cli;
 mod commands;
 mod config_support;
 mod gateway_auto_update;
+mod gateway_runtime;
 mod plugin_self_replace;
 mod plugins_cli;
-mod runtime_assembler;
 mod service_manager;
 
 const EMBEDDED_CCTTY_ARG: &str = "__cctty";

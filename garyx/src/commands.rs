@@ -2,10 +2,8 @@
 
 use crate::cli::AutomationScheduleArgs;
 use crate::config_support::{
-    default_config_path_buf, load_config_or_default, prepare_config_path_for_io_buf,
-    print_diagnostics, print_errors,
+    load_config_or_default, prepare_config_path_for_io_buf, print_diagnostics, print_errors,
 };
-use crate::runtime_assembler::{RuntimeAssembler, RuntimeAssembly};
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
 use flate2::read::GzDecoder;
@@ -20,12 +18,7 @@ use garyx_channels::plugin_host::{
     InboundHandler, ManifestDiscoverer, PluginErrorCode, PluginManifest, SpawnOptions,
     SubprocessAuthFlowExecutor, SubprocessPlugin,
 };
-use garyx_channels::{
-    BuiltInPluginDiscoverer, ChannelPluginManager, PluginMetadata, WeixinAuthExecutor,
-    builtin_plugin_metadata_list,
-};
-use garyx_gateway::server::AppState;
-use garyx_gateway::server::Gateway;
+use garyx_channels::{PluginMetadata, WeixinAuthExecutor, builtin_plugin_metadata_list};
 use garyx_models::command_catalog::{
     CommandCatalogOptions, CommandSurface, is_valid_shortcut_command_name,
     normalize_shortcut_command_name,
@@ -41,8 +34,7 @@ use garyx_models::config::{
     weixin_account_to_plugin_entry,
 };
 use garyx_models::config_loader::{
-    ConfigHotReloadOptions, ConfigHotReloader, ConfigLoadOptions, ConfigRuntimeOverrides,
-    ConfigWriteOptions, write_config_value_atomic,
+    ConfigRuntimeOverrides, ConfigWriteOptions, write_config_value_atomic,
 };
 use garyx_models::local_paths::{
     default_custom_agents_state_path, default_log_file_path, default_session_data_dir,
@@ -63,7 +55,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;

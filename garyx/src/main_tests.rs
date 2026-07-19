@@ -2396,7 +2396,7 @@ fn routing_rebuild_channels_falls_back_when_none_enabled() {
 
 #[tokio::test]
 async fn startup_runtime_wiring_enables_operational_handlers() {
-    use crate::runtime_assembler::RuntimeAssembler;
+    use crate::gateway_runtime::RuntimeAssembler;
     use axum::extract::State;
     use axum::http::HeaderMap;
     use axum::response::IntoResponse;
@@ -2471,7 +2471,7 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
 
 #[tokio::test]
 async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind() {
-    use crate::runtime_assembler::RuntimeAssembler;
+    use crate::gateway_runtime::RuntimeAssembler;
     use garyx_gateway::garyx_db::{GaryxDbService, RecentThreadDraft, ThreadRecordProjections};
     use garyx_models::config::GaryxConfig;
     use garyx_models::local_paths::garyx_database_path_for_data_dir;
@@ -2555,7 +2555,7 @@ async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind(
 
 #[tokio::test]
 async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canonical_threads() {
-    use crate::runtime_assembler::RuntimeAssembler;
+    use crate::gateway_runtime::RuntimeAssembler;
     use garyx_models::config::{GaryxConfig, TelegramAccount};
     use serde_json::json;
 
