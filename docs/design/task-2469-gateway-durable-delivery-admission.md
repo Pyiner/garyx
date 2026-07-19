@@ -474,17 +474,27 @@ unique truth source. Prompt-file adoption is a runtime file-lifecycle action,
 not a truth-table backfill. A future repair of a marked database must use a new
 marker such as `*_v2`; v1 is never silently weakened.
 
-### 4.5 One transaction domain
+### 4.5 One transaction and record-lock domain
 
-The gateway adds a `ConversationAdmissionRepository` constructed from the
-same `GaryxDbService` as production `SqliteThreadStore`. Its atomic methods
-receive projection sets from the same shared projection deriver used by
-`SqliteThreadStore`; they do not open a second database or derive a competing
-truth source. `AppStateBuilder` publishes delivery capabilities only when the
-thread store and admission repository share that transaction domain. Tests
-that inject a custom non-SQL store either inject a matching repository or run
-without these capabilities; they may not silently combine that store with an
-unrelated SQLite ledger.
+The gateway adds a `ConversationAdmissionRepository` whose production
+constructor receives a crate-private atomic write domain exported by
+`SqliteThreadStore`: the same `GaryxDbService`, the exact same per-record
+`key_lock` map, and the same projection deriver. Its atomic methods do not
+write `thread_records` directly. They extend the existing
+`update_many_atomic` primitive so one invocation can commit record/projection
+writes together with admission, create-claim, and attachment rows in the same
+SQLite transaction. They do not open a second database, create a parallel
+key-lock map, or derive a competing truth source.
+
+Sharing only `GaryxDbService` is insufficient: ordinary `set`, `update`, and
+`update_many_atomic` writers already serialize their read-merge-write cycle
+through the store's key locks before taking the SQLite writer. The admission
+repository must participate in that same lock identity and ordering.
+`AppStateBuilder` publishes delivery capabilities only when the thread store
+and admission repository share both domains. Tests that inject a custom
+non-SQL store either inject a matching atomic write domain or run without
+these capabilities; they may not silently combine that store with an unrelated
+SQLite ledger or lock table.
 
 ## 5. Dispatch admission and provider handoff
 
@@ -535,6 +545,9 @@ The endpoint binding mutator remains the single owner of endpoint uniqueness.
 It gains a transaction-oriented entry point used by dispatch/create rather
 than being bypassed. Previous owner, new owner, known-endpoint registry,
 `thread_records`, and every affected projection are one write transaction.
+That entry point delegates to the extended `SqliteThreadStore` atomic primitive
+and therefore shares its sorted record-key locks; the endpoint mutation lock is
+an additional uniqueness fence, not a substitute for record-write exclusion.
 
 ### 5.2 Detached owner and duplicate join
 
@@ -716,8 +729,17 @@ same fixed thread ID. No request payload is replayed from the database.
 
 ### 6.3 Single commit point
 
-Once preparation is complete, the service acquires the endpoint mutator lock
-when needed and commits one SQLite transaction containing:
+Once preparation is complete, the record-key set starts with the new target
+thread even though it is not yet present. When the command includes a binding,
+the service acquires the endpoint mutator lock and, while holding it, extends
+that set with the previous endpoint owner when one exists and the
+known-endpoint registry key. Every other existing record this command will
+read and write is included as well. It then delegates to the shared atomic
+write domain, which sorts and deduplicates those keys, acquires their existing
+`SqliteThreadStore::key_lock` guards, re-reads and merges the authoritative
+record bodies and derives projection drafts under those guards, rechecks SQL
+terminal and endpoint-holder invariants in the writer transaction, and commits
+that one SQLite transaction containing:
 
 1. the new canonical `thread_records` body;
 2. every thread/recent/task/endpoint projection derived from that body;
@@ -744,12 +766,23 @@ Lock order is fixed and tested:
 
 1. create-operation cell;
 2. optional endpoint mutation lock;
-3. SQLite writer transaction;
-4. release endpoint lock;
-5. bridge per-thread dispatch guard;
-6. short SQLite gate/settlement transactions.
+3. collect, sort, and deduplicate the complete record-key set;
+4. acquire the existing `SqliteThreadStore` per-key guards in lexicographic
+   order (target thread, previous owner when any, known-endpoint registry, and
+   any other record in the write set);
+5. while retaining those guards, re-read/merge and derive projection drafts,
+   then open the SQLite writer transaction, recheck its SQL invariants, and
+   commit;
+6. release the per-key guards, then the endpoint mutation lock;
+7. acquire the bridge per-thread dispatch guard;
+8. use short SQLite gate/settlement transactions.
 
-No path holds the SQLite writer while waiting for a provider or filesystem.
+The new primitive acquires every record guard before the SQLite writer and
+never calls `update_many_atomic` from inside an already-open transaction.
+Existing `update_many_atomic` paths enter at step 4 with the same shared locks,
+so no path can hold the writer while waiting for a record guard and no parallel
+lock map can create false mutual exclusion. No record guard or SQLite writer
+is held while waiting for a provider or filesystem operation.
 
 ### 6.4 Response loss and process loss
 
@@ -977,6 +1010,15 @@ The required deterministic evidence is:
   duplicate provider handoff.
 - Unique-index collision, same-key fingerprint conflict, preparing query,
   committed query, and archived/deleted query are covered.
+- A deterministic two-order race moves an endpoint during
+  `create_and_dispatch` while production `update_many_atomic` updates run state
+  on the previous owner. A barrier after either side's locked read/merge and
+  before its writer transaction forces each acquisition order. Both operations
+  must finish under a timeout; the previous owner retains the concurrent
+  `active_run_id`/run-state update but loses the binding, the new target and SQL
+  endpoint projection have exactly one holder, the registry agrees, and no
+  deadlock or stale-body overwrite occurs. The test uses the real shared
+  `SqliteThreadStore` lock domain, not independent test mutexes.
 - Every SQLite failpoint in the multi-record commit leaves either none of the
   thread/claim/admission/binding/attachment changes or all of them.
 - Managed workspace/worktree/transcript preparation crash points prove owner
@@ -1064,7 +1106,8 @@ volatile desktop queue into a durable one.
 - A normal client disconnect cannot cancel the admitted operation.
 - New thread truth/projections, claim, optional endpoint move, admission, and
   attachment claims share one transaction.
-- Endpoint uniqueness still has one mutator/serialization domain.
+- Endpoint uniqueness still has one mutator domain, and every affected record
+  reuses the sorted `SqliteThreadStore` key-lock domain before the writer.
 - Queries are indexed SQL point reads; no record enumeration or read repair.
 - Every marker is same-transaction with schema creation and validates marked
   databases fail-closed.
