@@ -2,13 +2,10 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMotionTests: XCTestCase {
-    func testEveryUnderdampedSpringIsGestureReleaseOnly() {
+    func testEveryOvershootingCurveIsGestureReleaseOnly() {
         for token in GaryxMotion.Token.allCases {
             let specification = GaryxMotion.specification(for: token)
-            guard case let .spring(_, dampingRatio) = specification.curve,
-                  dampingRatio < 1 else {
-                continue
-            }
+            guard specification.curve.hasOvershootPotential else { continue }
             XCTAssertEqual(
                 specification.kinetics,
                 .gestureRelease,
@@ -104,6 +101,25 @@ final class GaryxMotionTests: XCTestCase {
         XCTAssertEqual(resolution.mode, .crossFade)
         XCTAssertEqual(resolution.curve, .easeOut(duration: 0.12))
         XCTAssertEqual(resolution.effect, .identity)
+    }
+
+    func testSpatialResolutionUsesPrimaryCurveWhenCrossFadeCurveDiffers() {
+        let specification = GaryxMotion.specification(for: .morphOpen)
+        XCTAssertNotEqual(specification.curve, specification.crossFadeCurve)
+
+        let spatial = GaryxMotion.resolve(.morphOpen, preferences: .standard)
+        XCTAssertEqual(spatial.mode, .spatial)
+        XCTAssertEqual(spatial.curve, specification.curve)
+
+        let crossFade = GaryxMotion.resolve(
+            .morphOpen,
+            preferences: .init(
+                reduceMotion: false,
+                prefersCrossFadeTransitions: true
+            )
+        )
+        XCTAssertEqual(crossFade.mode, .crossFade)
+        XCTAssertEqual(crossFade.curve, specification.crossFadeCurve)
     }
 
     func testContinuousPeriodsAreCatalogOwned() {

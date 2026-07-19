@@ -131,8 +131,6 @@ private extension GaryxMotion.Curve {
             .easeInOut(duration: duration)
         case let .timingCurve(x1, y1, x2, y2, duration):
             .timingCurve(x1, y1, x2, y2, duration: duration)
-        case let .snappy(duration):
-            .snappy(duration: duration, extraBounce: 0)
         case let .linear(duration):
             .linear(duration: duration)
         }

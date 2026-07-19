@@ -2,10 +2,11 @@ import Foundation
 
 /// The single semantic motion-token catalog for Garyx mobile.
 ///
-/// Rule: state-driven motion is critically damped (damping ratio `1`) and
-/// must not overshoot. An underdamped spring is legal only for a gesture
-/// release that hands real momentum into the settle trajectory. Menus,
-/// toasts, presses, programmatic navigation, and snap-backs never bounce.
+/// Rule: state-driven motion must not overshoot; when expressed as a spring,
+/// it is critically damped (damping ratio `1`). Any overshooting curve is
+/// legal only for a gesture release that hands real momentum into the settle
+/// trajectory. Menus, toasts, presses, programmatic navigation, and
+/// snap-backs never bounce.
 public enum GaryxMotion {
     public enum Token: String, CaseIterable, Sendable {
         case morphOpen
@@ -74,7 +75,6 @@ public enum GaryxMotion {
             controlPoint2Y: Double,
             duration: TimeInterval
         )
-        case snappy(duration: TimeInterval)
         case linear(duration: TimeInterval)
 
         public var duration: TimeInterval {
@@ -83,11 +83,21 @@ public enum GaryxMotion {
                  let .easeIn(response),
                  let .easeOut(response),
                  let .easeInOut(response),
-                 let .snappy(response),
                  let .linear(response):
                 response
             case let .timingCurve(_, _, _, _, duration):
                 duration
+            }
+        }
+
+        var hasOvershootPotential: Bool {
+            switch self {
+            case let .spring(_, dampingRatio):
+                dampingRatio < 1
+            case let .timingCurve(_, firstY, _, secondY, _):
+                !(0...1).contains(firstY) || !(0...1).contains(secondY)
+            case .easeIn, .easeOut, .easeInOut, .linear:
+                false
             }
         }
 
@@ -130,12 +140,10 @@ public enum GaryxMotion {
             kinetics: Kinetics = .stateChange,
             effect: Effect = .identity
         ) {
-            if case let .spring(_, dampingRatio) = curve {
-                precondition(
-                    dampingRatio >= 1 || kinetics == .gestureRelease,
-                    "Only momentum-carrying gesture releases may use an underdamped spring"
-                )
-            }
+            precondition(
+                !curve.hasOvershootPotential || kinetics == .gestureRelease,
+                "Only momentum-carrying gesture releases may use an overshooting curve"
+            )
             self.curve = curve
             self.crossFadeCurve = crossFadeCurve ?? curve
             self.kinetics = kinetics
@@ -256,7 +264,7 @@ public enum GaryxMotion {
         case .composerPanel:
             return Specification(curve: .spring(response: 0.22, dampingRatio: 1))
         case .composerDrilldown:
-            return Specification(curve: .snappy(duration: 0.22))
+            return Specification(curve: .easeOut(duration: 0.22))
         case .drilldown:
             return Specification(curve: .easeOut(duration: 0.16))
         case .runtimeDrilldownExit:
