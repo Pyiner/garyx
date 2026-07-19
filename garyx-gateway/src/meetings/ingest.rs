@@ -201,12 +201,19 @@ impl MeetingService {
             .join_retry_window
     }
 
-    pub fn start_ingestion(self: &Arc<Self>, join_retry_window_secs: u64) {
+    /// Pure timing update: refreshes the ingestion join-retry window without
+    /// touching ingress spawning or coordinator resumption. Safe on hot
+    /// paths; `start_ingestion` (boot/resume) layers the side effects on top.
+    pub fn set_ingestion_join_retry_window(&self, join_retry_window_secs: u64) {
         self.ingestion
             .timing
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .join_retry_window = Duration::from_secs(join_retry_window_secs.max(1));
+    }
+
+    pub fn start_ingestion(self: &Arc<Self>, join_retry_window_secs: u64) {
+        self.set_ingestion_join_retry_window(join_retry_window_secs);
         let _ = self.ingestion.service.set(Arc::downgrade(self));
         let runtime = match tokio::runtime::Handle::try_current() {
             Ok(runtime) => runtime,

@@ -7,12 +7,7 @@ impl MessageRouter {
 
     /// Update configuration (for hot reload).
     pub fn update_config(&mut self, config: GaryxConfig) {
-        self.default_agent = config
-            .agents
-            .get("default")
-            .and_then(|v| v.as_str())
-            .unwrap_or("main")
-            .to_owned();
+        self.default_agent = super::super::default_agent_from_config(&config);
         self.config = config;
     }
 

@@ -203,6 +203,35 @@ async fn test_live_config_cell_supports_concurrent_snapshot_and_replace() {
     }
 }
 
+/// A rejected candidate config must not leak partial runtime state: if the
+/// bridge reconcile fails, the meeting knobs keep their previous values.
+#[tokio::test]
+async fn test_apply_runtime_config_failure_leaves_meeting_knobs_unchanged() {
+    let state = test_state();
+    let baseline = state.ops.meetings.ingestion_join_retry_window_for_test();
+
+    let mut config = GaryxConfig::default();
+    config.gateway.meetings.join_retry_window_secs = 4321;
+    config.agents.insert(
+        "claude".to_owned(),
+        serde_json::json!({
+            "provider_type": "claude_code",
+            "claude_cli_path": "/nonexistent/claude-cli-for-test"
+        }),
+    );
+
+    let result = state.apply_runtime_config(config).await;
+    assert!(
+        result.is_err(),
+        "an invalid provider CLI must fail the apply"
+    );
+    assert_eq!(
+        state.ops.meetings.ingestion_join_retry_window_for_test(),
+        baseline,
+        "a rejected candidate config must not leak the ingestion window"
+    );
+}
+
 /// Regression for the hot-reload drift where the meetings ingestion
 /// join-retry window refreshed only on the file-watcher path: applying a
 /// runtime config must update both meeting knobs, not just the page size.

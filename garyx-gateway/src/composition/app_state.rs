@@ -284,22 +284,22 @@ impl AppState {
 
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
         let projection = RuntimeConfigProjection::from_config(&config);
-        self.ops
-            .meetings
-            .set_read_page_bytes(projection.meeting_read_page_bytes);
-        // Closing a hot-reload drift: the ingestion join-retry window used to
-        // refresh only on the file-watcher path (via the channel-plugin
-        // rebuild), so API-driven settings saves left it stale until restart.
-        // start_ingestion is idempotent and boot already starts ingestion
-        // unconditionally; this call only refreshes the window.
-        self.ops
-            .meetings
-            .start_ingestion(projection.meeting_join_retry_window_secs);
         self.integration
             .bridge
             .replace_agent_profiles(self.ops.custom_agents.snapshot().await)
             .await;
         self.integration.bridge.reload_from_config(&config).await?;
+        // Publish the meeting knobs only after the fallible bridge reconcile
+        // above: a rejected candidate config must not leak partial runtime
+        // state. The join-retry window used to refresh only on the
+        // file-watcher path (via the channel-plugin rebuild), so API-driven
+        // settings saves left it stale until restart.
+        self.ops
+            .meetings
+            .set_read_page_bytes(projection.meeting_read_page_bytes);
+        self.ops
+            .meetings
+            .set_ingestion_join_retry_window(projection.meeting_join_retry_window_secs);
         // Rebuild the built-in routes from the new config and publish
         // them through the `SwappableDispatcher` so the concrete swap
         // identity is preserved (§9.4: respawning plugins rely on it).

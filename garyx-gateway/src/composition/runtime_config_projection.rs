@@ -16,6 +16,9 @@
 //! - `config.channels` — passed through verbatim because the hot-reload
 //!   dispatcher rebuild has state (weixin running, preserved plugin senders)
 //!   that a pre-derived value must not flatten.
+//! - the default agent id — router-owned via
+//!   `garyx_router::default_agent_from_config`, the shared derivation both
+//!   router construction and `update_config` call.
 
 use std::collections::HashMap;
 
@@ -31,8 +34,6 @@ pub struct RuntimeConfigProjection {
     /// Meetings ingestion join-retry window (`gateway.meetings`), clamped by
     /// `effective_join_retry_window_secs`.
     pub meeting_join_retry_window_secs: u64,
-    /// The default agent id (`agents["default"]`, falling back to `"main"`).
-    pub default_agent: String,
     /// Managed MCP server definitions handed to the cron dispatch runtime.
     pub managed_mcp_servers: HashMap<String, McpServerConfig>,
 }
@@ -45,12 +46,6 @@ impl RuntimeConfigProjection {
                 .gateway
                 .meetings
                 .effective_join_retry_window_secs(),
-            default_agent: config
-                .agents
-                .get("default")
-                .and_then(|v| v.as_str())
-                .unwrap_or("main")
-                .to_owned(),
             managed_mcp_servers: config.mcp_servers.clone(),
         }
     }
@@ -60,56 +55,25 @@ impl RuntimeConfigProjection {
 mod tests {
     use super::*;
 
+    /// Sub-floor inputs must come out clamped: if the projection ever
+    /// switches to the raw config fields, these assertions go red.
     #[test]
-    fn default_agent_falls_back_to_main() {
-        let config = GaryxConfig::default();
-        let projection = RuntimeConfigProjection::from_config(&config);
-        assert_eq!(projection.default_agent, "main");
-    }
-
-    #[test]
-    fn default_agent_reads_configured_value() {
+    fn meeting_values_clamp_sub_floor_inputs() {
         let mut config = GaryxConfig::default();
-        config
-            .agents
-            .insert("default".to_owned(), serde_json::json!("gary"));
+        config.gateway.meetings.read_page_bytes = 0;
+        config.gateway.meetings.join_retry_window_secs = 0;
         let projection = RuntimeConfigProjection::from_config(&config);
-        assert_eq!(projection.default_agent, "gary");
+        assert_eq!(projection.meeting_read_page_bytes, 4_096);
+        assert_eq!(projection.meeting_join_retry_window_secs, 1);
     }
 
-    /// Equivalence pin: the projection's default-agent derivation must match
-    /// what `MessageRouter` derives for the same config, both at construction
-    /// and through `update_config`. This guards the currently-duplicated
-    /// derivation sites against drift.
     #[test]
-    fn default_agent_matches_router_derivation() {
+    fn meeting_values_pass_through_above_floor() {
         let mut config = GaryxConfig::default();
-        config
-            .agents
-            .insert("default".to_owned(), serde_json::json!("gary"));
+        config.gateway.meetings.read_page_bytes = 8_192;
+        config.gateway.meetings.join_retry_window_secs = 120;
         let projection = RuntimeConfigProjection::from_config(&config);
-
-        let store: std::sync::Arc<dyn garyx_router::ThreadStore> =
-            std::sync::Arc::new(garyx_router::InMemoryThreadStore::new());
-        let mut router = garyx_router::MessageRouter::new(store, GaryxConfig::default());
-        router.update_config(config);
-        assert_eq!(
-            router.resolve_agent_for_channel("api", "main", None, false),
-            projection.default_agent
-        );
-    }
-
-    #[test]
-    fn meeting_values_apply_effective_clamps() {
-        let config = GaryxConfig::default();
-        let projection = RuntimeConfigProjection::from_config(&config);
-        assert_eq!(
-            projection.meeting_read_page_bytes,
-            config.gateway.meetings.effective_read_page_bytes()
-        );
-        assert_eq!(
-            projection.meeting_join_retry_window_secs,
-            config.gateway.meetings.effective_join_retry_window_secs()
-        );
+        assert_eq!(projection.meeting_read_page_bytes, 8_192);
+        assert_eq!(projection.meeting_join_retry_window_secs, 120);
     }
 }

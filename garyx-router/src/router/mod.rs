@@ -62,14 +62,21 @@ pub struct MessageRouter {
     message_ledger: Option<Arc<MessageLedgerStore>>,
 }
 
+/// The single derivation of the configured default agent id
+/// (`agents["default"]`, falling back to `"main"`). Shared by router
+/// construction and `update_config` so the two paths cannot drift.
+pub fn default_agent_from_config(config: &GaryxConfig) -> String {
+    config
+        .agents
+        .get("default")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main")
+        .to_owned()
+}
+
 impl MessageRouter {
     pub fn new(threads: Arc<dyn ThreadStore>, config: GaryxConfig) -> Self {
-        let default_agent = config
-            .agents
-            .get("default")
-            .and_then(|v| v.as_str())
-            .unwrap_or("main")
-            .to_owned();
+        let default_agent = default_agent_from_config(&config);
 
         Self {
             threads,
