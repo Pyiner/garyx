@@ -795,6 +795,10 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
     public private(set) var followupGeneration: UInt64?
     public private(set) var envelopeText: String?
     public private(set) var envelopeAttachmentIDs: [GaryxAttachmentID]
+    /// Transport-ready snapshots captured at seal. Legacy persisted barriers
+    /// decode this as an empty array; all newly sealed attachment envelopes
+    /// populate it before the delivery record is linearized.
+    public private(set) var envelopeAttachments: [GaryxComposerAttachment]
     public private(set) var envelopeClientIntentID: String?
     public private(set) var provisionalFollowupText: String
     public private(set) var provisionalFollowupAttachmentIDs: [GaryxAttachmentID]
@@ -813,9 +817,70 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         followupGeneration = nil
         envelopeText = nil
         envelopeAttachmentIDs = []
+        envelopeAttachments = []
         envelopeClientIntentID = nil
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case entryID
+        case scope
+        case payloadLifecycle
+        case phase
+        case reservationID
+        case envelopeGeneration
+        case followupGeneration
+        case envelopeText
+        case envelopeAttachmentIDs
+        case envelopeAttachments
+        case envelopeClientIntentID
+        case provisionalFollowupText
+        case provisionalFollowupAttachmentIDs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        entryID = try container.decode(GaryxComposerPayloadEntryID.self, forKey: .entryID)
+        scope = try container.decode(GaryxGatewayScope.self, forKey: .scope)
+        payloadLifecycle = try container.decode(
+            GaryxPayloadLifecycleCapture.self,
+            forKey: .payloadLifecycle
+        )
+        phase = try container.decode(GaryxSendCommitBarrierPhase.self, forKey: .phase)
+        reservationID = try container.decodeIfPresent(
+            GaryxSendReservationID.self,
+            forKey: .reservationID
+        )
+        envelopeGeneration = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .envelopeGeneration
+        )
+        followupGeneration = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .followupGeneration
+        )
+        envelopeText = try container.decodeIfPresent(String.self, forKey: .envelopeText)
+        envelopeAttachmentIDs = try container.decode(
+            [GaryxAttachmentID].self,
+            forKey: .envelopeAttachmentIDs
+        )
+        envelopeAttachments = try container.decodeIfPresent(
+            [GaryxComposerAttachment].self,
+            forKey: .envelopeAttachments
+        ) ?? []
+        envelopeClientIntentID = try container.decodeIfPresent(
+            String.self,
+            forKey: .envelopeClientIntentID
+        )
+        provisionalFollowupText = try container.decode(
+            String.self,
+            forKey: .provisionalFollowupText
+        )
+        provisionalFollowupAttachmentIDs = try container.decode(
+            [GaryxAttachmentID].self,
+            forKey: .provisionalFollowupAttachmentIDs
+        )
     }
 
     @discardableResult
@@ -842,6 +907,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         self.followupGeneration = followupGeneration
         envelopeText = envelope.text
         envelopeAttachmentIDs = envelope.attachmentIDs
+        envelopeAttachments = envelope.attachments
         envelopeClientIntentID = envelope.clientIntentID
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
@@ -881,6 +947,8 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
               let followupGeneration,
               let envelopeText,
               let envelopeClientIntentID,
+              envelopeAttachments.isEmpty
+                || Set(envelopeAttachments.map(\.id)) == Set(envelopeAttachmentIDs),
               clientIntentID == envelopeClientIntentID else {
             return nil
         }
@@ -888,6 +956,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         let envelope = GaryxDeliveryEnvelope(
             text: envelopeText,
             attachmentIDs: envelopeAttachmentIDs,
+            attachments: envelopeAttachments,
             generation: envelopeGeneration,
             clientIntentID: envelopeClientIntentID
         )
@@ -935,6 +1004,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         phase = .revoked
         envelopeText = nil
         envelopeAttachmentIDs = []
+        envelopeAttachments = []
         envelopeClientIntentID = nil
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []
@@ -948,6 +1018,7 @@ public struct GaryxSendCommitBarrier: Equatable, Codable, Sendable {
         followupGeneration = nil
         envelopeText = nil
         envelopeAttachmentIDs = []
+        envelopeAttachments = []
         envelopeClientIntentID = nil
         provisionalFollowupText = ""
         provisionalFollowupAttachmentIDs = []

@@ -167,11 +167,27 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         var barrier = makeBarrier()
         let lifecycle = makeEntry().lifecycle.snapshot
         let envelopeAttachment = GaryxAttachmentID(rawValue: "envelope")
+        let envelopeAttachmentSnapshot = GaryxComposerAttachment(
+            id: envelopeAttachment,
+            stagedAssetID: GaryxStagedAssetID(rawValue: "envelope-asset"),
+            generation: 10,
+            byteCount: 12,
+            kind: "file",
+            name: "envelope.txt",
+            mediaType: "text/plain",
+            uploadedPath: "prompt/envelope.txt"
+        )
         let followupAttachment = GaryxAttachmentID(rawValue: "followup")
         XCTAssertEqual(
             barrier.seal(
                 reservationID: reservation,
-                envelope: makeEnvelope(text: "T", attachments: [envelopeAttachment]),
+                envelope: GaryxDeliveryEnvelope(
+                    text: "T",
+                    attachmentIDs: [envelopeAttachment],
+                    attachments: [envelopeAttachmentSnapshot],
+                    generation: 10,
+                    clientIntentID: "intent"
+                ),
                 followupGeneration: 11,
                 readiness: .ready,
                 quota: .init(),
@@ -201,10 +217,47 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         XCTAssertEqual(settlement.followupAttachmentIDs, [followupAttachment])
         XCTAssertEqual(settlement.deliveryRecord?.envelope?.text, "T")
         XCTAssertEqual(settlement.deliveryRecord?.envelope?.attachmentIDs, [envelopeAttachment])
+        XCTAssertEqual(
+            settlement.deliveryRecord?.envelope?.attachments,
+            [envelopeAttachmentSnapshot]
+        )
         XCTAssertFalse(
             settlement.deliveryRecord?.envelope?.attachmentIDs.contains(followupAttachment) == true,
             "S1 is immutable after durable commit"
         )
+    }
+
+    func testSendBarrierDecodesLegacyRecordWithoutAttachmentSnapshots() throws {
+        var barrier = makeBarrier()
+        let lifecycle = makeEntry().lifecycle.snapshot
+        XCTAssertEqual(
+            barrier.seal(
+                reservationID: reservation,
+                envelope: makeEnvelope(
+                    text: "legacy attachment envelope",
+                    attachments: [GaryxAttachmentID(rawValue: "legacy-attachment")]
+                ),
+                followupGeneration: 11,
+                readiness: .ready,
+                quota: .init(),
+                producerPhase: .live,
+                lifecycle: lifecycle
+            ),
+            .sealed
+        )
+        let encoded = try JSONEncoder().encode(barrier)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "envelopeAttachments")
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(GaryxSendCommitBarrier.self, from: legacy)
+
+        XCTAssertEqual(
+            decoded.envelopeAttachmentIDs,
+            [GaryxAttachmentID(rawValue: "legacy-attachment")]
+        )
+        XCTAssertTrue(decoded.envelopeAttachments.isEmpty)
     }
 
     func testRevokedBarrierConsumesGenerationAndMergesTPlusUAtGPlusTwo() throws {

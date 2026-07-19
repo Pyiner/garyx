@@ -739,6 +739,62 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         try await coordinator.acknowledgeDelivery(payload.delivery)
     }
 
+    func testProductionSendBarrierRetainsAttachmentSnapshotsForAmbiguousExit() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            quotaLimitBytes: 1_024 * 1_024
+        )
+        let scope = GaryxGatewayScope(identity: "delivery-attachment-gateway", epoch: 1)
+        await coordinator.activate(scope: scope, key: .draft("delivery-attachment"))
+        try await persistText("send with attachment", in: coordinator)
+
+        let sourceURL = directory.appendingPathComponent("delivery-attachment.txt")
+        try Data("durable attachment".utf8).write(to: sourceURL)
+        let staged = try await coordinator.stageAttachment(
+            sourceURL: sourceURL,
+            metadata: .init(
+                kind: "file",
+                name: "delivery-attachment.txt",
+                mediaType: "text/plain",
+                previewDataURL: nil
+            ),
+            requestToken: .init(scope: scope, activationSequence: 1)
+        )
+        try await coordinator.completeUpload(
+            staged,
+            uploaded: try uploadedAttachment(path: "/remote/delivery-attachment.txt")
+        )
+
+        let payload = try await coordinator.takeReadyPayload(
+            clientIntentID: "delivery-attachment-intent"
+        )
+        XCTAssertEqual(payload.attachments.map(\.id), [staged.attachmentID])
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        let persisted = try await durability.load()
+        XCTAssertEqual(
+            persisted.deliveries[payload.delivery.deliveryID]?.envelope?.attachments
+                .map(\.uploadedPath),
+            ["/remote/delivery-attachment.txt"]
+        )
+
+        try await coordinator.markTransportAttempted(payload.delivery)
+        try await coordinator.markDeliveryAmbiguous(payload.delivery)
+        let restored = try await coordinator.restoreAmbiguousDelivery(
+            payload.delivery.deliveryID
+        )
+        XCTAssertEqual(restored.attachments.map(\.id), [staged.attachmentID])
+        XCTAssertEqual(
+            restored.attachments.map(\.uploadedPath),
+            ["/remote/delivery-attachment.txt"]
+        )
+    }
+
     func testAcknowledgedDeliverySettlementDoesNotBrickSixtyFifthSend() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
