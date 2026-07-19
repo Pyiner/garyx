@@ -4,7 +4,7 @@ import Foundation
 /// caches. A mounted predecessor and a staged destination can therefore render
 /// different conversations at the same time without consulting selection.
 @MainActor
-final class GaryxConversationLiveStore: ObservableObject {
+struct GaryxConversationLiveStore {
     let destination: GaryxRouteDestination
 
     init(destination: GaryxRouteDestination) {

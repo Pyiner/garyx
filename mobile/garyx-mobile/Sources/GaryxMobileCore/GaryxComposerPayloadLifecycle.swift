@@ -265,6 +265,10 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
         deliveryReferences.insert(id)
     }
 
+    public mutating func removeDeliveryReference(_ id: GaryxDeliveryRecordID) {
+        deliveryReferences.remove(id)
+    }
+
     /// Publishes the payload side of `commitSend`: the sealed generation is
     /// removed from composer state, the provisional follow-up becomes the
     /// current generation, and the immutable outbox record keeps the Entry

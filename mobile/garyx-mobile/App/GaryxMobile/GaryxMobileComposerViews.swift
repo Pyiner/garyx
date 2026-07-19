@@ -82,16 +82,37 @@ struct GaryxComposer: View {
     @State private var showsAddPanel = false
     @State private var isAddingAttachments = false
 
+    private var routeProjection: GaryxComposerPayloadProjection? {
+        guard let key = routeContext.composerKey else { return payload.snapshot.projection }
+        return payload.projection(forRouteKey: key)
+    }
+
+    private var routeText: String { routeProjection?.text ?? "" }
+
+    private var routePayloadItems: [GaryxMobileComposerAttachment] {
+        (routeProjection?.attachments ?? []).map { attachment in
+            GaryxMobileComposerAttachment(
+                id: attachment.id.rawValue,
+                kind: attachment.kind ?? "file",
+                name: attachment.name ?? "attachment",
+                mediaType: attachment.mediaType ?? "application/octet-stream",
+                path: attachment.uploadedPath ?? "",
+                previewDataUrl: attachment.previewDataURL
+            )
+        }
+    }
+
     private var hasLocalPayload: Bool {
-        !payload.currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !model.activeComposerPayloadItems.isEmpty
+        !routeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !routePayloadItems.isEmpty
     }
 
     private var canSendLocalPayload: Bool {
-        payload.canSend
+        routeContext.isCanonicalTop
+            && payload.canSend
             && model.canSendComposerPayload(
-                text: payload.currentText,
-                attachments: model.activeComposerPayloadItems
+                text: routeText,
+                attachments: routePayloadItems
             )
     }
 
@@ -130,7 +151,7 @@ struct GaryxComposer: View {
         .background(Color.clear)
         .animation(
             .spring(response: 0.24, dampingFraction: 0.88),
-            value: model.activeComposerPayloadItems
+            value: routePayloadItems
         )
         .sheet(isPresented: $showsWorkspaceModeSheet) {
             GaryxComposerWorkspaceModeSheet(
@@ -297,7 +318,7 @@ struct GaryxComposer: View {
 
     private var composerCardContent: some View {
         VStack(spacing: 0) {
-            if !model.activeComposerPayloadItems.isEmpty {
+            if !routePayloadItems.isEmpty {
                 composerPayloadItemsPreview
             }
 
@@ -395,7 +416,7 @@ struct GaryxComposer: View {
     private var composerPayloadItemsPreview: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(model.activeComposerPayloadItems) { attachment in
+                ForEach(routePayloadItems) { attachment in
                     GaryxAttachmentChip(attachment: attachment)
                 }
             }
@@ -407,7 +428,7 @@ struct GaryxComposer: View {
 
     private var composerInput: some View {
         ZStack(alignment: .topLeading) {
-            if payload.currentText.isEmpty {
+            if routeText.isEmpty {
                 Text(placeholderText)
                     .font(GaryxFont.subheadline())
                     .foregroundStyle(Color(.placeholderText))
@@ -416,7 +437,7 @@ struct GaryxComposer: View {
             }
 
             if let configuration = payload.inputConfiguration(),
-               routeContext.composerKey.map({ $0 == configuration.composerKey }) ?? true {
+               routeContext.composerKey.map(payload.routeKeyMatchesActiveSession) ?? true {
                 GaryxComposerUIKitField(
                     occurrenceID: composerOccurrenceID,
                     configuration: configuration,
@@ -446,7 +467,7 @@ struct GaryxComposer: View {
         .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
         .padding(
             .top,
-            model.activeComposerPayloadItems.isEmpty ? GaryxComposerLayout.inputTopPadding : 6
+            routePayloadItems.isEmpty ? GaryxComposerLayout.inputTopPadding : 6
         )
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
         .contentShape(Rectangle())

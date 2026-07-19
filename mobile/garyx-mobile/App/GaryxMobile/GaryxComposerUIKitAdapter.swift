@@ -91,8 +91,13 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         isLive = !configuration.isReadOnly
         isFinalizing = false
         if startsNewSession {
-            nextSequence = 1
+            nextSequence = configuration.nextInputSequence
             observedMarkedText = false
+        } else {
+            // A route payload rebind may arrive after the reducer has already
+            // admitted an event from this session. Never move the adapter's
+            // sequence cursor backwards.
+            nextSequence = max(nextSequence, configuration.nextInputSequence)
         }
         if text != configuration.initialText {
             text = configuration.initialText

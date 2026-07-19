@@ -156,7 +156,7 @@ struct GaryxConversationView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var isComposerFocused: Bool
-    @StateObject private var liveStore: GaryxConversationLiveStore
+    private let liveStore: GaryxConversationLiveStore
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
     /// the scroll-to-bottom control reads its projections.
@@ -185,9 +185,7 @@ struct GaryxConversationView: View {
     @State private var runtimePanelExpanded = false
 
     init(destination: GaryxRouteDestination) {
-        _liveStore = StateObject(
-            wrappedValue: GaryxConversationLiveStore(destination: destination)
-        )
+        liveStore = GaryxConversationLiveStore(destination: destination)
     }
 
     var body: some View {
@@ -944,7 +942,7 @@ struct GaryxConversationView: View {
 
 struct GaryxConversationHeader: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @ObservedObject var liveStore: GaryxConversationLiveStore
+    let liveStore: GaryxConversationLiveStore
     let isRuntimePanelPresented: Bool
     let onToggleRuntimePanel: () -> Void
     let onDismissRuntimePanel: () -> Void

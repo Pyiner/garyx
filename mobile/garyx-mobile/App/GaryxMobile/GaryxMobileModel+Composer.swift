@@ -153,14 +153,14 @@ extension GaryxMobileModel {
         }
         let clientIntentID = "mobile-\(UUID().uuidString)"
         do {
-            let (rawText, durableItems) = try await composerPayloadCoordinator.takeReadyPayload(
+            let payload = try await composerPayloadCoordinator.takeReadyPayload(
                 clientIntentID: clientIntentID
             )
-            let text = rawText
+            let text = payload.text
                 .replacingOccurrences(of: "\r\n", with: "\n")
                 .replacingOccurrences(of: "\r", with: "\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let attachments = durableItems.compactMap { item -> GaryxMobileComposerAttachment? in
+            let attachments = payload.attachments.compactMap { item -> GaryxMobileComposerAttachment? in
                 guard let path = item.uploadedPath, !path.isEmpty else { return nil }
                 return GaryxMobileComposerAttachment(
                     id: item.id.rawValue,
@@ -171,13 +171,14 @@ extension GaryxMobileModel {
                     previewDataUrl: item.previewDataURL
                 )
             }
-            guard attachments.count == durableItems.count else {
+            guard attachments.count == payload.attachments.count else {
                 throw GaryxComposerPayloadRuntimeError.attachmentNotUploaded
             }
             await send(
                 text,
                 attachments: attachments,
-                clientIntentId: clientIntentID
+                clientIntentId: clientIntentID,
+                delivery: payload.delivery
             )
             return true
         } catch {
@@ -189,7 +190,8 @@ extension GaryxMobileModel {
     func send(
         _ text: String,
         attachments: [GaryxMobileComposerAttachment] = [],
-        clientIntentId suppliedClientIntentId: String? = nil
+        clientIntentId suppliedClientIntentId: String? = nil,
+        delivery: GaryxComposerDeliveryHandle? = nil
     ) async {
         let runtimeGeneration = gatewayRequestToken
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
@@ -285,7 +287,8 @@ extension GaryxMobileModel {
                 attachments: attachments,
                 clientIntentId: clientIntentId,
                 workspacePath: workspacePath,
-                assistantMessageId: assistantId
+                assistantMessageId: assistantId,
+                delivery: delivery
             )
         } catch {
             guard runtimeGeneration == gatewayRequestToken else { return }
@@ -520,30 +523,47 @@ extension GaryxMobileModel {
         attachments: [GaryxMobileComposerAttachment],
         clientIntentId: String,
         workspacePath: String?,
-        assistantMessageId: String
+        assistantMessageId: String,
+        delivery: GaryxComposerDeliveryHandle? = nil
     ) async throws {
         let runtimeGeneration = gatewayRequestToken
-        let result = try await client().startChat(
-            GaryxStartChatRequest(
-                threadId: threadId,
-                message: message,
-                attachments: attachments.map(\.promptAttachment),
-                workspacePath: workspacePath,
-                metadata: [
-                    "client": "garyx-mobile",
-                    "client_intent_id": clientIntentId,
-                    "client_timestamp_local": Self.localChatTimestamp(),
-                ]
+        var crossedTransportBoundary = false
+        if let delivery {
+            try await composerPayloadCoordinator.markTransportAttempted(delivery)
+            crossedTransportBoundary = true
+        }
+        let result: GaryxStartChatResult
+        do {
+            result = try await client().startChat(
+                GaryxStartChatRequest(
+                    threadId: threadId,
+                    message: message,
+                    attachments: attachments.map(\.promptAttachment),
+                    workspacePath: workspacePath,
+                    metadata: [
+                        "client": "garyx-mobile",
+                        "client_intent_id": clientIntentId,
+                        "client_timestamp_local": Self.localChatTimestamp(),
+                    ]
+                )
             )
-        )
+            guard Self.isSuccessfulStreamInputStatus(result.status) else {
+                throw GaryxGatewayError.encodingFailed(
+                    result.status.isEmpty ? "Chat start was not accepted." : result.status
+                )
+            }
+            if let delivery {
+                try await composerPayloadCoordinator.acknowledgeDelivery(delivery)
+            }
+        } catch {
+            if crossedTransportBoundary, let delivery {
+                try? await composerPayloadCoordinator.markDeliveryAmbiguous(delivery)
+            }
+            throw error
+        }
         try Task.checkCancellation()
         guard runtimeGeneration == gatewayRequestToken else {
             throw CancellationError()
-        }
-        guard Self.isSuccessfulStreamInputStatus(result.status) else {
-            throw GaryxGatewayError.encodingFailed(
-                result.status.isEmpty ? "Chat start was not accepted." : result.status
-            )
         }
         let acceptedThreadId = result.threadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? threadId
