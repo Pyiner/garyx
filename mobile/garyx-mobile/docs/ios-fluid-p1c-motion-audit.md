@@ -19,7 +19,7 @@ rg -n --glob '*.swift' \
 | 入口 | 命中 | 说明 |
 |---|---:|---|
 | `withAnimation` | 21 | 全部是真实 SwiftUI 动画事务 |
-| `.animation(` | 24 | 18 个 View modifier，另 6 个是 `TimelineView` 帧驱动 |
+| `.animation(` | 24 | 19 个 View modifier，另 5 个是带括号的 `TimelineView` 帧驱动；ink spinner 的 `TimelineView(.animation)` 无括号，不在这 24 个命中内 |
 | `.spring(` | 8 | 4 个重复 morph、2 个 composer、2 个 image preview |
 | `easeInOut` | 7 | 表单、头像、鉴权与 running badge |
 | `easeOut` | 18 | toast、press、菜单、滚动、展开与 drilldown |
@@ -44,9 +44,11 @@ rg -n --glob '*.swift' \
 - `GaryxMotionContext`：App 层唯一 SwiftUI `Animation` / `AnyTransition`
   适配器，消费方不再自行读取 Reduce Motion 或 cross-fade 偏好。
 
-令牌构造器带有硬不变量：`dampingRatio < 1` 只允许
-`kinetics == .gestureRelease`。因此菜单、toast、press、程序化导航、无速度
-snap-back 与 morph 无法误用带过冲 spring。
+令牌构造器带有硬不变量：任何有过冲潜力的 curve（`dampingRatio < 1`，或
+纵向控制点越出 `0...1` 的自定义 timing curve）只允许
+`kinetics == .gestureRelease`。目录不提供会隐含系统基础 bounce 的
+`.snappy` escape hatch。因此菜单、toast、press、程序化导航、无速度
+snap-back 与 morph 无法误用带过冲曲线。
 
 ## 3. 令牌与消费面
 
@@ -94,6 +96,7 @@ snap-back 与 morph 无法误用带过冲 spring。
 | Capsule + thread runtime morph close | spring `0.32 / 0.92` | `0.32 / 1.00` | 程序化收合，无释放动量 |
 | Composer payload layout | spring `0.24 / 0.88` | `0.24 / 1.00` | 数据驱动布局变化 |
 | Composer add panel | spring `0.22 / 0.82` | `0.22 / 1.00` | 按钮状态变化 |
+| Composer add-popover drilldown | system `.snappy(duration: 0.22)` | `easeOut 0.22` | page 状态变化，无手势动量；移除系统基础 bounce |
 | Gallery dismiss reset | spring `0.22 / 0.88` | `0.22 / 1.00` | 旧路径没有速度交接 |
 | Image double-tap zoom | spring `0.28 / 0.86` | `0.28 / 1.00` | 离散双击命令 |
 | Capsule cancelled drag | spring `0.28 / 0.90` | `0.28 / 1.00` | cancel 注入零速度 |
@@ -158,7 +161,7 @@ rg -n --glob '*.swift' \
 
 - 上述两条产品源码扫描均为 0；全仓所有 Swift 源码都位于
   `mobile/garyx-mobile`，没有仓外 Swift 消费面遗漏。
-- `swift test --skip-build`：1,413 tests，0 failures。
+- `swift test`：1,414 tests，0 failures。
 - `xcodebuild -target GaryxMobile -sdk iphonesimulator ... build`：
   iOS 26.5 SDK，`BUILD SUCCEEDED`。
 - `xcodebuild -scheme GaryxMobile -destination
