@@ -42,6 +42,7 @@ extension GaryxMobileModel {
         guard !anchor.isEmpty else {
             taskTreeForestPage = nil
             taskTreeLoadPhase = .idle
+            taskTreeRevealInteraction.invalidate(position: .closed)
             isTaskTreeSidebarOpen = false
             return
         }
@@ -98,6 +99,7 @@ extension GaryxMobileModel {
         // A light tick on open and close so the panel state change is felt,
         // matching the left navigation drawer.
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        taskTreeRevealInteraction.setTarget(.open, animated: true)
         isTaskTreeSidebarOpen = true
         Task { [weak self] in
             await self?.refreshSelectedThreadTaskForest()
@@ -107,6 +109,7 @@ extension GaryxMobileModel {
     func closeTaskTreeSidebar() {
         guard isTaskTreeSidebarOpen else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        taskTreeRevealInteraction.setTarget(.closed, animated: true)
         isTaskTreeSidebarOpen = false
     }
 
@@ -168,6 +171,54 @@ extension GaryxMobileModel {
             taskTreeSnapshotsByOrigin.removeValue(forKey: evicted)
         }
     }
+
+    #if DEBUG
+    /// Deterministic production-host fixture for A5 edge arbitration tests.
+    /// It is inert unless the UI-test-only environment flag is present.
+    func seedDebugTaskTreeGestureFixtureIfRequested() {
+        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_A5_TASK_TREE_FIXTURE"] == "1",
+              let anchor = selectedThread?.id,
+              let page = Self.decodeDebugFixture(GaryxTaskForestPage.self, from: """
+              {
+                "tasks": [
+                  {
+                    "kind": "thread",
+                    "node_id": "thread-root:thread-history",
+                    "thread_id": "thread-history",
+                    "title": "Thread History",
+                    "provider_type": "codex",
+                    "agent_id": "codex",
+                    "message_count": 36,
+                    "run_state": "idle",
+                    "depth": 0
+                  },
+                  {
+                    "kind": "task",
+                    "node_id": "task:synthetic-a5",
+                    "parent_node_id": "thread-root:thread-history",
+                    "thread_id": "thread-synthetic-a5",
+                    "task_id": "#TASK-100",
+                    "number": 100,
+                    "title": "Synthetic gesture review",
+                    "status": "in_progress",
+                    "runtime_agent_id": "codex",
+                    "reply_count": 0,
+                    "parent_thread_id": "thread-history",
+                    "run_state": "running",
+                    "depth": 0
+                  }
+                ],
+                "total": 2,
+                "active_count": 1,
+                "root_thread_ids": ["thread-history"],
+                "skipped_pinned_thread_ids": []
+              }
+              """) else { return }
+        taskTreeForestPage = page
+        taskTreeLoadPhase = .loaded
+        storeTaskTreeSnapshot(page, anchor: anchor)
+    }
+    #endif
 
     /// Identity hint for a sidebar row resolved against the loaded agent
     /// targets so avatars reuse the shared cache and presentation.

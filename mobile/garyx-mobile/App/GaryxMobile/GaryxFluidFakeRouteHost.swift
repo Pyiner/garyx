@@ -472,9 +472,24 @@ private struct GaryxFluidFakeRouteContainerRepresentable: UIViewControllerRepres
             }
         )
         container.layoutDirectionOverride = configuration.layoutDirection
-        container.homeLeadingEdgeAction = { [weak probe] in probe?.homeLeadingEdge() }
-        container.trailingEdgeActionEligible = { true }
-        container.trailingEdgeAction = {}
+        container.homeLeadingEdgeInteraction = GaryxRouteEdgePanInteraction(
+            isEligible: { true },
+            requiresEdgeZone: { true },
+            acceptedDirection: { .positive },
+            began: { [weak probe] in probe?.homeLeadingEdge() },
+            changed: { _, _ in },
+            ended: { _ in },
+            cancelled: {}
+        )
+        container.trailingEdgeInteraction = GaryxRouteEdgePanInteraction(
+            isEligible: { true },
+            requiresEdgeZone: { true },
+            acceptedDirection: { .positive },
+            began: {},
+            changed: { _, _ in },
+            ended: { _ in },
+            cancelled: {}
+        )
         container.gestureDiagnostic = { [weak probe] in probe?.recordGestureDiagnostic($0) }
         container.transitionFrameObserver = { [weak probe] phase, progress, timestamp in
             probe?.recordTransitionFrame(

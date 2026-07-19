@@ -4,14 +4,18 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum GaryxMobileMotion {
-    static let sidebar = Animation.interactiveSpring(response: 0.28, dampingFraction: 0.92, blendDuration: 0.08)
     static let sidebarDrilldown = Animation.easeOut(duration: 0.16)
-    static let rowSwipe = Animation.interactiveSpring(response: 0.22, dampingFraction: 0.92, blendDuration: 0.04)
+    static let rowSwipe = Animation.interactiveSpring(
+        response: 0.22,
+        dampingFraction: 0.92,
+        blendDuration: 0.04
+    )
 }
 
 struct GaryxRootView: View {
     let model: GaryxMobileModel
     @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
+    @Environment(\.layoutDirection) private var inheritedLayoutDirection
 
     var body: some View {
         ZStack {
@@ -20,6 +24,7 @@ struct GaryxRootView: View {
                     model: model,
                     shellStore: model.shellChromeStore,
                     drawerStore: model.navigationDrawerStore,
+                    drawerRevealInteraction: model.drawerRevealInteraction,
                     routeStore: model.productionRouteStore,
                     routeNotFoundStore: model.routeNotFoundStore,
                     homeListStore: model.homeThreadListStore,
@@ -116,6 +121,7 @@ struct GaryxRootView: View {
         .environment(\.garyxOpenSidebar) {
             model.setSidebarVisible(true)
         }
+        .environment(\.layoutDirection, resolvedLayoutDirection)
         .task {
             #if DEBUG
             guard !model.debugSnapshotActive else { return }
@@ -146,6 +152,15 @@ struct GaryxRootView: View {
             \.garyxPresentationLeaseCoordinator,
             model.productionRouteStore.presentationCoordinator
         )
+    }
+
+    private var resolvedLayoutDirection: LayoutDirection {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["GARYX_MOBILE_DEBUG_RTL"] == "1" {
+            return .rightToLeft
+        }
+        #endif
+        return inheritedLayoutDirection
     }
 }
 
@@ -467,6 +482,7 @@ private struct GaryxSetupGatewayRow: View {
 private struct GaryxDrawerPanelClipShape: Shape {
     var leadingCornerRadius: CGFloat
     var safeAreaOutsets: EdgeInsets
+    var leadingIsLeft: Bool
 
     var animatableData: CGFloat {
         get { leadingCornerRadius }
@@ -481,10 +497,10 @@ private struct GaryxDrawerPanelClipShape: Shape {
             height: rect.height + safeAreaOutsets.top + safeAreaOutsets.bottom
         )
         return UnevenRoundedRectangle(
-            topLeadingRadius: leadingCornerRadius,
-            bottomLeadingRadius: leadingCornerRadius,
-            bottomTrailingRadius: 0,
-            topTrailingRadius: 0,
+            topLeadingRadius: leadingIsLeft ? leadingCornerRadius : 0,
+            bottomLeadingRadius: leadingIsLeft ? leadingCornerRadius : 0,
+            bottomTrailingRadius: leadingIsLeft ? 0 : leadingCornerRadius,
+            topTrailingRadius: leadingIsLeft ? 0 : leadingCornerRadius,
             style: .continuous
         )
         .path(in: expanded)
@@ -495,10 +511,14 @@ struct GaryxShellView: View, Equatable {
     let model: GaryxMobileModel
     @ObservedObject var shellStore: GaryxShellChromeStore
     @ObservedObject var drawerStore: GaryxNavigationDrawerStore
+    @ObservedObject var drawerRevealInteraction: GaryxHorizontalRevealInteractionStore
     @ObservedObject var routeStore: GaryxProductionRouteStore
     @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
 
     let onSetSidebarVisible: (Bool, Bool) -> Void
     let onRefreshAll: () async -> Void
@@ -525,26 +545,16 @@ struct GaryxShellView: View, Equatable {
     let onManageGateways: () -> Void
     @Binding var debugShowsGatewaySwitcher: Bool
 
-    @State private var sidebarDragOffset: CGFloat = 0
-    @State private var sidebarDragAxis: GaryxSidebarDragAxis?
     @State private var openSwipeActionRowId: String?
-    /// Auto-resetting liveness for the drawer drag. `DragGesture.onEnded` is
-    /// skipped when the system cancels a gesture, which used to leave
-    /// `sidebarDragAxis` stuck on `.horizontal` and the conversation scroll
-    /// permanently disabled; `@GestureState` always resets, so the
-    /// `onChange(of: sidebarDragLive)` below can clean up after cancellation.
-    @GestureState private var sidebarDragLive = false
 
     private let sidebarWidth: CGFloat = 330
     private let drawerMainPanelCornerRadius: CGFloat = 36
-    private let sidebarEdgeGestureWidth: CGFloat = 24
-    private let sidebarAxisDecisionDistance: CGFloat = 14
-    private let sidebarAxisDecisionRatio: CGFloat = 1.5
 
     static func == (lhs: GaryxShellView, rhs: GaryxShellView) -> Bool {
         lhs.model === rhs.model
             && lhs.shellStore === rhs.shellStore
             && lhs.drawerStore === rhs.drawerStore
+            && lhs.drawerRevealInteraction === rhs.drawerRevealInteraction
             && lhs.routeStore === rhs.routeStore
             && lhs.routeNotFoundStore === rhs.routeNotFoundStore
             && lhs.homeListStore === rhs.homeListStore
@@ -553,21 +563,42 @@ struct GaryxShellView: View, Equatable {
 
     var body: some View {
         GeometryReader { proxy in
+            let width = drawerSidebarWidth(for: proxy.size)
             drawerBody(
-                width: drawerSidebarWidth(for: proxy.size),
+                width: width,
                 containerSize: proxy.size,
                 safeAreaInsets: proxy.safeAreaInsets
             )
-            .environment(\.garyxSidebarDragActive, sidebarDragAxis == .horizontal)
+            .environment(
+                \.garyxSidebarDragActive,
+                drawerRevealInteraction.presentation.phase != .idle
+            )
             .environment(\.garyxOpenSwipeActionRowId, $openSwipeActionRowId)
-            .onChange(of: sidebarDragLive) { _, live in
-                guard !live, sidebarDragAxis != nil else { return }
-                sidebarDragAxis = nil
-                resetSidebarDrag()
+            .onAppear {
+                drawerRevealInteraction.configure(
+                    extent: width,
+                    restingPosition: shellStore.snapshot.sidebarVisible ? .open : .closed
+                )
+            }
+            .onChange(of: width) { oldWidth, newWidth in
+                guard oldWidth != newWidth else { return }
+                drawerRevealInteraction.configure(
+                    extent: newWidth,
+                    restingPosition: shellStore.snapshot.sidebarVisible ? .open : .closed
+                )
+            }
+            .onChange(of: shellStore.snapshot.sidebarVisible) { _, visible in
+                drawerRevealInteraction.setTarget(
+                    visible ? .open : .closed,
+                    animated: animatesTransitions
+                )
             }
         }
         .onChange(of: horizontalSizeClass) { _, _ in
-            sidebarDragOffset = 0
+            drawerRevealInteraction.setTarget(
+                shellStore.snapshot.sidebarVisible ? .open : .closed,
+                animated: false
+            )
         }
     }
 
@@ -579,8 +610,12 @@ struct GaryxShellView: View, Equatable {
 
     private func drawerBody(width: CGFloat, containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
-        let drawerOffset = revealWidth - width
         let drawerProgress = drawerRevealProgress(revealWidth: revealWidth, width: width)
+        let leadingIsLeft = layoutDirection == .leftToRight
+        let drawerOffset = leadingIsLeft
+            ? revealWidth - width
+            : width - revealWidth
+        let contentOffset = (leadingIsLeft ? 1 : -1) * revealWidth
         // Clip bounds extend through the surrounding safe areas so the panels'
         // full-bleed backgrounds and bottom chrome aprons reach the physical
         // screen edges instead of leaving a plain background band under the
@@ -588,135 +623,127 @@ struct GaryxShellView: View, Equatable {
         // layout.
         let clipOutsets = EdgeInsets(
             top: safeAreaInsets.top,
-            leading: 0,
+            leading: safeAreaInsets.leading,
             bottom: safeAreaInsets.bottom,
             trailing: safeAreaInsets.trailing
         )
 
-        // The drawer pan runs as a simultaneous gesture, so it does not cancel
-        // child taps by itself: a button under the finger would still fire on
-        // touch-up mid-drag and could present covers above the opened
-        // sidebar. While a horizontal drag is in flight both panels' controls
-        // are disabled so the in-flight tap lands dead; while any part of the
-        // sidebar stays revealed, the main panel additionally rejects new
-        // touches without the disabled dimming.
-        let drawerDragActive = sidebarDragAxis == .horizontal
+        // The public UIKit pan cancels descendant touches when it wins. Keep
+        // both surfaces inert for the whole explicit drag/settle phase so a
+        // regrab cannot accidentally activate a control under the finger.
+        let drawerDragActive = drawerRevealInteraction.presentation.phase != .idle
 
         return ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                GaryxNavigationDrawerView(
-                    drawerStore: drawerStore,
-                    onOpenPanel: onOpenPanel,
-                    onOpenBotGroup: onOpenBotGroup,
-                    onOpenBotDrilldown: onOpenBotDrilldown,
-                    onOpenWorkspaceDrilldown: onOpenWorkspaceDrilldown,
-                    onOpenSettings: onOpenSettings,
-                    onSwitchGateway: onSwitchGateway,
-                    onManageGateways: onManageGateways,
-                    debugShowsGatewaySwitcher: $debugShowsGatewaySwitcher
-                )
-                    .disabled(drawerDragActive)
-                    .frame(width: width)
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .allowsHitTesting(revealWidth > width * 0.82)
-                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
-
-                GaryxRootNavigationView(
-                    routeStore: routeStore,
-                    routeNotFoundStore: routeNotFoundStore,
-                    homeListStore: homeListStore,
-                    model: model,
-                    isSidebarDragActive: drawerDragActive,
-                    onOpenDrawer: {
-                        onSetSidebarVisible(true, true)
-                    },
-                    onRefreshAll: onRefreshAll,
-                    onRefreshSidebarThreads: onRefreshSidebarThreads,
-                    onLoadMoreThreads: onLoadMoreThreads,
-                    onRetryLoadMoreThreads: onRetryLoadMoreThreads,
-                    onSelectRecentFilter: onSelectRecentFilter,
-                    onStartNewChat: onStartNewChat,
-                    onOpenThread: onOpenThread,
-                    onTogglePinnedThread: onTogglePinnedThread,
-                    onToggleFavoriteThread: onToggleFavoriteThread,
-                    onUnpinThread: onUnpinThread,
-                    onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
-                    onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
-                    onAcceptPinnedOrderDrop: onAcceptPinnedOrderDrop,
-                    onCancelPinnedOrderDrag: onCancelPinnedOrderDrag,
-                    onArchiveThread: onArchiveThread
-                )
-                .equatable()
-                    .disabled(drawerDragActive)
-                    .allowsHitTesting(revealWidth == 0)
-                    .overlay {
-                        // While any part of the drawer is revealed, the main
-                        // panel area becomes one big close target.
-                        if revealWidth > 1 {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture { closeSidebar() }
-                                .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
-                        }
-                    }
-                    .frame(width: containerSize.width, height: containerSize.height)
-                    .garyxPageBackground()
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.10))
-                            .frame(width: 1 / UIScreen.main.scale)
-                            .opacity(drawerProgress)
-                            .allowsHitTesting(false)
-                    }
-                    .clipShape(
-                        GaryxDrawerPanelClipShape(
-                            leadingCornerRadius: drawerMainPanelCornerRadius * drawerProgress,
-                            safeAreaOutsets: clipOutsets
-                        )
-                    )
-                    // A pre-baked gradient strip instead of `.shadow`: animated
-                    // shadow radii force a full-screen offscreen blur of the
-                    // main panel every drag frame, which drops drawer frames.
-                    .overlay(alignment: .leading) {
-                        LinearGradient(
-                            gradient: Gradient(stops: [
-                                .init(color: Color.black.opacity(0), location: 0),
-                                .init(color: Color.black.opacity(0.04), location: 0.5),
-                                .init(color: Color.black.opacity(0.16), location: 1),
-                            ]),
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                        .frame(width: 40)
-                        .padding(.vertical, -safeAreaInsets.top - safeAreaInsets.bottom)
-                        .offset(x: -40)
-                        .opacity(Double(drawerProgress))
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                    }
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
-            }
-            .frame(
-                width: width + containerSize.width,
-                height: containerSize.height,
-                alignment: .topLeading
+            GaryxNavigationDrawerView(
+                drawerStore: drawerStore,
+                onOpenPanel: onOpenPanel,
+                onOpenBotGroup: onOpenBotGroup,
+                onOpenBotDrilldown: onOpenBotDrilldown,
+                onOpenWorkspaceDrilldown: onOpenWorkspaceDrilldown,
+                onOpenSettings: onOpenSettings,
+                onSwitchGateway: onSwitchGateway,
+                onManageGateways: onManageGateways,
+                debugShowsGatewaySwitcher: $debugShowsGatewaySwitcher
             )
+            .disabled(drawerDragActive)
+            .frame(width: width, height: containerSize.height)
+            .contentShape(Rectangle())
+            .allowsHitTesting(revealWidth > width * 0.82)
             .offset(x: drawerOffset)
-            .zIndex(0)
 
+            GaryxRootNavigationView(
+                routeStore: routeStore,
+                routeNotFoundStore: routeNotFoundStore,
+                homeListStore: homeListStore,
+                model: model,
+                isSidebarDragActive: drawerDragActive,
+                onOpenDrawer: {
+                    onSetSidebarVisible(true, true)
+                },
+                onRefreshAll: onRefreshAll,
+                onRefreshSidebarThreads: onRefreshSidebarThreads,
+                onLoadMoreThreads: onLoadMoreThreads,
+                onRetryLoadMoreThreads: onRetryLoadMoreThreads,
+                onSelectRecentFilter: onSelectRecentFilter,
+                onStartNewChat: onStartNewChat,
+                onOpenThread: onOpenThread,
+                onTogglePinnedThread: onTogglePinnedThread,
+                onToggleFavoriteThread: onToggleFavoriteThread,
+                onUnpinThread: onUnpinThread,
+                onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
+                onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
+                onAcceptPinnedOrderDrop: onAcceptPinnedOrderDrop,
+                onCancelPinnedOrderDrag: onCancelPinnedOrderDrag,
+                onArchiveThread: onArchiveThread
+            )
+            .equatable()
+            .disabled(drawerDragActive)
+            .allowsHitTesting(abs(revealWidth) < 0.5)
+            .overlay {
+                // While any part of the drawer is revealed, the main panel
+                // area becomes one big close target.
+                if revealWidth > 1 {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { closeSidebar() }
+                }
+            }
+            .frame(width: containerSize.width, height: containerSize.height)
+            .garyxPageBackground()
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.10))
+                    .frame(width: 1 / UIScreen.main.scale)
+                    .opacity(drawerProgress)
+                    .allowsHitTesting(false)
+            }
+            .clipShape(
+                GaryxDrawerPanelClipShape(
+                    leadingCornerRadius: drawerMainPanelCornerRadius * drawerProgress,
+                    safeAreaOutsets: clipOutsets,
+                    leadingIsLeft: leadingIsLeft
+                )
+            )
+            // A pre-baked gradient strip instead of `.shadow`: animated
+            // shadow radii force a full-screen offscreen blur of the main
+            // panel every drag frame, which drops drawer frames.
+            .overlay(alignment: .leading) {
+                LinearGradient(
+                    gradient: Gradient(stops: [
+                        .init(color: Color.black.opacity(0), location: 0),
+                        .init(color: Color.black.opacity(0.04), location: 0.5),
+                        .init(color: Color.black.opacity(0.16), location: 1),
+                    ]),
+                    startPoint: leadingIsLeft ? .leading : .trailing,
+                    endPoint: leadingIsLeft ? .trailing : .leading
+                )
+                .frame(width: 40)
+                .padding(.vertical, -safeAreaInsets.top - safeAreaInsets.bottom)
+                .offset(x: leadingIsLeft ? -40 : 40)
+                .opacity(Double(drawerProgress))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+            .offset(x: contentOffset)
+            .zIndex(0)
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
-        .clipShape(GaryxDrawerPanelClipShape(leadingCornerRadius: 0, safeAreaOutsets: clipOutsets))
+        .clipShape(
+            GaryxDrawerPanelClipShape(
+                leadingCornerRadius: 0,
+                safeAreaOutsets: clipOutsets,
+                leadingIsLeft: leadingIsLeft
+            )
+        )
         .garyxPageBackground()
     }
 
     private func sidebarRevealWidth(for width: CGFloat) -> CGFloat {
-        if shellStore.snapshot.sidebarVisible {
-            return max(0, min(width, width + sidebarDragOffset))
+        guard drawerRevealInteraction.isGestureEligible else {
+            return shellStore.snapshot.sidebarVisible ? width : 0
         }
-        return max(0, min(width, sidebarDragOffset))
+        return drawerRevealInteraction.reveal
     }
 
     private func drawerRevealProgress(revealWidth: CGFloat, width: CGFloat) -> CGFloat {
@@ -724,138 +751,14 @@ struct GaryxShellView: View, Equatable {
         return max(0, min(1, revealWidth / width))
     }
 
-    private func openingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .global)
-            .updating($sidebarDragLive) { _, state, _ in
-                state = true
-            }
-            .onChanged { value in
-                guard !shellStore.snapshot.sidebarVisible else { return }
-                guard routeStore.path.isEmpty else {
-                    // A pushed route's leading edge belongs exclusively to
-                    // GaryxRouteStackContainer's UIKit edge recognizer.
-                    sidebarDragAxis = .vertical
-                    return
-                }
-                if sidebarDragAxis == nil {
-                    sidebarDragAxis = decideSidebarAxis(
-                        translation: value.translation,
-                        startLocation: value.startLocation,
-                        opening: true
-                    )
-                }
-                guard sidebarDragAxis == .horizontal else { return }
-                sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
-            }
-            .onEnded { value in
-                // The closing gesture owns drags while the drawer is open;
-                // touching the shared axis/offset here would clobber its
-                // decision before it runs.
-                guard !shellStore.snapshot.sidebarVisible else { return }
-                defer {
-                    sidebarDragAxis = nil
-                }
-                guard sidebarDragAxis == .horizontal else {
-                    resetSidebarDrag()
-                    return
-                }
-                let shouldOpen = value.translation.width > sidebarWidth * 0.22
-                    || value.predictedEndTranslation.width > sidebarWidth * 0.35
-                guard routeStore.path.isEmpty else {
-                    resetSidebarDrag()
-                    return
-                }
-                finishGesture(open: shouldOpen)
-            }
-    }
-
-    private func closingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .global)
-            .updating($sidebarDragLive) { _, state, _ in
-                state = true
-            }
-            .onChanged { value in
-                guard shellStore.snapshot.sidebarVisible else { return }
-                if sidebarDragAxis == nil {
-                    sidebarDragAxis = decideSidebarAxis(
-                        translation: value.translation,
-                        startLocation: value.startLocation,
-                        opening: false
-                    )
-                }
-                guard sidebarDragAxis == .horizontal else { return }
-                sidebarDragOffset = min(0, max(-sidebarWidth, value.translation.width))
-            }
-            .onEnded { value in
-                // Mirror of the opening gesture: stay inert while the drawer
-                // is closed so the opening gesture's state is untouched.
-                guard shellStore.snapshot.sidebarVisible else { return }
-                defer {
-                    sidebarDragAxis = nil
-                }
-                guard sidebarDragAxis == .horizontal else {
-                    resetSidebarDrag()
-                    return
-                }
-                let shouldClose = -value.translation.width > sidebarWidth * 0.12
-                    || -value.predictedEndTranslation.width > sidebarWidth * 0.28
-                finishGesture(open: !shouldClose)
-            }
-    }
-
-    private func decideSidebarAxis(
-        translation: CGSize,
-        startLocation: CGPoint,
-        opening: Bool
-    ) -> GaryxSidebarDragAxis? {
-        let horizontal = translation.width
-        let vertical = translation.height
-        let horizontalMag = abs(horizontal)
-        let verticalMag = abs(vertical)
-        let dominant = max(horizontalMag, verticalMag)
-        guard dominant >= sidebarAxisDecisionDistance else { return nil }
-        // Opening competes with vertical list scrolling and stays strict;
-        // closing an open drawer is an unambiguous intent, so any
-        // horizontally-dominant swipe qualifies.
-        let ratio = opening ? sidebarAxisDecisionRatio : 1.0
-        guard horizontalMag > verticalMag * ratio else {
-            return .vertical
-        }
-        if opening {
-            guard horizontal > 0,
-                  startLocation.x <= sidebarEdgeGestureWidth else {
-                return .vertical
-            }
-        } else {
-            guard horizontal < 0 else { return .vertical }
-        }
-        return .horizontal
-    }
-
-    private func finishGesture(open: Bool) {
-        hideKeyboard()
-        withAnimation(GaryxMobileMotion.sidebar) {
-            onSetSidebarVisible(open, false)
-            sidebarDragOffset = 0
-        }
-    }
-
-    private func resetSidebarDrag() {
-        withAnimation(GaryxMobileMotion.sidebar) {
-            sidebarDragOffset = 0
-        }
+    private var animatesTransitions: Bool {
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
     }
 
     private func closeSidebar() {
-        finishGesture(open: false)
-    }
-
-    private func hideKeyboard() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil
-        )
+        onSetSidebarVisible(false, true)
     }
 }

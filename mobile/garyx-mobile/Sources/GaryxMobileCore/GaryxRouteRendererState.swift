@@ -239,7 +239,7 @@ public enum GaryxRouteGestureDirection: Equatable, Sendable {
     case negative
     case either
 
-    fileprivate func accepts(_ logicalValue: CGFloat) -> Bool {
+    public func accepts(_ logicalValue: CGFloat) -> Bool {
         switch self {
         case .positive:
             logicalValue > 0
@@ -300,13 +300,16 @@ public enum GaryxRouteEdgeGestureArbitrator {
     public static func winner(
         surface: GaryxRouteGestureCompetitionSurface,
         touchStartedInEdgeZone: Bool,
-        actionEligible: Bool
+        actionEligible: Bool,
+        requiresEdgeZone: Bool = true
     ) -> GaryxRouteGestureWinner {
         switch surface {
         case .modalPresentation:
             return .modal
         case .taskTree:
-            return actionEligible ? .taskTree : .descendant
+            return actionEligible && (!requiresEdgeZone || touchStartedInEdgeZone)
+                ? .taskTree
+                : .descendant
         case .verticalScroll:
             return .descendant
         case .horizontalScroll, .composerKeyboardDismiss, .rowSwipe:

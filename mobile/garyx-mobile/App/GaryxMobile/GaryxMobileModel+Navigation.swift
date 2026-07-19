@@ -102,13 +102,11 @@ extension GaryxMobileModel {
         guard sidebarVisible != visible else { return }
         // A light tick on open and close so the drawer state change is felt.
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if animated {
-            withAnimation(GaryxMobileMotion.sidebar) {
-                sidebarVisible = visible
-            }
-        } else {
-            sidebarVisible = visible
-        }
+        drawerRevealInteraction.setTarget(
+            visible ? .open : .closed,
+            animated: animated
+        )
+        sidebarVisible = visible
     }
 
     func setActivePanel(
@@ -970,6 +968,7 @@ extension GaryxMobileModel {
         skillFileLoadRequestId = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
+        seedDebugTaskTreeGestureFixtureIfRequested()
     }
 
     static func decodeDebugFixture<T: Decodable>(_ type: T.Type, from json: String) -> T? {

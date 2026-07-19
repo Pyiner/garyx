@@ -169,11 +169,12 @@ final class GaryxRouteRendererStateTests: XCTestCase {
     }
 
     func testGestureCompetitionAndAxisTable() {
-        for surface in [
+        let descendantHorizontalSurfaces: [GaryxRouteGestureCompetitionSurface] = [
             GaryxRouteGestureCompetitionSurface.horizontalScroll,
             .composerKeyboardDismiss,
             .rowSwipe,
-        ] {
+        ]
+        for surface in descendantHorizontalSurfaces {
             XCTAssertEqual(
                 GaryxRouteEdgeGestureArbitrator.winner(
                     surface: surface,
@@ -190,15 +191,35 @@ final class GaryxRouteRendererStateTests: XCTestCase {
                 ),
                 .descendant
             )
+            XCTAssertEqual(
+                GaryxRouteEdgeGestureArbitrator.winner(
+                    surface: surface,
+                    touchStartedInEdgeZone: true,
+                    actionEligible: false
+                ),
+                .descendant
+            )
         }
-        XCTAssertEqual(
-            GaryxRouteEdgeGestureArbitrator.winner(
-                surface: .modalPresentation,
-                touchStartedInEdgeZone: true,
-                actionEligible: true
-            ),
-            .modal
-        )
+        for startedAtEdge in [false, true] {
+            for eligible in [false, true] {
+                XCTAssertEqual(
+                    GaryxRouteEdgeGestureArbitrator.winner(
+                        surface: .modalPresentation,
+                        touchStartedInEdgeZone: startedAtEdge,
+                        actionEligible: eligible
+                    ),
+                    .modal
+                )
+                XCTAssertEqual(
+                    GaryxRouteEdgeGestureArbitrator.winner(
+                        surface: .verticalScroll,
+                        touchStartedInEdgeZone: startedAtEdge,
+                        actionEligible: eligible
+                    ),
+                    .descendant
+                )
+            }
+        }
         XCTAssertEqual(
             GaryxRouteEdgeGestureArbitrator.winner(
                 surface: .taskTree,
@@ -210,14 +231,24 @@ final class GaryxRouteRendererStateTests: XCTestCase {
         XCTAssertEqual(
             GaryxRouteEdgeGestureArbitrator.winner(
                 surface: .taskTree,
-                touchStartedInEdgeZone: true,
-                actionEligible: false
+                touchStartedInEdgeZone: false,
+                actionEligible: true
             ),
             .descendant
         )
         XCTAssertEqual(
             GaryxRouteEdgeGestureArbitrator.winner(
-                surface: .rowSwipe,
+                surface: .taskTree,
+                touchStartedInEdgeZone: false,
+                actionEligible: true,
+                requiresEdgeZone: false
+            ),
+            .taskTree,
+            "an open or settling task tree accepts a non-edge interrupt"
+        )
+        XCTAssertEqual(
+            GaryxRouteEdgeGestureArbitrator.winner(
+                surface: .taskTree,
                 touchStartedInEdgeZone: true,
                 actionEligible: false
             ),

@@ -242,6 +242,163 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         harness.container.dismiss(animated: false)
     }
 
+    func testPublicEdgeRecognizersShareTheWindowFailureGraphWithDescendantPans() {
+        let harness = Harness(path: [entry(1)])
+        let descendantScroll = UIScrollView(frame: harness.container.view.bounds)
+        harness.container.view.addSubview(descendantScroll)
+
+        XCTAssertTrue(harness.container.leadingEdgePanGestureRecognizer.view === harness.window)
+        XCTAssertTrue(harness.container.trailingEdgePanGestureRecognizer.view === harness.window)
+        XCTAssertTrue(harness.container.gestureRecognizer(
+            harness.container.leadingEdgePanGestureRecognizer,
+            shouldBeRequiredToFailBy: descendantScroll.panGestureRecognizer
+        ))
+        XCTAssertTrue(harness.container.gestureRecognizer(
+            harness.container.trailingEdgePanGestureRecognizer,
+            shouldBeRequiredToFailBy: descendantScroll.panGestureRecognizer
+        ))
+    }
+
+    func testHostedTouchDownSnapshotAndAxisLockUseRealLTRAndRTLCoordinates() {
+        let harness = Harness(path: [entry(1)])
+
+        harness.container.layoutDirectionOverride = .leftToRight
+        harness.container.recordEdgeTouchDown(
+            physicalX: 5,
+            viewportWidth: harness.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertTrue(
+            harness.container.shouldBeginEdgePan(
+                edge: .leading,
+                translation: CGSize(width: 20, height: 0),
+                velocity: .zero
+            ),
+            "a 5 pt touch remains navigation-owned after recognition at 25 pt"
+        )
+
+        harness.container.recordEdgeTouchDown(
+            physicalX: 25,
+            viewportWidth: harness.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertFalse(
+            harness.container.shouldBeginEdgePan(
+                edge: .leading,
+                translation: CGSize(width: -20, height: 0),
+                velocity: .zero
+            ),
+            "moving backwards into the edge cannot rewrite touch-down ownership"
+        )
+
+        harness.container.recordEdgeTouchDown(
+            physicalX: 5,
+            viewportWidth: harness.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertFalse(
+            harness.container.shouldBeginEdgePan(
+                edge: .leading,
+                translation: CGSize(width: 20, height: 100),
+                velocity: .zero
+            ),
+            "vertical intent must stay with the descendant scroll"
+        )
+
+        harness.container.layoutDirectionOverride = .rightToLeft
+        harness.container.recordEdgeTouchDown(
+            physicalX: harness.window.bounds.width - 5,
+            viewportWidth: harness.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertTrue(harness.container.shouldBeginEdgePan(
+            edge: .leading,
+            translation: CGSize(width: -20, height: 0),
+            velocity: .zero
+        ))
+    }
+
+    func testHomeDrawerAndTaskTreeUseNodeSpecificOwnersAndSettleInterruptSemantics() {
+        let home = Harness(path: [])
+        home.container.homeLeadingEdgeInteraction = edgeInteraction(
+            requiresEdgeZone: true,
+            direction: .positive
+        )
+        home.container.recordEdgeTouchDown(
+            physicalX: 5,
+            viewportWidth: home.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertTrue(home.container.shouldBeginEdgePan(
+            edge: .leading,
+            translation: CGSize(width: 20, height: 0),
+            velocity: .zero
+        ))
+
+        home.container.homeLeadingEdgeInteraction = edgeInteraction(
+            requiresEdgeZone: false,
+            direction: .either
+        )
+        home.container.recordEdgeTouchDown(
+            physicalX: 180,
+            viewportWidth: home.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertTrue(
+            home.container.shouldBeginEdgePan(
+                edge: .leading,
+                translation: CGSize(width: -20, height: 0),
+                velocity: .zero
+            ),
+            "an in-flight drawer settle must be regrabbable in reverse"
+        )
+
+        let conversation = Harness(path: [entry(
+            1,
+            destination: .conversation(threadID: "synthetic-thread")
+        )])
+        conversation.container.trailingEdgeInteraction = edgeInteraction(
+            requiresEdgeZone: true,
+            direction: .positive
+        )
+        conversation.container.interactivePopEligible = { false }
+        conversation.container.recordEdgeTouchDown(
+            physicalX: conversation.window.bounds.width - 5,
+            viewportWidth: conversation.window.bounds.width,
+            edge: .trailing
+        )
+        XCTAssertTrue(conversation.container.shouldBeginEdgePan(
+            edge: .trailing,
+            translation: CGSize(width: -20, height: 0),
+            velocity: .zero
+        ))
+
+        conversation.container.recordEdgeTouchDown(
+            physicalX: 5,
+            viewportWidth: conversation.window.bounds.width,
+            edge: .leading
+        )
+        XCTAssertFalse(
+            conversation.container.shouldBeginEdgePan(
+                edge: .leading,
+                translation: CGSize(width: 20, height: 0),
+                velocity: .zero
+            ),
+            "an open task tree keeps route pop ineligible"
+        )
+    }
+
+    func testPresentationBarrierDisablesBothPublicEdgeRecognizers() {
+        let harness = Harness(path: [entry(1)])
+        let token = GaryxPresentationLeaseToken(rawValue: "synthetic-edge-barrier")
+        XCTAssertTrue(harness.container.acquirePresentationLease(token))
+        XCTAssertFalse(harness.container.leadingEdgePanGestureRecognizer.isEnabled)
+        XCTAssertFalse(harness.container.trailingEdgePanGestureRecognizer.isEnabled)
+        harness.container.presentationDismissalCompleted(token)
+        XCTAssertTrue(harness.container.leadingEdgePanGestureRecognizer.isEnabled)
+        XCTAssertTrue(harness.container.trailingEdgePanGestureRecognizer.isEnabled)
+    }
+
     func testHighVelocityRegrabSettleRemainsEndpointBoundedAndMonotonic() throws {
         let harness = Harness(path: [entry(1)])
         var commitProgress: [CGFloat] = []
@@ -694,6 +851,21 @@ final class GaryxRouteStackContainerTests: XCTestCase {
     }
 
     // MARK: Fixtures
+
+    private func edgeInteraction(
+        requiresEdgeZone: Bool,
+        direction: GaryxRouteGestureDirection
+    ) -> GaryxRouteEdgePanInteraction {
+        GaryxRouteEdgePanInteraction(
+            isEligible: { true },
+            requiresEdgeZone: { requiresEdgeZone },
+            acceptedDirection: { direction },
+            began: {},
+            changed: { _, _ in },
+            ended: { _ in },
+            cancelled: {}
+        )
+    }
 
     private func entry(
         _ index: Int,

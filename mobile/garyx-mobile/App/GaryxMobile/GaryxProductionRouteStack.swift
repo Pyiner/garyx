@@ -490,10 +490,88 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         container.layoutDirectionOverride = layoutDirection == .rightToLeft
             ? .rightToLeft
             : .leftToRight
-        // The home drawer has its own interactive SwiftUI drag. Keeping the
-        // UIKit route recognizer inert at depth zero avoids opening the drawer
-        // at touch-down and leaves a single gesture owner for that surface.
-        container.homeLeadingEdgeAction = nil
+        let drawerInteraction = model.drawerRevealInteraction
+        container.homeLeadingEdgeInteraction = GaryxRouteEdgePanInteraction(
+            isEligible: {
+                drawerInteraction.isGestureEligible
+            },
+            requiresEdgeZone: {
+                drawerInteraction.requiresEdgeZone
+            },
+            acceptedDirection: {
+                drawerInteraction.acceptedDirection
+            },
+            began: {
+                drawerInteraction.beginGesture()
+            },
+            changed: { translation, _ in
+                drawerInteraction.updateGesture(logicalTranslation: translation)
+            },
+            ended: { [weak model] velocity in
+                guard let target = drawerInteraction.endGesture(logicalVelocity: velocity)
+                else { return }
+                model?.setSidebarVisible(target == .open, animated: true)
+            },
+            cancelled: { [weak model] in
+                guard let target = drawerInteraction.cancelGesture() else { return }
+                model?.setSidebarVisible(target == .open, animated: true)
+            }
+        )
+
+        let taskTreeInteraction = model.taskTreeRevealInteraction
+        container.trailingEdgeInteraction = GaryxRouteEdgePanInteraction(
+            isEligible: { [weak model] in
+                guard let model,
+                      taskTreeInteraction.isGestureEligible,
+                      !drawerInteraction.isDragging,
+                      store.path.last?.destination.composerKey != nil else { return false }
+                if taskTreeInteraction.presentation.phase != .idle
+                    || abs(taskTreeInteraction.reveal) > 0.5 {
+                    return true
+                }
+                return model.selectedThread != nil
+                    && (model.taskTreeForestPage == nil || model.isTaskTreeSidebarAvailable)
+            },
+            requiresEdgeZone: {
+                taskTreeInteraction.requiresEdgeZone
+            },
+            acceptedDirection: {
+                taskTreeInteraction.acceptedDirection
+            },
+            began: {
+                taskTreeInteraction.beginGesture()
+            },
+            changed: { translation, _ in
+                taskTreeInteraction.updateGesture(logicalTranslation: translation)
+            },
+            ended: { [weak model] velocity in
+                guard let model,
+                      let target = taskTreeInteraction.endGesture(logicalVelocity: velocity)
+                else { return }
+                if target == .open {
+                    model.openTaskTreeSidebar()
+                } else {
+                    model.closeTaskTreeSidebar()
+                }
+            },
+            cancelled: { [weak model] in
+                guard let model,
+                      let target = taskTreeInteraction.cancelGesture() else { return }
+                if target == .open {
+                    model.openTaskTreeSidebar()
+                } else {
+                    model.closeTaskTreeSidebar()
+                }
+            }
+        )
+        container.interactivePopEligible = { [weak model] in
+            guard let model else { return false }
+            let taskTree = model.taskTreeRevealInteraction
+            return !model.isTaskTreeSidebarOpen
+                && taskTree.presentation.phase == .idle
+                && taskTree.presentation.target == .closed
+                && abs(taskTree.reveal) <= 0.5
+        }
         #if DEBUG
         diagnostics?.install(in: container)
         container.transitionFrameObserver = { [weak container, weak diagnostics] phase, progress, timestamp in

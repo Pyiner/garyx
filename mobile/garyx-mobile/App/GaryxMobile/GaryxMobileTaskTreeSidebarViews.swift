@@ -1,23 +1,11 @@
 import SwiftUI
 import UIKit
 
-// Conversation task-tree sidebar: a trailing push-in panel scoped to the open
-// conversation — the panel slides in from the right edge and pushes the
-// conversation content left in lockstep (not an overlay). The right-edge
-// swipe mirrors the left navigation drawer's proven gesture parameters (edge
-// zone 24pt, min distance 18pt, axis decision 14pt at 1.5x dominance, open
-// 22%/35%, close 12%/28%, @GestureState cancel self-heal) so the two edges
-// feel symmetric.
-
-private enum GaryxTaskTreeDragAxis {
-    case horizontal
-    case vertical
-}
+// Conversation task-tree sidebar: a logical-trailing push-in panel scoped to
+// the open conversation. The container's public trailing pan owns arbitration;
+// this view only renders the shared reveal presentation.
 
 private enum GaryxTaskTreeSidebarMetrics {
-    static let edgeGestureWidth: CGFloat = 24
-    static let axisDecisionDistance: CGFloat = 14
-    static let axisDecisionRatio: CGFloat = 1.5
     static let indentStep: CGFloat = 12
     /// Compact task-list glyph shared by the panel header and empty state.
     static let treeGlyph = "list.bullet"
@@ -28,7 +16,7 @@ private enum GaryxTaskTreeSidebarMetrics {
 }
 
 extension View {
-    /// Mounts the task-tree sidebar surface (opening gesture + scrim + panel)
+    /// Mounts the task-tree sidebar surface (shared interaction + scrim + panel)
     /// over a conversation page.
     func garyxTaskTreeSidebarSurface() -> some View {
         modifier(GaryxTaskTreeSidebarSurface())
@@ -37,35 +25,42 @@ extension View {
 
 struct GaryxTaskTreeSidebarSurface: ViewModifier {
     @EnvironmentObject private var model: GaryxMobileModel
-    @Environment(\.garyxSidebarDragActive) private var drawerDragActive
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
-
-    @State private var dragOffset: CGFloat = 0
-    @State private var dragAxis: GaryxTaskTreeDragAxis?
-    @State private var containerGlobalFrame: CGRect = .zero
-    /// Auto-resetting drag liveness: `DragGesture.onEnded` is skipped when the
-    /// system cancels a gesture, which would leave `dragAxis` stuck and the
-    /// panel half-revealed; `@GestureState` always resets, so the
-    /// `onChange(of: dragLive)` below cleans up after cancellation (the left
-    /// drawer's documented fix, reused).
-    @GestureState private var dragLive = false
 
     func body(content: Content) -> some View {
+        GaryxTaskTreeSidebarInteractionSurface(
+            model: model,
+            interaction: model.taskTreeRevealInteraction,
+            content: content
+        )
+    }
+}
+
+private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: View {
+    @ObservedObject var model: GaryxMobileModel
+    @ObservedObject var interaction: GaryxHorizontalRevealInteractionStore
+    let content: SurfaceContent
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.garyxPrefersCrossFadeTransitions) private var prefersCrossFadeTransitions
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
         GeometryReader { proxy in
             let panelWidth = GaryxTaskTreeSidebarMetrics.panelWidth(containerWidth: proxy.size.width)
-            let reveal = revealWidth(panelWidth: panelWidth)
+            let reveal = interaction.isGestureEligible
+                ? interaction.reveal
+                : (model.isTaskTreeSidebarOpen ? panelWidth : 0)
             let progress = panelWidth > 0 ? max(0, min(1, reveal / panelWidth)) : 0
+            let leadingSign: CGFloat = layoutDirection == .leftToRight ? 1 : -1
 
             content
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .simultaneousGesture(openingGesture(panelWidth: panelWidth))
                 // Push, not overlay: the conversation slides left in lockstep
                 // with the incoming panel — the same `reveal` value drives
                 // both offsets, so drag and settle animations stay in sync.
                 // Reduce Motion keeps the crossfade presentation and skips
                 // the push.
-                .offset(x: usesCrossFade ? 0 : -reveal)
+                .offset(x: usesCrossFade ? 0 : -leadingSign * reveal)
                 .overlay {
                     if progress > 0 {
                         // While revealed, the visible conversation strip
@@ -76,7 +71,6 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                             .ignoresSafeArea()
                             .contentShape(Rectangle())
                             .onTapGesture { closePanel() }
-                            .simultaneousGesture(closingGesture(panelWidth: panelWidth))
                             .accessibilityLabel("Close task tree")
                             .accessibilityAddTraits(.isButton)
                     }
@@ -91,19 +85,30 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                         )
                     }
                 }
-                .onChange(of: dragLive) { _, live in
-                    guard !live, dragAxis != nil else { return }
-                    dragAxis = nil
-                    resetDrag()
+                .onAppear {
+                    interaction.configure(
+                        extent: panelWidth,
+                        restingPosition: model.isTaskTreeSidebarOpen ? .open : .closed
+                    )
+                }
+                .onChange(of: panelWidth) { oldWidth, newWidth in
+                    guard oldWidth != newWidth else { return }
+                    interaction.configure(
+                        extent: newWidth,
+                        restingPosition: model.isTaskTreeSidebarOpen ? .open : .closed
+                    )
+                }
+                .onChange(of: model.isTaskTreeSidebarOpen) { _, open in
+                    interaction.setTarget(
+                        open ? .open : .closed,
+                        animated: animatesTransitions
+                    )
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
-                    dragAxis = nil
-                    dragOffset = 0
-                }
-                .onGeometryChange(for: CGRect.self) { geometry in
-                    geometry.frame(in: .global)
-                } action: { frame in
-                    containerGlobalFrame = frame
+                    interaction.setTarget(
+                        model.isTaskTreeSidebarOpen ? .open : .closed,
+                        animated: false
+                    )
                 }
                 .task(id: model.selectedThread?.id) {
                     model.syncTaskTreeSidebarAnchor()
@@ -129,7 +134,8 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
         progress: CGFloat,
         safeAreaInsets: EdgeInsets
     ) -> some View {
-        let dragActive = dragAxis == .horizontal
+        let dragActive = interaction.presentation.phase != .idle
+        let leadingSign: CGFloat = layoutDirection == .leftToRight ? 1 : -1
 
         // Full-height rail: the material reaches the physical top and bottom
         // edges, while the header and scrolling content own their respective
@@ -159,145 +165,22 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                         .init(color: Color.black.opacity(0.04), location: 0.5),
                         .init(color: Color.black.opacity(0), location: 1),
                     ]),
-                    startPoint: .trailing,
-                    endPoint: .leading
+                    startPoint: leadingSign > 0 ? .trailing : .leading,
+                    endPoint: leadingSign > 0 ? .leading : .trailing
                 )
                 .frame(width: 40)
-                .offset(x: -40)
+                .offset(x: -leadingSign * 40)
                 .opacity(Double(progress))
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
             // Reduce Motion: crossfade + scrim only, no interactive slide.
             .opacity(usesCrossFade ? Double(progress) : 1)
-            .offset(x: usesCrossFade ? 0 : panelWidth - reveal)
+            .offset(x: usesCrossFade ? 0 : leadingSign * (panelWidth - reveal))
             .disabled(dragActive)
-            .simultaneousGesture(closingGesture(panelWidth: panelWidth))
             .ignoresSafeArea(edges: [.top, .bottom])
             .accessibilityAddTraits(.isModal)
             .accessibilityAction(.escape) { closePanel() }
-    }
-
-    /// Revealed panel width for the current open/drag state.
-    private func revealWidth(panelWidth: CGFloat) -> CGFloat {
-        if model.isTaskTreeSidebarOpen {
-            return max(0, min(panelWidth, panelWidth - max(0, dragOffset)))
-        }
-        return max(0, min(panelWidth, -min(0, dragOffset)))
-    }
-
-    private func openingGesture(panelWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .global)
-            .updating($dragLive) { _, state, _ in
-                state = true
-            }
-            .onChanged { value in
-                guard !model.isTaskTreeSidebarOpen, canStartOpeningDrag else { return }
-                if dragAxis == nil {
-                    dragAxis = decideAxis(
-                        translation: value.translation,
-                        startLocation: value.startLocation,
-                        opening: true
-                    )
-                }
-                guard dragAxis == .horizontal else { return }
-                dragOffset = min(0, max(-panelWidth, value.translation.width))
-            }
-            .onEnded { value in
-                guard !model.isTaskTreeSidebarOpen else { return }
-                defer { dragAxis = nil }
-                guard dragAxis == .horizontal else {
-                    resetDrag()
-                    return
-                }
-                let shouldOpen = -value.translation.width > panelWidth * 0.22
-                    || -value.predictedEndTranslation.width > panelWidth * 0.35
-                finishGesture(open: shouldOpen)
-            }
-    }
-
-    private func closingGesture(panelWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .global)
-            .updating($dragLive) { _, state, _ in
-                state = true
-            }
-            .onChanged { value in
-                guard model.isTaskTreeSidebarOpen else { return }
-                if dragAxis == nil {
-                    dragAxis = decideAxis(
-                        translation: value.translation,
-                        startLocation: value.startLocation,
-                        opening: false
-                    )
-                }
-                guard dragAxis == .horizontal else { return }
-                dragOffset = max(0, min(panelWidth, value.translation.width))
-            }
-            .onEnded { value in
-                guard model.isTaskTreeSidebarOpen else { return }
-                defer { dragAxis = nil }
-                guard dragAxis == .horizontal else {
-                    resetDrag()
-                    return
-                }
-                let shouldClose = value.translation.width > panelWidth * 0.12
-                    || value.predictedEndTranslation.width > panelWidth * 0.28
-                finishGesture(open: !shouldClose)
-            }
-    }
-
-    /// The gesture qualifies only when the tree can open: not while the left
-    /// drawer is dragging, and never on a known-empty tree (an unknown tree
-    /// opens onto the loading state while the first fetch is in flight).
-    private var canStartOpeningDrag: Bool {
-        guard !drawerDragActive else { return false }
-        return model.taskTreeForestPage == nil || model.isTaskTreeSidebarAvailable
-    }
-
-    private func decideAxis(
-        translation: CGSize,
-        startLocation: CGPoint,
-        opening: Bool
-    ) -> GaryxTaskTreeDragAxis? {
-        let horizontal = translation.width
-        let vertical = translation.height
-        let horizontalMag = abs(horizontal)
-        let verticalMag = abs(vertical)
-        let dominant = max(horizontalMag, verticalMag)
-        guard dominant >= GaryxTaskTreeSidebarMetrics.axisDecisionDistance else { return nil }
-        // Opening competes with vertical transcript scrolling and stays
-        // strict; closing an open panel is an unambiguous intent.
-        let ratio = opening ? GaryxTaskTreeSidebarMetrics.axisDecisionRatio : 1.0
-        guard horizontalMag > verticalMag * ratio else {
-            return .vertical
-        }
-        if opening {
-            guard horizontal < 0,
-                  startLocation.x >= containerGlobalFrame.maxX
-                      - GaryxTaskTreeSidebarMetrics.edgeGestureWidth else {
-                return .vertical
-            }
-        } else {
-            guard horizontal > 0 else { return .vertical }
-        }
-        return .horizontal
-    }
-
-    private func finishGesture(open: Bool) {
-        withAnimation(settleAnimation) {
-            if open {
-                model.openTaskTreeSidebar()
-            } else {
-                model.closeTaskTreeSidebar()
-            }
-            dragOffset = 0
-        }
-    }
-
-    private func resetDrag() {
-        withAnimation(settleAnimation) {
-            dragOffset = 0
-        }
     }
 
     private var usesCrossFade: Bool {
@@ -307,12 +190,16 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
         )
     }
 
-    private var settleAnimation: Animation {
-        usesCrossFade ? .easeInOut(duration: 0.2) : GaryxMobileMotion.sidebar
+    private var animatesTransitions: Bool {
+        GaryxAccessibilityTransitionPolicy.animatesTransition(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        )
     }
 
     private func closePanel() {
-        finishGesture(open: false)
+        interaction.setTarget(.closed, animated: animatesTransitions)
+        model.closeTaskTreeSidebar()
     }
 }
 

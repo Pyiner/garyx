@@ -1,11 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum GaryxSidebarDragAxis {
-    case horizontal
-    case vertical
-}
-
 /// Root content column owned exclusively by the UIKit occurrence stack.
 struct GaryxRootNavigationView: View, Equatable {
     @ObservedObject var routeStore: GaryxProductionRouteStore

@@ -135,6 +135,17 @@ final class GaryxRouteTransitionWrapperView: UIView {
     }
 }
 
+@MainActor
+struct GaryxRouteEdgePanInteraction {
+    var isEligible: () -> Bool
+    var requiresEdgeZone: () -> Bool
+    var acceptedDirection: () -> GaryxRouteGestureDirection
+    var began: () -> Void
+    var changed: (_ logicalTranslation: CGFloat, _ logicalVelocity: CGFloat) -> Void
+    var ended: (_ logicalVelocity: CGFloat) -> Void
+    var cancelled: () -> Void
+}
+
 /// UIKit-owned route renderer for the fluid-navigation stack.
 ///
 /// A4a established this renderer with fake routes; A4b also uses it for the
@@ -183,6 +194,12 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         case pop(Int)
     }
 
+    private enum EdgePanOwner {
+        case routePop
+        case homeLeading
+        case trailing
+    }
+
     private struct PendingPayloadReplacement {
         let expected: GaryxRouteDestination
         let replacement: GaryxRouteDestination
@@ -204,6 +221,8 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     private var gestureBaseProgress: CGFloat = 0
     private var leadingTouchSnapshot: GaryxRouteEdgeTouchSnapshot?
     private var trailingTouchSnapshot: GaryxRouteEdgeTouchSnapshot?
+    private var leadingPanOwner: EdgePanOwner?
+    private var trailingPanOwner: EdgePanOwner?
     private var sceneIsActive = true
     private var deferredTerminalEffects: GaryxPresentationTerminalState?
     private var interactionFrozenAfterTerminal = false
@@ -224,9 +243,9 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         }
     }
 
-    var homeLeadingEdgeAction: (@MainActor () -> Void)?
-    var trailingEdgeAction: (@MainActor () -> Void)?
-    var trailingEdgeActionEligible: @MainActor () -> Bool = { false }
+    var homeLeadingEdgeInteraction: GaryxRouteEdgePanInteraction?
+    var trailingEdgeInteraction: GaryxRouteEdgePanInteraction?
+    var interactivePopEligible: @MainActor () -> Bool = { true }
     var gestureDiagnostic: (@MainActor (String) -> Void)?
     var transitionFrameObserver: (@MainActor (
         GaryxPresentationTransactionPhase,
@@ -275,8 +294,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         view.clipsToBounds = true
-        view.addGestureRecognizer(leadingEdgePanGestureRecognizer)
-        view.addGestureRecognizer(trailingEdgePanGestureRecognizer)
+        installEdgeRecognizers(on: view)
         applyLayoutDirectionOverride()
         mountInitialHosts()
         interactionShield.frame = view.bounds
@@ -287,6 +305,14 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         interactionShield.isHidden = true
         view.addSubview(interactionShield)
         refreshGestureAvailability()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // The home drawer is a SwiftUI sibling of the route controller. Hosting
+        // both public edge recognizers on the shared window gives drawer,
+        // route-pop, task-tree, and descendant pans one failure graph.
+        installEdgeRecognizers(on: view.window ?? view)
     }
 
     override func viewDidLayoutSubviews() {
@@ -730,9 +756,28 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         } else {
             return true
         }
+        guard let coordinateView = gestureRecognizer.view ?? view else { return false }
+        recordEdgeTouchDown(
+            physicalX: touch.location(in: coordinateView).x,
+            viewportWidth: max(coordinateView.bounds.width, 1),
+            edge: edge
+        )
+        return true
+    }
+
+    /// Freezes the physical touch-down coordinate before UIKit's recognition
+    /// hysteresis moves the finger. Kept internal so the hosted integration
+    /// target can drive the exact LTR/RTL arbitration seam without private
+    /// `UITouch` construction.
+    func recordEdgeTouchDown(
+        physicalX: CGFloat,
+        viewportWidth: CGFloat,
+        edge: GaryxRouteLogicalEdge
+    ) {
+        setPanOwner(nil, for: edge)
         let snapshot = GaryxRouteEdgeTouchSnapshot(
-            physicalX: touch.location(in: view).x,
-            viewportWidth: viewportWidth,
+            physicalX: physicalX,
+            viewportWidth: max(viewportWidth, 1),
             logicalEdge: edge,
             layoutDirection: routeLayoutDirection
         )
@@ -742,45 +787,91 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             trailingTouchSnapshot = snapshot
         }
         gestureDiagnostic?("touch-\(edge.rawValue)-\(Int(snapshot.physicalX.rounded()))")
-        return true
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
         let edge: GaryxRouteLogicalEdge
-        let snapshot: GaryxRouteEdgeTouchSnapshot?
-        let eligible: Bool
         if gestureRecognizer === leadingEdgePanGestureRecognizer {
             edge = .leading
-            snapshot = leadingTouchSnapshot
-            let phase = transition?.coordinator.phase
-            eligible = phase == .cancelSettle
-                || (transition == nil && (!canonicalState.path.isEmpty || homeLeadingEdgeAction != nil))
         } else if gestureRecognizer === trailingEdgePanGestureRecognizer {
             edge = .trailing
-            snapshot = trailingTouchSnapshot
-            eligible = transition == nil && trailingEdgeActionEligible()
         } else {
             return false
+        }
+        let coordinateView = gestureRecognizer.view ?? view
+        return shouldBeginEdgePan(
+            edge: edge,
+            translation: CGSize(
+                width: pan.translation(in: coordinateView).x,
+                height: pan.translation(in: coordinateView).y
+            ),
+            velocity: CGSize(
+                width: pan.velocity(in: coordinateView).x,
+                height: pan.velocity(in: coordinateView).y
+            )
+        )
+    }
+
+    /// Evaluates one frozen touch-down snapshot. The hosted integration suite
+    /// supplies vectors directly because UIKit does not expose synthetic pan
+    /// velocity injection; production always enters through the delegate.
+    func shouldBeginEdgePan(
+        edge: GaryxRouteLogicalEdge,
+        translation: CGSize,
+        velocity: CGSize
+    ) -> Bool {
+        let snapshot: GaryxRouteEdgeTouchSnapshot?
+        let owner: EdgePanOwner
+        let requiresEdgeZone: Bool
+        let direction: GaryxRouteGestureDirection
+        if edge == .leading {
+            snapshot = leadingTouchSnapshot
+            let phase = transition?.coordinator.phase
+            if phase == .cancelSettle {
+                owner = .routePop
+                requiresEdgeZone = true
+                direction = .positive
+            } else if transition == nil, canonicalState.path.isEmpty,
+                      let interaction = homeLeadingEdgeInteraction,
+                      interaction.isEligible() {
+                owner = .homeLeading
+                requiresEdgeZone = interaction.requiresEdgeZone()
+                direction = interaction.acceptedDirection()
+            } else if transition == nil, !canonicalState.path.isEmpty,
+                      interactivePopEligible() {
+                owner = .routePop
+                requiresEdgeZone = true
+                direction = .positive
+            } else {
+                return false
+            }
+        } else {
+            snapshot = trailingTouchSnapshot
+            guard transition == nil,
+                  let interaction = trailingEdgeInteraction,
+                  interaction.isEligible() else { return false }
+            owner = .trailing
+            requiresEdgeZone = interaction.requiresEdgeZone()
+            direction = interaction.acceptedDirection()
         }
         guard let snapshot, snapshot.logicalEdge == edge else { return false }
         let shouldBegin = GaryxRouteEdgeGestureArbitrator.shouldBegin(
             touch: snapshot,
-            translation: CGSize(
-                width: pan.translation(in: view).x,
-                height: pan.translation(in: view).y
-            ),
-            velocity: CGSize(
-                width: pan.velocity(in: view).x,
-                height: pan.velocity(in: view).y
-            ),
+            translation: translation,
+            velocity: velocity,
             modalBarrierActive: presentationLeases.hasBarrier,
-            actionEligible: eligible
+            actionEligible: true,
+            requiresEdgeZone: requiresEdgeZone,
+            direction: direction
         )
+        if shouldBegin {
+            setPanOwner(owner, for: edge)
+        }
         gestureDiagnostic?(
             "shouldBegin-\(edge.rawValue)-\(shouldBegin ? "yes" : "no")"
-                + "-t\(Int(pan.translation(in: view).x.rounded()))"
-                + "-v\(Int(pan.velocity(in: view).x.rounded()))"
+                + "-t\(Int(translation.width.rounded()))"
+                + "-v\(Int(velocity.width.rounded()))"
         )
         return shouldBegin
     }
@@ -806,7 +897,13 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             if root === candidate { return true }
             return root.children.contains(where: contains)
         }
-        return contains(self)
+        if contains(self) { return true }
+        var ancestor = parent
+        while let current = ancestor {
+            if current === candidate { return true }
+            ancestor = current.parent
+        }
+        return false
     }
 
     func gestureRecognizer(
@@ -819,7 +916,9 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
               otherGestureRecognizer !== trailingEdgePanGestureRecognizer,
               otherGestureRecognizer is UIPanGestureRecognizer,
               let descendantView = otherGestureRecognizer.view,
-              descendantView.isDescendant(of: view)
+              let recognizerHost = gestureRecognizer.view,
+              descendantView === recognizerHost
+                || descendantView.isDescendant(of: recognizerHost)
         else { return false }
         return true
     }
@@ -1478,45 +1577,100 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         edge: GaryxRouteLogicalEdge
     ) {
         gestureDiagnostic?("state-\(edge.rawValue)-\(recognizer.state.rawValue)")
-        if edge == .trailing {
-            if recognizer.state == .began { trailingEdgeAction?() }
-            return
-        }
+        guard let owner = panOwner(for: edge) else { return }
+        let coordinateView = recognizer.view ?? view
+        let logicalTranslation = GaryxRouteEdgeGestureArbitrator.logicalTranslation(
+            physicalTranslationX: recognizer.translation(in: coordinateView).x,
+            edge: edge,
+            layoutDirection: routeLayoutDirection
+        )
+        let logicalVelocity = GaryxRouteEdgeGestureArbitrator.logicalTranslation(
+            physicalTranslationX: recognizer.velocity(in: coordinateView).x,
+            edge: edge,
+            layoutDirection: routeLayoutDirection
+        )
 
         switch recognizer.state {
         case .began:
-            if transition?.coordinator.phase == .cancelSettle {
-                _ = regrabCancelSettle()
-            } else if canonicalState.path.isEmpty {
-                homeLeadingEdgeAction?()
-            } else {
-                _ = beginInteractivePop()
+            switch owner {
+            case .routePop:
+                if transition?.coordinator.phase == .cancelSettle {
+                    _ = regrabCancelSettle()
+                } else {
+                    _ = beginInteractivePop()
+                }
+            case .homeLeading:
+                homeLeadingEdgeInteraction?.began()
+                homeLeadingEdgeInteraction?.changed(logicalTranslation, logicalVelocity)
+            case .trailing:
+                trailingEdgeInteraction?.began()
+                trailingEdgeInteraction?.changed(logicalTranslation, logicalVelocity)
             }
         case .changed:
-            let logicalDelta = GaryxRouteEdgeGestureArbitrator.logicalTranslation(
-                physicalTranslationX: recognizer.translation(in: view).x,
-                edge: .leading,
-                layoutDirection: routeLayoutDirection
-            )
-            updateInteractivePop(
-                logicalTranslation: gestureBaseProgress * viewportWidth + logicalDelta
-            )
+            switch owner {
+            case .routePop:
+                updateInteractivePop(
+                    logicalTranslation: gestureBaseProgress * viewportWidth + logicalTranslation
+                )
+            case .homeLeading:
+                homeLeadingEdgeInteraction?.changed(logicalTranslation, logicalVelocity)
+            case .trailing:
+                trailingEdgeInteraction?.changed(logicalTranslation, logicalVelocity)
+            }
         case .ended:
-            let logicalVelocity = GaryxRouteEdgeGestureArbitrator.logicalTranslation(
-                physicalTranslationX: recognizer.velocity(in: view).x,
-                edge: .leading,
-                layoutDirection: routeLayoutDirection
-            )
             gestureDiagnostic?(
-                "release-t\(Int(recognizer.translation(in: view).x.rounded()))"
-                    + "-v\(Int(recognizer.velocity(in: view).x.rounded()))"
+                "release-t\(Int(recognizer.translation(in: coordinateView).x.rounded()))"
+                    + "-v\(Int(recognizer.velocity(in: coordinateView).x.rounded()))"
             )
-            _ = endInteractivePop(logicalVelocity: logicalVelocity)
+            switch owner {
+            case .routePop:
+                _ = endInteractivePop(logicalVelocity: logicalVelocity)
+            case .homeLeading:
+                homeLeadingEdgeInteraction?.changed(logicalTranslation, logicalVelocity)
+                homeLeadingEdgeInteraction?.ended(logicalVelocity)
+            case .trailing:
+                trailingEdgeInteraction?.changed(logicalTranslation, logicalVelocity)
+                trailingEdgeInteraction?.ended(logicalVelocity)
+            }
+            setPanOwner(nil, for: edge)
         case .cancelled, .failed:
-            cancelInteractivePop()
+            switch owner {
+            case .routePop:
+                cancelInteractivePop()
+            case .homeLeading:
+                homeLeadingEdgeInteraction?.cancelled()
+            case .trailing:
+                trailingEdgeInteraction?.cancelled()
+            }
+            setPanOwner(nil, for: edge)
         default:
             break
         }
+    }
+
+    private func panOwner(for edge: GaryxRouteLogicalEdge) -> EdgePanOwner? {
+        edge == .leading ? leadingPanOwner : trailingPanOwner
+    }
+
+    private func setPanOwner(_ owner: EdgePanOwner?, for edge: GaryxRouteLogicalEdge) {
+        if edge == .leading {
+            leadingPanOwner = owner
+        } else {
+            trailingPanOwner = owner
+        }
+    }
+
+    private func installEdgeRecognizers(on host: UIView) {
+        guard leadingEdgePanGestureRecognizer.view !== host
+                || trailingEdgePanGestureRecognizer.view !== host else { return }
+        leadingEdgePanGestureRecognizer.view?.removeGestureRecognizer(
+            leadingEdgePanGestureRecognizer
+        )
+        trailingEdgePanGestureRecognizer.view?.removeGestureRecognizer(
+            trailingEdgePanGestureRecognizer
+        )
+        host.addGestureRecognizer(leadingEdgePanGestureRecognizer)
+        host.addGestureRecognizer(trailingEdgePanGestureRecognizer)
     }
 
     // MARK: Cleanup assertions

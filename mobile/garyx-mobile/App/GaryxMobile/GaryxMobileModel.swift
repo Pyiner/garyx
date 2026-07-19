@@ -530,6 +530,12 @@ final class GaryxMobileModel: ObservableObject {
     let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
+    let drawerRevealInteraction = GaryxHorizontalRevealInteractionStore(
+        projection: .fullScreenNavigation
+    )
+    let taskTreeRevealInteraction = GaryxHorizontalRevealInteractionStore(
+        projection: .fullScreenNavigation
+    )
     let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()
     let avatarStore: GaryxAvatarDiskStore
     let avatarImageProvider: GaryxAvatarImageProvider

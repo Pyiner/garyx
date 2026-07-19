@@ -141,6 +141,94 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         waitForTitle("Fake route depth 2", in: app)
     }
 
+    func testHomeDrawerUsesPhysicalLeadingEdgeInLTRAndRTL() {
+        for rtl in [false, true] {
+            let app = launchProductionHome(rtl: rtl)
+            dragLeadingEdge(
+                in: app,
+                fromInset: 5,
+                travel: app.frame.width * 0.72,
+                rtl: rtl
+            )
+
+            let settings = app.buttons["Settings"]
+            waitForHittable(settings, named: "drawer Settings (rtl=\(rtl))")
+            dragDrawerClosed(in: app, rtl: rtl)
+            waitForNotHittable(settings, named: "closed drawer Settings (rtl=\(rtl))")
+            app.terminate()
+        }
+    }
+
+    func testHomeDrawerCancelSettleCanBeRegrabbedAndReversed() {
+        let app = launchProductionHome()
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: 80,
+            velocity: XCUIGestureVelocity(rawValue: 40),
+            holdAtEnd: 0.05
+        )
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.72,
+            velocity: .fast
+        )
+
+        waitForHittable(app.buttons["Settings"], named: "regrabbed drawer")
+    }
+
+    func testTaskTreeTrailingEdgeOwnsOpenCloseAndMakesPopIneligible() {
+        let app = launchProductionConversation(taskTreeFixture: true)
+        dragTrailingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.78
+        )
+        let taskTreeTitle = app.staticTexts["Task tree"]
+        XCTAssertTrue(taskTreeTitle.waitForExistence(timeout: 5))
+
+        // While the task surface is open, a leading-edge rightward swipe is
+        // routed to task-tree close. It must never pop the conversation.
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.78
+        )
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 3))
+        XCTAssertFalse(taskTreeTitle.waitForExistence(timeout: 2))
+
+        dragTrailingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.78
+        )
+        XCTAssertTrue(taskTreeTitle.waitForExistence(timeout: 5))
+        dragTaskTreeClosed(in: app)
+        XCTAssertFalse(taskTreeTitle.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Back"].exists)
+    }
+
+    func testTaskTreeCancelSettleCanBeRegrabbed() {
+        let app = launchProductionConversation(taskTreeFixture: true)
+        dragTrailingEdge(
+            in: app,
+            fromInset: 5,
+            travel: 90,
+            velocity: XCUIGestureVelocity(rawValue: 40),
+            holdAtEnd: 0.05
+        )
+        dragTrailingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.78,
+            velocity: .fast
+        )
+
+        XCTAssertTrue(app.staticTexts["Task tree"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Back"].exists)
+    }
+
     func testSlowMotionFramesMatchFrozenSystemGeometry() {
         let app = launchFakeRoutes(depth: 2)
         let button = app.buttons["fluid.fake.slow-motion"]
@@ -250,7 +338,8 @@ final class FluidRouteStackInteractionTests: XCTestCase {
     }
 
     private func launchProductionConversation(
-        automaticallyRegrabs: Bool = false
+        automaticallyRegrabs: Bool = false,
+        taskTreeFixture: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
@@ -260,6 +349,7 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_AUTO_REGRAB"] = automaticallyRegrabs
             ? "1"
             : "0"
+        app.launchEnvironment["GARYX_MOBILE_A5_TASK_TREE_FIXTURE"] = taskTreeFixture ? "1" : "0"
         app.launch()
         XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["production.route.status"].waitForExistence(timeout: 10))
@@ -278,6 +368,16 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         // asserts UITextView.isFirstResponder directly once the drag begins.
         Thread.sleep(forTimeInterval: 0.5)
         waitForProductionStatus("depth=1", in: app)
+        return app
+    }
+
+    private func launchProductionHome(rtl: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SIDEBAR"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_RTL"] = rtl ? "1" : "0"
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Garyx"].waitForExistence(timeout: 10))
         return app
     }
 
@@ -337,6 +437,81 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func waitForHittable(
+        _ element: XCUIElement,
+        named name: String,
+        timeout: TimeInterval = 5
+    ) {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), name)
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: element
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed, name)
+    }
+
+    private func waitForNotHittable(
+        _ element: XCUIElement,
+        named name: String,
+        timeout: TimeInterval = 5
+    ) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == false"),
+            object: element
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed, name)
+    }
+
+    private func dragDrawerClosed(in app: XCUIApplication, rtl: Bool) {
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let startX = app.frame.width * (rtl ? 0.28 : 0.72)
+        let endX = rtl ? app.frame.width - 45 : 45
+        origin.withOffset(CGVector(dx: startX, dy: app.frame.height * 0.56)).press(
+            forDuration: 0.05,
+            thenDragTo: origin.withOffset(
+                CGVector(dx: endX, dy: app.frame.height * 0.56)
+            ),
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
+    }
+
+    private func dragTaskTreeClosed(in app: XCUIApplication, rtl: Bool = false) {
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let startX = app.frame.width * (rtl ? 0.72 : 0.28)
+        let endX = rtl ? 45 : app.frame.width - 45
+        origin.withOffset(CGVector(dx: startX, dy: app.frame.height * 0.56)).press(
+            forDuration: 0.05,
+            thenDragTo: origin.withOffset(
+                CGVector(dx: endX, dy: app.frame.height * 0.56)
+            ),
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
+    }
+
+    private func dragTrailingEdge(
+        in app: XCUIApplication,
+        fromInset: CGFloat,
+        travel: CGFloat,
+        velocity: XCUIGestureVelocity = .default,
+        holdAtEnd: TimeInterval = 0,
+        rtl: Bool = false
+    ) {
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let startX = rtl ? fromInset : app.frame.width - fromInset
+        let physicalTravel = rtl ? travel : -travel
+        let y = app.frame.height * 0.56
+        origin.withOffset(CGVector(dx: startX, dy: y)).press(
+            forDuration: 0.05,
+            thenDragTo: origin.withOffset(
+                CGVector(dx: startX + physicalTravel, dy: y)
+            ),
+            withVelocity: velocity,
+            thenHoldForDuration: holdAtEnd
+        )
     }
 
     private func dragLeadingEdge(
