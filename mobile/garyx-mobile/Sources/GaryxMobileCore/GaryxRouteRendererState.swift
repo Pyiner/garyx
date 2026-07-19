@@ -19,16 +19,14 @@ public struct GaryxRouteVisualPreferences: Equatable, Sendable {
     }
 
     public var resolvedPolicy: GaryxRouteVisualPolicy {
-        guard GaryxAccessibilityTransitionPolicy.usesCrossFade(
+        switch GaryxAccessibilityTransitionPolicy.mode(
             reduceMotion: reduceMotion,
             prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        ) else {
-            return .spatial
+        ) {
+        case .spatial: .spatial
+        case .crossFade: .crossFade
+        case .immediate: .immediate
         }
-        return GaryxAccessibilityTransitionPolicy.animatesTransition(
-            reduceMotion: reduceMotion,
-            prefersCrossFadeTransitions: prefersCrossFadeTransitions
-        ) ? .crossFade : .immediate
     }
 }
 
@@ -60,7 +58,12 @@ public enum GaryxRouteTransitionCalibration {
     /// 404 ms on the iOS 26 SwiftUI spring solver, inside the measured
     /// 300-440 ms system-pop settle window.
     public static var settleCurve: GaryxMotionPhysics.SpringCurve {
-        .init(response: 0.22, dampingRatio: 0.88)
+        GaryxMotion.springCurve(for: .settle)
+    }
+
+    /// Zero-momentum programmatic and cancellation settles do not bounce.
+    public static var programmaticSettleCurve: GaryxMotionPhysics.SpringCurve {
+        GaryxMotion.springCurve(for: .snapBack)
     }
 }
 

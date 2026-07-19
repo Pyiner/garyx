@@ -111,11 +111,11 @@ public enum GaryxChromeMorphPresentationReducer {
     public static func reduce(
         state: GaryxChromeMorphPresentationState,
         event: GaryxChromeMorphPresentationEvent,
-        reduceMotion: Bool
+        transitionMode: GaryxAccessibilityTransitionMode
     ) -> GaryxChromeMorphPresentationTransition {
         switch (state, event) {
         case (.hidden, .requestPresent), (.collapsing, .requestPresent):
-            if reduceMotion {
+            if transitionMode == .immediate {
                 return .init(state: .expanded, animation: .none, schedule: .none)
             }
             return .init(
@@ -126,7 +126,7 @@ public enum GaryxChromeMorphPresentationReducer {
         case (.presentedCollapsed, .expandTick):
             return .init(state: .expanded, animation: .open, schedule: .none)
         case (.expanded, .requestDismiss):
-            if reduceMotion {
+            if transitionMode == .immediate {
                 return .init(state: .hidden, animation: .none, schedule: .none)
             }
             return .init(

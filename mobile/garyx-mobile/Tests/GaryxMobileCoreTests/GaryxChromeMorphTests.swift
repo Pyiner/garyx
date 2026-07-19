@@ -73,12 +73,12 @@ final class GaryxChromeMorphTests: XCTestCase {
         XCTAssertEqual(transition, .init(state: .hidden, animation: .none, schedule: .none))
     }
 
-    func testPresentationReduceMotionJumpsDirectly() {
+    func testPresentationImmediatePolicyJumpsDirectly() {
         XCTAssertEqual(
             GaryxChromeMorphPresentationReducer.reduce(
                 state: .hidden,
                 event: .requestPresent,
-                reduceMotion: true
+                transitionMode: .immediate
             ),
             .init(state: .expanded, animation: .none, schedule: .none)
         )
@@ -86,9 +86,24 @@ final class GaryxChromeMorphTests: XCTestCase {
             GaryxChromeMorphPresentationReducer.reduce(
                 state: .expanded,
                 event: .requestDismiss,
-                reduceMotion: true
+                transitionMode: .immediate
             ),
             .init(state: .hidden, animation: .none, schedule: .none)
+        )
+    }
+
+    func testPresentationCrossFadeRetainsStagedLifecycle() {
+        XCTAssertEqual(
+            GaryxChromeMorphPresentationReducer.reduce(
+                state: .hidden,
+                event: .requestPresent,
+                transitionMode: .crossFade
+            ),
+            .init(
+                state: .presentedCollapsed,
+                animation: .none,
+                schedule: .expandOnNextTick
+            )
         )
     }
 
@@ -119,7 +134,7 @@ final class GaryxChromeMorphTests: XCTestCase {
         GaryxChromeMorphPresentationReducer.reduce(
             state: state,
             event: event,
-            reduceMotion: false
+            transitionMode: .spatial
         )
     }
 }

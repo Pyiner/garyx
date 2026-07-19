@@ -1,4 +1,20 @@
+public enum GaryxAccessibilityTransitionMode: String, CaseIterable, Codable, Sendable {
+    case spatial
+    case crossFade
+    case immediate
+}
+
 public enum GaryxAccessibilityTransitionPolicy {
+    public static func mode(
+        reduceMotion: Bool,
+        prefersCrossFadeTransitions: Bool
+    ) -> GaryxAccessibilityTransitionMode {
+        if prefersCrossFadeTransitions {
+            return .crossFade
+        }
+        return reduceMotion ? .immediate : .spatial
+    }
+
     /// Existing Reduce Motion fallbacks already remove spatial movement. The
     /// dedicated cross-fade preference requests the same presentation even if
     /// SwiftUI has not surfaced Reduce Motion in the current environment yet.
@@ -6,7 +22,10 @@ public enum GaryxAccessibilityTransitionPolicy {
         reduceMotion: Bool,
         prefersCrossFadeTransitions: Bool
     ) -> Bool {
-        reduceMotion || prefersCrossFadeTransitions
+        mode(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        ) != .spatial
     }
 
     /// Reduce Motion keeps transitions immediate unless the user explicitly
@@ -16,6 +35,9 @@ public enum GaryxAccessibilityTransitionPolicy {
         reduceMotion: Bool,
         prefersCrossFadeTransitions: Bool
     ) -> Bool {
-        !reduceMotion || prefersCrossFadeTransitions
+        mode(
+            reduceMotion: reduceMotion,
+            prefersCrossFadeTransitions: prefersCrossFadeTransitions
+        ) != .immediate
     }
 }
