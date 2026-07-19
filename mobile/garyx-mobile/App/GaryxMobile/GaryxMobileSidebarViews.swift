@@ -363,7 +363,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             } label: {
                 GaryxSidebarEmptyRow(title: "Couldn't refresh · Tap to retry")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         }
 
         GaryxSidebarThreadAutoLoadFooter()
@@ -395,7 +395,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             } label: {
                 GaryxSidebarEmptyRow(title: "Recent threads unavailable · Tap to retry")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         case .none:
             EmptyView()
         }
@@ -616,7 +616,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                         .frame(width: 44, height: 36)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Reset pinned reorder spike")
                 .accessibilityIdentifier("pinned-reorder-debug-reset")
 
@@ -634,7 +634,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                         .frame(width: 44, height: 36)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Inject pin move")
                 .accessibilityIdentifier("pinned-reorder-debug-pin-move")
 
@@ -677,7 +677,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                         .frame(width: 44, height: 36)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Begin home scroll probe")
                 .accessibilityIdentifier("home-scroll-probe-begin")
 
@@ -688,7 +688,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                         .frame(width: 44, height: 36)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("End home scroll probe")
                 .accessibilityIdentifier("home-scroll-probe-end")
 
@@ -914,7 +914,7 @@ private struct GaryxDrawerChildRow<Icon: View>: View {
             .frame(minHeight: 40)
             .contentShape(RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(title)
     }
 }
@@ -946,7 +946,7 @@ struct GaryxSidebarNavigationRow: View {
             )
             .contentShape(RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(panel.label)
     }
 
@@ -1139,7 +1139,7 @@ private struct GaryxSidebarThreadAutoLoadFooter: View {
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                 case .hidden:
                     EmptyView()
                 }
@@ -1319,7 +1319,7 @@ struct GaryxSidebarThreadRowView: View {
                             }
                             .frame(width: 26, height: 22)
                             .contentShape(Rectangle())
-                            .buttonStyle(.plain)
+                            .buttonStyle(GaryxPressableRowStyle())
                             .accessibilityLabel("Unpin thread")
                         } else {
                             Image(systemName: "pin.fill")
@@ -1535,7 +1535,7 @@ struct GaryxSidebarActionPill: View {
                 view.garyxAdaptiveGlass(.regular, isInteractive: true, in: Capsule())
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.45)
     }
@@ -1634,7 +1634,7 @@ struct GaryxWorkspaceBotsView: View {
                 } label: {
                     GaryxToolbarIcon(systemName: "plus")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Add Workspace")
             }
         }

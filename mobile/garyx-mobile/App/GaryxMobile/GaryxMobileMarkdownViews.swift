@@ -582,7 +582,7 @@ private struct GaryxMarkdownImageView: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .fixedSize()
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .garyxInPlaceMessageMenu {

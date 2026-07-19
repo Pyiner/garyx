@@ -103,6 +103,24 @@ final class GaryxMotionTests: XCTestCase {
         XCTAssertEqual(resolution.effect, .identity)
     }
 
+    func testPressFeedbackKeepsOpacityWhenReduceMotionRemovesScale() {
+        let standard = GaryxMotion.resolve(.press, preferences: .standard)
+        XCTAssertEqual(standard.effect.scale, 0.96)
+        XCTAssertEqual(standard.effect.opacity, 0.78)
+        XCTAssertTrue(standard.animates)
+
+        let reduced = GaryxMotion.resolve(
+            .press,
+            preferences: .init(
+                reduceMotion: true,
+                prefersCrossFadeTransitions: false
+            )
+        )
+        XCTAssertEqual(reduced.effect.scale, 1)
+        XCTAssertEqual(reduced.effect.opacity, 0.78)
+        XCTAssertFalse(reduced.animates)
+    }
+
     func testSpatialResolutionUsesPrimaryCurveWhenCrossFadeCurveDiffers() {
         let specification = GaryxMotion.specification(for: .morphOpen)
         XCTAssertNotEqual(specification.curve, specification.crossFadeCurve)

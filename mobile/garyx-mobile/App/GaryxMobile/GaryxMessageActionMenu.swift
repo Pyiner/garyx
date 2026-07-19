@@ -88,6 +88,7 @@ private struct GaryxInPlaceMessageMenuModifier: ViewModifier {
                     .onEnded { _ in
                         let items = itemsProvider()
                         guard !items.isEmpty else { return }
+                        GaryxMobileHaptics.shared.prepare(.clipboardCopySucceeded)
                         GaryxMobileHaptics.shared.play(.messageActionMenuPresented)
                         presented = PresentedMenu(token: UUID(), items: items)
                     }
@@ -188,7 +189,7 @@ private struct GaryxMessageMenuPanel: View {
                         .frame(height: 46)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                 }
             }
             .padding(.vertical, 6)

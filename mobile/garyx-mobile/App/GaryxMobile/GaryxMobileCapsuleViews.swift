@@ -128,7 +128,7 @@ struct GaryxCapsulesView: View {
             Button(action: dismiss) {
                 GaryxToolbarIcon(systemName: "chevron.left")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel(routeNavigation.backLabel)
         } else {
             GaryxSidebarMenuButton { openSidebar() }
@@ -204,7 +204,7 @@ private struct GaryxCapsuleGalleryCard: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle(prepares: .capsuleFavoriteChanged))
         .contextMenu {
             Button(action: onFavorite) {
                 Label(
@@ -478,7 +478,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
                         } label: {
                             GaryxToolbarIcon(systemName: "chevron.down")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .accessibilityLabel("Close Capsule")
 
                         GaryxCapsuleChromeHeaderControl(
@@ -501,7 +501,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
                                 )
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle(prepares: .capsuleFavoriteChanged))
                         .disabled(projectedCapsule == nil)
                         .accessibilityLabel(isFavorited ? "Unfavorite Capsule" : "Favorite Capsule")
                         .accessibilityHint(
@@ -984,7 +984,7 @@ private struct GaryxMobileCapsuleChatCard: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .frame(maxWidth: 320, alignment: .leading)
     }
 

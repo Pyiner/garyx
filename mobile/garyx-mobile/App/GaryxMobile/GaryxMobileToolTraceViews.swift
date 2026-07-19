@@ -25,7 +25,7 @@ struct GaryxToolTraceGroupView: View {
                 .frame(minHeight: 22)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Show tool calls")
             .accessibilityAddTraits(.isButton)
 
@@ -82,7 +82,7 @@ struct GaryxToolCallListSheet: View {
                         } label: {
                             GaryxToolCallRowLabel(row: row)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                     }
                 }
                 .padding(.horizontal, 20)
@@ -450,7 +450,7 @@ private struct GaryxToolImageThumbnail: View {
                     .stroke(Color.primary.opacity(0.08), lineWidth: 1)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel("Preview \(ref.fileName)")
         .task(id: ref.path) {
             await loadThumbnail()

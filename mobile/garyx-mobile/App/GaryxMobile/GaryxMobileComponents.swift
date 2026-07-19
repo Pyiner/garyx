@@ -314,7 +314,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                         } label: {
                             GaryxToolbarIcon(systemName: leadingActionSystemName)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .accessibilityLabel(leadingActionLabel ?? "Back")
                     } else if let dismiss = routeNavigation.dismiss {
                         Button {
@@ -322,7 +322,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                         } label: {
                             GaryxToolbarIcon(systemName: "chevron.left")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .accessibilityLabel(routeNavigation.backLabel)
                     } else {
                         GaryxSidebarMenuButton {
@@ -341,7 +341,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                         } label: {
                             GaryxToolbarIcon(systemName: "arrow.clockwise")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .accessibilityLabel("Refresh")
                     }
 
@@ -456,13 +456,13 @@ struct GaryxListPanelScaffold<Rows: View, Actions: View>: View {
                         Button(action: leadingAction) {
                             GaryxToolbarIcon(systemName: "chevron.left")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .accessibilityLabel(leadingActionLabel ?? "Back")
                     } else if let dismiss = routeNavigation.dismiss {
                         Button(action: dismiss) {
                             GaryxToolbarIcon(systemName: "chevron.left")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .accessibilityLabel(routeNavigation.backLabel)
                     } else {
                         GaryxSidebarMenuButton(action: openSidebar)
@@ -508,7 +508,7 @@ struct GaryxAddToolbarButton: View {
         Button(action: action) {
             GaryxToolbarIcon(systemName: "plus")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(label)
     }
 }

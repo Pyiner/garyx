@@ -38,7 +38,7 @@ struct GaryxSettingsProviderContent: View {
                                 usageRefreshedAt: model.codingUsage?.refreshedAt
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
 
                         if index < providers.count - 1 {
                             GaryxCompactRowDivider()

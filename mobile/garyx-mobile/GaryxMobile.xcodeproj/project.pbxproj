@@ -28,6 +28,7 @@
 		13D8727F296AE289BC889C3F /* GaryxComposerDurabilityRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3794F00100D06DBA7807EC6B /* GaryxComposerDurabilityRecovery.swift */; };
 		13E2EA51156DF738134BEC06 /* GaryxGatewayJSONModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7FA38D305E410137E067EFE /* GaryxGatewayJSONModels.swift */; };
 		14CD59749E4C9175279AC63C /* GaryxGatewaySwitcherViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54BE544447A1FB8F2E733993 /* GaryxGatewaySwitcherViews.swift */; };
+		160C2C13048369CC6FA4A5A4 /* GaryxPressableRowStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67976D649DA6E13BE9E109AA /* GaryxPressableRowStyle.swift */; };
 		166A30720C192C0354A31D69 /* GaryxThreadListDrilldownViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19D56E8DCC914DA3B685C997 /* GaryxThreadListDrilldownViews.swift */; };
 		166A859731BBCBE54CFCF6C9 /* GaryxMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04A73487236E63824BB1232 /* GaryxMotion.swift */; };
 		174972574FCE19DEB829C6A6 /* GaryxProviderSettingsPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B477879B94DB62168F0BBFC /* GaryxProviderSettingsPresentation.swift */; };
@@ -406,6 +407,7 @@
 		630A78D60519B846FE4A4800 /* GaryxPinnedDragLifecycleAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxPinnedDragLifecycleAdapter.swift; sourceTree = "<group>"; };
 		652B1EA6A38559202A4E8053 /* GaryxMobileCatalogCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileCatalogCache.swift; sourceTree = "<group>"; };
 		6630040C052C868525DBA8B3 /* GaryxMobileHaptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileHaptics.swift; sourceTree = "<group>"; };
+		67976D649DA6E13BE9E109AA /* GaryxPressableRowStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxPressableRowStyle.swift; sourceTree = "<group>"; };
 		67BE28134FE5D2F4A08CF44D /* GaryxFavoritesState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxFavoritesState.swift; sourceTree = "<group>"; };
 		698A286E34BA98078B82FA55 /* GaryxMobileMarkdownViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileMarkdownViews.swift; sourceTree = "<group>"; };
 		6A056F0993027B32FBFB26DC /* GaryxPinnedOrderState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxPinnedOrderState.swift; sourceTree = "<group>"; };
@@ -729,6 +731,7 @@
 				630A78D60519B846FE4A4800 /* GaryxPinnedDragLifecycleAdapter.swift */,
 				307A412F68A596B5F9A01BFA /* GaryxPinnedOrderPersistence.swift */,
 				1B146C3C5EB80F93457CD8E5 /* GaryxPresentationLeaseViews.swift */,
+				67976D649DA6E13BE9E109AA /* GaryxPressableRowStyle.swift */,
 				5255F67DF750ED686CBC8DD0 /* GaryxProductionRouteStack.swift */,
 				46A559996C462FF1CFA503EA /* GaryxRecentThreadFilterMenu.swift */,
 				4CD6F1CA998BB668325CB3F6 /* GaryxRouteContext.swift */,
@@ -1251,6 +1254,7 @@
 				EF7F628A19C510113854D969 /* GaryxPinnedOrderState.swift in Sources */,
 				3EBD90DF4A2DAF8634DB9322 /* GaryxPresentationLeaseViews.swift in Sources */,
 				C12B724CEB9AB5F0F2A2B242 /* GaryxPresentationTransaction.swift in Sources */,
+				160C2C13048369CC6FA4A5A4 /* GaryxPressableRowStyle.swift in Sources */,
 				89ACBAD2904C0B643748C30D /* GaryxProductionRouteStack.swift in Sources */,
 				174972574FCE19DEB829C6A6 /* GaryxProviderSettingsPresentation.swift in Sources */,
 				35CF0E615458E943268871EE /* GaryxRecentThreadFeeds.swift in Sources */,

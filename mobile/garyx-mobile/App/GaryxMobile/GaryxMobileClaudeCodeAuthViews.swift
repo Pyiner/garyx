@@ -135,7 +135,7 @@ struct GaryxClaudeCodeLoginSheet: View {
             Button { dismiss() } label: {
                 GaryxCompactGlassIcon(systemName: "xmark")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, 18)
@@ -235,7 +235,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
 
             if showsAdvancedOptions {
                 VStack(alignment: .leading, spacing: 12) {
@@ -284,7 +284,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(GaryxTheme.link)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Paste code from clipboard")
             } else {
                 Button {
@@ -294,7 +294,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                         .font(GaryxFont.system(size: 18, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Clear code")
             }
         }
@@ -365,7 +365,7 @@ struct GaryxClaudeCodeLoginSheet: View {
                             .frame(minHeight: 44)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                     .foregroundStyle(secondary.kind == .startOver ? GaryxTheme.danger : .primary)
                     .disabled(!secondary.isEnabled)
                     .opacity(secondary.isEnabled ? 1 : 0.45)

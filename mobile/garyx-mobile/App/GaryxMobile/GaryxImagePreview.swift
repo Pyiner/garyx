@@ -180,7 +180,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 in: Circle()
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .disabled(saveState == .saving)
         .accessibilityLabel("Save image to Photos")
         .accessibilityValue(saveState.accessibilityValue)
@@ -202,7 +202,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                     in: Circle()
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel("Close image preview")
     }
 

@@ -146,7 +146,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel(expanded ? "Collapse turn details" : "Expand turn details")
 
             if expanded && turn.hasBody {

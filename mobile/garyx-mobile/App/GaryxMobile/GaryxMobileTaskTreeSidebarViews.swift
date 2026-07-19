@@ -365,7 +365,7 @@ private struct GaryxTaskTreeSidebarRowView: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(accessibilityText)
     }
 

@@ -370,7 +370,7 @@ struct GaryxComposer: View {
                 .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .disabled(!canChangeWorkspaceMode)
             .accessibilityLabel("Workspace mode")
 
@@ -533,7 +533,7 @@ struct GaryxComposer: View {
                     )
                     .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Stop current run")
             }
 
@@ -548,7 +548,7 @@ struct GaryxComposer: View {
                     )
                     .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle(prepares: .messageSendCommitted))
                 .disabled(!canSendLocalPayload)
                 .accessibilityLabel("Send")
             }
@@ -587,7 +587,7 @@ struct GaryxComposer: View {
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .disabled(isAddingAttachments)
         .accessibilityLabel(isAddingAttachments ? "Adding attachments" : "Add attachment")
         .accessibilityHint("Take a photo, choose photos or files, or insert a saved command")
@@ -924,7 +924,7 @@ private struct GaryxComposerAddPopover: View {
                         .frame(width: 36, height: 36)
                         .background(Color.primary.opacity(0.055), in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Back to attachments")
 
                 Text("Commands")
@@ -1125,7 +1125,7 @@ private struct GaryxComposerWorkspaceModeSheet: View {
             .opacity(isEnabled ? 1 : 0.42)
             .contentShape(workspaceModeRowShape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .disabled(!isEnabled)
     }
 
@@ -1167,7 +1167,7 @@ struct GaryxAttachmentChip: View {
                     .padding(4)
                     .background(Color.black.opacity(0.65), in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Remove attachment")
             .padding(4)
         }
@@ -1186,7 +1186,7 @@ struct GaryxAttachmentChip: View {
                 Image(systemName: "xmark")
                     .font(GaryxFont.caption(weight: .bold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Remove attachment")
         }
         .foregroundStyle(.primary)

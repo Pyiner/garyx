@@ -183,7 +183,7 @@ struct GaryxFormRow<Content: View>: View {
                 rowLayout
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         } else {
             rowLayout
         }
@@ -432,7 +432,7 @@ struct GaryxFormTextAreaRow: View {
             showsFocusedEditor = true
         }
         .font(.subheadline)
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .foregroundStyle(.secondary)
     }
 
@@ -576,7 +576,7 @@ struct GaryxGatewayHeadersEditor: View {
                                     .font(GaryxFont.system(size: 13, weight: .semibold))
                                     .frame(width: 32, height: 32)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(GaryxPressableRowStyle())
                             .disabled(rows.count == 1 && row.name.isEmpty && row.value.isEmpty)
                             .accessibilityLabel("Remove header")
                         }
@@ -611,7 +611,7 @@ struct GaryxGatewayHeadersEditor: View {
                     Label("Add Header", systemImage: "plus")
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Add header")
             }
             .padding(.top, 8)
@@ -797,7 +797,7 @@ struct GaryxFormMenuRow<MenuContent: View, ValueLabel: View>: View {
             .frame(maxWidth: .infinity, minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .listRowInsets(EdgeInsets())
     }
 }
@@ -1057,7 +1057,7 @@ struct GaryxWorkspaceSelectSheet: View {
             .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 
     private func addWorkspace(_ selectedPath: String) async {
@@ -1123,7 +1123,7 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
                         .frame(width: 32, height: 32)
                         .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .disabled(parentPath == nil || isLoading)
                 .opacity(parentPath == nil ? 0.36 : 1)
                 .accessibilityLabel("Back")
@@ -1156,7 +1156,7 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
                         .frame(height: 30)
                         .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                 }
             }
             .padding(.horizontal, 8)
@@ -1253,7 +1253,7 @@ private struct GaryxWorkspaceDirectoryBrowserRow: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }
 
@@ -1314,7 +1314,7 @@ private struct GaryxDismissButton: View {
         } label: {
             GaryxCompactGlassIcon(systemName: "xmark")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel("Close")
     }
 }

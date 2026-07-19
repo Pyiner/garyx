@@ -27,7 +27,7 @@ struct GaryxWorkspacesView: View {
                 } label: {
                     GaryxToolbarIcon(systemName: "plus")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Add Workspace")
 
                 Button {
@@ -35,7 +35,7 @@ struct GaryxWorkspacesView: View {
                 } label: {
                     GaryxToolbarIcon(systemName: model.isUploadingWorkspaceFiles ? "hourglass" : "square.and.arrow.up")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .disabled(model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isUploadingWorkspaceFiles)
                 .accessibilityLabel("Upload Files")
             }
@@ -172,7 +172,7 @@ struct GaryxWorkspacePathRow: View {
             .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent)
         .accessibilityValue(garyxCompactPathLabel(path))
     }
@@ -234,7 +234,7 @@ struct GaryxWorkspaceUpRow: View {
             .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }
 
@@ -292,7 +292,7 @@ struct GaryxWorkspaceFileRow: View {
             .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(entry.name.isEmpty ? entry.path.garyxLastPathComponent : entry.name)
     }
 

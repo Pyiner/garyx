@@ -137,7 +137,7 @@ struct GaryxGlobalErrorToast: View {
             }
             .shadow(color: Color.black.opacity(0.10), radius: 18, y: 8)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(text)
         .accessibilityHint("Dismiss")
     }
@@ -482,7 +482,7 @@ struct GaryxGlassSearchField: View {
                         .font(GaryxFont.system(size: 15, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Clear search")
             }
         }
@@ -514,7 +514,7 @@ struct GaryxSidebarMenuButton: View {
                 .frame(width: 48, height: 48)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle(prepares: .drawerVisibilityCommitted))
         .accessibilityLabel("Open menu")
     }
 }
@@ -568,6 +568,6 @@ struct GaryxPrimaryCapsuleButton: View {
             .frame(height: 56)
             .background(Color(.label), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }

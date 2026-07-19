@@ -325,7 +325,7 @@ struct GaryxGatewaySetupView: View {
                         .frame(minHeight: 52)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                     .accessibilityLabel("Add Gateway")
                 }
                 .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -461,7 +461,7 @@ private struct GaryxSetupGatewayRow: View {
             .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(row.title)
     }
 }

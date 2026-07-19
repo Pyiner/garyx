@@ -1381,7 +1381,7 @@ private struct GaryxAvatarStyleRow: View {
             .frame(minHeight: 54)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }
 
@@ -1399,7 +1399,7 @@ struct GaryxAgentCard: View {
                 } label: {
                     agentIdentityRow
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .contentShape(Rectangle())
             }
         }
@@ -1870,7 +1870,7 @@ private struct GaryxAgentOptionSelectionSheet<Content: View>: View {
                 } label: {
                     GaryxCompactGlassIcon(systemName: "xmark")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Close")
             }
             .padding(.horizontal, 22)
@@ -1951,6 +1951,6 @@ private struct GaryxAgentPlainOptionRow: View {
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }

@@ -222,7 +222,7 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
                     in: Circle()
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .contentShape(Circle())
         .accessibilityLabel("Close file preview")
     }

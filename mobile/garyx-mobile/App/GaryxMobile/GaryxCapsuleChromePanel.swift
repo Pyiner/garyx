@@ -59,7 +59,7 @@ struct GaryxCapsuleChromeHeaderControl: View {
                 )
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .opacity(isHidden ? 0 : 1)
         .allowsHitTesting(!isHidden)
         .accessibilityLabel("\(title), Capsule actions")
@@ -128,7 +128,7 @@ struct GaryxCapsuleChromePanel: View {
                     .contentShape(Rectangle())
                     .clipped()
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Close Capsule actions")
 
             if isExpanded {
@@ -176,7 +176,7 @@ struct GaryxCapsuleChromePanel: View {
             .frame(minHeight: 62)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel("Open source conversation, \(sourceConversationTitle)")
     }
 
@@ -199,6 +199,6 @@ struct GaryxCapsuleChromePanel: View {
             .frame(minHeight: 50)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }

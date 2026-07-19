@@ -100,7 +100,7 @@ struct GaryxDisclosureListRow: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(title)
     }
 
@@ -230,7 +230,7 @@ struct GaryxRowActionMenu<Content: View>: View {
                             )
                             .contentShape(Capsule())
                     }
-                    .buttonStyle(GaryxItemActionMenuButtonStyle())
+                    .buttonStyle(GaryxPressableRowStyle(prepares: .threadPinChanged))
                     .padding(.trailing, actionMenuTrailingInset)
                     .accessibilityLabel("Item actions")
                 }
@@ -341,7 +341,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
                         .background(action.tone.background, in: Circle())
                         .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle(prepares: .threadPinChanged))
                 .accessibilityLabel(action.title)
             }
         }
@@ -467,17 +467,6 @@ struct GaryxSwipeActionRow<Content: View>: View {
         guard !didPlayFullRevealFeedback else { return }
         didPlayFullRevealFeedback = true
         GaryxMobileHaptics.shared.play(.rowSwipeFullyRevealed)
-    }
-}
-
-struct GaryxItemActionMenuButtonStyle: ButtonStyle {
-    @Environment(\.garyxMotion) private var motion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(motion.scale(.press, active: configuration.isPressed))
-            .opacity(motion.opacity(.press, active: configuration.isPressed))
-            .animation(motion.animation(.press), value: configuration.isPressed)
     }
 }
 

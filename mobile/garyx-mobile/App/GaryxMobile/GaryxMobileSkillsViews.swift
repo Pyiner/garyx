@@ -157,7 +157,7 @@ struct GaryxSkillCard: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
 
                 Toggle("", isOn: skillEnabledBinding)
                     .labelsHidden()

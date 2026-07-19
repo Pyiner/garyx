@@ -77,7 +77,7 @@ struct GaryxConfiguredBotConfigRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Open \(bot.displayName)")
             .accessibilityHint("Shows bot account details.")
         }

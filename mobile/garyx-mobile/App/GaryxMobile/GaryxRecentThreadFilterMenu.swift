@@ -33,7 +33,7 @@ struct GaryxRecentThreadFilterMenu: View {
         }
         .menuOrder(.fixed)
         .menuIndicator(.hidden)
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel("Recent filter")
         .accessibilityValue(selection.displayName)
     }

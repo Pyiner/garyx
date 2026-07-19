@@ -243,7 +243,7 @@ struct GaryxMessageBubble: View {
                 }
                 .foregroundStyle(Color(.systemRed))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle(prepares: .messageSendCommitted))
             .disabled(retrying)
             .accessibilityLabel(Text("Retry message"))
             .accessibilityHint(Text(statusText))
@@ -519,7 +519,7 @@ struct GaryxMessageImageAttachmentView: View {
                     .stroke(Color.primary.opacity(0.08), lineWidth: 1)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .garyxFullScreenCover(isPresented: $showsPreview) {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(

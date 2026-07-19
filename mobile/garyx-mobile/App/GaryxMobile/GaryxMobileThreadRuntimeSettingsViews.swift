@@ -444,7 +444,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                     // VoiceOver keeps the visible page title (with header
                     // semantics); going back is the action, not the label.
                     .accessibilityLabel(page.title)
@@ -586,7 +586,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
             .frame(minHeight: 48)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .disabled(!enabled)
     }
 
@@ -948,7 +948,7 @@ struct GaryxThreadBotBindingSheet: View {
             } label: {
                 GaryxCompactGlassIcon(systemName: "xmark")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, 22)
@@ -1021,7 +1021,7 @@ struct GaryxThreadBotBindingSheet: View {
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .disabled(isApplying)
         .opacity(isApplying ? 0.62 : 1)
     }

@@ -39,7 +39,7 @@ struct GaryxAutomationsView: View {
             } label: {
                 GaryxToolbarIcon(systemName: "plus")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("New Automation")
         }
         .garyxFullScreenCover(isPresented: $showsCreateAutomation) {
@@ -120,7 +120,7 @@ struct GaryxAutomationCard: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
 
                 Toggle("", isOn: automationEnabledBinding)
                     .labelsHidden()
@@ -151,7 +151,7 @@ struct GaryxAutomationCard: View {
                         )
                         .contentShape(Capsule())
                 }
-                .buttonStyle(GaryxItemActionMenuButtonStyle())
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Automation actions")
                 .garyxPopover(isPresented: $showsActionPanel, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
                     GaryxAutomationActionPopover(
@@ -331,7 +331,7 @@ private struct GaryxAutomationActionPopover: View {
             .frame(height: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }
 
@@ -894,7 +894,7 @@ private struct GaryxAutomationIntervalStepper: View {
                 .frame(width: 36, height: 36)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }
 
@@ -938,7 +938,7 @@ struct GaryxAutomationThreadPickerSheet: View {
                 } label: {
                     GaryxCompactGlassIcon(systemName: "xmark")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Close")
             }
             .padding(.horizontal, 22)
@@ -1096,7 +1096,7 @@ struct GaryxAutomationThreadPickerSheet: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 10)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         case .ready:
             EmptyView()
         }
@@ -1128,7 +1128,7 @@ struct GaryxAutomationThreadPickerSheet: View {
             .font(GaryxFont.caption(weight: .medium))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 44)
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         }
     }
 

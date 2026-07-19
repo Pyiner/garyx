@@ -21,7 +21,7 @@ struct GaryxSidebarGatewayIdentityControl: View {
             } primaryAction: {
                 showsSwitcher = true
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel(accessibilityText(for: identity))
             .accessibilityHint("Opens the gateway switcher")
             .garyxSheet(isPresented: $showsSwitcher) {
@@ -165,7 +165,7 @@ struct GaryxGatewaySwitcherSheet: View {
                     .frame(width: 30, height: 30)
                     .background(.quaternary.opacity(0.5), in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, 22)
@@ -205,7 +205,7 @@ struct GaryxGatewaySwitcherSheet: View {
             .padding(.horizontal, 20)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(row.isCurrent ? "\(row.title), current gateway" : row.title)
     }
 
@@ -219,7 +219,7 @@ struct GaryxGatewaySwitcherSheet: View {
             } label: {
                 footerRow(title: "Manage Gateways", systemImage: "gearshape")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         }
         .padding(.bottom, 6)
     }

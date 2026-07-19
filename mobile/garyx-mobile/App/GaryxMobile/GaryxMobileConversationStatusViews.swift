@@ -148,7 +148,7 @@ struct GaryxEmptyConversationView: View {
             .frame(height: 46)
             .background(Color(.label), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 
     private var newThreadWorkspaceBinding: Binding<String> {
@@ -346,7 +346,7 @@ struct GaryxRateLimitBanner: View {
                 // capsule so the card itself stays short.
                 .contentShape(Rectangle().inset(by: -9))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle(prepares: .messageSendCommitted))
         .disabled(sending)
     }
 }

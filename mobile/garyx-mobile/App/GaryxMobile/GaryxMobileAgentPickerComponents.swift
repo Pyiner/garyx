@@ -437,7 +437,7 @@ struct GaryxAgentTargetPickerControl: View {
                 style: style
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
 
         if showsThreadModelOverride {
             button
@@ -513,7 +513,7 @@ struct GaryxBotAgentPickerControl: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .garyxPopover(
             isPresented: showsPicker,
             attachmentAnchor: .rect(.bounds),
@@ -580,7 +580,7 @@ private struct GaryxBotAgentPickerPopover: View {
                         .frame(minHeight: 58)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle())
                     .disabled(!option.isAvailable)
 
                     if index < options.count - 1 {
@@ -687,7 +687,7 @@ struct GaryxAgentTargetPickerPopover: View {
                     .padding(.horizontal, 20)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
             }
         }
         .frame(width: 308)
@@ -738,7 +738,7 @@ struct GaryxAgentTargetPickerPopover: View {
             .padding(.horizontal, 20)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 }
 
@@ -832,7 +832,7 @@ struct GaryxNewThreadAgentSheet: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
             }
             Spacer(minLength: 0)
         }
@@ -846,7 +846,7 @@ struct GaryxNewThreadAgentSheet: View {
                     .frame(width: 30, height: 30)
                     .background(.quaternary.opacity(0.5), in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, 22)
@@ -912,7 +912,7 @@ struct GaryxNewThreadAgentSheet: View {
             .frame(minHeight: 50)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 
     private var allAgentsPage: some View {
@@ -968,7 +968,7 @@ struct GaryxNewThreadAgentSheet: View {
             .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 
     @ViewBuilder
@@ -1060,7 +1060,7 @@ struct GaryxNewThreadAgentSheet: View {
             .frame(minHeight: 48)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 
     @ViewBuilder
@@ -1145,7 +1145,7 @@ struct GaryxAgentSheetOptionsPanel: View {
                     .frame(minHeight: 48)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
 
                 if index < options.count - 1 {
                     Divider().padding(.leading, 46)

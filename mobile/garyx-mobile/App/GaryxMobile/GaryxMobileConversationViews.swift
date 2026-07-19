@@ -244,7 +244,7 @@ struct GaryxConversationView: View {
                                 .contentShape(Circle())
                                 .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GaryxPressableRowStyle())
                         .transition(motion.transition(.scrollLatest))
                         .accessibilityLabel("Scroll to latest message")
                     }
@@ -953,7 +953,7 @@ struct GaryxConversationHeader: View {
                 Button(action: goHome) {
                     GaryxToolbarIcon(systemName: "chevron.left")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GaryxPressableRowStyle())
                 .accessibilityLabel("Back")
 
                 if liveStore.threadID == nil {
@@ -1013,7 +1013,7 @@ struct GaryxConversationHeader: View {
                             GaryxToolbarIcon(systemName: "ellipsis")
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GaryxPressableRowStyle(prepares: .threadPinChanged))
                     .accessibilityLabel(
                         liveStore.isLoadingInitialHistory(in: model, isCanonicalTop: true)
                             ? "Loading thread"
@@ -1129,7 +1129,7 @@ private struct GaryxThreadRuntimeHeaderControl: View {
                 // same pattern as GaryxToolbarIcon.
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
         .opacity(isHidden ? 0 : 1)
         .allowsHitTesting(!isHidden)
         .accessibilityLabel("\(title), thread settings")

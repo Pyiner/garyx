@@ -251,7 +251,7 @@ private struct GaryxThreadListRowsSection: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GaryxPressableRowStyle())
         }
     }
 
@@ -275,7 +275,7 @@ private struct GaryxThreadListRowsSection: View {
                 message: message
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxPressableRowStyle())
     }
 
     private func stateRow(icon: String, title: String, message: String) -> some View {
