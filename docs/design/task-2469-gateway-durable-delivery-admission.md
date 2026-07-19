@@ -19,11 +19,14 @@ The non-negotiable invariants are:
    Once the provider handoff gate for that identity has been crossed, a replay
    never crosses it again. A settled replay returns the originally allocated
    run and pending-input identifiers.
-2. `thread_records`, all of its SQL projections, an optional endpoint-owner
-   move, a create-intent claim, the first dispatch-admission row, and attachment
-   claims are committed in one SQLite transaction for the new atomic command.
-   There is no committed thread without a durable create claim and dispatch
-   admission, and no committed claim pointing at a different thread.
+2. For the new `create_and_dispatch` command, `thread_records`, all of its SQL
+   projections, an optional endpoint-owner move, a create-intent claim, the
+   first dispatch-admission row, and attachment claims are committed in one
+   SQLite transaction. That command cannot commit a thread without both its
+   durable create claim and dispatch admission, and cannot commit a claim
+   pointing at a different thread. Compatible `create_only` and uncorrelated
+   legacy create paths are outside this command-specific invariant and do not
+   invent dispatch rows.
 3. The unique create mapping is never reused or silently forgotten, including
    after archive/delete. A client can always distinguish “unknown intent”,
    “preparing”, “committed”, and “the claimed thread was later removed” by a
@@ -448,13 +451,23 @@ database does not persist machine-specific duplicate prefixes.
 
 ### 4.4 Marker execution and validation
 
-Each migration runs in one `BEGIN IMMEDIATE` transaction:
+Each migration explicitly requests `TransactionBehavior::Immediate` and runs
+in one `BEGIN IMMEDIATE` transaction. The implementation must not use the
+current default-deferred `transaction()` / `unchecked_transaction()` behavior
+for this read-then-write marker protocol:
 
 1. read its marker from `projection_states`;
 2. if absent, create the table/index set, validate it, then insert the marker
    with `source_row_count = 0` in the same transaction;
 3. if present, validate exact required columns, constraints, and named unique
    indexes; mismatch is `GaryxDbError::Configuration` and startup stops.
+
+`initialize_connection` already enables `PRAGMA foreign_keys = ON` on file and
+memory connections. Because the `thread_create_resources` claim relationship
+uses `ON DELETE RESTRICT`, migration validation also requires that pragma to be
+`1`; focused tests delete a referenced create-intent row and assert the foreign
+key rejects it. A connection with foreign-key enforcement disabled fails this
+migration rather than silently weakening the ownership contract.
 
 There is no row backfill for dispatch/create: historical metadata is not a
 unique truth source. Prompt-file adoption is a runtime file-lifecycle action,
@@ -933,7 +946,8 @@ commits:
 2. create-intent migration, point query, and atomic create-and-dispatch;
 3. attachment migration, managed upload root, claims, lifecycle worker, and GC;
 4. cross-path/restart/fault integration tests and capability publication;
-5. Mac canonical durable-delivery consumer and conformance fixtures.
+5. Mac canonical durable-delivery consumer plus the cross-platform shared
+   fixture marker/assertion/documentation update.
 
 The required deterministic evidence is:
 
@@ -980,11 +994,14 @@ The required deterministic evidence is:
 
 ### Validation ladder
 
-- focused crate/unit and desktop conformance tests while iterating;
+- focused crate/unit and cross-platform conformance tests while iterating;
 - `scripts/test/rust_tier1_fast.sh --changed`;
 - `scripts/test/rust_tier2_pr.sh`;
 - `RUN_EXTERNAL_AI_TESTS=1 scripts/test/rust_tier3_extended.sh`;
-- desktop `npm run test:unit` and `npm run build:ui` for the Mac consumer.
+- desktop `npm run test:unit` and `npm run build:ui` for the Mac consumer;
+- `cd mobile/garyx-mobile && swift test` so the
+  `GaryxConversationStateConformanceTests` assertion and its existing full
+  delivery/create scenario execution validate the same shared marker change.
 
 External-provider tier 3 is evidence only; correctness does not depend on
 restarting the managed gateway.
@@ -992,21 +1009,45 @@ restarting the managed gateway.
 ## 11. Mac DurableDeliveryState follow-up
 
 This batch includes the bounded Mac parity item because the shared fixture is
-already canonical and the completion gate requires desktop conformance.
+already canonical and the completion gate requires desktop conformance. The
+implementation is Mac-side, but flipping the shared fixture's rollout marker
+is a cross-platform contract change and is handled as one atomic source change
+across both consumers and the contract documentation.
 
 A production-neutral TypeScript module defines the exact arrays and pure
-reducers for:
+reducers for the canonical keys:
 
-- durable delivery state/evidence/user disposition;
-- create delivery phase/user disposition;
+- `durableDeliveryState`, `durableDeliveryEvidence`, and
+  `durableDeliveryUserDisposition`;
+- `durableCreateDeliveryPhase` and the deliberately asymmetric
+  `durableCreateUserDisposition`;
 - every action used by
   `spec/conversation-state/scenarios/durable-delivery.json`.
 
+The reducers port the complete semantic seams exercised by the iOS blueprint,
+including conflict-set admission for recovery/resend and scope-authenticated,
+multi-record evidence ingress. Scenarios such as cross-scope evidence,
+restored payload conflict, and duplicate resend must pass through those seams;
+a phase-only fixture interpreter is not conformant.
+
 The existing desktop conversation-state conformance test imports that module,
-asserts every enum against `states.json`, executes every delivery and create
-scenario, and changes `platformConsumers.mac` from `p0_g_follow_up` to
-`implemented`. This is a real semantic consumer rather than the current
-“fixture exists” assertion.
+asserts every enum against `states.json`, and executes every delivery and
+create scenario. In the same implementation commit:
+
+1. `spec/conversation-state/scenarios/durable-delivery.json` changes
+   `platformConsumers.mac` from `p0_g_follow_up` to `implemented`;
+2. the desktop conformance assertion changes to `implemented` and proves the
+   new reducer against every shared scenario;
+3. `GaryxConversationStateConformanceTests.swift` changes its Mac marker
+   assertion to `implemented` while retaining its existing execution of every
+   delivery and create scenario from that same file; and
+4. `docs/agents/conversation-state.md` stops describing Mac consumption as a
+   P0-G follow-up and records both platforms as implemented.
+
+Both desktop unit/build validation and the SwiftPM `GaryxMobileCoreTests`
+suite gate that commit. This is a real semantic consumer rather than the
+current “fixture exists” assertion, without leaving a sibling platform pinned
+to stale rollout metadata.
 
 It does **not** claim process-death durability for the current desktop sender:
 the desktop has no persisted payload/outbox equivalent to iOS. Wiring the pure
@@ -1032,5 +1073,7 @@ volatile desktop queue into a durable one.
   durable before physical unlink.
 - HTTP, WS, iOS, desktop, and legacy clients have an explicit compatibility
   story.
+- The shared Mac rollout-marker flip updates both platform assertions and the
+  contract documentation in one commit, gated by desktop and SwiftPM tests.
 - The Mac deliverable is accurately bounded and does not overclaim a durable
   product transport.
