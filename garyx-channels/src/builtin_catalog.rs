@@ -262,3 +262,12 @@ pub fn weixin_schema() -> Value {
         }
     })
 }
+
+/// Channel names the built-in outbound senders claim (canonical ids
+/// plus aliases). A plugin registering under one of these would be
+/// shadowed by built-in routing, so `register_plugin` /
+/// `fork_with_plugin_sender` reject them up front. Single source of
+/// truth: the dispatcher re-exports this — channel-name string
+/// literals must not appear in the dispatcher itself.
+pub const RESERVED_CHANNEL_NAMES: &[&str] =
+    &["telegram", "discord", "feishu", "lark", "weixin", "wechat"];

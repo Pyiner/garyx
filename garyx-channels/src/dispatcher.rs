@@ -1865,32 +1865,425 @@ impl OutboundMessage {
 // Concrete implementation
 // ---------------------------------------------------------------------------
 
-/// Channel names the built-in `send_message` match arms already
-/// claim. A plugin registering under one of these would be shadowed
-/// by the built-in routing, so `register_plugin` rejects them up
-/// front. Single source of truth for both the guard
-/// (`is_reserved_channel`) and the `register_plugin_rejects_reserved_builtin_names`
-/// test — keep in lockstep with the arms in
-/// [`ChannelDispatcher::send_message`].
-pub(crate) const RESERVED_CHANNEL_NAMES: &[&str] =
-    &["telegram", "discord", "feishu", "lark", "weixin", "wechat"];
+pub use crate::builtin_catalog::RESERVED_CHANNEL_NAMES;
 
-/// Concrete dispatcher that routes outbound messages to registered channel senders.
+/// Uniform outbound contract every registered channel conforms to —
+/// built-in or plugin-backed. The method set mirrors the subprocess
+/// plugin wire contract (dispatch / stream-event callback / accounts /
+/// capability-driven legacy selection), so a built-in channel is
+/// simply the in-process implementation of the same shape a
+/// `PluginSenderHandle` provides over JSON-RPC (Phase-6 B2:
+/// 内外插件真同构, 改内不改外).
 ///
-/// **Clone semantics.** All inner sender types (`TelegramSender`,
-/// `FeishuSender`, `WeixinSender`, `PluginSenderHandle`) are Clone and
-/// reference-counted internally. Cloning the dispatcher produces a
-/// shallow copy that still shares the underlying HTTP clients, RPC
-/// writers, and token caches. The §9.4 respawn path relies on this to
-/// build a forked dispatcher cheaply and hot-swap it into
+/// The DTO stays the host-side [`OutboundMessage`] rather than the
+/// wire `DispatchOutbound`: the plugin impl converts at its boundary,
+/// exactly where the process boundary sits.
+#[async_trait]
+pub trait OutboundChannelSender: Send + Sync {
+    /// Canonical channel id — the registry's primary routing key.
+    fn channel_id(&self) -> &str;
+
+    /// Alias spellings that resolve to this sender (`lark`, `wechat`).
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Per-account rows for [`ChannelDispatcher::available_channels`].
+    /// Built-ins list one row per registered account; plugins expose a
+    /// single presence-marker row (empty `account_id`).
+    fn accounts(&self) -> Vec<ChannelInfo>;
+
+    /// Shared running flag, when the channel exposes one (weixin).
+    fn running_handle(&self) -> Option<Arc<AtomicBool>> {
+        None
+    }
+
+    /// Deliver one outbound message. `request.channel` may be an alias
+    /// of [`Self::channel_id`]; account resolution and the
+    /// unregistered-account error text are owned by the sender.
+    async fn dispatch(&self, request: OutboundMessage) -> Result<SendMessageResult, ChannelError>;
+
+    /// Construct the native per-target stream-event callback, or
+    /// `None` when the target's account is unknown or the sender lacks
+    /// the native streaming capability.
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+    ) -> Option<StreamDispatchCallback>;
+
+    /// Whether the host-rendered legacy outbound stream adapter
+    /// applies (§9.4 capability gate: `outbound` without
+    /// `dispatch_stream_event`). Built-ins are native and default to
+    /// `false`.
+    fn supports_legacy_stream_adapter(&self, target: &StreamingDispatchTarget) -> bool {
+        let _ = target;
+        false
+    }
+}
+
+/// Built-in Telegram channel: account map + the in-process
+/// [`OutboundChannelSender`] implementation.
+#[derive(Clone, Default)]
+pub struct TelegramChannelSender {
+    accounts: HashMap<String, TelegramSender>,
+}
+
+impl TelegramChannelSender {
+    fn register(&mut self, sender: TelegramSender) {
+        self.accounts.insert(sender.account_id.clone(), sender);
+    }
+}
+
+#[async_trait]
+impl OutboundChannelSender for TelegramChannelSender {
+    fn channel_id(&self) -> &str {
+        "telegram"
+    }
+
+    fn accounts(&self) -> Vec<ChannelInfo> {
+        self.accounts
+            .values()
+            .map(|sender| ChannelInfo {
+                channel: self.channel_id().to_owned(),
+                account_id: sender.account_id.clone(),
+                is_running: sender.is_running,
+            })
+            .collect()
+    }
+
+    async fn dispatch(&self, request: OutboundMessage) -> Result<SendMessageResult, ChannelError> {
+        let sender = self.accounts.get(&request.account_id).ok_or_else(|| {
+            ChannelError::Config(format!(
+                "Telegram account '{}' not registered in dispatcher",
+                request.account_id
+            ))
+        })?;
+        sender.send_outbound(request).await
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+    ) -> Option<StreamDispatchCallback> {
+        let sender = self.accounts.get(&target.account_id)?;
+        let chat_id = parse_telegram_id("chat_id", &target.chat_id).ok()?;
+        let outbound_thread_id = normalize_telegram_thread_id(chat_id, target.thread_id.as_deref());
+
+        let stream_callback = crate::telegram::build_bound_response_callback(
+            crate::telegram::StreamingCallbackConfig {
+                http: sender.http.clone(),
+                token: sender.token.clone(),
+                account_id: sender.account_id.clone(),
+                chat_id,
+                api_base: sender.api_base.clone(),
+                reply_to_mode: garyx_models::config::ReplyToMode::Off,
+                reply_to: None,
+                outbound_thread_id,
+            },
+        );
+        Some(Arc::new(move |envelope| {
+            stream_callback(envelope.event);
+        }))
+    }
+}
+
+/// Built-in Discord channel.
+#[derive(Clone, Default)]
+pub struct DiscordChannelSender {
+    accounts: HashMap<String, DiscordSender>,
+}
+
+impl DiscordChannelSender {
+    fn register(&mut self, sender: DiscordSender) {
+        self.accounts.insert(sender.account_id.clone(), sender);
+    }
+}
+
+#[async_trait]
+impl OutboundChannelSender for DiscordChannelSender {
+    fn channel_id(&self) -> &str {
+        "discord"
+    }
+
+    fn accounts(&self) -> Vec<ChannelInfo> {
+        self.accounts
+            .values()
+            .map(|sender| ChannelInfo {
+                channel: self.channel_id().to_owned(),
+                account_id: sender.account_id.clone(),
+                is_running: sender.is_running,
+            })
+            .collect()
+    }
+
+    async fn dispatch(&self, request: OutboundMessage) -> Result<SendMessageResult, ChannelError> {
+        let sender = self.accounts.get(&request.account_id).ok_or_else(|| {
+            ChannelError::Config(format!(
+                "Discord account '{}' not registered in dispatcher",
+                request.account_id
+            ))
+        })?;
+        sender.send_outbound(request).await
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+    ) -> Option<StreamDispatchCallback> {
+        let sender = self.accounts.get(&target.account_id)?;
+        let (stream_callback, thread_id_tx) = crate::discord::build_discord_response_callback(
+            crate::discord::DiscordStreamingCallbackConfig {
+                sender: sender.clone(),
+                chat_id: target.chat_id.clone(),
+                reply_to_message_id: None,
+            },
+        );
+        let _ = thread_id_tx.send(target.target_thread_id.clone());
+        Some(Arc::new(move |envelope| {
+            stream_callback(envelope.event);
+        }))
+    }
+}
+
+/// Built-in Feishu channel (alias: `lark`).
+#[derive(Clone, Default)]
+pub struct FeishuChannelSender {
+    accounts: HashMap<String, FeishuSender>,
+}
+
+impl FeishuChannelSender {
+    fn register(&mut self, sender: FeishuSender) {
+        self.accounts.insert(sender.account_id.clone(), sender);
+    }
+}
+
+#[async_trait]
+impl OutboundChannelSender for FeishuChannelSender {
+    fn channel_id(&self) -> &str {
+        "feishu"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["lark"]
+    }
+
+    fn accounts(&self) -> Vec<ChannelInfo> {
+        self.accounts
+            .values()
+            .map(|sender| ChannelInfo {
+                channel: self.channel_id().to_owned(),
+                account_id: sender.account_id.clone(),
+                is_running: sender.is_running,
+            })
+            .collect()
+    }
+
+    async fn dispatch(&self, request: OutboundMessage) -> Result<SendMessageResult, ChannelError> {
+        let sender = self.accounts.get(&request.account_id).ok_or_else(|| {
+            ChannelError::Config(format!(
+                "Feishu account '{}' not registered in dispatcher",
+                request.account_id
+            ))
+        })?;
+        sender.send_outbound(request).await
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+    ) -> Option<StreamDispatchCallback> {
+        let sender = self.accounts.get(&target.account_id)?;
+        let (stream_callback, thread_id_tx) = crate::feishu::build_feishu_response_callback(
+            crate::feishu::FeishuStreamingCallbackConfig {
+                client: sender.stream_client(),
+                account_id: sender.account_id.clone(),
+                receive_id_type: target.delivery_target_type.clone(),
+                chat_id: target.delivery_target_id.clone(),
+                reply_message_id: None,
+                reply_in_thread: false,
+                is_group_reply: false,
+                mention_prefix: String::new(),
+                processing_reaction_id: None,
+            },
+        );
+        let _ = thread_id_tx.send(target.target_thread_id.clone());
+        Some(Arc::new(move |envelope| {
+            stream_callback(envelope.event);
+        }))
+    }
+}
+
+/// Built-in Weixin channel (alias: `wechat`). Owns the shared
+/// process-wide running flag; registration reconciles every account
+/// sender onto that one `AtomicBool` (first registered sender may
+/// donate its handle when the channel-level one was defaulted).
+#[derive(Clone)]
+pub struct WeixinChannelSender {
+    accounts: HashMap<String, WeixinSender>,
+    running: Arc<AtomicBool>,
+}
+
+impl WeixinChannelSender {
+    fn with_running(running: Arc<AtomicBool>) -> Self {
+        Self {
+            accounts: HashMap::new(),
+            running,
+        }
+    }
+
+    fn register(&mut self, mut sender: WeixinSender) {
+        if self.accounts.is_empty() && !Arc::ptr_eq(&sender.running, &self.running) {
+            self.running = sender.running.clone();
+        } else {
+            sender.running = self.running.clone();
+        }
+        self.accounts.insert(sender.account_id.clone(), sender);
+    }
+}
+
+impl Default for WeixinChannelSender {
+    fn default() -> Self {
+        Self::with_running(Arc::new(AtomicBool::new(false)))
+    }
+}
+
+#[async_trait]
+impl OutboundChannelSender for WeixinChannelSender {
+    fn channel_id(&self) -> &str {
+        "weixin"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["wechat"]
+    }
+
+    fn accounts(&self) -> Vec<ChannelInfo> {
+        self.accounts
+            .values()
+            .map(|sender| ChannelInfo {
+                channel: self.channel_id().to_owned(),
+                account_id: sender.account_id.clone(),
+                is_running: sender.is_running,
+            })
+            .collect()
+    }
+
+    fn running_handle(&self) -> Option<Arc<AtomicBool>> {
+        Some(self.running.clone())
+    }
+
+    async fn dispatch(&self, request: OutboundMessage) -> Result<SendMessageResult, ChannelError> {
+        let sender = self.accounts.get(&request.account_id).ok_or_else(|| {
+            ChannelError::Config(format!(
+                "Weixin account '{}' not registered in dispatcher",
+                request.account_id
+            ))
+        })?;
+        sender.send_outbound(request).await
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+    ) -> Option<StreamDispatchCallback> {
+        let sender = self.accounts.get(&target.account_id)?;
+        let stream_callback = crate::weixin::build_weixin_response_callback(
+            crate::weixin::WeixinStreamingCallbackConfig {
+                http: sender.http.clone(),
+                account: sender.account.clone(),
+                account_id: sender.account_id.clone(),
+                user_id: target.delivery_target_id.clone(),
+                context_token: String::new(),
+                thread_id: target.target_thread_id.clone(),
+                typing_ticket: None,
+                running: sender.running.clone(),
+            },
+        );
+        Some(Arc::new(move |envelope| {
+            stream_callback(envelope.event);
+        }))
+    }
+}
+
+/// A subprocess plugin is the out-of-process implementation of the
+/// same contract: `dispatch` crosses the wire as `dispatch_outbound`,
+/// the stream callback as `dispatch_stream_event`, and the legacy
+/// adapter selection is driven by the plugin's advertised
+/// capabilities.
+#[async_trait]
+impl OutboundChannelSender for PluginSenderHandle {
+    fn channel_id(&self) -> &str {
+        self.plugin_id()
+    }
+
+    fn accounts(&self) -> Vec<ChannelInfo> {
+        // Plugin-backed channels: the dispatcher only knows the plugin
+        // id, not per-account state. The manager holds the full
+        // plugin-account map and exposes it via `list-channel-accounts`
+        // IPC; this entry is a presence marker so a caller that only
+        // talks to the dispatcher still sees the plugin exists.
+        vec![ChannelInfo {
+            channel: self.plugin_id().to_owned(),
+            account_id: String::new(),
+            is_running: true,
+        }]
+    }
+
+    async fn dispatch(&self, request: OutboundMessage) -> Result<SendMessageResult, ChannelError> {
+        let delivery_target_type = request.resolved_delivery_target_type();
+        let delivery_target_id = request.resolved_delivery_target_id();
+        let dispatch_req = DispatchOutbound {
+            account_id: request.account_id.clone(),
+            chat_id: request.chat_id.clone(),
+            delivery_target_type,
+            delivery_target_id,
+            content: request.content.clone(),
+            reply_to: request.reply_to.clone(),
+            thread_id: request.thread_id.clone(),
+        };
+        let result = PluginSenderHandle::dispatch(self, dispatch_req).await?;
+        Ok(SendMessageResult {
+            message_ids: result.message_ids,
+        })
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+    ) -> Option<StreamDispatchCallback> {
+        if self.capabilities().dispatch_stream_event {
+            Some(build_plugin_stream_event_callback(self.clone(), target))
+        } else {
+            None
+        }
+    }
+
+    fn supports_legacy_stream_adapter(&self, _target: &StreamingDispatchTarget) -> bool {
+        let capabilities = self.capabilities();
+        capabilities.outbound && !capabilities.dispatch_stream_event
+    }
+}
+
+/// Concrete dispatcher that routes outbound messages through the
+/// uniform [`OutboundChannelSender`] registry: four always-present
+/// built-in channel senders plus one entry per running subprocess
+/// plugin. Routing is data-driven (`channel_id()` / `aliases()`);
+/// there are no channel-name match arms here.
+///
+/// **Clone semantics.** All inner account sender types
+/// (`TelegramSender`, `FeishuSender`, `WeixinSender`,
+/// `PluginSenderHandle`) are Clone and reference-counted internally.
+/// Cloning the dispatcher produces a shallow copy that still shares
+/// the underlying HTTP clients, RPC writers, token caches, and the
+/// weixin running flag. The §9.4 respawn path relies on this to build
+/// a forked dispatcher cheaply and hot-swap it into
 /// [`SwappableDispatcher`] without disturbing in-flight calls.
 #[derive(Clone)]
 pub struct ChannelDispatcherImpl {
-    telegram_senders: HashMap<String, TelegramSender>,
-    discord_senders: HashMap<String, DiscordSender>,
-    feishu_senders: HashMap<String, FeishuSender>,
-    weixin_senders: HashMap<String, WeixinSender>,
-    weixin_running: Arc<AtomicBool>,
+    telegram: TelegramChannelSender,
+    discord: DiscordChannelSender,
+    feishu: FeishuChannelSender,
+    weixin: WeixinChannelSender,
     /// Plugin-backed senders keyed by their manifest `plugin.id`. The
     /// manager registers one entry per plugin whose lifecycle state is
     /// `Running` and unregisters on stop/respawn (§9.4). The entry's
@@ -1902,13 +2295,32 @@ pub struct ChannelDispatcherImpl {
 impl ChannelDispatcherImpl {
     pub fn new() -> Self {
         Self {
-            telegram_senders: HashMap::new(),
-            discord_senders: HashMap::new(),
-            feishu_senders: HashMap::new(),
-            weixin_senders: HashMap::new(),
-            weixin_running: Arc::new(AtomicBool::new(false)),
+            telegram: TelegramChannelSender::default(),
+            discord: DiscordChannelSender::default(),
+            feishu: FeishuChannelSender::default(),
+            weixin: WeixinChannelSender::default(),
             plugin_senders: HashMap::new(),
         }
+    }
+
+    /// The four always-present built-in channel senders as uniform
+    /// registry entries. Plugin entries live in `plugin_senders`.
+    fn builtin_senders(&self) -> [&dyn OutboundChannelSender; 4] {
+        [&self.telegram, &self.discord, &self.feishu, &self.weixin]
+    }
+
+    /// Resolve a channel name (canonical id or alias) to its sender.
+    /// Built-ins win over plugins by construction: `register_plugin`
+    /// rejects reserved names, so the two key spaces are disjoint.
+    fn route(&self, name: &str) -> Option<&dyn OutboundChannelSender> {
+        self.builtin_senders()
+            .into_iter()
+            .find(|sender| sender.channel_id() == name || sender.aliases().contains(&name))
+            .or_else(|| {
+                self.plugin_senders
+                    .get(name)
+                    .map(|sender| sender as &dyn OutboundChannelSender)
+            })
     }
 
     /// Build a dispatcher from the channels configuration.
@@ -1925,7 +2337,7 @@ impl ChannelDispatcherImpl {
         weixin_running: Arc<AtomicBool>,
     ) -> Self {
         let mut dispatcher = Self::new();
-        dispatcher.weixin_running = weixin_running;
+        dispatcher.weixin = WeixinChannelSender::with_running(weixin_running);
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -1998,12 +2410,16 @@ impl ChannelDispatcherImpl {
             if !account.enabled {
                 continue;
             }
+            let running = dispatcher
+                .weixin
+                .running_handle()
+                .expect("weixin channel sender always exposes a running handle");
             dispatcher.register_weixin(WeixinSender {
                 account_id: account_id.clone(),
                 account: account.clone(),
                 http: http.clone(),
                 is_running: true,
-                running: dispatcher.weixin_running.clone(),
+                running,
             });
         }
 
@@ -2011,10 +2427,7 @@ impl ChannelDispatcherImpl {
     }
 
     pub fn channel_running_handle(&self, channel: &str) -> Option<Arc<AtomicBool>> {
-        match channel {
-            "weixin" | "wechat" => Some(self.weixin_running.clone()),
-            _ => None,
-        }
+        self.route(channel)?.running_handle()
     }
 
     pub fn register_telegram(&mut self, sender: TelegramSender) {
@@ -2022,8 +2435,7 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Telegram sender for dispatch"
         );
-        self.telegram_senders
-            .insert(sender.account_id.clone(), sender);
+        self.telegram.register(sender);
     }
 
     pub fn register_discord(&mut self, sender: DiscordSender) {
@@ -2031,8 +2443,7 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Discord sender for dispatch"
         );
-        self.discord_senders
-            .insert(sender.account_id.clone(), sender);
+        self.discord.register(sender);
     }
 
     pub fn register_feishu(&mut self, sender: FeishuSender) {
@@ -2040,22 +2451,15 @@ impl ChannelDispatcherImpl {
             account_id = %sender.account_id,
             "Registered Feishu sender for dispatch"
         );
-        self.feishu_senders
-            .insert(sender.account_id.clone(), sender);
+        self.feishu.register(sender);
     }
 
-    pub fn register_weixin(&mut self, mut sender: WeixinSender) {
-        if self.weixin_senders.is_empty() && !Arc::ptr_eq(&sender.running, &self.weixin_running) {
-            self.weixin_running = sender.running.clone();
-        } else {
-            sender.running = self.weixin_running.clone();
-        }
+    pub fn register_weixin(&mut self, sender: WeixinSender) {
         info!(
             account_id = %sender.account_id,
             "Registered Weixin sender for dispatch"
         );
-        self.weixin_senders
-            .insert(sender.account_id.clone(), sender);
+        self.weixin.register(sender);
     }
 
     /// Register a plugin-backed outbound sender (§9.4). The handle's
@@ -2064,11 +2468,12 @@ impl ChannelDispatcherImpl {
     /// handle, which is what `respawn_plugin` relies on.
     ///
     /// Returns `ChannelError::Config` if `plugin_id` collides with a
-    /// reserved built-in route name (`telegram`, `feishu`, `lark`,
-    /// `weixin`, `wechat`). Without this guard a colliding registration
-    /// would succeed silently but `send_message`'s built-in match arms
-    /// would shadow the plugin, producing an "unroutable" channel that
-    /// appears in `available_channels` but never receives traffic.
+    /// reserved built-in route name
+    /// ([`crate::builtin_catalog::RESERVED_CHANNEL_NAMES`]). Without
+    /// this guard a colliding registration would succeed silently but
+    /// `route` resolves built-ins first, producing an "unroutable"
+    /// channel that appears in `available_channels` but never receives
+    /// traffic.
     pub fn register_plugin(&mut self, sender: PluginSenderHandle) -> Result<(), ChannelError> {
         let id = sender.plugin_id();
         if Self::is_reserved_channel(id) {
@@ -2329,132 +2734,27 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
             "Dispatching outbound message"
         );
 
-        match request.channel.as_str() {
-            "telegram" => {
-                let sender = self
-                    .telegram_senders
-                    .get(&request.account_id)
-                    .ok_or_else(|| {
-                        ChannelError::Config(format!(
-                            "Telegram account '{}' not registered in dispatcher",
-                            request.account_id
-                        ))
-                    })?;
-                sender.send_outbound(request).await
-            }
-            "discord" => {
-                let sender = self
-                    .discord_senders
-                    .get(&request.account_id)
-                    .ok_or_else(|| {
-                        ChannelError::Config(format!(
-                            "Discord account '{}' not registered in dispatcher",
-                            request.account_id
-                        ))
-                    })?;
-                sender.send_outbound(request).await
-            }
-            "feishu" | "lark" => {
-                let sender = self
-                    .feishu_senders
-                    .get(&request.account_id)
-                    .ok_or_else(|| {
-                        ChannelError::Config(format!(
-                            "Feishu account '{}' not registered in dispatcher",
-                            request.account_id
-                        ))
-                    })?;
-                sender.send_outbound(request).await
-            }
-            "weixin" | "wechat" => {
-                let sender = self
-                    .weixin_senders
-                    .get(&request.account_id)
-                    .ok_or_else(|| {
-                        ChannelError::Config(format!(
-                            "Weixin account '{}' not registered in dispatcher",
-                            request.account_id
-                        ))
-                    })?;
-                sender.send_outbound(request).await
-            }
-            other => {
-                // §9.4 routing order: built-in match exhausted; fall
-                // back to plugin senders keyed by `plugin_id`. An
-                // unknown name after that is a genuine config error.
-                if let Some(plugin) = self.plugin_senders.get(other) {
-                    let delivery_target_type = request.resolved_delivery_target_type();
-                    let delivery_target_id = request.resolved_delivery_target_id();
-                    let dispatch_req = DispatchOutbound {
-                        account_id: request.account_id.clone(),
-                        chat_id: request.chat_id.clone(),
-                        delivery_target_type,
-                        delivery_target_id,
-                        content: request.content.clone(),
-                        reply_to: request.reply_to.clone(),
-                        thread_id: request.thread_id.clone(),
-                    };
-                    let result = plugin.dispatch(dispatch_req).await?;
-                    Ok(SendMessageResult {
-                        message_ids: result.message_ids,
-                    })
-                } else {
-                    Err(ChannelError::Config(format!(
-                        "Unknown channel type: '{other}'"
-                    )))
-                }
-            }
+        // §9.4 routing: one uniform registry lookup (canonical id or
+        // alias for built-ins, plugin_id for plugins). An unknown name
+        // is a genuine config error.
+        match self.route(request.channel.as_str()) {
+            Some(sender) => sender.dispatch(request).await,
+            None => Err(ChannelError::Config(format!(
+                "Unknown channel type: '{}'",
+                request.channel
+            ))),
         }
     }
 
     fn available_channels(&self) -> Vec<ChannelInfo> {
-        let mut channels = Vec::new();
-
-        for sender in self.telegram_senders.values() {
-            channels.push(ChannelInfo {
-                channel: "telegram".to_string(),
-                account_id: sender.account_id.clone(),
-                is_running: sender.is_running,
-            });
-        }
-
-        for sender in self.discord_senders.values() {
-            channels.push(ChannelInfo {
-                channel: "discord".to_string(),
-                account_id: sender.account_id.clone(),
-                is_running: sender.is_running,
-            });
-        }
-
-        for sender in self.feishu_senders.values() {
-            channels.push(ChannelInfo {
-                channel: "feishu".to_string(),
-                account_id: sender.account_id.clone(),
-                is_running: sender.is_running,
-            });
-        }
-
-        for sender in self.weixin_senders.values() {
-            channels.push(ChannelInfo {
-                channel: "weixin".to_string(),
-                account_id: sender.account_id.clone(),
-                is_running: sender.is_running,
-            });
-        }
-
-        // Plugin-backed channels: the dispatcher only knows the plugin
-        // id, not per-account state. The manager holds the full
-        // plugin-account map and exposes it via `list-channel-accounts`
-        // IPC; this entry is a presence marker so a caller that only
-        // talks to the dispatcher still sees the plugin exists.
+        let mut channels: Vec<ChannelInfo> = self
+            .builtin_senders()
+            .into_iter()
+            .flat_map(|sender| sender.accounts())
+            .collect();
         for plugin in self.plugin_senders.values() {
-            channels.push(ChannelInfo {
-                channel: plugin.plugin_id().to_owned(),
-                account_id: String::new(),
-                is_running: true,
-            });
+            channels.extend(OutboundChannelSender::accounts(plugin));
         }
-
         channels.sort_by(|a, b| (&a.channel, &a.account_id).cmp(&(&b.channel, &b.account_id)));
         channels
     }
@@ -2463,100 +2763,13 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
         &self,
         target: StreamingDispatchTarget,
     ) -> Option<StreamDispatchCallback> {
-        match target.channel.as_str() {
-            "telegram" => {
-                let sender = self.telegram_senders.get(&target.account_id)?;
-                let chat_id = parse_telegram_id("chat_id", &target.chat_id).ok()?;
-                let outbound_thread_id =
-                    normalize_telegram_thread_id(chat_id, target.thread_id.as_deref());
-
-                let stream_callback = crate::telegram::build_bound_response_callback(
-                    crate::telegram::StreamingCallbackConfig {
-                        http: sender.http.clone(),
-                        token: sender.token.clone(),
-                        account_id: sender.account_id.clone(),
-                        chat_id,
-                        api_base: sender.api_base.clone(),
-                        reply_to_mode: garyx_models::config::ReplyToMode::Off,
-                        reply_to: None,
-                        outbound_thread_id,
-                    },
-                );
-                Some(Arc::new(move |envelope| {
-                    stream_callback(envelope.event);
-                }))
-            }
-            "feishu" => {
-                let sender = self.feishu_senders.get(&target.account_id)?;
-                let (stream_callback, thread_id_tx) = crate::feishu::build_feishu_response_callback(
-                    crate::feishu::FeishuStreamingCallbackConfig {
-                        client: sender.stream_client(),
-                        account_id: sender.account_id.clone(),
-                        receive_id_type: target.delivery_target_type.clone(),
-                        chat_id: target.delivery_target_id.clone(),
-                        reply_message_id: None,
-                        reply_in_thread: false,
-                        is_group_reply: false,
-                        mention_prefix: String::new(),
-                        processing_reaction_id: None,
-                    },
-                );
-                let _ = thread_id_tx.send(target.target_thread_id.clone());
-                Some(Arc::new(move |envelope| {
-                    stream_callback(envelope.event);
-                }))
-            }
-            "discord" => {
-                let sender = self.discord_senders.get(&target.account_id)?;
-                let (stream_callback, thread_id_tx) =
-                    crate::discord::build_discord_response_callback(
-                        crate::discord::DiscordStreamingCallbackConfig {
-                            sender: sender.clone(),
-                            chat_id: target.chat_id.clone(),
-                            reply_to_message_id: None,
-                        },
-                    );
-                let _ = thread_id_tx.send(target.target_thread_id.clone());
-                Some(Arc::new(move |envelope| {
-                    stream_callback(envelope.event);
-                }))
-            }
-            "weixin" => {
-                let sender = self.weixin_senders.get(&target.account_id)?;
-                let stream_callback = crate::weixin::build_weixin_response_callback(
-                    crate::weixin::WeixinStreamingCallbackConfig {
-                        http: sender.http.clone(),
-                        account: sender.account.clone(),
-                        account_id: sender.account_id.clone(),
-                        user_id: target.delivery_target_id.clone(),
-                        context_token: String::new(),
-                        thread_id: target.target_thread_id.clone(),
-                        typing_ticket: None,
-                        running: sender.running.clone(),
-                    },
-                );
-                Some(Arc::new(move |envelope| {
-                    stream_callback(envelope.event);
-                }))
-            }
-            other => {
-                let sender = self.plugin_senders.get(other)?;
-                if sender.capabilities().dispatch_stream_event {
-                    Some(build_plugin_stream_event_callback(sender.clone(), target))
-                } else {
-                    None
-                }
-            }
-        }
+        self.route(target.channel.as_str())?
+            .build_stream_event_callback(target)
     }
 
     fn supports_legacy_stream_adapter(&self, target: &StreamingDispatchTarget) -> bool {
-        self.plugin_senders
-            .get(target.channel.as_str())
-            .map(|sender| {
-                let capabilities = sender.capabilities();
-                capabilities.outbound && !capabilities.dispatch_stream_event
-            })
+        self.route(target.channel.as_str())
+            .map(|sender| sender.supports_legacy_stream_adapter(target))
             .unwrap_or(false)
     }
 
