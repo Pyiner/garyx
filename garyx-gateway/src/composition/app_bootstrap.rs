@@ -20,6 +20,7 @@ use tracing::warn;
 
 use crate::agent_identity::GatewayThreadCreator;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
+use crate::composition::runtime_config_projection::RuntimeConfigProjection;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
@@ -364,20 +365,16 @@ impl AppStateBuilder {
         }
 
         let router = Arc::new(Mutex::new(router));
+        let projection = RuntimeConfigProjection::from_config(&self.config);
         let meetings = Arc::new(
             MeetingService::new(
                 self.garyx_db.clone(),
                 self.meetings_dir,
-                self.config.gateway.meetings.effective_read_page_bytes(),
+                projection.meeting_read_page_bytes,
             )
             .unwrap_or_else(|error| panic!("failed to initialize meeting service: {error}")),
         );
-        meetings.start_ingestion(
-            self.config
-                .gateway
-                .meetings
-                .effective_join_retry_window_secs(),
-        );
+        meetings.start_ingestion(projection.meeting_join_retry_window_secs);
         {
             let mut manager = self
                 .channel_plugin_manager

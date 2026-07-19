@@ -18,6 +18,7 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
+use crate::composition::runtime_config_projection::RuntimeConfigProjection;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
@@ -282,9 +283,10 @@ impl AppState {
     }
 
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
+        let projection = RuntimeConfigProjection::from_config(&config);
         self.ops
             .meetings
-            .set_read_page_bytes(config.gateway.meetings.effective_read_page_bytes());
+            .set_read_page_bytes(projection.meeting_read_page_bytes);
         self.integration
             .bridge
             .replace_agent_profiles(self.ops.custom_agents.snapshot().await)
@@ -341,7 +343,7 @@ impl AppState {
                 );
             }
         }
-        let managed_mcp_servers = config.mcp_servers.clone();
+        let managed_mcp_servers = projection.managed_mcp_servers;
         self.replace_channel_dispatcher(dispatcher.clone());
         self.replace_config(config.clone());
         {
