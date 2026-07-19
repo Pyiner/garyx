@@ -2030,6 +2030,7 @@ mod e2e_tests {
     struct FeishuReadFileProvider;
 
     struct FeishuReasoningThenImageViewProvider;
+    struct FeishuPlanThenImageViewProvider;
 
     #[async_trait]
     impl ProviderRuntime for FeishuReadFileProvider {
@@ -2169,6 +2170,104 @@ mod e2e_tests {
                 output_tokens: 1,
                 cost: 0.0,
                 duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for FeishuPlanThenImageViewProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            // Exact Codex production mapping (garyx-bridge
+            // codex_provider::build_tool_session_message): plan items
+            // carry tool_name = codex_structured_activity_name =
+            // "plan" and content {type:"plan", id, text}. tool_name is
+            // NOT "reasoning", so the pre-B3 Feishu predicate
+            // (reasoning-only) kept it visible; the shared engine
+            // hides it via the "plan" item type. This pins the
+            // delegated superset end to end.
+            let plan_use = ProviderMessage::tool_use(
+                serde_json::json!({
+                    "type": "plan",
+                    "id": "plan_home_1",
+                    "text": "1. inspect image",
+                }),
+                Some("plan_home_1".to_owned()),
+                Some("plan".to_owned()),
+            )
+            .with_metadata_value("item_type", serde_json::json!("plan"));
+            let plan_result = ProviderMessage::tool_result(
+                plan_use.content.clone(),
+                plan_use.tool_use_id.clone(),
+                plan_use.tool_name.clone(),
+                Some(false),
+            )
+            .with_metadata_value("item_type", serde_json::json!("plan"));
+            let image_use = ProviderMessage::tool_use(
+                serde_json::json!({
+                    "type": "imageView",
+                    "id": "call_plan_image",
+                    "path": "/var/folders/example/file_plan.jpg",
+                }),
+                Some("call_plan_image".to_owned()),
+                Some("imageView".to_owned()),
+            )
+            .with_metadata_value("item_type", serde_json::json!("imageView"));
+            let image_result = ProviderMessage::tool_result(
+                image_use.content.clone(),
+                image_use.tool_use_id.clone(),
+                image_use.tool_name.clone(),
+                Some(false),
+            )
+            .with_metadata_value("item_type", serde_json::json!("imageView"));
+
+            on_chunk(StreamEvent::ToolUse { message: plan_use });
+            on_chunk(StreamEvent::ToolResult {
+                message: plan_result,
+            });
+            on_chunk(StreamEvent::ToolUse { message: image_use });
+            on_chunk(StreamEvent::ToolResult {
+                message: image_result,
+            });
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "feishu-plan-image-view".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "计划已更新".to_owned(),
+                session_messages: Vec::new(),
+                sdk_session_id: None,
+                actual_model: None,
+                thread_title: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: 0.001,
+                duration_ms: 42,
             })
         }
 
@@ -3590,6 +3689,114 @@ mod e2e_tests {
         )
         .await;
         assert_eq!(complete_calls.len(), 1, "COT run should be completed");
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_cot_hides_engine_superset_plan_but_keeps_image_view_tool() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("POST"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "cot_id": "cot_plan_image_001",
+                    "message_id": "om_cot_plan_image_001"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/im/v1/message_cot/complete/[^/]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = Arc::new(FeishuPlanThenImageViewProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::group("ou_user123", "oc_group456", "plan then image")
+            .with_root_id("om_thread_root_plan")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let update_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            4,
+            |r| r.method.as_str() == "PUT" && r.url.path() == "/im/v1/message_cot",
+        )
+        .await;
+        let tool_event_contents: Vec<(String, Value)> = update_calls
+            .iter()
+            .flat_map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                body["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter_map(|event| {
+                let event_type = event
+                    .get("event_type")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)?;
+                let content = event
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .and_then(|content| serde_json::from_str::<Value>(content).ok())?;
+                Some((event_type, content))
+            })
+            .collect();
+        // The plan item was VISIBLE under the pre-B3 reasoning-only
+        // predicate; the shared engine must hide it entirely (no event
+        // may carry the plan tool-call id or open a plan tool row).
+        assert!(
+            tool_event_contents
+                .iter()
+                .all(|(_, content)| { !content.to_string().contains("plan_home_1") }),
+            "engine-superset plan items must not reach Feishu COT: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().all(|(event_type, content)| {
+                event_type != "TOOL_CALL_START"
+                    || content["toolCallId"].as_str() == Some("call_plan_image")
+            }),
+            "only the imageView tool row may open: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_START"
+                    && content["toolCallId"].as_str() == Some("call_plan_image")
+            }),
+            "imageView must stay visible next to a hidden plan item: {tool_event_contents:?}"
+        );
     }
 
     #[tokio::test]

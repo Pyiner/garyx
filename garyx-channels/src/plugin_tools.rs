@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind};
+use serde_json::Value;
 
 /// Per-response state for rendering lightweight tool-call progress in channels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -340,15 +341,19 @@ pub fn should_hide_tool_call_display(message: &ProviderMessage) -> bool {
         return true;
     }
 
-    if provider_message_item_type(message).is_some_and(is_hidden_tool_item_type) {
-        return true;
-    }
-
-    message
-        .tool_name
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(is_hidden_tool_item_type)
+    // Every source is an independent candidate: a visible value in one
+    // source must never mask a hidden value in another (B3 review R1).
+    [
+        message.tool_name.as_deref(),
+        message.metadata.get("item_type").and_then(Value::as_str),
+        message.metadata.get("itemType").and_then(Value::as_str),
+        message.content.get("type").and_then(Value::as_str),
+        message.content.get("item_type").and_then(Value::as_str),
+        message.content.get("itemType").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| is_hidden_tool_item_type(value.trim()))
 }
 
 pub fn render_tool_call_placeholder(index: usize, name: &str) -> String {
@@ -388,24 +393,6 @@ impl TextFlushGate {
         }
         elapsed_since_last_send.is_none_or(|elapsed| elapsed >= self.min_flush_interval)
     }
-}
-
-fn provider_message_item_type(message: &ProviderMessage) -> Option<&str> {
-    message
-        .metadata
-        .get("item_type")
-        .or_else(|| message.metadata.get("itemType"))
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            message
-                .content
-                .get("type")
-                .or_else(|| message.content.get("item_type"))
-                .or_else(|| message.content.get("itemType"))
-                .and_then(|value| value.as_str())
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]
@@ -663,31 +650,48 @@ mod tests {
     }
 
     #[test]
-    fn hidden_tool_display_matches_case_insensitively_and_via_tool_name() {
+    fn hidden_item_type_in_any_source_wins_over_visible_wrapper_type() {
+        // Conflicting sources in ONE message: a visible metadata type
+        // must not mask a hidden content type (B3 review R1 probe).
         let mut message = ProviderMessage {
             role: garyx_models::provider::ProviderMessageRole::ToolUse,
-            content: json!({}),
+            content: json!({"type": "reasoning"}),
             text: None,
             timestamp: None,
             metadata: std::collections::HashMap::new(),
             tool_use_id: Some("call-1".to_owned()),
-            tool_name: Some("Reasoning".to_owned()),
+            tool_name: Some("ordinary_tool".to_owned()),
             is_error: None,
         };
-        // tool_name source, case-insensitive (Feishu CoT parity).
+        message
+            .metadata
+            .insert("item_type".to_owned(), json!("mcpToolCall"));
+        assert!(
+            should_hide_tool_call_display(&message),
+            "a hidden content.type must not be masked by a visible metadata.item_type"
+        );
+
+        // An EMPTY snake_case key must not mask a hidden camelCase key.
+        message.content = json!({});
+        message.metadata.insert("item_type".to_owned(), json!(""));
+        message
+            .metadata
+            .insert("itemType".to_owned(), json!("PLAN"));
+        assert!(
+            should_hide_tool_call_display(&message),
+            "an empty metadata.item_type must not mask metadata.itemType"
+        );
+
+        // tool_name is an independent candidate, case-insensitive.
+        message.metadata.clear();
+        message.tool_name = Some("Reasoning".to_owned());
         assert!(should_hide_tool_call_display(&message));
-        // camelCase metadata key source.
+
+        // Ordinary tool with only visible sources stays visible.
         message.tool_name = Some("Bash".to_owned());
         message
             .metadata
-            .insert("itemType".to_owned(), json!("reasoning"));
-        assert!(should_hide_tool_call_display(&message));
-        // content item_type source.
-        message.metadata.clear();
-        message.content = json!({"item_type": "PLAN"});
-        assert!(should_hide_tool_call_display(&message));
-        // ordinary tool stays visible.
-        message.content = json!({});
+            .insert("item_type".to_owned(), json!("mcpToolCall"));
         assert!(!should_hide_tool_call_display(&message));
     }
 }
