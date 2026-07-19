@@ -1,7 +1,8 @@
+#[cfg(test)]
+use super::cot_render::{MAX_EVENT_CONTENT_BYTES, MAX_TOOL_ARG_DISPLAY_CHARS};
 use super::cot_render::{
-    MAX_EVENT_CONTENT_BYTES, MAX_TOOL_ARG_DISPLAY_CHARS, readable_tool_argument,
-    sanitize_event_id_part, split_utf8_bytes, stringify_event_content, summarize_tool_args,
-    tool_icon, tool_name, tool_parameter_result_content, tool_title,
+    readable_tool_argument, sanitize_event_id_part, split_utf8_bytes, stringify_event_content,
+    summarize_tool_args, tool_icon, tool_name, tool_parameter_result_content, tool_title,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
