@@ -177,8 +177,13 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     }
 
     private enum PendingCanonicalMutation {
-        case push(GaryxRouteEntry)
+        case push([GaryxRouteEntry])
         case pop(Int)
+    }
+
+    private struct PendingPayloadReplacement {
+        let expected: GaryxRouteDestination
+        let replacement: GaryxRouteDestination
     }
 
     private let hostBuilder: HostBuilder
@@ -203,6 +208,9 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     private var screenChangedDelivered = false
     private var presentationLeases = GaryxPresentationLeaseTree()
     private var pendingHardSnapPath: [GaryxRouteEntry]?
+    private var pendingPayloadReplacements: [
+        GaryxRouteInstanceID: PendingPayloadReplacement
+    ] = [:]
     private var isTearingDown = false
     private let interactionShield = UIView()
 
@@ -317,15 +325,33 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     @discardableResult
     func push(_ entry: GaryxRouteEntry, animated: Bool = true) -> Bool {
+        push([entry], animated: animated)
+    }
+
+    /// Appends a route suffix as one presentation transaction. Only the last
+    /// entry is rendered during the push; intermediate entries become real
+    /// canonical predecessors and are mounted if a later pop reveals them.
+    @discardableResult
+    func push(_ entries: [GaryxRouteEntry], animated: Bool = true) -> Bool {
         loadViewIfNeeded()
-        guard transition == nil else { return false }
+        guard transition == nil, let destinationEntry = entries.last else { return false }
+        precondition(
+            Set(entries.map(\.id)).count == entries.count,
+            "batch push occurrence IDs must be unique"
+        )
+        precondition(
+            canonicalState.path.allSatisfy { existing in
+                !entries.contains(where: { $0.id == existing.id })
+            },
+            "batch push occurrence ID reused"
+        )
         let source = canonicalState.topNode
-        let destination = GaryxRoutePresentationNode.entry(entry)
+        let destination = GaryxRoutePresentationNode.entry(destinationEntry)
         guard beginTransition(
             kind: .push,
             source: source,
             destination: destination,
-            mutation: .push(entry)
+            mutation: .push(entries)
         ) else { return false }
         releaseProgrammaticCommit(animated: animated)
         return true
@@ -560,13 +586,35 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         draftID: String,
         threadID: String
     ) -> Bool {
-        guard transition == nil,
-              canonicalState.promoteVisibleDraft(
-                instanceID: instanceID,
-                draftID: draftID,
-                threadID: threadID
-              ),
-              let entry = canonicalState.path.first(where: { $0.id == instanceID }) else {
+        let expected = GaryxRouteDestination.conversationDraft(draftID: draftID)
+        let replacement = GaryxRouteDestination.conversation(threadID: threadID)
+        if transition != nil {
+            guard canonicalState.path.contains(where: {
+                $0.id == instanceID && $0.destination == expected
+            }) else { return false }
+            pendingPayloadReplacements[instanceID] = PendingPayloadReplacement(
+                expected: expected,
+                replacement: replacement
+            )
+            return true
+        }
+        return replaceRoutePayload(
+            instanceID: instanceID,
+            expected: expected,
+            replacement: replacement
+        )
+    }
+
+    private func replaceRoutePayload(
+        instanceID: GaryxRouteInstanceID,
+        expected: GaryxRouteDestination,
+        replacement: GaryxRouteDestination
+    ) -> Bool {
+        guard canonicalState.replaceRoutePayload(
+            instanceID: instanceID,
+            expected: expected,
+            with: replacement
+        ), let entry = canonicalState.path.first(where: { $0.id == instanceID }) else {
             return false
         }
         let identity = GaryxRoutePresentationIdentity.entry(instanceID)
@@ -581,6 +629,21 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         }
         callbacks.canonicalPathChanged(canonicalState.path)
         return true
+    }
+
+    private func applyPendingPayloadReplacements() {
+        guard !pendingPayloadReplacements.isEmpty else { return }
+        let pending = pendingPayloadReplacements
+        pendingPayloadReplacements.removeAll()
+        for (instanceID, replacement) in pending.sorted(by: {
+            $0.key.rawValue < $1.key.rawValue
+        }) {
+            _ = replaceRoutePayload(
+                instanceID: instanceID,
+                expected: replacement.expected,
+                replacement: replacement.replacement
+            )
+        }
     }
 
     /// A draft target/key switch is a payload replacement on the same route
@@ -646,6 +709,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         _ gestureRecognizer: UIGestureRecognizer,
         shouldReceive touch: UITouch
     ) -> Bool {
+        guard routeOwnsGestureTouch(in: touch.view) else { return false }
         let edge: GaryxRouteLogicalEdge
         if gestureRecognizer === leadingEdgePanGestureRecognizer {
             edge = .leading
@@ -707,6 +771,30 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
                 + "-v\(Int(pan.velocity(in: view).x.rounded()))"
         )
         return shouldBegin
+    }
+
+    /// A sheet, full-screen cover, alert, or menu owns its own touches above
+    /// the route stack. Resolve the controller for this specific touch rather
+    /// than globally looking for any presentation: keyboard/focus internals
+    /// may install system presentations while the visible route still owns an
+    /// interactive-pop touch.
+    func routeOwnsGestureTouch(in touchedView: UIView?) -> Bool {
+        var responder: UIResponder? = touchedView
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                return ownsController(controller)
+            }
+            responder = current.next
+        }
+        return true
+    }
+
+    private func ownsController(_ candidate: UIViewController) -> Bool {
+        func contains(_ root: UIViewController) -> Bool {
+            if root === candidate { return true }
+            return root.children.contains(where: contains)
+        }
+        return contains(self)
     }
 
     func gestureRecognizer(
@@ -890,6 +978,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         pendingMutation = nil
         committedRemovedIdentities = []
         transition = nil
+        applyPendingPayloadReplacements()
         interactionShield.isHidden = true
         reconcileHostVisibility()
         trimMountedHosts()
@@ -900,8 +989,10 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     private func commitPendingCanonicalMutation() {
         guard let pendingMutation else { return }
         switch pendingMutation {
-        case .push(let entry):
-            _ = canonicalState.open(entry)
+        case .push(let entries):
+            for entry in entries {
+                _ = canonicalState.open(entry)
+            }
         case .pop(let count):
             let removed = canonicalState.pop(count: count)
             committedRemovedIdentities = Set(
@@ -1438,6 +1529,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         pendingMutation = nil
         committedRemovedIdentities.removeAll(keepingCapacity: false)
         pendingHardSnapPath = nil
+        pendingPayloadReplacements.removeAll(keepingCapacity: false)
         deferredTerminalEffects = nil
         interactionFrozenAfterTerminal = false
         assert(hosts.isEmpty, "route container deinit retained child hosts")

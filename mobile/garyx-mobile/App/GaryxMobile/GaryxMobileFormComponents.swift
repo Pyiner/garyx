@@ -790,9 +790,15 @@ struct GaryxFormMenuRow<MenuContent: View, ValueLabel: View>: View {
                 valueLabel
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            // Own the native Form cell's full width, including its default
+            // leading/trailing inset. Content keeps the same 16-point visual
+            // alignment while the Menu hit region covers the white row edge.
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 52)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets())
     }
 }
 

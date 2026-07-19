@@ -64,14 +64,51 @@ final class GaryxProductionRouteStore: ObservableObject {
         return entry
     }
 
+    /// Opens a suffix in one container transaction so no intermediate push
+    /// can be lost to the first entry's settle. A detail route can therefore
+    /// install its canonical overview predecessor in the same user action.
+    @discardableResult
+    func open(
+        _ destinations: [GaryxRouteDestination],
+        source: GaryxMobilePanelOpenSource,
+        animated: Bool = true
+    ) -> [GaryxRouteEntry] {
+        precondition(!destinations.isEmpty, "route suffix must not be empty")
+        let entries = destinations.map { destination in
+            GaryxRouteEntry(
+                id: GaryxRouteInstanceID(rawValue: UUID().uuidString.lowercased()),
+                destination: destination
+            )
+        }
+        guard let container else {
+            path = source == .current ? path + entries : entries
+            return entries
+        }
+
+        if path.isEmpty || source == .current {
+            _ = container.push(entries, animated: animated)
+        } else {
+            _ = container.requestHardSnap(to: entries)
+        }
+        return entries
+    }
+
     func popToHome(animated: Bool = true) {
         guard !path.isEmpty else { return }
-        _ = container?.pop(count: path.count, animated: animated)
+        if let container {
+            _ = container.pop(count: path.count, animated: animated)
+        } else {
+            path.removeAll()
+        }
     }
 
     func popOne(animated: Bool = true) {
         guard !path.isEmpty else { return }
-        _ = container?.pop(animated: animated)
+        if let container {
+            _ = container.pop(animated: animated)
+        } else {
+            path.removeLast()
+        }
     }
 
     @discardableResult
@@ -209,7 +246,10 @@ struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         container.layoutDirectionOverride = layoutDirection == .rightToLeft
             ? .rightToLeft
             : .leftToRight
-        container.homeLeadingEdgeAction = onOpenDrawer
+        // The home drawer has its own interactive SwiftUI drag. Keeping the
+        // UIKit route recognizer inert at depth zero avoids opening the drawer
+        // at touch-down and leaves a single gesture owner for that surface.
+        container.homeLeadingEdgeAction = nil
         #if DEBUG
         diagnostics?.install(in: container)
         container.transitionFrameObserver = { [weak container, weak diagnostics] phase, progress, timestamp in

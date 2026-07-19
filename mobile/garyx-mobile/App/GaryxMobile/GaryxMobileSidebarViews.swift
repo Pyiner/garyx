@@ -118,9 +118,7 @@ private struct GaryxRootRouteContentView: View {
     private func panelContent(for panel: GaryxMobilePanel) -> some View {
         switch panel {
         case .chat:
-            GaryxConversationView(
-                destination: .conversationDraft(draftID: "compatibility-chat")
-            )
+            EmptyView()
         case .workspaces:
             GaryxWorkspacesView()
         case .automations:
@@ -1611,7 +1609,6 @@ struct GaryxWorkspaceBotsView: View {
                 rootWorkspacePanel
             }
         }
-        .onDisappear { model.workspaceBotsDrilldown = nil }
     }
 
     private var rootWorkspacePanel: some View {
@@ -1625,7 +1622,7 @@ struct GaryxWorkspaceBotsView: View {
         ) {
             GaryxWorkspaceRootSection(groups: model.sidebarWorkspaceThreadGroups) { path in
                 withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                    model.workspaceBotsDrilldown = .workspace(path)
+                    model.openWorkspaceBotsDrilldown(.workspace(path), source: .current)
                 }
             }
         } actions: {
@@ -1667,7 +1664,7 @@ struct GaryxWorkspaceBotsView: View {
     private func addWorkspace(_ path: String) async {
         guard let addedPath = await model.addUserWorkspacePath(path) else { return }
         await model.selectWorkspace(addedPath)
-        model.workspaceBotsDrilldown = .workspace(addedPath)
+        model.openWorkspaceBotsDrilldown(.workspace(addedPath), source: .current)
     }
 
     private func missingDrilldown(title: String, message: String) -> some View {

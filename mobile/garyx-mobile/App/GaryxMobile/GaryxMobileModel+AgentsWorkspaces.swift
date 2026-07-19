@@ -968,7 +968,6 @@ extension GaryxMobileModel {
         workspaceListing = nil
         workspacePreview = nil
         workspaceUploadStatus = nil
-        workspaceBotsDrilldown = nil
         openWorkspaceFilesPanel(source: source)
 
         let runtimeGeneration = gatewayRequestToken

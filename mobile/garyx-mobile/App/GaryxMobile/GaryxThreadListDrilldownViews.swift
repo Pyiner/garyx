@@ -9,8 +9,8 @@ struct GaryxWorkspaceThreadListDrilldown: View {
         GaryxListPanelScaffold(
             title: path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent,
             onRefresh: { await model.refreshWorkspaceThreadList(path: path) },
-            leadingActionLabel: "Workspaces",
-            leadingAction: { model.workspaceBotsDrilldown = nil }
+            leadingActionLabel: model.mainPanelLeadingEdgeActionLabel,
+            leadingAction: { model.performMainPanelLeadingEdgeAction() }
         ) {
             GaryxThreadListRowsSection(
                 model: model,
@@ -48,7 +48,7 @@ struct GaryxAutomationThreadListDrilldown: View {
             onRefresh: {
                 await model.refreshAutomationThreadList(automationId: automation.id)
             },
-            leadingActionLabel: "Automations",
+            leadingActionLabel: model.mainPanelLeadingEdgeActionLabel,
             leadingAction: { model.performMainPanelLeadingEdgeAction() }
         ) {
             GaryxThreadListRowsSection(
@@ -90,7 +90,7 @@ struct GaryxBotThreadListDrilldown: View {
                 await model.refreshRemoteState()
                 refreshCurrentGroup()
             },
-            leadingActionLabel: "Bots",
+            leadingActionLabel: model.mainPanelLeadingEdgeActionLabel,
             leadingAction: { model.performMainPanelLeadingEdgeAction() }
         ) {
             GaryxThreadListRowsSection(

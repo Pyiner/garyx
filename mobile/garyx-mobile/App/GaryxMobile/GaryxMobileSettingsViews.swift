@@ -68,13 +68,13 @@ struct GaryxMobileSettingsPanel: View {
     }
 
     private var settingsLeadingActionLabel: String? {
-        model.activeSettingsTab == .manage ? nil : "All Settings"
+        model.activeSettingsTab == .manage ? nil : model.mainPanelLeadingEdgeActionLabel
     }
 
     private var settingsLeadingAction: (() -> Void)? {
         guard model.activeSettingsTab != .manage else { return nil }
         return {
-            model.showSettingsOverview()
+            model.performMainPanelLeadingEdgeAction()
         }
     }
 }

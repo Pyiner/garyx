@@ -613,10 +613,9 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
 
     private func resolvedPanel(_ panel: GaryxMobilePanel) -> GaryxMobilePanel {
         switch panel {
-        case .bots, .workspaces:
-            // Bot and workspace conversations browse through the
-            // workspace-threads page drilldowns; the .workspaces panel itself
-            // is the file browser.
+        case .bots:
+            // Bot conversations browse through the workspace-threads page.
+            // `.workspaces` remains the independent file-browser panel.
             .workspaceBots
         default:
             panel

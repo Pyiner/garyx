@@ -44,6 +44,24 @@ public enum GaryxRouteDestination: Hashable, Codable, Sendable {
             nil
         }
     }
+
+    /// User-facing label for a control that returns to this route when it is
+    /// the canonical predecessor. Presentation derives from route values so a
+    /// drilldown keeps the identity of what actually opened it.
+    public var backNavigationLabel: String {
+        switch self {
+        case .conversation:
+            "Chat"
+        case .conversationDraft:
+            "New Chat"
+        case .panel(let rawPanel):
+            GaryxMobilePanel(rawValue: rawPanel)?.label ?? "Back"
+        case .settingsDetail(let rawTab):
+            GaryxMobileSettingsTab(rawValue: rawTab)?.label ?? "All Settings"
+        case .workspaceDrilldown:
+            "Back"
+        }
+    }
 }
 
 public struct GaryxRouteEntry: Hashable, Codable, Sendable {

@@ -4,6 +4,32 @@ import UIKit
 import UniformTypeIdentifiers
 import WidgetKit
 
+extension GaryxWorkspaceBotsDrilldown {
+    var routeIdentity: GaryxWorkspaceDrilldownIdentity {
+        switch self {
+        case .workspace(let path):
+            .workspace(path: path)
+        case .bot(let accountID):
+            .bot(accountID: accountID)
+        case .automationThreads(let automationID):
+            .automationThreads(automationID: automationID)
+        }
+    }
+}
+
+extension GaryxWorkspaceDrilldownIdentity {
+    var legacyDrilldown: GaryxWorkspaceBotsDrilldown {
+        switch self {
+        case .workspace(let path):
+            .workspace(path)
+        case .bot(let accountID):
+            .bot(accountID)
+        case .automationThreads(let automationID):
+            .automationThreads(automationID)
+        }
+    }
+}
+
 extension GaryxMobileModel {
     /// The UIKit route path is the navigation truth. Legacy panel state and
     /// selectedThread remain compatibility projections for existing feature
@@ -24,8 +50,15 @@ extension GaryxMobileModel {
                     tab: GaryxMobileSettingsTab(rawValue: rawTab) ?? .manage,
                     source: source
                 )
-            case .workspaceDrilldown:
-                projectedNavigation.openPanel(.workspaceBots, source: source)
+            case .workspaceDrilldown(let identity):
+                projectedNavigation.openRoute(
+                    GaryxMobilePanelRoute(
+                        panel: .workspaceBots,
+                        settingsTab: .manage,
+                        workspaceBotsDrilldown: identity.legacyDrilldown
+                    ),
+                    source: source
+                )
             }
         }
         if navigationState != projectedNavigation {
@@ -71,10 +104,7 @@ extension GaryxMobileModel {
         get { navigationState.activeSettingsTab }
         set {
             guard navigationState.activeSettingsTab != newValue else { return }
-            invalidatePendingThreadOpen()
-            var nextState = navigationState
-            nextState.activeSettingsTab = newValue
-            navigationState = nextState
+            openSettings(tab: newValue, source: .current)
         }
     }
 
@@ -82,10 +112,11 @@ extension GaryxMobileModel {
         get { navigationState.workspaceBotsDrilldown }
         set {
             guard navigationState.workspaceBotsDrilldown != newValue else { return }
-            invalidatePendingThreadOpen()
-            var nextState = navigationState
-            nextState.setWorkspaceBotsDrilldown(newValue)
-            navigationState = nextState
+            if let newValue {
+                openWorkspaceBotsDrilldown(newValue, source: .current)
+            } else if case .workspaceDrilldown? = productionRouteStore.path.last?.destination {
+                productionRouteStore.popOne()
+            }
         }
     }
 
@@ -136,7 +167,7 @@ extension GaryxMobileModel {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
-        let resolved = panel == .bots || panel == .workspaces ? GaryxMobilePanel.workspaceBots : panel
+        let resolved = panel == .bots ? GaryxMobilePanel.workspaceBots : panel
         let destination: GaryxRouteDestination
         if resolved == .chat {
             destination = selectedThread.map {
@@ -179,7 +210,7 @@ extension GaryxMobileModel {
 
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
         invalidatePendingThreadOpen()
-        let resolved = panel == .bots || panel == .workspaces ? GaryxMobilePanel.workspaceBots : panel
+        let resolved = panel == .bots ? GaryxMobilePanel.workspaceBots : panel
         _ = productionRouteStore.open(.panel(resolved.rawValue), source: source)
         if !productionRouteStore.isAttached {
             applyCanonicalRouteProjection(productionRouteStore.path)
@@ -189,7 +220,24 @@ extension GaryxMobileModel {
 
     func openSettings(tab: GaryxMobileSettingsTab = .manage, source: GaryxMobilePanelOpenSource = .sidebar) {
         invalidatePendingThreadOpen()
-        _ = productionRouteStore.open(.settingsDetail(tab.rawValue), source: source)
+        let overview = GaryxRouteDestination.settingsDetail(
+            GaryxMobileSettingsTab.manage.rawValue
+        )
+        if tab != .manage {
+            if productionRouteStore.path.last?.destination == overview {
+                _ = productionRouteStore.open(
+                    .settingsDetail(tab.rawValue),
+                    source: .current
+                )
+            } else {
+                _ = productionRouteStore.open(
+                    [overview, .settingsDetail(tab.rawValue)],
+                    source: source
+                )
+            }
+        } else {
+            _ = productionRouteStore.open(.settingsDetail(tab.rawValue), source: source)
+        }
         if !productionRouteStore.isAttached {
             applyCanonicalRouteProjection(productionRouteStore.path)
         }
@@ -201,28 +249,18 @@ extension GaryxMobileModel {
         source: GaryxMobilePanelOpenSource = .current
     ) {
         invalidatePendingThreadOpen()
-        var nextState = navigationState
-        nextState.openRoute(
-            GaryxMobilePanelRoute(
-                panel: .workspaceBots,
-                settingsTab: .manage,
-                workspaceBotsDrilldown: drilldown
-            ),
+        _ = productionRouteStore.open(
+            .workspaceDrilldown(drilldown.routeIdentity),
             source: source
         )
-        navigationState = nextState
+        if !productionRouteStore.isAttached {
+            applyCanonicalRouteProjection(productionRouteStore.path)
+        }
         setSidebarVisible(false)
     }
 
     func openWorkspaceFilesPanel(source: GaryxMobilePanelOpenSource = .current) {
-        invalidatePendingThreadOpen()
-        var nextState = navigationState
-        nextState.openRoute(
-            GaryxMobilePanelRoute(panel: .workspaces, settingsTab: .manage),
-            source: source
-        )
-        navigationState = nextState
-        setSidebarVisible(false)
+        openPanel(.workspaces, source: source)
     }
 
     func queuePendingMobileRoute(_ route: GaryxMobileRoute) {
@@ -414,11 +452,16 @@ extension GaryxMobileModel {
     }
 
     var mainPanelLeadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        navigationState.leadingEdgeAction
+        if productionRouteStore.path.isEmpty { return .openSidebar }
+        return productionRouteStore.path.count > 1 ? .mainPanelBack : .popToHome
     }
 
     var mainPanelLeadingEdgeActionLabel: String {
-        switch mainPanelLeadingEdgeAction {
+        if productionRouteStore.path.count > 1,
+           let predecessor = productionRouteStore.path.dropLast().last {
+            return predecessor.destination.backNavigationLabel
+        }
+        return switch mainPanelLeadingEdgeAction {
         case .openSidebar:
             "Open menu"
         case .popToHome, .mainPanelBack:
@@ -443,29 +486,29 @@ extension GaryxMobileModel {
         case .mainPanelBack:
             goBackInMainPanel()
         case .settingsOverview:
-            showSettingsOverview()
+            goBackInMainPanel()
         case .workspaceBotsOverview:
-            var nextState = navigationState
-            nextState.showWorkspaceBotsOverview()
-            navigationState = nextState
+            goBackInMainPanel()
         }
     }
 
     func showSettingsOverview() {
         invalidatePendingThreadOpen()
-        var nextState = navigationState
-        nextState.showSettingsOverview()
-        navigationState = nextState
+        if case .settingsDetail? = productionRouteStore.path.last?.destination,
+           productionRouteStore.path.count > 1 {
+            productionRouteStore.popOne()
+        } else {
+            openSettings(tab: .manage, source: .replace)
+        }
     }
 
     func goBackInMainPanel() {
         invalidatePendingThreadOpen()
-        var nextState = navigationState
-        guard nextState.goBackInMainPanel() else {
-            setSidebarVisible(true)
+        guard productionRouteStore.path.count > 1 else {
+            popToHome()
             return
         }
-        navigationState = nextState
+        productionRouteStore.popOne()
         setSidebarVisible(false)
     }
 
@@ -532,7 +575,7 @@ extension GaryxMobileModel {
 
         if let panelName, let panel = GaryxMobilePanel(rawValue: panelName) {
             let targetPanel: GaryxMobilePanel = switch panel {
-            case .bots, .workspaces:
+            case .bots:
                 .workspaceBots
             default:
                 panel
