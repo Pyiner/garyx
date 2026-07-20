@@ -8816,7 +8816,7 @@ async fn delete_thread_retains_local_state_and_pending_job_when_provider_clear_f
     );
     assert_eq!(
         state.ops.garyx_db.pending_cleanup_outbox_count().unwrap(),
-        3
+        4
     );
 }
 

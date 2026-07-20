@@ -2,6 +2,9 @@ use super::*;
 
 pub(crate) const PROMPT_ATTACHMENT_MIGRATION_NAME: &str = "prompt_attachment_lifecycle_v1";
 pub(crate) const PROMPT_ATTACHMENT_MIGRATION_VERSION: i64 = 1;
+pub(crate) const PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_NAME: &str =
+    "prompt_attachment_thread_ownership_v2";
+pub(crate) const PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_VERSION: i64 = 2;
 
 const PROMPT_ATTACHMENTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS prompt_attachments (
@@ -63,19 +66,64 @@ CREATE INDEX IF NOT EXISTS idx_prompt_attachments_delete_pending
     ON prompt_attachments(state, next_delete_at) WHERE state = 'delete_pending';
 "#;
 
+const PROMPT_ATTACHMENTS_V2_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS prompt_attachments (
+    attachment_id TEXT PRIMARY KEY,
+    scope_identity TEXT NOT NULL,
+    scope_epoch INTEGER NOT NULL CHECK (scope_epoch >= 0),
+    relative_path TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'file')),
+    original_name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+    sha256 TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('staged', 'owned')),
+    owner_thread_id TEXT,
+    owner_kind TEXT CHECK (owner_kind IS NULL OR owner_kind IN ('chat_start', 'stream_input')),
+    owner_client_intent_id TEXT,
+    owner_requested_run_id TEXT,
+    owner_effective_run_id TEXT,
+    created_at TEXT NOT NULL,
+    owned_at TEXT,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (scope_epoch = 0 AND scope_identity = '__legacy_api__')
+        OR (scope_epoch > 0 AND scope_identity <> '__legacy_api__')
+    ),
+    CHECK (
+        state <> 'staged'
+        OR (
+            owner_thread_id IS NULL AND owner_kind IS NULL
+            AND owner_client_intent_id IS NULL AND owner_requested_run_id IS NULL
+            AND owner_effective_run_id IS NULL AND owned_at IS NULL
+        )
+    ),
+    CHECK (
+        state <> 'owned'
+        OR (
+            owner_thread_id IS NOT NULL AND owner_kind IS NOT NULL
+            AND owner_effective_run_id IS NOT NULL AND owned_at IS NOT NULL
+        )
+    )
+) STRICT;
+"#;
+
+const PROMPT_ATTACHMENTS_V2_INDEX_SQL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_prompt_attachments_owner_thread
+    ON prompt_attachments(owner_thread_id, attachment_id) WHERE state = 'owned';
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PromptAttachmentState {
-    Ready,
-    Claimed,
-    DeletePending,
+    Staged,
+    Owned,
 }
 
 impl PromptAttachmentState {
     fn parse(value: &str) -> GaryxDbResult<Self> {
         match value {
-            "ready" => Ok(Self::Ready),
-            "claimed" => Ok(Self::Claimed),
-            "delete_pending" => Ok(Self::DeletePending),
+            "staged" => Ok(Self::Staged),
+            "owned" => Ok(Self::Owned),
             _ => Err(GaryxDbError::Configuration(format!(
                 "invalid prompt attachment state '{value}'"
             ))),
@@ -95,20 +143,11 @@ pub(crate) struct PromptAttachmentRecord {
     pub byte_size: i64,
     pub sha256: String,
     pub state: PromptAttachmentState,
-    pub expires_at: String,
-    pub lease_expires_at: Option<String>,
     pub owner_thread_id: Option<String>,
     pub owner_kind: Option<String>,
     pub owner_client_intent_id: Option<String>,
     pub owner_requested_run_id: Option<String>,
     pub owner_effective_run_id: Option<String>,
-    pub delete_attempt_count: i64,
-    pub next_delete_at: Option<String>,
-    pub last_delete_error: Option<String>,
-    pub created_at: String,
-    pub claimed_at: Option<String>,
-    pub delete_pending_at: Option<String>,
-    pub updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +161,6 @@ pub(crate) struct NewPromptAttachment {
     pub media_type: String,
     pub byte_size: i64,
     pub sha256: String,
-    pub expires_at: String,
     pub created_at: String,
 }
 
@@ -143,7 +181,6 @@ pub(crate) struct PromptAttachmentOwner<'a> {
     pub client_intent_id: Option<&'a str>,
     pub requested_run_id: Option<&'a str>,
     pub effective_run_id: &'a str,
-    pub lease_expires_at: &'a str,
 }
 
 fn canonical_schema_sql(sql: &str) -> String {
@@ -156,7 +193,7 @@ fn canonical_schema_sql(sql: &str) -> String {
         .to_owned()
 }
 
-fn validate_prompt_attachment_schema(tx: &Transaction<'_>) -> GaryxDbResult<()> {
+fn validate_prompt_attachment_v1_schema(tx: &Transaction<'_>) -> GaryxDbResult<()> {
     let table = tx
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'prompt_attachments'",
@@ -211,14 +248,46 @@ fn validate_prompt_attachment_schema(tx: &Transaction<'_>) -> GaryxDbResult<()> 
     Ok(())
 }
 
-fn parse_prompt_attachment_timestamp(field: &str, value: &str) -> GaryxDbResult<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| timestamp.with_timezone(&Utc))
-        .map_err(|error| {
-            GaryxDbError::Configuration(format!(
-                "invalid prompt attachment {field} timestamp '{value}': {error}"
-            ))
-        })
+fn validate_prompt_attachment_v2_schema(tx: &Transaction<'_>) -> GaryxDbResult<()> {
+    let table = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'prompt_attachments'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            GaryxDbError::Configuration("prompt attachment table is missing".to_owned())
+        })?;
+    if canonical_schema_sql(&table) != canonical_schema_sql(PROMPT_ATTACHMENTS_V2_TABLE_SQL) {
+        return Err(GaryxDbError::Configuration(
+            "prompt attachment table does not match the committed v2 schema".to_owned(),
+        ));
+    }
+    let index = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master
+              WHERE type = 'index' AND name = 'idx_prompt_attachments_owner_thread'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            GaryxDbError::Configuration(
+                "prompt attachment schema is missing owner-thread index".to_owned(),
+            )
+        })?;
+    if canonical_schema_sql(&index)
+        != canonical_schema_sql(
+            "CREATE INDEX IF NOT EXISTS idx_prompt_attachments_owner_thread ON prompt_attachments(owner_thread_id, attachment_id) WHERE state = 'owned';",
+        )
+    {
+        return Err(GaryxDbError::Configuration(
+            "prompt attachment owner-thread index does not match the committed v2 schema"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn decode_prompt_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<PromptAttachmentRecord> {
@@ -240,30 +309,19 @@ fn decode_prompt_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<PromptA
                 Box::new(error),
             )
         })?,
-        expires_at: row.get(10)?,
-        lease_expires_at: row.get(11)?,
-        owner_thread_id: row.get(12)?,
-        owner_kind: row.get(13)?,
-        owner_client_intent_id: row.get(14)?,
-        owner_requested_run_id: row.get(15)?,
-        owner_effective_run_id: row.get(16)?,
-        delete_attempt_count: row.get(17)?,
-        next_delete_at: row.get(18)?,
-        last_delete_error: row.get(19)?,
-        created_at: row.get(20)?,
-        claimed_at: row.get(21)?,
-        delete_pending_at: row.get(22)?,
-        updated_at: row.get(23)?,
+        owner_thread_id: row.get(10)?,
+        owner_kind: row.get(11)?,
+        owner_client_intent_id: row.get(12)?,
+        owner_requested_run_id: row.get(13)?,
+        owner_effective_run_id: row.get(14)?,
     })
 }
 
 const PROMPT_ATTACHMENT_SELECT_COLUMNS: &str = "
     attachment_id, scope_identity, scope_epoch, relative_path, kind,
-    original_name, media_type, byte_size, sha256, state, expires_at,
-    lease_expires_at, owner_thread_id, owner_kind, owner_client_intent_id,
-    owner_requested_run_id, owner_effective_run_id, delete_attempt_count,
-    next_delete_at, last_delete_error, created_at, claimed_at,
-    delete_pending_at, updated_at";
+    original_name, media_type, byte_size, sha256, state, owner_thread_id,
+    owner_kind, owner_client_intent_id, owner_requested_run_id,
+    owner_effective_run_id";
 
 pub(super) fn claim_prompt_attachments_tx(
     tx: &Transaction<'_>,
@@ -271,7 +329,6 @@ pub(super) fn claim_prompt_attachments_tx(
     owner: &PromptAttachmentOwner<'_>,
     now: &str,
 ) -> GaryxDbResult<()> {
-    let claim_time = parse_prompt_attachment_timestamp("claim time", now)?;
     for claim in claims {
         let record = tx
             .query_row(
@@ -297,7 +354,7 @@ pub(super) fn claim_prompt_attachments_tx(
                 claim.attachment_id
             )));
         }
-        if record.state == PromptAttachmentState::Claimed
+        if record.state == PromptAttachmentState::Owned
             && record.scope_identity == owner.scope_identity
             && record.scope_epoch == owner.scope_epoch
             && record.owner_thread_id.as_deref() == Some(owner.thread_id)
@@ -308,15 +365,9 @@ pub(super) fn claim_prompt_attachments_tx(
         {
             continue;
         }
-        if record.state != PromptAttachmentState::Ready {
+        if record.state != PromptAttachmentState::Staged {
             return Err(GaryxDbError::BadRequest(format!(
                 "prompt attachment already claimed: {}",
-                claim.attachment_id
-            )));
-        }
-        if parse_prompt_attachment_timestamp("expiry", &record.expires_at)? <= claim_time {
-            return Err(GaryxDbError::BadRequest(format!(
-                "prompt attachment expired: {}",
                 claim.attachment_id
             )));
         }
@@ -334,16 +385,15 @@ pub(super) fn claim_prompt_attachments_tx(
         }
         let updated = tx.execute(
             "UPDATE prompt_attachments
-                SET scope_identity = ?2, scope_epoch = ?3, state = 'claimed',
-                    lease_expires_at = ?4, owner_thread_id = ?5, owner_kind = ?6,
-                    owner_client_intent_id = ?7, owner_requested_run_id = ?8,
-                    owner_effective_run_id = ?9, claimed_at = ?10, updated_at = ?10
-              WHERE attachment_id = ?1 AND state = 'ready'",
+                SET scope_identity = ?2, scope_epoch = ?3, state = 'owned',
+                    owner_thread_id = ?4, owner_kind = ?5,
+                    owner_client_intent_id = ?6, owner_requested_run_id = ?7,
+                    owner_effective_run_id = ?8, owned_at = ?9, updated_at = ?9
+              WHERE attachment_id = ?1 AND state = 'staged'",
             params![
                 claim.attachment_id,
                 owner.scope_identity,
                 owner.scope_epoch,
-                owner.lease_expires_at,
                 owner.thread_id,
                 owner.kind.as_str(),
                 owner.client_intent_id,
@@ -384,7 +434,7 @@ impl GaryxDbService {
             tx.execute_batch(PROMPT_ATTACHMENTS_TABLE_SQL)?;
             tx.execute_batch(PROMPT_ATTACHMENTS_INDEX_SQL)?;
         }
-        validate_prompt_attachment_schema(&tx)?;
+        validate_prompt_attachment_v1_schema(&tx)?;
         if marker.is_none() {
             record_projection_state_tx(
                 &tx,
@@ -398,7 +448,129 @@ impl GaryxDbService {
         Ok(())
     }
 
-    pub(crate) fn insert_ready_prompt_attachments(
+    pub(crate) fn migrate_prompt_attachment_thread_ownership_v2(&self) -> GaryxDbResult<()> {
+        self.migrate_cleanup_outbox_prompt_attachments_v1()?;
+        let completed = {
+            let conn = self.conn()?;
+            conn.query_row(
+                "SELECT projection_version FROM projection_states WHERE projection_name = ?1",
+                params![PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_NAME],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        };
+        if let Some(version) = completed {
+            if version != PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_VERSION {
+                return Err(GaryxDbError::Configuration(format!(
+                    "prompt attachment ownership marker version mismatch: expected {}, found {version}",
+                    PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_VERSION
+                )));
+            }
+            let mut conn = self.conn()?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let v1_version = tx
+                .query_row(
+                    "SELECT projection_version FROM projection_states WHERE projection_name = ?1",
+                    params![PROMPT_ATTACHMENT_MIGRATION_NAME],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if v1_version != Some(PROMPT_ATTACHMENT_MIGRATION_VERSION) {
+                return Err(GaryxDbError::Configuration(
+                    "prompt attachment v2 marker requires the committed v1 marker".to_owned(),
+                ));
+            }
+            validate_prompt_attachment_v2_schema(&tx)?;
+            tx.commit()?;
+            return Ok(());
+        }
+
+        // The v1 marker and its physical schema remain a strict prerequisite.
+        // A separate v2 cutover owns the intentional retirement of TTL/lease
+        // fields instead of weakening the already-committed v1 contract.
+        self.migrate_prompt_attachment_lifecycle_v1()?;
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        validate_prompt_attachment_v1_schema(&tx)?;
+        let invalid_delete_pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM prompt_attachments
+              WHERE state = 'delete_pending'
+                AND NOT (
+                    (owner_thread_id IS NULL AND owner_kind IS NULL
+                     AND owner_client_intent_id IS NULL
+                     AND owner_requested_run_id IS NULL
+                     AND owner_effective_run_id IS NULL AND claimed_at IS NULL)
+                    OR
+                    (owner_thread_id IS NOT NULL AND owner_kind IS NOT NULL
+                     AND owner_effective_run_id IS NOT NULL AND claimed_at IS NOT NULL)
+                )",
+            [],
+            |row| row.get(0),
+        )?;
+        if invalid_delete_pending != 0 {
+            return Err(GaryxDbError::Configuration(format!(
+                "prompt attachment v1 contains {invalid_delete_pending} ambiguous delete-pending ownership rows"
+            )));
+        }
+        let source_row_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM prompt_attachments", [], |row| {
+                row.get(0)
+            })?;
+        tx.execute_batch("ALTER TABLE prompt_attachments RENAME TO prompt_attachments_v1")?;
+        tx.execute_batch(PROMPT_ATTACHMENTS_V2_TABLE_SQL)?;
+        tx.execute(
+            "INSERT INTO prompt_attachments (
+                attachment_id, scope_identity, scope_epoch, relative_path, kind,
+                original_name, media_type, byte_size, sha256, state,
+                owner_thread_id, owner_kind, owner_client_intent_id,
+                owner_requested_run_id, owner_effective_run_id, created_at,
+                owned_at, updated_at
+             )
+             SELECT attachment_id, scope_identity, scope_epoch, relative_path, kind,
+                    original_name, media_type, byte_size, sha256,
+                    CASE WHEN owner_thread_id IS NULL THEN 'staged' ELSE 'owned' END,
+                    owner_thread_id, owner_kind, owner_client_intent_id,
+                    owner_requested_run_id, owner_effective_run_id, created_at,
+                    claimed_at, updated_at
+               FROM prompt_attachments_v1",
+            [],
+        )?;
+        tx.execute_batch("DROP TABLE prompt_attachments_v1")?;
+        tx.execute_batch(PROMPT_ATTACHMENTS_V2_INDEX_SQL)?;
+        tx.execute(
+            "INSERT INTO cleanup_outbox (
+                thread_id, step, payload, status, attempt_count,
+                next_attempt_at, created_at, settled_at
+             )
+             SELECT DISTINCT attachment.owner_thread_id,
+                    'prompt_attachments_remove', NULL, 'pending', 0,
+                    NULL, ?1, NULL
+               FROM prompt_attachments AS attachment
+               JOIN archived_threads AS terminal
+                 ON terminal.thread_id = attachment.owner_thread_id
+              WHERE attachment.state = 'owned'
+                AND terminal.kind = 'deleted'
+                AND NOT EXISTS (
+                    SELECT 1 FROM cleanup_outbox AS existing
+                     WHERE existing.thread_id = attachment.owner_thread_id
+                       AND existing.step = 'prompt_attachments_remove'
+                )",
+            params![now_string()],
+        )?;
+        validate_prompt_attachment_v2_schema(&tx)?;
+        record_projection_state_tx(
+            &tx,
+            PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_NAME,
+            PROMPT_ATTACHMENT_OWNERSHIP_MIGRATION_VERSION,
+            source_row_count,
+            None,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn insert_staged_prompt_attachments(
         &self,
         attachments: &[NewPromptAttachment],
     ) -> GaryxDbResult<()> {
@@ -409,8 +581,8 @@ impl GaryxDbService {
                 "INSERT INTO prompt_attachments (
                     attachment_id, scope_identity, scope_epoch, relative_path, kind,
                     original_name, media_type, byte_size, sha256, state,
-                    expires_at, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'ready', ?10, ?11, ?11)",
+                    created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'staged', ?10, ?10)",
                 params![
                     input.attachment_id,
                     input.scope_identity,
@@ -421,7 +593,6 @@ impl GaryxDbService {
                     input.media_type,
                     input.byte_size,
                     input.sha256,
-                    input.expires_at,
                     input.created_at,
                 ],
             )?;
@@ -475,96 +646,32 @@ impl GaryxDbService {
         Ok(())
     }
 
-    pub(crate) fn renew_prompt_attachment_lease(
+    pub(crate) fn owned_prompt_attachments_for_thread(
         &self,
-        effective_run_id: &str,
-        lease_expires_at: &str,
-        now: &str,
-    ) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
-        conn.execute(
-            "UPDATE prompt_attachments SET lease_expires_at = ?2, updated_at = ?3
-              WHERE owner_effective_run_id = ?1 AND state = 'claimed'",
-            params![effective_run_id, lease_expires_at, now],
-        )
-        .map_err(Into::into)
-    }
-
-    pub(crate) fn mark_prompt_attachments_delete_pending_for_run(
-        &self,
-        effective_run_id: &str,
-        now: &str,
-    ) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
-        conn.execute(
-            "UPDATE prompt_attachments
-                SET state = 'delete_pending', delete_pending_at = ?2,
-                    next_delete_at = ?2, updated_at = ?2
-              WHERE owner_effective_run_id = ?1 AND state = 'claimed'",
-            params![effective_run_id, now],
-        )
-        .map_err(Into::into)
-    }
-
-    pub(crate) fn expire_prompt_attachments(&self, now: &str) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
-        conn.execute(
-            "UPDATE prompt_attachments
-                SET state = 'delete_pending', delete_pending_at = ?1,
-                    next_delete_at = ?1, updated_at = ?1
-              WHERE (state = 'ready' AND expires_at <= ?1)
-                 OR (state = 'claimed' AND lease_expires_at <= ?1)",
-            params![now],
-        )
-        .map_err(Into::into)
-    }
-
-    pub(crate) fn due_prompt_attachment_deletions(
-        &self,
-        now: &str,
-        limit: usize,
+        thread_id: &str,
     ) -> GaryxDbResult<Vec<PromptAttachmentRecord>> {
         let conn = self.read_conn()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {PROMPT_ATTACHMENT_SELECT_COLUMNS}
                FROM prompt_attachments
-              WHERE state = 'delete_pending'
-                AND (next_delete_at IS NULL OR next_delete_at <= ?1)
-              ORDER BY COALESCE(next_delete_at, delete_pending_at), attachment_id
-              LIMIT ?2"
+              WHERE state = 'owned' AND owner_thread_id = ?1
+              ORDER BY attachment_id"
         ))?;
-        let rows = stmt.query_map(params![now, limit as i64], decode_prompt_attachment)?;
+        let rows = stmt.query_map(params![thread_id], decode_prompt_attachment)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub(crate) fn finish_prompt_attachment_deletion(
+    pub(crate) fn delete_owned_prompt_attachment(
         &self,
         attachment_id: &str,
+        thread_id: &str,
     ) -> GaryxDbResult<bool> {
         let conn = self.conn()?;
         Ok(conn.execute(
-            "DELETE FROM prompt_attachments WHERE attachment_id = ?1 AND state = 'delete_pending'",
-            params![attachment_id],
+            "DELETE FROM prompt_attachments
+              WHERE attachment_id = ?1 AND state = 'owned' AND owner_thread_id = ?2",
+            params![attachment_id, thread_id],
         )? == 1)
-    }
-
-    pub(crate) fn fail_prompt_attachment_deletion(
-        &self,
-        attachment_id: &str,
-        next_delete_at: &str,
-        error: &str,
-        now: &str,
-    ) -> GaryxDbResult<()> {
-        let bounded_error = error.chars().take(2048).collect::<String>();
-        let conn = self.conn()?;
-        conn.execute(
-            "UPDATE prompt_attachments
-                SET delete_attempt_count = delete_attempt_count + 1,
-                    next_delete_at = ?2, last_delete_error = ?3, updated_at = ?4
-              WHERE attachment_id = ?1 AND state = 'delete_pending'",
-            params![attachment_id, next_delete_at, bounded_error, now],
-        )?;
-        Ok(())
     }
 }
 
@@ -572,7 +679,7 @@ impl GaryxDbService {
 mod tests {
     use super::*;
 
-    fn ready(id: &str, expires_at: &str) -> NewPromptAttachment {
+    fn staged(id: &str) -> NewPromptAttachment {
         NewPromptAttachment {
             attachment_id: id.to_owned(),
             scope_identity: "attachment-test".to_owned(),
@@ -583,16 +690,15 @@ mod tests {
             media_type: "text/plain".to_owned(),
             byte_size: 4,
             sha256: "abcd".to_owned(),
-            expires_at: expires_at.to_owned(),
             created_at: "2026-07-20T00:00:00Z".to_owned(),
         }
     }
 
     #[test]
-    fn marker_is_strict_and_claim_is_single_owner() {
+    fn ownership_marker_is_strict_and_claim_is_single_owner() {
         let db = GaryxDbService::memory().unwrap();
-        db.migrate_prompt_attachment_lifecycle_v1().unwrap();
-        db.insert_ready_prompt_attachments(&[ready("attachment:one", "2026-07-21T00:00:00Z")])
+        db.migrate_prompt_attachment_thread_ownership_v2().unwrap();
+        db.insert_staged_prompt_attachments(&[staged("attachment:one")])
             .unwrap();
         let claim = PromptAttachmentClaim {
             attachment_id: "attachment:one".to_owned(),
@@ -610,7 +716,6 @@ mod tests {
                 client_intent_id: Some("intent-one"),
                 requested_run_id: Some("run-one"),
                 effective_run_id: "run-one",
-                lease_expires_at: "2026-07-20T02:00:00Z",
             },
             "2026-07-20T00:00:01Z",
         )
@@ -626,7 +731,6 @@ mod tests {
                     client_intent_id: Some("intent-two"),
                     requested_run_id: Some("run-two"),
                     effective_run_id: "run-two",
-                    lease_expires_at: "2026-07-20T02:00:00Z",
                 },
                 "2026-07-20T00:00:02Z",
             )
@@ -661,68 +765,176 @@ mod tests {
     }
 
     #[test]
-    fn claim_expiry_compares_rfc3339_instants_at_submillisecond_precision() {
+    fn committed_v2_marker_does_not_recreate_a_missing_owner_index() {
         let db = GaryxDbService::memory().unwrap();
-        db.migrate_prompt_attachment_lifecycle_v1().unwrap();
-        db.insert_ready_prompt_attachments(&[
-            ready(
-                "attachment:precision-valid",
-                "2026-07-21T00:00:00.123456+00:00",
-            ),
-            ready(
-                "attachment:precision-expired",
-                "2026-07-21T00:00:00.123456+00:00",
-            ),
-        ])
-        .unwrap();
-        let claim = |attachment_id: &str| PromptAttachmentClaim {
-            attachment_id: attachment_id.to_owned(),
-            expected_relative_path: format!("{attachment_id}/payload"),
-            expected_kind: "file".to_owned(),
-            expected_sha256: "abcd".to_owned(),
-        };
-        fn owner<'a>(intent: &'a str, run: &'a str) -> PromptAttachmentOwner<'a> {
-            PromptAttachmentOwner {
-                scope_identity: "attachment-test",
-                scope_epoch: 1,
-                thread_id: "thread::precision",
-                kind: DispatchAdmissionKind::ChatStart,
-                client_intent_id: Some(intent),
-                requested_run_id: Some(run),
-                effective_run_id: run,
-                lease_expires_at: "2026-07-21T02:00:00Z",
-            }
-        }
+        db.migrate_prompt_attachment_thread_ownership_v2().unwrap();
+        db.conn()
+            .unwrap()
+            .execute_batch("DROP INDEX idx_prompt_attachments_owner_thread")
+            .unwrap();
 
-        db.claim_prompt_attachments(
-            &[claim("attachment:precision-valid")],
-            owner("intent-valid", "run-valid"),
-            "2026-07-21T00:00:00.123Z",
-        )
-        .expect("123.456ms expiry remains valid at 123ms");
         let error = db
-            .claim_prompt_attachments(
-                &[claim("attachment:precision-expired")],
-                owner("intent-expired", "run-expired"),
-                "2026-07-21T00:00:00.124Z",
+            .migrate_prompt_attachment_thread_ownership_v2()
+            .expect_err("a committed v2 marker must not repair a missing owner index");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+        let index_count: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_prompt_attachments_owner_thread'",
+                [],
+                |row| row.get(0),
             )
-            .expect_err("123.456ms expiry is expired at 124ms");
-        assert!(error.to_string().contains("expired"));
+            .unwrap();
+        assert_eq!(index_count, 0, "marked v2 drift must remain unrepaired");
     }
 
     #[test]
-    fn ready_ttl_and_claim_lease_converge_to_delete_pending() {
+    fn v2_migration_preserves_staging_and_committed_v1_rows_without_timers() {
         let db = GaryxDbService::memory().unwrap();
         db.migrate_prompt_attachment_lifecycle_v1().unwrap();
-        db.insert_ready_prompt_attachments(&[
-            ready("attachment:ready", "2026-07-20T00:00:10Z"),
-            ready("attachment:claimed", "2026-07-21T00:00:00Z"),
+        db.conn()
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO archived_threads (thread_id, archived_at, kind)
+                 VALUES ('thread::migration-owned', '2026-07-01T00:00:00Z', 'deleted');
+                 INSERT INTO prompt_attachments (
+                    attachment_id, scope_identity, scope_epoch, relative_path, kind,
+                    original_name, media_type, byte_size, sha256, state, expires_at,
+                    created_at, updated_at
+                 ) VALUES (
+                    'attachment:staged', 'attachment-test', 1,
+                    'attachment:staged/payload', 'image', 'staged.jpg', 'image/jpeg',
+                    4, 'staged-sha', 'ready', '2026-07-01T00:00:00Z',
+                    '2026-06-30T00:00:00Z', '2026-06-30T00:00:00Z'
+                 );
+                 INSERT INTO prompt_attachments (
+                    attachment_id, scope_identity, scope_epoch, relative_path, kind,
+                    original_name, media_type, byte_size, sha256, state, expires_at,
+                    lease_expires_at, owner_thread_id, owner_kind,
+                    owner_client_intent_id, owner_requested_run_id,
+                    owner_effective_run_id, created_at, claimed_at, updated_at
+                 ) VALUES (
+                    'attachment:owned', 'attachment-test', 1,
+                    'attachment:owned/payload', 'image', 'owned.jpg', 'image/jpeg',
+                    4, 'owned-sha', 'claimed', '2026-07-01T00:00:00Z',
+                    '2026-07-01T01:00:00Z', 'thread::migration-owned', 'chat_start',
+                    'intent-owned', 'run-owned', 'run-owned',
+                    '2026-06-30T00:00:00Z', '2026-06-30T00:01:00Z',
+                    '2026-06-30T00:01:00Z'
+                 );
+                 INSERT INTO prompt_attachments (
+                    attachment_id, scope_identity, scope_epoch, relative_path, kind,
+                    original_name, media_type, byte_size, sha256, state, expires_at,
+                    lease_expires_at, owner_thread_id, owner_kind,
+                    owner_client_intent_id, owner_requested_run_id,
+                    owner_effective_run_id, created_at, claimed_at,
+                    delete_pending_at, next_delete_at, updated_at
+                 ) VALUES (
+                    'attachment:pending-owned', 'attachment-test', 1,
+                    'attachment:pending-owned/payload', 'image', 'pending.jpg', 'image/jpeg',
+                    4, 'pending-sha', 'delete_pending', '2026-07-01T00:00:00Z',
+                    '2026-07-01T01:00:00Z', 'thread::migration-owned', 'chat_start',
+                    'intent-pending', 'run-pending', 'run-pending',
+                    '2026-06-30T00:00:00Z', '2026-06-30T00:01:00Z',
+                    '2026-07-01T01:00:00Z', '2026-07-01T01:00:00Z',
+                    '2026-07-01T01:00:00Z'
+                 );",
+            )
+            .unwrap();
+
+        db.migrate_prompt_attachment_thread_ownership_v2().unwrap();
+
+        assert_eq!(
+            db.prompt_attachment_by_id("attachment:staged")
+                .unwrap()
+                .unwrap()
+                .state,
+            PromptAttachmentState::Staged
+        );
+        assert_eq!(
+            db.prompt_attachment_by_id("attachment:owned")
+                .unwrap()
+                .unwrap()
+                .state,
+            PromptAttachmentState::Owned
+        );
+        let pending = db
+            .prompt_attachment_by_id("attachment:pending-owned")
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.state, PromptAttachmentState::Owned);
+        assert_eq!(
+            pending.owner_thread_id.as_deref(),
+            Some("thread::migration-owned")
+        );
+        let cleanup = db
+            .next_cleanup_outbox_job("2999-01-01T00:00:00Z")
+            .unwrap()
+            .unwrap();
+        assert_eq!(cleanup.thread_id, "thread::migration-owned");
+        assert_eq!(cleanup.step, CleanupOutboxStep::PromptAttachmentsRemove);
+        let columns = {
+            let conn = db.conn().unwrap();
+            let mut statement = conn
+                .prepare("PRAGMA table_info(prompt_attachments)")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(!columns.iter().any(|column| {
+            matches!(
+                column.as_str(),
+                "expires_at" | "lease_expires_at" | "delete_pending_at" | "next_delete_at"
+            )
+        }));
+    }
+
+    #[test]
+    fn staging_uploads_remain_claimable_after_the_retired_expiry_timestamp() {
+        let db = GaryxDbService::memory().unwrap();
+        db.migrate_prompt_attachment_thread_ownership_v2().unwrap();
+        db.insert_staged_prompt_attachments(&[staged("attachment:retained-staging")])
+            .unwrap();
+        let claim = PromptAttachmentClaim {
+            attachment_id: "attachment:retained-staging".to_owned(),
+            expected_relative_path: "attachment:retained-staging/payload".to_owned(),
+            expected_kind: "file".to_owned(),
+            expected_sha256: "abcd".to_owned(),
+        };
+        db.claim_prompt_attachments(
+            &[claim],
+            PromptAttachmentOwner {
+                scope_identity: "attachment-test",
+                scope_epoch: 1,
+                thread_id: "thread::retained-staging",
+                kind: DispatchAdmissionKind::ChatStart,
+                client_intent_id: Some("intent-retained-staging"),
+                requested_run_id: Some("run-retained-staging"),
+                effective_run_id: "run-retained-staging",
+            },
+            "2999-07-21T00:00:00Z",
+        )
+        .expect("staging uploads have no time-based expiry");
+    }
+
+    #[test]
+    fn staging_and_owned_rows_have_distinct_durable_ownership() {
+        let db = GaryxDbService::memory().unwrap();
+        db.migrate_prompt_attachment_thread_ownership_v2().unwrap();
+        db.insert_staged_prompt_attachments(&[
+            staged("attachment:staged"),
+            staged("attachment:owned"),
         ])
         .unwrap();
         db.claim_prompt_attachments(
             &[PromptAttachmentClaim {
-                attachment_id: "attachment:claimed".to_owned(),
-                expected_relative_path: "attachment:claimed/payload".to_owned(),
+                attachment_id: "attachment:owned".to_owned(),
+                expected_relative_path: "attachment:owned/payload".to_owned(),
                 expected_kind: "file".to_owned(),
                 expected_sha256: "abcd".to_owned(),
             }],
@@ -734,33 +946,30 @@ mod tests {
                 client_intent_id: Some("intent"),
                 requested_run_id: Some("run"),
                 effective_run_id: "run",
-                lease_expires_at: "2026-07-20T00:00:10Z",
             },
             "2026-07-20T00:00:01Z",
         )
         .unwrap();
         assert_eq!(
-            db.expire_prompt_attachments("2026-07-20T00:00:11Z")
-                .unwrap(),
-            2
-        );
-        assert_eq!(
-            db.due_prompt_attachment_deletions("2026-07-20T00:00:11Z", 10)
+            db.prompt_attachment_by_id("attachment:staged")
                 .unwrap()
-                .len(),
-            2
+                .unwrap()
+                .state,
+            PromptAttachmentState::Staged
         );
+        let owned = db
+            .owned_prompt_attachments_for_thread("thread::one")
+            .unwrap();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].attachment_id, "attachment:owned");
     }
 
     #[test]
     fn legacy_chat_starts_with_distinct_requested_runs_cannot_share_one_attachment() {
         let db = GaryxDbService::memory().unwrap();
-        db.migrate_prompt_attachment_lifecycle_v1().unwrap();
-        db.insert_ready_prompt_attachments(&[ready(
-            "attachment:legacy-owner",
-            "2026-07-21T00:00:00Z",
-        )])
-        .unwrap();
+        db.migrate_prompt_attachment_thread_ownership_v2().unwrap();
+        db.insert_staged_prompt_attachments(&[staged("attachment:legacy-owner")])
+            .unwrap();
         let claim = PromptAttachmentClaim {
             attachment_id: "attachment:legacy-owner".to_owned(),
             expected_relative_path: "attachment:legacy-owner/payload".to_owned(),
@@ -775,7 +984,6 @@ mod tests {
             client_intent_id: None,
             requested_run_id: Some(requested_run_id),
             effective_run_id: "run-active",
-            lease_expires_at: "2026-07-20T02:00:00Z",
         };
         db.claim_prompt_attachments(
             std::slice::from_ref(&claim),

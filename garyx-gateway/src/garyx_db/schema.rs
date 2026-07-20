@@ -87,7 +87,8 @@ pub(super) fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             thread_id TEXT NOT NULL,
             step TEXT NOT NULL CHECK (step IN (
                 'endpoint_runtime_invalidate', 'runtime_teardown',
-                'transcript_remove', 'thread_log_remove'
+                'transcript_remove', 'thread_log_remove',
+                'prompt_attachments_remove'
             )),
             payload TEXT,
             status TEXT NOT NULL DEFAULT 'pending'

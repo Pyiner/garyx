@@ -38,9 +38,67 @@ pub(crate) const CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME: &str = "canonical_exc
 
 pub(super) const CANONICAL_EXCLUSION_STRIP_MIGRATION_VERSION: i64 = 3;
 
+pub(crate) const CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_NAME: &str =
+    "cleanup_outbox_prompt_attachments_v1";
+
+pub(super) const CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_VERSION: i64 = 1;
+
 pub(super) const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 
 pub(super) const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
+
+const CLEANUP_OUTBOX_V1_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS cleanup_outbox (
+    job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    step TEXT NOT NULL CHECK (step IN (
+        'endpoint_runtime_invalidate', 'runtime_teardown',
+        'transcript_remove', 'thread_log_remove'
+    )),
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'done')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at TEXT,
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+) STRICT;
+"#;
+
+const CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS cleanup_outbox (
+    job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    step TEXT NOT NULL CHECK (step IN (
+        'endpoint_runtime_invalidate', 'runtime_teardown',
+        'transcript_remove', 'thread_log_remove',
+        'prompt_attachments_remove'
+    )),
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'done')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at TEXT,
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+) STRICT;
+"#;
+
+const CLEANUP_OUTBOX_PENDING_INDEX_SQL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_cleanup_outbox_pending
+    ON cleanup_outbox(status, next_attempt_at)
+    WHERE status = 'pending';
+"#;
+
+fn canonical_migration_schema_sql(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("CREATE TABLE IF NOT EXISTS", "CREATE TABLE")
+        .replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX")
+        .trim_end_matches(';')
+        .to_owned()
+}
 
 pub(super) const THREAD_META_SCHEMA_V2_COLUMNS: &[&str] = &[
     "thread_id",
@@ -347,6 +405,104 @@ pub(super) fn assert_recent_membership_parity_tx(tx: &Transaction<'_>) -> GaryxD
 }
 
 impl GaryxDbService {
+    pub(crate) fn migrate_cleanup_outbox_prompt_attachments_v1(&self) -> GaryxDbResult<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let marker = tx
+            .query_row(
+                "SELECT projection_version FROM projection_states WHERE projection_name = ?1",
+                params![CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_NAME],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if marker
+            .is_some_and(|version| version != CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_VERSION)
+        {
+            return Err(GaryxDbError::Configuration(format!(
+                "cleanup outbox attachment marker version mismatch: expected {}, found {}",
+                CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_VERSION,
+                marker.unwrap_or_default()
+            )));
+        }
+        let actual_table = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cleanup_outbox'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                GaryxDbError::Configuration("cleanup outbox table is missing".to_owned())
+            })?;
+        let actual_index = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_cleanup_outbox_pending'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                GaryxDbError::Configuration("cleanup outbox pending index is missing".to_owned())
+            })?;
+        if canonical_migration_schema_sql(&actual_index)
+            != canonical_migration_schema_sql(CLEANUP_OUTBOX_PENDING_INDEX_SQL)
+        {
+            return Err(GaryxDbError::Configuration(
+                "cleanup outbox pending index has an unsupported shape".to_owned(),
+            ));
+        }
+
+        let actual = canonical_migration_schema_sql(&actual_table);
+        let expected = canonical_migration_schema_sql(CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_TABLE_SQL);
+        if marker.is_some() {
+            if actual != expected {
+                return Err(GaryxDbError::Configuration(
+                    "cleanup outbox table does not match the committed attachment-step schema"
+                        .to_owned(),
+                ));
+            }
+            tx.commit()?;
+            return Ok(());
+        }
+
+        let legacy = canonical_migration_schema_sql(CLEANUP_OUTBOX_V1_TABLE_SQL);
+        let source_row_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM cleanup_outbox", [], |row| row.get(0))?;
+        if actual == legacy {
+            tx.execute_batch(
+                "DROP INDEX idx_cleanup_outbox_pending;
+                 ALTER TABLE cleanup_outbox RENAME TO cleanup_outbox_v1;",
+            )?;
+            tx.execute_batch(CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_TABLE_SQL)?;
+            tx.execute(
+                "INSERT INTO cleanup_outbox (
+                    job_id, thread_id, step, payload, status, attempt_count,
+                    next_attempt_at, created_at, settled_at
+                 )
+                 SELECT job_id, thread_id, step, payload, status, attempt_count,
+                        next_attempt_at, created_at, settled_at
+                   FROM cleanup_outbox_v1",
+                [],
+            )?;
+            tx.execute_batch("DROP TABLE cleanup_outbox_v1")?;
+            tx.execute_batch(CLEANUP_OUTBOX_PENDING_INDEX_SQL)?;
+        } else if actual != expected {
+            return Err(GaryxDbError::Configuration(
+                "cleanup outbox table has an unsupported pre-attachment shape".to_owned(),
+            ));
+        }
+        record_projection_state_tx(
+            &tx,
+            CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_NAME,
+            CLEANUP_OUTBOX_PROMPT_ATTACHMENTS_MIGRATION_VERSION,
+            source_row_count,
+            None,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Read the import and retirement markers in one SQL query. The boot
     /// importer double-checks this pair after taking the lifecycle lock.
     pub(crate) fn legacy_import_marker_pair(&self) -> GaryxDbResult<(bool, bool)> {
@@ -513,7 +669,7 @@ impl GaryxDbService {
         self.recover_stale_dispatch_admissions()?;
         self.migrate_thread_create_intent_claim_v1()?;
         self.recover_stale_create_intents()?;
-        self.migrate_prompt_attachment_lifecycle_v1()?;
+        self.migrate_prompt_attachment_thread_ownership_v2()?;
         Ok(())
     }
 

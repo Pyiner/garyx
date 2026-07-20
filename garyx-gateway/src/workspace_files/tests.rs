@@ -55,6 +55,9 @@ async fn rejects_escape_paths() {
 async fn previews_markdown_and_pdf() {
     let temp = tempdir().unwrap();
     let root = temp.path();
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(root.join("data").display().to_string());
+    let state = AppStateBuilder::new(config).build();
     fs::write(
         root.join("README.md"),
         "# Hello\n```mermaid\ngraph TD\nA-->B\n```\n",
@@ -65,15 +68,23 @@ async fn previews_markdown_and_pdf() {
         .await
         .unwrap();
 
-    let markdown = build_preview(root.display().to_string(), Some("README.md".to_owned()))
-        .await
-        .unwrap();
+    let markdown = build_preview(
+        &state,
+        root.display().to_string(),
+        Some("README.md".to_owned()),
+    )
+    .await
+    .unwrap();
     assert_eq!(markdown.preview_kind, "markdown");
     assert!(markdown.text.unwrap().contains("mermaid"));
 
-    let pdf = build_preview(root.display().to_string(), Some("deck.pdf".to_owned()))
-        .await
-        .unwrap();
+    let pdf = build_preview(
+        &state,
+        root.display().to_string(),
+        Some("deck.pdf".to_owned()),
+    )
+    .await
+    .unwrap();
     assert_eq!(pdf.preview_kind, "pdf");
     assert!(pdf.data_base64.is_some());
 }
@@ -174,7 +185,7 @@ async fn chat_attachment_upload_creates_scoped_managed_row() {
         .expect("upload ownership row");
     assert_eq!(row.scope_identity, scope.identity);
     assert_eq!(row.scope_epoch, scope.epoch);
-    assert_eq!(row.state, PromptAttachmentState::Ready);
+    assert_eq!(row.state, PromptAttachmentState::Staged);
     assert_eq!(row.original_name, "notes.txt");
     assert_eq!(row.media_type, "text/plain");
     assert_eq!(row.byte_size, 15);
@@ -220,6 +231,7 @@ async fn managed_chat_image_remains_previewable_for_transcript_echo() {
         Some("payload")
     );
     let preview = build_preview(
+        &state,
         managed_path
             .parent()
             .expect("managed attachment directory")
@@ -234,8 +246,56 @@ async fn managed_chat_image_remains_previewable_for_transcript_echo() {
         preview.preview_kind, "image",
         "a managed image referenced by a committed user message must load as an image thumbnail"
     );
+    assert_eq!(preview.name, "photo-1.jpg");
     assert_eq!(preview.media_type, "image/jpeg");
     assert_eq!(preview.data_base64, Some(BASE64.encode(jpeg)));
+}
+
+#[tokio::test]
+async fn managed_preview_classification_uses_catalog_media_type_not_either_filename() {
+    let data_dir = tempdir().unwrap();
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(data_dir.path().join("data").display().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let png = vec![0x89, b'P', b'N', b'G'];
+    let uploaded = write_uploaded_chat_attachments(
+        &state,
+        UploadChatAttachmentsBody {
+            idempotency_scope: Some(IdempotencyScope {
+                identity: "catalog-mime-test".to_owned(),
+                epoch: 1,
+            }),
+            files: vec![UploadChatAttachment {
+                kind: PromptAttachmentKind::Image,
+                name: "misleading.txt".to_owned(),
+                media_type: Some("image/png".to_owned()),
+                data_base64: BASE64.encode(&png),
+            }],
+        },
+    )
+    .await
+    .unwrap()
+    .files
+    .pop()
+    .unwrap();
+    assert_eq!(Path::new(&uploaded.path).file_name().unwrap(), "payload");
+
+    let preview = build_preview(
+        &state,
+        Path::new(&uploaded.path)
+            .parent()
+            .unwrap()
+            .display()
+            .to_string(),
+        Some("payload".to_owned()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(preview.name, "misleading.txt");
+    assert_eq!(preview.media_type, "image/png");
+    assert_eq!(preview.preview_kind, "image");
+    assert_eq!(preview.data_base64, Some(BASE64.encode(png)));
 }
 
 #[cfg(unix)]

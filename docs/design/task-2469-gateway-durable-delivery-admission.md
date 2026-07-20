@@ -2,7 +2,7 @@
 
 Date: 2026-07-20
 
-Status: design review candidate
+Status: implemented; prompt-attachment lifecycle superseded by #TASK-2511
 
 Scope: P0-G server batch derived from the P0-A review
 
@@ -32,9 +32,10 @@ The non-negotiable invariants are:
    “preparing”, “committed”, and “the claimed thread was later removed” by a
    SQL point query.
 4. Only files created by the prompt-attachment upload service are managed.
-   Their state is `ready -> claimed -> delete_pending`; physical deletion is a
-   retryable outbox operation. Arbitrary workspace paths remain caller-owned
-   and are never deleted by this protocol.
+   Their state is `staged -> owned`. Neither state has timer-based cleanup;
+   owned files are durable conversation content and physical deletion is a
+   retryable thread-delete outbox operation. Arbitrary workspace paths remain
+   caller-owned and are never deleted by this protocol.
 5. A committed migration marker is durable protocol. A database bearing a v1
    marker but missing or drifting from the v1 table/index shape fails startup;
    it is not repaired by `CREATE TABLE IF NOT EXISTS`, a read route, a
@@ -385,7 +386,13 @@ only an equal-fingerprint POST replay can start a new preparation lease.
 
 ### 4.3 Prompt-attachment lifecycle
 
-Marker: `prompt_attachment_lifecycle_v1`, version `1`.
+Historical marker: `prompt_attachment_lifecycle_v1`, version `1`.
+
+This exact schema remains documented because its committed marker is still a
+strict migration prerequisite. Runtime storage is upgraded by
+`prompt_attachment_thread_ownership_v2`: it replaces `ready/claimed` with
+`staged/owned`, removes every expiry, lease, and delete-retry column, and adds
+an owned-thread index. The v1 validator is not weakened to describe v2.
 
 ```sql
 CREATE TABLE prompt_attachments (
@@ -1020,8 +1027,7 @@ result keeps the compatibility fields and adds:
   "kind": "file",
   "path": "/derived/absolute/path",
   "name": "notes.txt",
-  "mediaType": "text/plain",
-  "expiresAt": "..."
+  "mediaType": "text/plain"
 }
 ```
 
@@ -1034,64 +1040,49 @@ ID/path/scope/kind/hash metadata rather than trusting client copies.
 Uploads go to `<data-dir>/prompt-attachments-v1/<attachment-id>/payload`.
 For a batch, the service writes and fsyncs staging files, atomically renames
 them inside that root, fsyncs the affected parent directories, then inserts
-every `ready` row in one DB transaction before responding. DB failure removes
-the files. A crash between rename and insert leaves an unreferenced file that
-the root scanner deletes after a grace period; the scanner never follows
-symlinks or leaves the managed root.
-
-The ready TTL is 24 hours. The response exposes the deadline so clients can
-re-upload from their local durable payload before use.
+every `staged` row in one DB transaction before responding. DB failure removes
+the files as rollback of that failed upload. There is no TTL or orphan scanner:
+an acknowledged staging upload is retained until a later explicit product
+policy claims it or removes it.
 
 ### 8.2 Claim and ownership
 
 Managed attachments are single-use by logical dispatch. The admission
-transaction verifies `ready`, unexpired, and same explicit scope, then writes
-the exact owner tuple and a two-hour renewable lease. A replay by the same
-ledger key is allowed; another key or scope receives `409
-attachment_already_claimed`. A `no_active_session` stream-input result does not
-consume attachments and leaves them `ready`.
+transaction verifies `staged` and same explicit scope, then writes the exact
+owner tuple and changes the row to `owned`. This transition commits in the same
+SQLite transaction as the message/dispatch admission, so it means the payload
+has become durable conversation content. A replay by the same ledger key is
+allowed; another key or scope receives `409 attachment_already_claimed`. A
+`no_active_session` stream-input result does not consume attachments and leaves
+them `staged`.
 
 An uncorrelated legacy dispatch still receives lifecycle safety: after its
 side-effect-free bridge plan, a standalone claim transaction uses the
 allocated run/pending identity as owner before provider handoff. It does not
-gain dispatch idempotency, but its server-managed file is still released on
-terminal/lease expiry.
+gain dispatch idempotency, but its server-managed file has the same durable
+thread ownership after the claim.
 
-One upgrade exception is permitted: an unclaimed `ready` row uploaded into
+One upgrade exception is permitted: an unowned `staged` row uploaded into
 `(__legacy_api__, 0)` may be transferred once to the authenticated request's
 explicit scope in the same claim transaction, after exact ID/path/hash match.
-A claimed row is never transferred. This covers an app upgrade between upload
+An owned row is never transferred. This covers an app upgrade between upload
 and send without making general cross-scope attachment access legal.
 
 For queued input, the bridge plan writes the active `effective_run_id` before
-provider handoff. For a fresh run it equals `requested_run_id`. A gateway
-run-lifecycle event renews the lease while the run is live.
+provider handoff. For a fresh run it equals `requested_run_id`. The run identity
+is retained for idempotent owner matching and audit; it is not a lifetime lease.
 
-### 8.3 Terminal and TTL cleanup
+### 8.3 Thread-owned cleanup
 
-The bridge run task owns a non-async drop guard that emits a terminal lifecycle
-event through a gateway channel on success, failure, interrupt, abort, or
-panic. The lifecycle worker changes all of that effective run's claimed rows
-to `delete_pending` before touching the filesystem.
-
-The same transition occurs when:
-
-- an unclaimed row reaches `expires_at`;
-- a claimed row's renewable `lease_expires_at` passes (covers process death or
-  a missed terminal event);
-- a provider accepted the handoff and the owning run reached a terminal event.
-
-A typed provider `NotAccepted` proof before consumption atomically returns the
-attachment to `ready` with its original `expires_at` before a replacement plan
-is considered. An untyped/post-gate failure remains claimed and ambiguous
-until its lease expires; it is never made available to a second logical
-dispatch while the first may have consumed it.
-
-The delete worker resolves the stored relative path under the fixed root,
-refuses traversal/symlinks, removes the exact file/directory, and deletes the
-row only after success. Missing files count as success. Failures increment a
-counter and set bounded exponential `next_delete_at`, so a crash after either
-the DB transition or physical unlink converges on restart.
+Upload age, claim age, provider terminal events, gateway restart, and thread
+archive never delete a staged or owned attachment. Thread deletion enqueues a
+dedicated `prompt_attachments_remove` cleanup-outbox step after the durable
+thread terminal transaction. That step selects only rows owned by the deleted
+thread, resolves each stored relative path under the fixed root, refuses
+traversal/symlinks, removes the exact file/directory, and deletes the row only
+after physical success. Missing files count as success. The existing outbox
+retry/backoff and same-thread ordering make a crash after either unlink or row
+deletion converge on restart.
 
 The historical root is process-global, while Garyx permits distinct configured
 data directories. An old binary does not participate in a new ownership lock,
@@ -1119,9 +1110,8 @@ Client impact:
 - Desktop's existing metadata intent receives legacy-scope dedupe immediately.
   A future durable desktop transport must send explicit scope before enabling
   automatic restart retry.
-- Older clients ignore added response fields. Their uploaded files now expire,
-  which is an intentional lifecycle contract; the path remains valid until
-  the advertised expiry or its owning run settles.
+- Older clients ignore the attachment ID field. Uploaded and committed paths do
+  not expire; committed paths remain valid for the lifetime of their thread.
 - Internal dispatchers without a client intent do not accidentally accumulate
   ledger rows or change semantics.
 - The record patch/fence is wire-neutral and applies to every client because it
@@ -1130,16 +1120,12 @@ Client impact:
   gets an explicit unsupported persistence error; the bridge never falls back
   to a stale full-body write.
 
-An old binary can read the same database because it ignores the additive
-tables. It cannot honor new admissions or serve the new route. Therefore
-rollback is structurally safe but behaviorally capability-gated: once the
-capability disappears, clients stop automatic retry and return to ambiguous
-recovery. Rows and files are not down-migrated or dropped; re-upgrade resumes
-the recorded v1 contract. The guarantee is suspended while an old binary is
-serving: a manual same-key dispatch through that binary is not represented in
-the ledger and must not be retried as though v1 were active. A rollback may
-delay attachment GC but cannot delete a live attachment. No gateway restart is
-part of this task's validation or handoff.
+An old binary that only understands the attachment v1 physical schema fails
+its strict marker validation after the v2 cutover; the migration intentionally
+does not pretend the removed expiry columns still exist. Rollback therefore
+requires a binary that understands v2 or an explicit offline down-migration.
+Rows and files are never silently down-migrated or dropped. No gateway restart
+is part of this task's validation or handoff.
 
 ## 10. Implementation slices and validation evidence
 
@@ -1152,7 +1138,8 @@ commits:
    binding writers, bridge/router/gateway existing-record writer migration,
    and stale bridge-write regression tests; then create-intent migration,
    point query, and atomic create-and-dispatch;
-3. attachment migration, managed upload root, claims, lifecycle worker, and GC;
+3. attachment migration, managed upload root, durable claims, and thread-delete
+   outbox cleanup;
 4. cross-path/restart/fault integration tests and capability publication;
 5. Mac canonical durable-delivery consumer plus the cross-platform shared
    fixture marker/assertion/documentation update.
@@ -1241,13 +1228,14 @@ The required deterministic evidence is:
 
 ### Attachments
 
-- A fake clock proves ready TTL, claimed lease renewal, run-terminal cleanup,
-  expired-lease cleanup after reopen, and retry after unlink/DB crash.
+- Regression tests prove elapsed legacy TTL, claim-lease time, and run terminal
+  events cannot remove attachment content; thread-delete outbox retry/restart
+  converges after unlink/DB crash.
 - Scope mismatch, second-owner conflict, idempotent same-owner replay, path
   traversal/symlink rejection, unmanaged workspace non-deletion, and safe
   legacy lazy-copy without source deletion are covered.
-- File/DB failpoints prove no acknowledged upload lacks a row/file and orphan
-  staging/final files converge through the scanner.
+- File/DB failpoints prove no acknowledged upload lacks a row/file and a failed
+  upload rolls back files created by that failed transaction.
 
 ### Validation ladder
 

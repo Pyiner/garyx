@@ -5321,6 +5321,62 @@ fn cleanup_outbox_skips_blocked_threads_but_never_overtakes_same_thread() {
 }
 
 #[test]
+fn cleanup_outbox_attachment_step_migration_preserves_pending_jobs() {
+    let db = GaryxDbService::memory().expect("db opens");
+    {
+        let conn = db.conn().unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_cleanup_outbox_pending;
+             DROP TABLE cleanup_outbox;
+             CREATE TABLE cleanup_outbox (
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id TEXT NOT NULL,
+                step TEXT NOT NULL CHECK (step IN (
+                    'endpoint_runtime_invalidate', 'runtime_teardown',
+                    'transcript_remove', 'thread_log_remove'
+                )),
+                payload TEXT,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'done')),
+                attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+                next_attempt_at TEXT,
+                created_at TEXT NOT NULL,
+                settled_at TEXT
+             ) STRICT;
+             CREATE INDEX idx_cleanup_outbox_pending
+                ON cleanup_outbox(status, next_attempt_at)
+                WHERE status = 'pending';
+             INSERT INTO cleanup_outbox (
+                thread_id, step, status, attempt_count, created_at
+             ) VALUES (
+                'thread::migration', 'transcript_remove', 'pending', 2,
+                '2026-07-20T00:00:00Z'
+             );",
+        )
+        .unwrap();
+    }
+
+    db.migrate_cleanup_outbox_prompt_attachments_v1().unwrap();
+
+    let preserved = db
+        .next_cleanup_outbox_job("2026-07-21T00:00:00Z")
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.thread_id, "thread::migration");
+    assert_eq!(preserved.step, CleanupOutboxStep::TranscriptRemove);
+    assert_eq!(preserved.attempt_count, 2);
+    db.conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO cleanup_outbox (
+                thread_id, step, status, attempt_count, created_at
+             ) VALUES (?1, 'prompt_attachments_remove', 'pending', 0, ?2)",
+            params!["thread::new-step", "2026-07-20T00:00:01Z"],
+        )
+        .expect("migrated schema accepts the attachment cleanup step");
+}
+
+#[test]
 fn startup_recovery_abandons_only_orphaned_queued_inputs_in_one_pass() {
     let db = GaryxDbService::memory().expect("db opens");
     let thread_id = "thread::orphaned-inputs";

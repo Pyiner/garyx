@@ -130,7 +130,6 @@ pub struct UploadedChatAttachment {
     pub path: String,
     pub name: String,
     pub media_type: String,
-    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,10 +153,10 @@ pub async fn list_workspace_files(
 }
 
 pub async fn preview_workspace_file(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(query): Query<WorkspaceFileQuery>,
 ) -> impl IntoResponse {
-    match build_preview(query.workspace_dir, query.path).await {
+    match build_preview(&state, query.workspace_dir, query.path).await {
         Ok(preview) => (StatusCode::OK, Json(json!(preview))).into_response(),
         Err(error) => error.into_response(),
     }
@@ -235,6 +234,7 @@ async fn build_listing(
 }
 
 async fn build_preview(
+    state: &AppState,
     workspace_dir: String,
     file_path: Option<String>,
 ) -> Result<WorkspaceFilePreview, WorkspaceFileError> {
@@ -260,13 +260,24 @@ async fn build_preview(
         ));
     }
 
-    let name = canonical_file
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or("file")
-        .to_owned();
-    let media_type = detect_media_type(&name);
-    let preview_kind = detect_preview_kind(&name, &media_type);
+    let managed_metadata = state
+        .ops
+        .prompt_attachments
+        .preview_metadata_for_path(&canonical_file)
+        .await
+        .map_err(WorkspaceFileError::from)?;
+    let (name, media_type) = if let Some(metadata) = managed_metadata {
+        (metadata.name, metadata.media_type)
+    } else {
+        let name = canonical_file
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("file")
+            .to_owned();
+        let media_type = detect_media_type(&name);
+        (name, media_type)
+    };
+    let preview_kind = detect_preview_kind(&media_type);
     let modified_at = metadata.modified().ok().map(format_system_time);
     let size = metadata.len();
 
@@ -418,7 +429,6 @@ async fn write_uploaded_chat_attachments(
             path: attachment.path,
             name: attachment.name,
             media_type: attachment.media_type,
-            expires_at: attachment.expires_at,
         })
         .collect();
     Ok(UploadChatAttachmentsResult { files: uploaded })
@@ -728,18 +738,20 @@ fn preview_kind_label(kind: PreviewKind) -> &'static str {
     }
 }
 
-fn detect_preview_kind(name: &str, media_type: &str) -> PreviewKind {
-    let lower_name = name.trim().to_ascii_lowercase();
-    if lower_name.ends_with(".md")
-        || lower_name.ends_with(".markdown")
-        || media_type == "text/markdown"
-    {
+fn detect_preview_kind(media_type: &str) -> PreviewKind {
+    let media_type = media_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if media_type == "text/markdown" {
         return PreviewKind::Markdown;
     }
-    if lower_name.ends_with(".html") || lower_name.ends_with(".htm") || media_type == "text/html" {
+    if media_type == "text/html" {
         return PreviewKind::Html;
     }
-    if lower_name.ends_with(".pdf") || media_type == "application/pdf" {
+    if media_type == "application/pdf" {
         return PreviewKind::Pdf;
     }
     if media_type.starts_with("image/") {
@@ -747,33 +759,8 @@ fn detect_preview_kind(name: &str, media_type: &str) -> PreviewKind {
     }
     if media_type.starts_with("text/")
         || matches!(
-            lower_name.rsplit('.').next(),
-            Some(
-                "txt"
-                    | "json"
-                    | "jsonl"
-                    | "yaml"
-                    | "yml"
-                    | "toml"
-                    | "csv"
-                    | "tsv"
-                    | "log"
-                    | "rs"
-                    | "ts"
-                    | "tsx"
-                    | "js"
-                    | "jsx"
-                    | "css"
-                    | "scss"
-                    | "py"
-                    | "go"
-                    | "java"
-                    | "kt"
-                    | "swift"
-                    | "sh"
-                    | "sql"
-                    | "xml"
-            )
+            media_type.as_str(),
+            "application/json" | "application/yaml" | "application/xml"
         )
     {
         return PreviewKind::Text;

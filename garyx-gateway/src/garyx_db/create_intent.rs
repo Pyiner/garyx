@@ -970,7 +970,6 @@ impl GaryxDbService {
                             "managed attachment admission requires an effective run id".to_owned(),
                         )
                     })?;
-                    let lease_expires_at = (Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
                     claim_prompt_attachments_tx(
                         &tx,
                         attachment_claims,
@@ -982,7 +981,6 @@ impl GaryxDbService {
                             client_intent_id: Some(&dispatch.key.client_intent_id),
                             requested_run_id: dispatch.requested_run_id,
                             effective_run_id,
-                            lease_expires_at: &lease_expires_at,
                         },
                         &now,
                     )?;

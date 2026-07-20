@@ -72,10 +72,12 @@ for personal data and remove it.
 - Configured bot account `config` is ordinary application state; do not add
   token-specific merge, redaction, or preservation paths beyond keeping real
   secrets out of committed fixtures.
-- Prompt attachments referenced by committed messages are durable conversation
-  content. Never expire or delete them on upload TTL, claim lease expiry, or
-  provider-run termination; ownership follows the thread, and deletion must run
-  through the thread cleanup outbox.
+- Prompt attachments never use timer-based cleanup. Retain unreferenced staging
+  uploads unless their own failed upload transaction is rolled back. Attachments
+  referenced by committed messages are durable conversation content: never
+  expire or delete them on upload TTL, claim lease expiry, provider-run
+  termination, or thread archive. Ownership follows the thread, and physical
+  deletion runs only through the thread cleanup outbox after thread deletion.
 - A committed migration marker makes that migration's normalization contract
   durable protocol, not dead code. Never weaken it when retiring runtime
   fields; repair already-marked databases with a new versioned migration.

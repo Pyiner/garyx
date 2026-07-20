@@ -611,6 +611,12 @@ impl LifecycleService {
             CleanupOutboxStep::ThreadLogRemove => {
                 state.ops.thread_logs.delete_thread(&job.thread_id).await
             }
+            CleanupOutboxStep::PromptAttachmentsRemove => state
+                .ops
+                .prompt_attachments
+                .delete_thread_attachments(&job.thread_id)
+                .await
+                .map_err(|error| error.to_string()),
         }
     }
 
@@ -649,14 +655,17 @@ fn cleanup_backoff(attempt: u32) -> Duration {
 mod tests {
     use super::*;
     use crate::app_bootstrap::AppStateBuilder;
+    use crate::application::chat::contracts::IdempotencyScope;
     use crate::endpoint_binding_mutator::{DeleteBindingPreflight, SqlEndpointBindingMutator};
     use crate::garyx_db::{LifecycleMutationInput, LifecycleTransactionResult};
+    use crate::prompt_attachment_lifecycle::PromptAttachmentUpload;
     use async_trait::async_trait;
     use garyx_bridge::provider_trait::StreamCallback;
     use garyx_bridge::{BridgeError, ProviderRuntime};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
-        AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType,
+        AgentRunRequest, PromptAttachment, PromptAttachmentKind, ProviderRunOptions,
+        ProviderRunResult, ProviderType,
     };
     use garyx_router::{
         AdmittedRun, ChannelBinding, EndpointBindingMutationError, EndpointBindingMutator,
@@ -999,11 +1008,22 @@ mod tests {
 
     async fn state_with_runtime_cleanup(
         provider: Arc<CleanupProvider>,
-    ) -> (Arc<AppState>, Arc<GaryxDbService>, String) {
+        operation_kind: LifecycleOperationKind,
+    ) -> (
+        Arc<AppState>,
+        Arc<GaryxDbService>,
+        String,
+        String,
+        String,
+        tempfile::TempDir,
+    ) {
         let db = Arc::new(GaryxDbService::memory().expect("db opens"));
         let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
         bridge.register_provider("provider-one", provider).await;
-        let state = AppStateBuilder::new(GaryxConfig::default())
+        let attachment_data = tempfile::tempdir().unwrap();
+        let mut config = GaryxConfig::default();
+        config.sessions.data_dir = Some(attachment_data.path().join("data").display().to_string());
+        let state = AppStateBuilder::new(config)
             .with_garyx_db(db.clone())
             .with_bridge(bridge.clone())
             .build();
@@ -1024,14 +1044,67 @@ mod tests {
         bridge
             .set_thread_workspace_binding(&thread_id, Some("/tmp/test-workspace".to_owned()))
             .await;
+        let scope = IdempotencyScope {
+            identity: "outbox-attachment".to_owned(),
+            epoch: 1,
+        };
+        let uploaded = state
+            .ops
+            .prompt_attachments
+            .upload(
+                Some(&scope),
+                vec![PromptAttachmentUpload {
+                    kind: PromptAttachmentKind::Image,
+                    name: "outbox-photo.jpg".to_owned(),
+                    media_type: "image/jpeg".to_owned(),
+                    bytes: vec![0xff, 0xd8, 0xff, 0xd9],
+                }],
+            )
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let mut attachments = vec![PromptAttachment {
+            attachment_id: Some(uploaded.attachment_id.clone()),
+            kind: uploaded.kind.clone(),
+            path: uploaded.path.clone(),
+            name: uploaded.name,
+            media_type: uploaded.media_type,
+        }];
+        let claims = state
+            .ops
+            .prompt_attachments
+            .prepare_claims((&scope.identity, scope.epoch), &mut attachments)
+            .await
+            .unwrap();
+        state
+            .ops
+            .prompt_attachments
+            .claim_standalone(
+                (&scope.identity, scope.epoch),
+                &thread_id,
+                crate::garyx_db::DispatchAdmissionKind::ChatStart,
+                Some("outbox-intent"),
+                Some("outbox-run"),
+                "outbox-run",
+                &claims,
+            )
+            .await
+            .unwrap();
+        let attachment_path = attachments[0].path.clone();
+        let attachment_id = attachments[0].attachment_id.clone().unwrap();
         let incarnation = db.store_incarnation_id().unwrap();
+        let operation_label = match operation_kind {
+            LifecycleOperationKind::Archive => "archive",
+            LifecycleOperationKind::Delete => "delete",
+        };
         let result = db
             .execute_lifecycle_mutation(LifecycleMutationInput {
                 expected_store_incarnation: incarnation,
-                operation_id: "operation-runtime-cleanup".to_owned(),
-                kind: LifecycleOperationKind::Delete,
+                operation_id: format!("operation-runtime-cleanup-{operation_label}"),
+                kind: operation_kind,
                 thread_id: thread_id.clone(),
-                fingerprint: "runtime-cleanup-fingerprint".to_owned(),
+                fingerprint: format!("runtime-cleanup-{operation_label}-fingerprint"),
                 endpoint_keys: Vec::new(),
                 enabled_channel_accounts: BTreeSet::new(),
             })
@@ -1040,13 +1113,21 @@ mod tests {
             result,
             LifecycleTransactionResult::Completed { .. }
         ));
-        (state, db, thread_id)
+        (
+            state,
+            db,
+            thread_id,
+            attachment_path,
+            attachment_id,
+            attachment_data,
+        )
     }
 
     #[tokio::test]
     async fn retryable_provider_cleanup_retains_affinity_and_pending_job() {
         let provider = Arc::new(CleanupProvider::new(true));
-        let (state, db, thread_id) = state_with_runtime_cleanup(provider.clone()).await;
+        let (state, db, thread_id, attachment_path, _, _attachment_data) =
+            state_with_runtime_cleanup(provider.clone(), LifecycleOperationKind::Delete).await;
         assert!(state.ops.lifecycle.process_one_ready_job().await.unwrap());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -1058,13 +1139,15 @@ mod tests {
                 .as_deref(),
             Some("provider-one")
         );
-        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 3);
+        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 4);
+        assert!(std::path::Path::new(&attachment_path).exists());
     }
 
     #[tokio::test]
     async fn replay_after_provider_clear_before_local_drop_converges_from_already_absent() {
         let provider = Arc::new(CleanupProvider::new(false));
-        let (state, db, thread_id) = state_with_runtime_cleanup(provider.clone()).await;
+        let (state, db, thread_id, attachment_path, _, _attachment_data) =
+            state_with_runtime_cleanup(provider.clone(), LifecycleOperationKind::Delete).await;
         state.ops.lifecycle.fail_after_provider_clear_once();
         assert!(state.ops.lifecycle.process_one_ready_job().await.unwrap());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
@@ -1088,14 +1171,35 @@ mod tests {
                 .await
                 .is_none()
         );
-        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 2);
+        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 3);
+        assert!(std::path::Path::new(&attachment_path).exists());
+    }
+
+    #[tokio::test]
+    async fn archive_outbox_retains_thread_owned_attachments() {
+        let provider = Arc::new(CleanupProvider::new(false));
+        let (state, db, _, attachment_path, attachment_id, _attachment_data) =
+            state_with_runtime_cleanup(provider, LifecycleOperationKind::Archive).await;
+        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 3);
+
+        while state.ops.lifecycle.process_one_ready_job().await.unwrap() {}
+
+        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 0);
+        assert!(std::path::Path::new(&attachment_path).exists());
+        assert!(
+            db.prompt_attachment_by_id(&attachment_id)
+                .unwrap()
+                .is_some(),
+            "archiving a thread must retain its durable conversation attachments"
+        );
     }
 
     #[tokio::test]
     async fn pending_outbox_survives_state_restart_and_boot_worker_drains_it() {
         let original_provider = Arc::new(CleanupProvider::new(false));
-        let (original_state, db, thread_id) = state_with_runtime_cleanup(original_provider).await;
-        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 3);
+        let (original_state, db, thread_id, attachment_path, attachment_id, attachment_data) =
+            state_with_runtime_cleanup(original_provider, LifecycleOperationKind::Delete).await;
+        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 4);
         drop(original_state);
 
         // A fresh lifecycle service/bridge represents the next gateway boot;
@@ -1111,7 +1215,10 @@ mod tests {
         restarted_bridge
             .set_thread_workspace_binding(&thread_id, Some("/tmp/stale-workspace".to_owned()))
             .await;
-        let restarted = AppStateBuilder::new(GaryxConfig::default())
+        let mut restarted_config = GaryxConfig::default();
+        restarted_config.sessions.data_dir =
+            Some(attachment_data.path().join("data").display().to_string());
+        let restarted = AppStateBuilder::new(restarted_config)
             .with_garyx_db(db.clone())
             .with_bridge(restarted_bridge.clone())
             .build();
@@ -1129,6 +1236,12 @@ mod tests {
             restarted_bridge
                 .thread_affinity_for(&thread_id)
                 .await
+                .is_none()
+        );
+        assert!(!std::path::Path::new(&attachment_path).exists());
+        assert!(
+            db.prompt_attachment_by_id(&attachment_id)
+                .unwrap()
                 .is_none()
         );
     }

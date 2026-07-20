@@ -86,6 +86,7 @@ pub enum CleanupOutboxStep {
     RuntimeTeardown,
     TranscriptRemove,
     ThreadLogRemove,
+    PromptAttachmentsRemove,
 }
 
 impl CleanupOutboxStep {
@@ -95,6 +96,7 @@ impl CleanupOutboxStep {
             Self::RuntimeTeardown => "runtime_teardown",
             Self::TranscriptRemove => "transcript_remove",
             Self::ThreadLogRemove => "thread_log_remove",
+            Self::PromptAttachmentsRemove => "prompt_attachments_remove",
         }
     }
 
@@ -104,6 +106,7 @@ impl CleanupOutboxStep {
             "runtime_teardown" => Ok(Self::RuntimeTeardown),
             "transcript_remove" => Ok(Self::TranscriptRemove),
             "thread_log_remove" => Ok(Self::ThreadLogRemove),
+            "prompt_attachments_remove" => Ok(Self::PromptAttachmentsRemove),
             other => Err(GaryxDbError::Configuration(format!(
                 "invalid cleanup outbox step '{other}'"
             ))),
@@ -757,6 +760,14 @@ impl GaryxDbService {
             )?;
             enqueue_cleanup_job(&tx, &thread_id, CleanupOutboxStep::TranscriptRemove, None)?;
             enqueue_cleanup_job(&tx, &thread_id, CleanupOutboxStep::ThreadLogRemove, None)?;
+            if kind == LifecycleOperationKind::Delete {
+                enqueue_cleanup_job(
+                    &tx,
+                    &thread_id,
+                    CleanupOutboxStep::PromptAttachmentsRemove,
+                    None,
+                )?;
+            }
         }
 
         let result_payload = matches!(

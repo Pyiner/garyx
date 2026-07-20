@@ -530,10 +530,6 @@ impl AppStateBuilder {
             cron_service.set_garyx_db(state.ops.garyx_db.clone());
         }
         lifecycle.attach_state(Arc::downgrade(&state));
-        state
-            .ops
-            .prompt_attachments
-            .spawn_worker(&state.integration.bridge);
         crate::create_resources::spawn_create_resource_cleanup_worker(&state);
 
         state
