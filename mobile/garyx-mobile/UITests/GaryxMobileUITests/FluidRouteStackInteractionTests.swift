@@ -333,7 +333,61 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         waitForProductionStatus("focusedAdapters=0", in: app)
     }
 
+    func testProductionComposerTapRepositionsCaretInsideEnteredText() {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_DRAFT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        let original = "ALPHA BRAVO CHARLIE DELTA"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_COMPOSER_TEXT"] = original
+        app.launch()
+
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let visibleRegion = app.otherElements["garyx-composer-visible-input-region"]
+        XCTAssertTrue(visibleRegion.waitForExistence(timeout: 10))
+        waitForSelection(original.utf16.count, in: composer)
+
+        visibleRegion.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 76 / visibleRegion.frame.width,
+                dy: 25 / visibleRegion.frame.height
+            )
+        ).tap()
+        let tappedSelection = selection(in: composer)
+
+        print(
+            "COMPOSER_CARET_REPRO textView=\(composer.frame) visible=\(visibleRegion.frame) "
+                + "selectionBefore=\(original.utf16.count) selectionAfter=\(tappedSelection)"
+        )
+        XCTAssertLessThan(
+            tappedSelection,
+            original.utf16.count,
+            "tapping entered text must move the caret away from the trailing insertion point; "
+                + "textView=\(composer.frame) visible=\(visibleRegion.frame)"
+        )
+    }
+
     // MARK: Helpers
+
+    private func waitForSelection(
+        _ location: Int,
+        in composer: XCUIElement,
+        timeout: TimeInterval = 5
+    ) {
+        let predicate = NSPredicate(format: "value BEGINSWITH %@", "selection=\(location);")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: composer)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
+    }
+
+    private func selection(in composer: XCUIElement) -> Int {
+        guard let value = composer.value as? String,
+              let prefix = value.split(separator: ";").first,
+              let location = Int(prefix.dropFirst("selection=".count)) else {
+            return .max
+        }
+        return location
+    }
 
     private func launchFakeRoutes(
         depth: Int,

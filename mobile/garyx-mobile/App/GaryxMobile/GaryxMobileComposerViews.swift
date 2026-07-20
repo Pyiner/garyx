@@ -52,6 +52,23 @@ private enum GaryxComposerLayout {
     static let workspaceModeSelectedStroke = Color.primary.opacity(0.11)
 }
 
+#if DEBUG
+final class GaryxComposerInputRegionProbeView: UIView {}
+
+private struct GaryxComposerInputRegionProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> GaryxComposerInputRegionProbeView {
+        let view = GaryxComposerInputRegionProbeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "garyx-composer-visible-input-region"
+        view.accessibilityLabel = "Composer visible input region"
+        return view
+    }
+
+    func updateUIView(_ uiView: GaryxComposerInputRegionProbeView, context: Context) {}
+}
+#endif
+
 private enum GaryxComposerCameraAlert: String, Identifiable {
     case permissionDenied
     case unavailable
@@ -586,6 +603,11 @@ struct GaryxComposer: View {
             routePayloadItems.isEmpty ? GaryxComposerLayout.inputTopPadding : 6
         )
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
+        #if DEBUG
+        .background {
+            GaryxComposerInputRegionProbe()
+        }
+        #endif
         .contentShape(Rectangle())
         .onTapGesture {
             // `.onTapGesture` ignores `.disabled`; do not pop the keyboard

@@ -5,6 +5,89 @@ import XCTest
 
 @MainActor
 final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
+    func testComposerUIKitFieldOwnsEntireVisibleInputRegion() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let suiteName = "GaryxComposerHitRegion-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            composerPayloadCoordinator: coordinator
+        )
+        try await waitUntil { coordinator.inputConfiguration() != nil }
+        let draftID = "hit-region"
+        let composerKey = GaryxComposerKey.draft(draftID)
+        await coordinator.activate(scope: model.gatewayRequestToken.scope, key: composerKey)
+        try await waitUntil { coordinator.activeKey == composerKey }
+        XCTAssertEqual(coordinator.inputConfiguration()?.composerKey, composerKey)
+        XCTAssertTrue(coordinator.routeKeyMatchesActiveSession(composerKey))
+
+        let entry = GaryxRouteEntry(
+            id: .init(rawValue: "hit-region-occurrence"),
+            destination: .conversationDraft(draftID: draftID)
+        )
+        let harness = GaryxComposerHitRegionHarness(
+            model: model,
+            coordinator: coordinator,
+            routeContext: GaryxRouteContext(
+                node: .entry(entry),
+                isCanonicalTop: true,
+                lifecycle: .active
+            )
+        )
+        let controller = UIHostingController(rootView: harness)
+        let windowScene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let window = UIWindow(windowScene: windowScene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 180)
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true }
+        controller.view.frame = window.bounds
+        window.layoutIfNeeded()
+        controller.view.layoutIfNeeded()
+        for _ in 0..<5 {
+            await Task.yield()
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+        }
+
+        let textView = try XCTUnwrap(
+            controller.view.firstDescendant(ofType: GaryxComposerOrderedTextView.self)
+        )
+        let visibleRegion = try XCTUnwrap(
+            controller.view.firstDescendant(ofType: GaryxComposerInputRegionProbeView.self)
+        )
+
+        let actual = textView.convert(textView.bounds, to: controller.view)
+        let expected = visibleRegion.convert(visibleRegion.bounds, to: controller.view)
+        let glyphPoint = CGPoint(x: actual.minX + 60, y: actual.midY)
+        let paddedPoint = CGPoint(x: expected.minX + 76, y: expected.minY + 7)
+        let glyphHit = controller.view.hitTest(glyphPoint, with: nil)
+        let paddedHit = controller.view.hitTest(paddedPoint, with: nil)
+        let glyphReachesTextView = glyphHit?.isDescendant(of: textView) == true
+        let paddedReachesTextView = paddedHit?.isDescendant(of: textView) == true
+        let coverage = actual.width * actual.height / (expected.width * expected.height)
+
+        print(
+            "COMPOSER_HIT_REGION actual=\(actual) expected=\(expected) "
+                + "coverage=\(coverage) glyphHit=\(String(describing: glyphHit)) "
+                + "paddedHit=\(String(describing: paddedHit))"
+        )
+        XCTAssertTrue(glyphReachesTextView, "a point on the rendered glyph line must reach UITextView")
+        XCTAssertTrue(paddedReachesTextView, "every point in the visible input region must reach UITextView")
+        XCTAssertEqual(
+            actual,
+            expected,
+            "the system text control must own the composer's complete visible input region"
+        )
+    }
+
     func testRealUIKitHostUnmarksCJKBeforeCapturingExactFinalSequence() throws {
         let view = makeTextView()
         var ordered: [(String, GaryxComposerInputEventIdentity)] = []
@@ -1548,6 +1631,36 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
     ) -> GaryxRouteEntry {
         .init(id: .init(rawValue: id), destination: destination)
     }
+}
+
+@MainActor
+private struct GaryxComposerHitRegionHarness: View {
+    let model: GaryxMobileModel
+    @ObservedObject var coordinator: GaryxComposerPayloadCoordinator
+    let routeContext: GaryxRouteContext
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        GaryxComposer(payload: coordinator, isFocused: $isFocused)
+            .environmentObject(model)
+            .environment(\.garyxRouteContext, routeContext)
+    }
+}
+
+@MainActor
+private extension UIView {
+    func firstDescendant<ViewType: UIView>(ofType type: ViewType.Type) -> ViewType? {
+        if let match = self as? ViewType {
+            return match
+        }
+        for subview in subviews {
+            if let match = subview.firstDescendant(ofType: type) {
+                return match
+            }
+        }
+        return nil
+    }
+
 }
 
 private actor ComposerAsyncGate {

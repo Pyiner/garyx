@@ -152,6 +152,7 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         guard ProcessInfo.processInfo.environment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] == "1"
         else { return }
         accessibilityLabel = isLive ? "composer-live" : "composer-read-only"
+        accessibilityValue = "selection=\(selectedRange.location);length=\(text.utf16.count)"
         #endif
     }
 
@@ -159,7 +160,16 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         guard isLive, !isFinalizing else { return }
         self.text = text
         publishCurrentText(force: true)
+        #if DEBUG
+        updateDebugAccessibilityState()
+        #endif
     }
+
+    #if DEBUG
+    func observedSelectionDidChange() {
+        updateDebugAccessibilityState()
+    }
+    #endif
 
     /// Main-actor critical section used by route commit-release:
     /// freeze admission, unmark synchronously, publish the exact resulting
@@ -327,6 +337,9 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         context.coordinator.installCallbacks(on: view)
         view.grantLive(configuration)
         onRegister(view)
+        #if DEBUG
+        seedDebugTextIfNeeded(on: view)
+        #endif
         requestDebugFocusIfNeeded(on: view)
         return view
     }
@@ -370,6 +383,16 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         }
         #endif
     }
+
+    #if DEBUG
+    private func seedDebugTextIfNeeded(on view: GaryxComposerOrderedTextView) {
+        guard let text = ProcessInfo.processInfo.environment["GARYX_MOBILE_DEBUG_COMPOSER_TEXT"]
+        else { return }
+        view.replaceLiveText(text)
+        view.selectedRange = NSRange(location: text.utf16.count, length: 0)
+        view.observedSelectionDidChange()
+    }
+    #endif
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
@@ -419,6 +442,12 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             (textView as? GaryxComposerOrderedTextView)?.observedTextDidChange()
         }
+
+        #if DEBUG
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            (textView as? GaryxComposerOrderedTextView)?.observedSelectionDidChange()
+        }
+        #endif
 
         func textView(
             _ textView: UITextView,
