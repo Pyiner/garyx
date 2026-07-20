@@ -5,6 +5,52 @@ import XCTest
 
 @MainActor
 final class GaryxRouteStackContainerTests: XCTestCase {
+    func testTaskNotificationOpeningRowUsesFullReadingWidth() throws {
+        let viewportWidth = try XCTUnwrap(
+            UIApplication.shared.connectedScenes
+                .compactMap { ($0 as? UIWindowScene)?.screen }
+                .first
+        ).bounds.width
+        let transcriptWidth = viewportWidth - 32
+        let message = GaryxMobileMessage(
+            id: "task-notification-width-repro",
+            role: .user,
+            text: """
+            <garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review">
+            Task #TASK-42 is ready for review: Width reproduction
+
+            阶段一已经完成，下面是用于稳定复现窄列换行的较长说明：
+
+            - 第一项验证进入线程时的消息阅读宽度
+            - 第二项验证长文本与列表不会被用户气泡宽度压缩
+            - 第三项验证转场结束后仍使用完整阅读宽度
+
+            View details:
+            garyx task get #TASK-42
+            </garyx_task_notification>
+            """,
+            timestamp: "00:00",
+            isStreaming: false
+        )
+        XCTAssertNotNil(GaryxTaskNotificationPresentation.parse(message.text))
+        let renderer = ImageRenderer(
+            content: GaryxMessageBubble(message: message)
+                .frame(width: transcriptWidth)
+                .background(Color(red: 1, green: 0, blue: 1))
+        )
+        renderer.scale = 1
+
+        let image = try XCTUnwrap(renderer.uiImage)
+        let renderedReadingWidth = try nonMagentaHorizontalSpan(in: image)
+
+        XCTAssertEqual(
+            renderedReadingWidth,
+            transcriptWidth,
+            accuracy: 2,
+            "task notifications are system reading surfaces and must not inherit the compact user-bubble width"
+        )
+    }
+
     func testInactiveConversationPreparationDoesNotMutatePathAndPushReusesHost() throws {
         let harness = Harness(path: [])
         let prepared = entry(
@@ -20,10 +66,13 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         let preparedWrapper = try XCTUnwrap(
             harness.wrapper(identity: .entry(prepared.id))
         )
+        let preparedHostedView = try XCTUnwrap(preparedWrapper.contentView.subviews.first)
         XCTAssertFalse(preparedWrapper.isHidden)
         XCTAssertFalse(preparedWrapper.isUserInteractionEnabled)
         XCTAssertTrue(preparedWrapper.accessibilityElementsHidden)
         XCTAssertEqual(preparedWrapper.alpha, 0.01, accuracy: 0.001)
+        XCTAssertEqual(preparedWrapper.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(preparedHostedView.bounds.width, harness.width, accuracy: 0.01)
 
         XCTAssertTrue(harness.container.push(prepared, animated: false))
         harness.pumpUI()
@@ -38,7 +87,46 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertTrue(preparedWrapper.isUserInteractionEnabled)
         XCTAssertFalse(preparedWrapper.accessibilityElementsHidden)
         XCTAssertEqual(preparedWrapper.alpha, 1, accuracy: 0.001)
+        XCTAssertEqual(preparedWrapper.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(preparedHostedView.bounds.width, harness.width, accuracy: 0.01)
         XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
+    func testSpatialPushTranslatesFullWidthDestinationWithoutNarrowingItsHost() throws {
+        let harness = Harness(path: [])
+        let destination = entry(
+            1,
+            destination: .conversation(threadID: "thread-width-repro")
+        )
+
+        XCTAssertTrue(harness.container.push(destination, animated: true))
+        harness.pumpUI()
+
+        let wrapper = try XCTUnwrap(
+            harness.wrapper(identity: .entry(destination.id))
+        )
+        let hostedView = try XCTUnwrap(wrapper.contentView.subviews.first)
+        XCTAssertEqual(wrapper.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(wrapper.contentView.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(hostedView.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(wrapper.transform.tx, harness.width, accuracy: 0.01)
+
+        harness.advance(
+            by: GaryxRouteTransitionCalibration.programmaticSettleCurve.settlingDuration * 0.4
+        )
+
+        XCTAssertGreaterThan(wrapper.transform.tx, 0)
+        XCTAssertLessThan(wrapper.transform.tx, harness.width)
+        XCTAssertEqual(wrapper.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(wrapper.contentView.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(hostedView.bounds.width, harness.width, accuracy: 0.01)
+
+        harness.completeDisplayLinkedSettle()
+
+        XCTAssertEqual(wrapper.transform, .identity)
+        XCTAssertEqual(wrapper.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(wrapper.contentView.bounds.width, harness.width, accuracy: 0.01)
+        XCTAssertEqual(hostedView.bounds.width, harness.width, accuracy: 0.01)
     }
 
     func testRendererInfrastructureDoesNotOwnPageBackground() throws {
@@ -1193,6 +1281,46 @@ private func makeTestWindow(frame: CGRect) -> UIWindow {
     let window = UIWindow(windowScene: scene)
     window.frame = frame
     return window
+}
+
+private func nonMagentaHorizontalSpan(in image: UIImage) throws -> CGFloat {
+    let cgImage = try XCTUnwrap(image.cgImage)
+    let width = cgImage.width
+    let height = cgImage.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let context = try XCTUnwrap(
+        CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+    )
+    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+    var maximumSpan = 0
+    for y in 0..<height {
+        var first: Int?
+        var last: Int?
+        for x in 0..<width {
+            let index = (y * width + x) * 4
+            let red = pixels[index]
+            let green = pixels[index + 1]
+            let blue = pixels[index + 2]
+            let isMagenta = red > 245 && green < 10 && blue > 245
+            guard !isMagenta else { continue }
+            first = first ?? x
+            last = x
+        }
+        if let first, let last {
+            maximumSpan = max(maximumSpan, last - first + 1)
+        }
+    }
+    return CGFloat(maximumSpan) / image.scale
 }
 
 @MainActor
