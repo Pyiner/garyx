@@ -1,7 +1,7 @@
 import Foundation
 
 /// Separates remote archive requests from committed runtime tombstones so a
-/// failed swipe action never produces a delete-then-reinsert List update.
+/// failed archive action never produces a delete-then-reinsert List update.
 public struct GaryxPendingThreadArchiveState: Equatable, Sendable {
     private var requestThreadIds: Set<String>
     private var committedThreadIds: Set<String>

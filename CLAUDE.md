@@ -133,6 +133,8 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   there are zero local renderable rows, and preserve the shared header loading
   spinner. Prewarm the exact shared components and retain both moving-transition
   and post-reveal hitch gates.
+- Mobile thread-list rows never expose swipe actions. Keep row actions in the
+  existing long-press context menu, with destructive actions presented as such.
 - Message, transcript, and tool-row display is server-render-state first:
   `garyx-models` derives `render_state` from the committed event ledger and the
   gateway sends it in per-thread `thread_render_frame` SSE. Desktop and mobile

@@ -16,17 +16,16 @@ final class WorkspaceThreadListSmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["Workspaces"].exists)
     }
 
-    func testWorkspaceDrilldownUsesUnifiedSwipeActions() {
+    func testWorkspaceDrilldownHorizontalSwipeDoesNotRevealActions() {
         let app = launchWorkspaceDrilldown()
         let row = app.staticTexts["Thread History"]
         XCTAssertTrue(row.waitForExistence(timeout: 10))
 
         row.swipeLeft()
-        let swipePin = app.buttons["Pin thread"]
-        XCTAssertTrue(swipePin.waitForExistence(timeout: 5))
-        XCTAssertTrue(swipePin.isHittable)
-        XCTAssertTrue(app.buttons["Favorite thread"].isHittable)
-        XCTAssertTrue(app.buttons["Archive thread"].isHittable)
+        XCTAssertFalse(app.buttons["Pin thread"].waitForExistence(timeout: 1))
+        XCTAssertFalse(app.buttons["Favorite thread"].exists)
+        XCTAssertFalse(app.buttons["Archive thread"].exists)
+        XCTAssertTrue(row.exists)
     }
 
     func testWorkspaceDrilldownUsesUnifiedLongPressActions() {

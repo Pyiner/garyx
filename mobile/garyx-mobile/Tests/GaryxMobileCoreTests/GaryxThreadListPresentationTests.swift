@@ -2,7 +2,7 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxThreadListPresentationTests: XCTestCase {
-    func testActionPlannerUsesOneCapabilityTableForMenuAndSwipe() {
+    func testActionPlannerProducesCompleteContextMenuForMutableThread() {
         let full = GaryxThreadRowCapabilities(
             canOpen: true,
             canPin: true,
@@ -28,7 +28,7 @@ final class GaryxThreadListPresentationTests: XCTestCase {
         )
     }
 
-    func testActionPlannerOmitsArchiveWhenCapabilityDoes() {
+    func testActionPlannerProducesCompleteContextMenuForAutomationTarget() {
         let automationManaged = GaryxThreadRowCapabilities(
             canOpen: true,
             canPin: true,
@@ -51,6 +51,44 @@ final class GaryxThreadListPresentationTests: XCTestCase {
                 isFavorite: false
             ),
             [.pin, .favorite]
+        )
+    }
+
+    func testActionPlannerProducesCompleteContextMenuForBotEndpoint() {
+        let botEndpoint = GaryxThreadRowCapabilities(
+            canOpen: true,
+            canPin: true,
+            canArchive: true,
+            favorite: .addAndRemove,
+            archiveStrategy: .botEndpoint
+        )
+
+        XCTAssertEqual(
+            GaryxThreadRowActionPlanner.actions(
+                capabilities: botEndpoint,
+                isPinned: false,
+                isFavorite: false
+            ),
+            [.pin, .favorite, .archive(.botEndpoint)]
+        )
+    }
+
+    func testActionPlannerOmitsContextMenuForUnavailableRow() {
+        let unavailable = GaryxThreadRowCapabilities(
+            canOpen: false,
+            canPin: false,
+            canArchive: false,
+            favorite: .none,
+            archiveStrategy: .none
+        )
+
+        XCTAssertEqual(
+            GaryxThreadRowActionPlanner.actions(
+                capabilities: unavailable,
+                isPinned: false,
+                isFavorite: false
+            ),
+            []
         )
     }
 

@@ -14,8 +14,7 @@ public enum GaryxThreadRowActionKind: Equatable, Sendable {
     case archive(GaryxThreadArchiveStrategy)
 }
 
-/// One action plan shared by Home and every drilldown. SwiftUI only maps
-/// these semantic actions to menu/swipe presentation.
+/// One context-menu action plan shared by Home and every drilldown.
 public enum GaryxThreadRowActionPlanner {
     public static func actions(
         capabilities: GaryxThreadRowCapabilities,

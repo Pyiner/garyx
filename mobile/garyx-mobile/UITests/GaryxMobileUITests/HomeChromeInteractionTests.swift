@@ -98,48 +98,18 @@ final class HomeChromeInteractionTests: XCTestCase {
         XCTAssertEqual(pinAction.frame.height, 44, accuracy: 2)
     }
 
-    func testThreadSwipeRevealsCapabilityActionsWithoutOpeningThread() throws {
+    func testThreadHorizontalSwipeDoesNotRevealActionsOrOpenThread() throws {
         let app = launchHome(useScrollFixture: true)
         let row = app.staticTexts["Synthetic thread 7"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "swipeable unpinned thread row")
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "unpinned thread row")
 
         row.swipeLeft()
 
-        let pinAction = app.buttons["Pin thread"]
-        XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
-        XCTAssertTrue(pinAction.isHittable)
-        XCTAssertTrue(app.buttons["Favorite thread"].isHittable)
-        XCTAssertTrue(app.buttons["Archive thread"].isHittable)
+        XCTAssertFalse(app.buttons["Pin thread"].waitForExistence(timeout: 1))
+        XCTAssertFalse(app.buttons["Favorite thread"].exists)
+        XCTAssertFalse(app.buttons["Archive thread"].exists)
         XCTAssertFalse(app.buttons["Back"].exists)
-    }
-
-    func testThreadSwipeCancelSettleCanBeRegrabbed() throws {
-        let app = launchHome(useScrollFixture: true)
-        let row = app.staticTexts["Synthetic thread 7"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "regrabbable unpinned thread row")
-
-        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-        let start = origin.withOffset(
-            CGVector(dx: app.frame.width * 0.72, dy: row.frame.midY)
-        )
-        let shortRelease = origin.withOffset(
-            CGVector(dx: app.frame.width * 0.72 - 52, dy: row.frame.midY)
-        )
-        start.press(
-            forDuration: 0.05,
-            thenDragTo: shortRelease,
-            withVelocity: XCUIGestureVelocity(rawValue: 40),
-            thenHoldForDuration: 0
-        )
-
-        // The 52 pt slow release projects closed. A new touch at the settle
-        // boundary must remain eligible and drive the same row open.
-        row.swipeLeft(velocity: .fast)
-
-        XCTAssertTrue(app.buttons["Pin thread"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Favorite thread"].isHittable)
-        XCTAssertTrue(app.buttons["Archive thread"].isHittable)
-        XCTAssertFalse(app.buttons["Back"].exists)
+        XCTAssertTrue(row.exists)
     }
 
     func testThresholdLongPressPresentsMenuWithoutOpeningThread() throws {

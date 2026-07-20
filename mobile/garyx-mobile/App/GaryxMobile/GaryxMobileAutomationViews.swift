@@ -1215,7 +1215,6 @@ struct GaryxAutomationThreadPickerRow: View {
                     isFullBleed: true,
                     density: .compact,
                     selectionDisplay: .checkmark,
-                    swipeStyle: .custom,
                     openSource: .current
                 ),
                 onOpenThread: { _, _ in onSelect() },

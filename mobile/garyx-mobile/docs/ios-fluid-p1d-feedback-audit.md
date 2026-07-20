@@ -18,8 +18,8 @@ generator for a repeated action.
 | Event | Pattern | Preheat strategy | Visual/causal commit |
 | --- | --- | --- | --- |
 | Message send | Light impact | Send, Continue, and Retry button touch-down | `GaryxMobileModel.send`: after optimistic user row/run state is accepted, before the first network suspension |
-| Thread pin/unpin | Selection | Thread menu label touch-down; row-swipe gesture begin; cached generator re-arm for nested unpin | After optimistic pin membership and placement publish, before transport starts |
-| Thread favorite/unfavorite | Selection | Same thread menu/row-action selection generator | After the favorites reducer changes presented membership and publishes it |
+| Thread pin/unpin | Selection | Thread menu label touch-down; cached generator re-arm for nested unpin | After optimistic pin membership and placement publish, before transport starts |
+| Thread favorite/unfavorite | Selection | Same thread menu selection generator | After the favorites reducer changes presented membership and publishes it |
 | Capsule favorite/unfavorite | Selection | Gallery card or focused-star touch-down | After the capsule favorite reducer applies the visible star state, before transport starts |
 | Capsule drag dismiss | Medium impact | First owned drag sample | Reducer returns `.dismiss`; final drag state and haptic land in the release branch before dismissal |
 | Interactive back | Light impact | `beginInteractivePop()` | Irreversible `.committed` release branch, alongside commit-phase visual/canonical mutation |

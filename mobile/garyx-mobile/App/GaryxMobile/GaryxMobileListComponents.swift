@@ -321,8 +321,8 @@ struct GaryxSwipeActionRow<Content: View>: View {
             }
             .accessibilityHint(
                 layoutDirection == .leftToRight
-                    ? "Swipe left for thread actions."
-                    : "Swipe right for thread actions."
+                    ? "Swipe left for item actions."
+                    : "Swipe right for item actions."
             )
             .modifier(GaryxRowMenuAccessibilityActions(actions: actions, onAction: perform))
         }

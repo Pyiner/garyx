@@ -1,10 +1,5 @@
 import SwiftUI
 
-enum GaryxThreadRowSwipeStyle: Equatable {
-    case nativeList
-    case custom
-}
-
 struct GaryxThreadListRowInput: Equatable {
     var thread: GaryxThreadSummary
     var presentation: GaryxSidebarThreadRowPresentation
@@ -16,7 +11,6 @@ struct GaryxThreadListRowInput: Equatable {
     var isFullBleed = false
     var density: GaryxSidebarThreadRowDensity = .regular
     var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
-    var swipeStyle: GaryxThreadRowSwipeStyle = .nativeList
     var indent: CGFloat = 0
     var menuDismissToken = 0
     var menuMovementSuppression = false
@@ -44,28 +38,16 @@ struct GaryxThreadListRowButton: View, Equatable {
         #if DEBUG
         let _ = GaryxHomeScrollPerformanceProbe.shared.markRowBody()
         #endif
-        Group {
-            switch input.swipeStyle {
-            case .nativeList:
-                rowContent
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        nativeSwipeActions
-                    }
-            case .custom:
-                GaryxSwipeActionRow(id: "thread:\(input.thread.id)", actions: swipeActions) {
-                    rowContent
-                }
-            }
-        }
-        .padding(.leading, input.indent)
-        .frame(height: isExiting ? 0 : nil, alignment: .top)
-        .opacity(motion.opacity(.rowRemoval, active: isExiting))
-        .scaleEffect(motion.scale(.rowRemoval, active: isExiting), anchor: .trailing)
-        .offset(x: motion.offset(.rowRemoval, active: isExiting).width)
-        .clipped()
-        .allowsHitTesting(!isExiting)
-        .accessibilityHidden(isExiting)
-        .animation(motion.animation(.rowRemoval), value: isExiting)
+        rowContent
+            .padding(.leading, input.indent)
+            .frame(height: isExiting ? 0 : nil, alignment: .top)
+            .opacity(motion.opacity(.rowRemoval, active: isExiting))
+            .scaleEffect(motion.scale(.rowRemoval, active: isExiting), anchor: .trailing)
+            .offset(x: motion.offset(.rowRemoval, active: isExiting).width)
+            .clipped()
+            .allowsHitTesting(!isExiting)
+            .accessibilityHidden(isExiting)
+            .animation(motion.animation(.rowRemoval), value: isExiting)
     }
 
     private var rowContent: some View {
@@ -112,25 +94,6 @@ struct GaryxThreadListRowButton: View, Equatable {
         )
     }
 
-    private var swipeActions: [GaryxRowAction] {
-        actionPlan.map(rowAction)
-    }
-
-    @ViewBuilder
-    private var nativeSwipeActions: some View {
-        ForEach(Array(actionPlan.enumerated()), id: \.offset) { _, action in
-            let descriptor = descriptor(for: action)
-            Button(role: descriptor.destructive ? .destructive : nil) {
-                guard actionsEnabled else { return }
-                perform(action)
-            } label: {
-                Label(descriptor.title, systemImage: descriptor.systemImage)
-            }
-            .tint(descriptor.destructive ? GaryxTheme.danger : GaryxTheme.controlTint)
-            .disabled(!actionsEnabled)
-        }
-    }
-
     private func menuItems() -> [GaryxThreadActionMenuItem] {
         actionPlan.map { action in
             let descriptor = descriptor(for: action)
@@ -143,18 +106,6 @@ struct GaryxThreadListRowButton: View, Equatable {
                 guard actionsEnabled else { return }
                 perform(action)
             }
-        }
-    }
-
-    private func rowAction(_ action: GaryxThreadRowActionKind) -> GaryxRowAction {
-        let descriptor = descriptor(for: action)
-        return GaryxRowAction(
-            title: descriptor.title,
-            systemImage: descriptor.systemImage,
-            tone: descriptor.destructive ? .destructive : .neutral
-        ) {
-            guard actionsEnabled else { return }
-            perform(action)
         }
     }
 
