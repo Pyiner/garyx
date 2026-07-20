@@ -152,6 +152,8 @@ export interface ThreadRuntimeInfo {
   modelServiceTierOverride?: string | null;
   sdkSessionId?: string | null;
   workspacePath?: string | null;
+  rootWorkspacePath?: string | null;
+  workspaceOrigin?: string | null;
   worktree?: ThreadWorktreeInfo | null;
   activeRun?: ThreadActiveRunInfo | null;
   channelBindings: ThreadChannelBindingInfo[];

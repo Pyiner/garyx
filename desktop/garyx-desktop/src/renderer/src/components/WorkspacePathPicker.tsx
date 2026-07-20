@@ -34,7 +34,10 @@ export type WorkspacePathPickerProps = {
   triggerClassName?: string;
   contentClassName?: string;
   gatewayHome?: string | null;
-  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
+  onAddWorkspace?: (
+    path: string,
+    name?: string | null,
+  ) => Promise<DesktopWorkspace | null>;
 };
 
 export type WorkspacePathPickerDialogProps = {
@@ -562,6 +565,10 @@ export function WorkspacePathPicker({
     setPickerOpen(false);
     setAddOpen(false);
     setFetchedCatalog(null);
+    // A stale add's finally is epoch-guarded, so the switch owns resetting
+    // this local busy flag (otherwise a remount-free embedder stays stuck
+    // on Saving forever).
+    setSavingAdd(false);
   }, [workspaceEpoch]);
 
   useEffect(() => {
@@ -592,7 +599,7 @@ export function WorkspacePathPicker({
     const epoch = workspaceEpoch;
     try {
       const added = onAddWorkspace
-        ? await onAddWorkspace(path)
+        ? await onAddWorkspace(path, name)
         : await adapter.addWorkspace(path, name);
       if (epoch !== workspaceEpochRef.current) {
         return;

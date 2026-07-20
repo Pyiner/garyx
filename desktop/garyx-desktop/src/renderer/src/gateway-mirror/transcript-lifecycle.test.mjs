@@ -496,6 +496,8 @@ function makeLegacyBindings(h) {
       updatedAt: fallbackTimestamp,
       lastMessagePreview: preview,
       workspacePath: transcript.threadInfo?.workspacePath ?? null,
+      rootWorkspacePath: transcript.threadInfo?.rootWorkspacePath ?? null,
+      workspaceOrigin: transcript.threadInfo?.workspaceOrigin ?? null,
       messageCount:
         transcript.pageInfo?.totalMessages ?? transcript.messages.length,
       agentId: transcript.threadInfo?.agentId ?? null,

@@ -5786,6 +5786,53 @@ fn workspace_list_stats_aggregate_membership_in_total_order() {
 }
 
 #[test]
+fn workspace_total_order_pins_activity_and_path_tie_breakers() {
+    let db = GaryxDbService::memory().expect("db opens");
+    // Activity order deliberately CONFLICTS with name order: dropping the
+    // activity comparator would sort "aaa-idle" first and fail.
+    for (name, path) in [
+        (Some("aaa-idle"), "/workspace/aaa-idle"),
+        (Some("zzz-busy"), "/workspace/zzz-busy"),
+        // Same display name, different paths: only the final normalized
+        // path comparator gives these a deterministic order.
+        (Some("Same Name"), "/workspace/twin-b"),
+        (Some("Same Name"), "/workspace/twin-a"),
+    ] {
+        db.upsert_workspace(WorkspaceDraft {
+            name: name.map(ToOwned::to_owned),
+            path: path.to_owned(),
+        })
+        .expect("workspace row");
+    }
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::55555555-5555-5555-5555-555555555555",
+        Some("/workspace/zzz-busy"),
+        None,
+        9_000,
+        false,
+    ))
+    .expect("busy thread");
+
+    let ordered: Vec<String> = db
+        .list_workspaces_with_stats()
+        .expect("stats list")
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert_eq!(
+        ordered,
+        vec![
+            // Latest activity wins over name order…
+            "/workspace/zzz-busy".to_owned(),
+            "/workspace/aaa-idle".to_owned(),
+            // …and equal names fall through to the path tie-breaker.
+            "/workspace/twin-a".to_owned(),
+            "/workspace/twin-b".to_owned(),
+        ],
+    );
+}
+
+#[test]
 fn workspace_pin_and_rename_are_active_row_only_point_mutations() {
     let db = GaryxDbService::memory().expect("db opens");
     assert!(matches!(

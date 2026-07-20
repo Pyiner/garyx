@@ -478,6 +478,22 @@ pub(super) fn summarize_thread(thread_id: &str, data: &Value, messages: &[Value]
             .unwrap_or(Value::Null)
     };
 
+    let workspace_dir = workspace_dir_from_value(data);
+    let recorded_origin = data
+        .get("workspace_origin")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let workspace_origin = crate::workspace_mode::effective_workspace_origin(
+        thread_id,
+        workspace_dir.as_deref(),
+        recorded_origin,
+    );
+    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
+        workspace_origin,
+        workspace_dir.as_deref(),
+        data.get("worktree").unwrap_or(&Value::Null),
+    );
     json!({
         "thread_id": thread_id,
         "thread_key": thread_id,
@@ -485,7 +501,9 @@ pub(super) fn summarize_thread(thread_id: &str, data: &Value, messages: &[Value]
         "channel": get_value("channel", "last_channel"),
         "account_id": get_value("account_id", "last_account_id"),
         "from_id": get_value("from_id", "last_to"),
-        "workspace_dir": workspace_dir_from_value(data).map(Value::String).unwrap_or(Value::Null),
+        "workspace_dir": workspace_dir.map(Value::String).unwrap_or(Value::Null),
+        "workspace_origin": workspace_origin,
+        "root_workspace_path": root_workspace_path,
         "channel_bindings": serde_json::to_value(bindings_from_value(data)).unwrap_or_else(|_| Value::Array(Vec::new())),
         "message_count": message_count,
         "updated_at": get_value("updated_at", "_updated_at"),

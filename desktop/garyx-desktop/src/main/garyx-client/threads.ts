@@ -407,6 +407,20 @@ function mapThreadRuntimeInfo(
           "thread metadata.workspace_dir",
         )
       : null,
+    rootWorkspacePath: detail
+      ? optionalNullableStringField(
+          detail,
+          "root_workspace_path",
+          "thread metadata.root_workspace_path",
+        )
+      : null,
+    workspaceOrigin: detail
+      ? optionalNullableStringField(
+          detail,
+          "workspace_origin",
+          "thread metadata.workspace_origin",
+        )
+      : null,
     worktree: detail && hasContractField(detail, "worktree")
       ? mapThreadWorktreeInfo(detail.worktree)
       : null,

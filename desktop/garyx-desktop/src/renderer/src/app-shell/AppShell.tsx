@@ -2810,11 +2810,18 @@ export function AppShell() {
     const draftComposerVisible =
       contentView === "thread" && !selectedThreadId;
     // An empty catalog is a valid answer (→ explicit none), not a reason
-    // to stay unresolved; hydration completing is what gates this.
+    // to stay unresolved — but a FAILED catalog fetch is not an answer at
+    // all: its fallback is an empty list plus a workspaces remote error,
+    // and resolving on it would permanently pin `none` before the retry
+    // brings the real list. Hydration success is what gates this.
+    const workspacesSliceFailed = Boolean(
+      desktopState?.remoteErrors?.some((error) => error.source === "workspaces"),
+    );
     if (
       !draftComposerVisible ||
       pendingWorkspaceSelection !== null ||
-      !desktopState
+      !desktopState ||
+      workspacesSliceFailed
     ) {
       return;
     }

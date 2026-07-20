@@ -31,10 +31,12 @@
   padding: 0;
   background: transparent;
   color: var(--color-token-text-primary);
-  /* Captured reference: 16px / 445 / 24px line. */
-  font-size: var(--menu-item-font-size);
-  font-weight: var(--menu-item-font-weight);
-  line-height: 1.5;
+  /* Captured reference: 16px / 445 / 24px line (--menu-item-font-size
+   * resolves to 13px in this app, so the reference values are pinned
+   * literally). */
+  font-size: 16px;
+  font-weight: 445;
+  line-height: 24px;
 }
 
 .workspace-picker-search-input::placeholder {
