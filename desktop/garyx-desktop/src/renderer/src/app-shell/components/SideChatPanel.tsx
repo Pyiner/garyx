@@ -104,15 +104,10 @@ export interface SideChatPanelProps {
   /** Shell-truth chrome shared with the main ThreadPage instance. */
   composerAgentOptions: ThreadPageProps["composerAgentOptions"];
   availableWorkspaceCount: number;
-  newThreadWorkspaceEntry: ThreadPageProps["newThreadWorkspaceEntry"];
-  newThreadWorkspaceMode: DesktopWorkspaceMode;
-  preferredWorkspaceForNewThread: ThreadPageProps["preferredWorkspaceForNewThread"];
-  selectableNewThreadWorkspaces: ThreadPageProps["selectableNewThreadWorkspaces"];
   threadAvatarCatalog: ThreadPageProps["threadAvatarCatalog"];
   newThreadProviderModels?: DesktopProviderModels | null;
   botGroups: ThreadPageProps["botGroups"];
   botBindingDisabled: boolean;
-  workspaceMutation: ThreadPageProps["workspaceMutation"];
   slashCommands: SlashCommand[];
   slashCommandsLoaded: boolean;
   slashCommandsLoading: boolean;
@@ -152,7 +147,6 @@ export interface SideChatPanelProps {
     Record<string, boolean>
   >;
   /** Shell handlers reused verbatim from the main instance. */
-  onAddWorkspace: () => void;
   onLocalWorkspaceFileLinkClick: (path: string) => void;
   onResumeProviderSession: ThreadPageProps["onResumeProviderSession"];
   onRetryFailedMessage: (message: UiTranscriptMessage) => void;
@@ -168,14 +162,9 @@ export function SideChatPanel({
   activeThread,
   composerAgentOptions,
   availableWorkspaceCount,
-  newThreadWorkspaceEntry,
-  newThreadWorkspaceMode,
-  preferredWorkspaceForNewThread,
-  selectableNewThreadWorkspaces,
   threadAvatarCatalog,
   botGroups,
   botBindingDisabled,
-  workspaceMutation,
   slashCommands,
   slashCommandsLoaded,
   slashCommandsLoading,
@@ -194,7 +183,6 @@ export function SideChatPanel({
   setError,
   sideChatMessagesRef,
   deferredQueueDrainByThreadRef,
-  onAddWorkspace,
   onLocalWorkspaceFileLinkClick,
   onResumeProviderSession,
   onRetryFailedMessage,
@@ -695,6 +683,14 @@ export function SideChatPanel({
         sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
       }
       availableWorkspaceCount={availableWorkspaceCount}
+      draftWorkspaceSelection={null}
+      draftWorkspaceMode="local"
+      draftWorkspaces={[]}
+      gatewayHome={null}
+      workspaceAddBusy={false}
+      onDraftWorkspaceSelectionChange={() => {}}
+      onDraftWorkspaceModeChange={() => {}}
+      onDraftAddWorkspace={() => {}}
       composer={sideComposerDraft.text}
       composerAttachmentInputRef={sideComposerAttachmentInputRef}
       composerBrowserAnnotations={sideComposerDraft.browserAnnotations}
@@ -725,9 +721,6 @@ export function SideChatPanel({
       isComposingRef={sideIsComposingRef}
       messagesRef={sideChatMessagesRef}
       newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
-      newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-      newThreadWorkspaceMode={newThreadWorkspaceMode}
-      onAddWorkspace={onAddWorkspace}
       onAppendComposerAttachments={(files) => {
         void appendSideComposerAttachments(sideChatSourceThreadId, files);
       }}
@@ -797,7 +790,6 @@ export function SideChatPanel({
       }}
       onReorderQueuedIntent={onReorderQueuedIntent}
       onSelectNewThreadAgent={() => {}}
-      onSelectNewThreadWorkspaceMode={() => {}}
       onResumeProviderSession={onResumeProviderSession}
       onRetryFailedMessage={(message) => {
         onRetryFailedMessage(message);
@@ -811,14 +803,11 @@ export function SideChatPanel({
         onOpenThreadById(threadId);
       }}
       onOpenCapsule={onOpenCapsule}
-      onSelectWorkspace={() => {}}
       onSteerQueuedPrompt={(item) => {
         void mirror.steerQueuedIntent(item, {
           canSteer: sideChatCanSteerQueuedPrompt,
         });
       }}
-      preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-      selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
       selectedThreadId={sideChatThreadId}
       showAutomationRunInitialPlaceholder={false}
       // Side chats fork the provider session without importing visible
@@ -829,7 +818,6 @@ export function SideChatPanel({
       threadAvatarCatalog={threadAvatarCatalog}
       visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
       visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
-      workspaceMutation={workspaceMutation}
     />
   );
 }

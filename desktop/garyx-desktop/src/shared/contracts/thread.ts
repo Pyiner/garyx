@@ -275,6 +275,9 @@ export interface ThreadLogChunk {
 export interface CreateThreadInput {
   title?: string;
   workspacePath?: string | null;
+  /** Explicit No-workspace draft: create without a workspace_dir so the
+   *  gateway provisions its private Garyx-managed thread workspace. */
+  noWorkspace?: boolean;
   workspaceMode?: DesktopWorkspaceMode;
   /** Agent ID. */
   agentId?: string | null;

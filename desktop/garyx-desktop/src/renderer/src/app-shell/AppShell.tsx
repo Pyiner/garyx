@@ -26,6 +26,7 @@ import {
   type DesktopThreadSummary,
   type DesktopThreadPinOrderSnapshot,
   type DesktopWorkspace,
+  type DraftWorkspaceSelection,
   type DesktopWorkspaceMode,
   type ThreadRuntimeInfo,
   type ThreadTranscript,
@@ -100,6 +101,7 @@ import {
   pickPreferredWorkspace,
   selectedThread,
   selectedWorkspace,
+  resolveDefaultDraftWorkspace,
   visibleWorkspaceList,
   workspaceForThread,
   workspaceSuggestionFromPath,
@@ -111,7 +113,6 @@ import {
 import {
   ensureThread,
   scheduleThreadHistoryRefresh,
-  selectWorkspaceForThread,
   startNewThreadDraft,
   updateThreadBotBinding,
 } from "../thread-controller";
@@ -214,6 +215,8 @@ import {
 import garyxIconUrl from "../assets/garyx-icon.png";
 import {
   contentViewForDesktopRoute,
+  draftSelectionFromRouteWorkspace,
+  routeWorkspaceFromDraftSelection,
   type DesktopRoute,
 } from "./desktop-route";
 import {
@@ -242,6 +245,12 @@ type ThreadEntrySelectionSource =
   | "recent"
   | "bot-root"
   | "bot-conversation";
+
+function draftSelectionWorkspacePath(
+  selection: DraftWorkspaceSelection | null,
+): string | null {
+  return selection?.kind === "path" ? selection.path : null;
+}
 
 type LegacyLayoutIntentState = {
   globalSidebarOpen: boolean;
@@ -648,11 +657,12 @@ export function AppShell() {
   const [newThreadDraftActive, setNewThreadDraftActive] = useState(
     initialRouteValue.kind === "new-thread",
   );
-  const [pendingWorkspacePath, setPendingWorkspacePath] = useState<string | null>(
-    initialRouteValue.kind === "new-thread"
-      ? initialRouteValue.workspacePath || null
-      : null,
-  );
+  const [pendingWorkspaceSelection, setPendingWorkspaceSelection] =
+    useState<DraftWorkspaceSelection | null>(
+      initialRouteValue.kind === "new-thread"
+        ? draftSelectionFromRouteWorkspace(initialRouteValue.workspacePath)
+        : null,
+    );
   const [pendingWorkspaceMode, setPendingWorkspaceMode] =
     useState<DesktopWorkspaceMode>("local");
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
@@ -775,7 +785,7 @@ export function AppShell() {
   const selectedThreadGenerationRef = useRef(0);
   const selectThreadRequestSequenceRef = useRef(0);
   const newThreadDraftActiveRef = useRef(false);
-  const pendingWorkspacePathRef = useRef<string | null>(null);
+  const pendingWorkspaceSelectionRef = useRef<DraftWorkspaceSelection | null>(null);
   const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("local");
   const pendingBotIdRef = useRef<string | null>(null);
   const newThreadInitialDispatchLockRef = useRef(false);
@@ -1139,6 +1149,10 @@ export function AppShell() {
     desktopState,
     selectedThreadId,
   );
+  const pendingWorkspacePath =
+    pendingWorkspaceSelection?.kind === "path"
+      ? pendingWorkspaceSelection.path
+      : null;
   const pendingWorkspaceEntry = selectedWorkspace(
     desktopState,
     pendingWorkspacePath,
@@ -1655,8 +1669,6 @@ export function AppShell() {
     pendingNewThreadWorkspaceEntry,
     selectedNewThreadWorkspaceEntry,
   );
-  const newThreadWorkspaceEntry =
-    pendingNewThreadWorkspaceEntry || preferredWorkspaceForNewThread;
   const activeWorkspace =
     activeThreadWorkspace || pendingWorkspaceEntry || selectedWorkspaceEntry;
   const workspaceSelectionEntry =
@@ -2706,7 +2718,7 @@ export function AppShell() {
     setPendingAgentId,
     setPendingBotId,
     setPendingWorkspaceMode,
-    setPendingWorkspacePath,
+    setPendingWorkspaceSelection,
     setSelectedThreadId,
   });
 
@@ -2715,8 +2727,8 @@ export function AppShell() {
   }, [newThreadDraftActive]);
 
   useEffect(() => {
-    pendingWorkspacePathRef.current = pendingWorkspacePath;
-  }, [pendingWorkspacePath]);
+    pendingWorkspaceSelectionRef.current = pendingWorkspaceSelection;
+  }, [pendingWorkspaceSelection]);
 
   useEffect(() => {
     pendingWorkspaceModeRef.current = pendingWorkspaceMode;
@@ -2760,10 +2772,16 @@ export function AppShell() {
         .filter((path): path is string => Boolean(path)),
     );
     if (pendingWorkspacePath && !workspacePaths.has(pendingWorkspacePath)) {
-      setPendingWorkspacePath(null);
-      // A removed workspace clears the draft's workspace param too
+      // The selected workspace was removed: the one sanctioned re-resolution
+      // of a live draft. The route sync carries the new selection
       // (review #TASK-1627: raw pending writes must carry their sync).
-      syncDraftRoute({ workspacePath: null });
+      const fallback = resolveDefaultDraftWorkspace(
+        visibleWorkspaceList(desktopState),
+      );
+      setPendingWorkspaceSelection(fallback);
+      syncDraftRoute({
+        workspacePath: routeWorkspaceFromDraftSelection(fallback),
+      });
     }
     if (workspaceMenuOpenPath && !workspacePaths.has(workspaceMenuOpenPath)) {
       setWorkspaceMenuOpenPath(null);
@@ -2775,10 +2793,10 @@ export function AppShell() {
   ]);
 
   useEffect(() => {
-    if (selectedThreadId && pendingWorkspacePath) {
-      setPendingWorkspacePath(null);
+    if (selectedThreadId && pendingWorkspaceSelection) {
+      setPendingWorkspaceSelection(null);
     }
-  }, [pendingWorkspacePath, selectedThreadId]);
+  }, [pendingWorkspaceSelection, selectedThreadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2879,7 +2897,12 @@ export function AppShell() {
         } else if (startupRoute.kind === "new-thread") {
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
-          setPendingWorkspacePath(startupRoute.workspacePath || null);
+          setPendingWorkspaceSelection(
+            draftSelectionFromRouteWorkspace(startupRoute.workspacePath) ??
+              resolveDefaultDraftWorkspace(
+                visibleWorkspaceList(hydratedState),
+              ),
+          );
           setPendingWorkspaceMode("local");
           setPendingAgentId(
             startupRoute.agentId || null,
@@ -3098,41 +3121,16 @@ export function AppShell() {
     }, delayMs);
   }
 
-  async function handleSelectWorkspace(
-    workspacePath: string,
-    threadId?: string | null,
-  ) {
-    await selectWorkspaceForThread({
-      api: getDesktopApi(),
-      workspacePath,
-      threadId,
-      setError,
-      navigateRoute: (route) => {
-        desktopRouteStore.navigate(route, { replace: true });
-      },
-      enterDraft: (nextWorkspacePath) => {
-        // Keep the user's agent pick (undefined = keep).
-        enterNewThreadDraft({ workspacePath: nextWorkspacePath });
-      },
-      setDesktopState,
-    });
-  }
-
   async function ensureSelectedThreadId(): Promise<string | null> {
     return ensureThread({
       api: getDesktopApi(),
       selectedThreadId,
-      pendingWorkspacePath,
+      pendingWorkspaceSelection,
       pendingWorkspaceMode,
       pendingAgentId,
       pendingModel,
       pendingModelReasoningEffort,
       pendingModelServiceTier,
-      preferredWorkspacePath: preferredWorkspaceForNewThread?.available
-        ? preferredWorkspaceForNewThread.path
-        : null,
-      selectableWorkspaceCount: selectableNewThreadWorkspaces.length,
-      onAddWorkspace: handleAddWorkspaceForNewThread,
       setWorkspaceMutation,
       setDesktopState,
       // Draft promotion selects the created thread synchronously; sync its
@@ -3151,7 +3149,7 @@ export function AppShell() {
         }));
       },
       setNewThreadDraftActive,
-      setPendingWorkspacePath,
+      setPendingWorkspaceSelection,
       setPendingWorkspaceMode,
       setPendingBotId,
       setPendingAgentId,
@@ -3192,7 +3190,7 @@ export function AppShell() {
         ...current,
         [created.thread.id]: current[created.thread.id] || [],
       }));
-      setPendingWorkspacePath(null);
+      setPendingWorkspaceSelection(null);
       setPendingWorkspaceMode("local");
       setPendingBotId(null);
       setPendingAgentId(created.thread.agentId || providerHint || null);
@@ -3345,8 +3343,8 @@ export function AppShell() {
       activeThreadNewThreadWorkspace: activeThreadNewThreadWorkspace,
       selectedNewThreadWorkspaceEntry,
       setError,
-      enterDraft: (workspacePath) => {
-        enterNewThreadDraft({ workspacePath, agentId: null });
+      enterDraft: (selection) => {
+        enterNewThreadDraft({ workspaceSelection: selection, agentId: null });
       },
       syncComposerPhase,
     });
@@ -3362,14 +3360,21 @@ export function AppShell() {
    * user's current pick (bot drafts, workspace drafts).
    */
   function enterNewThreadDraft(input: {
-    workspacePath: string | null;
+    workspaceSelection: DraftWorkspaceSelection | null;
     agentId?: string | null;
     botId?: string | null;
   }) {
     setError(null);
     setNewThreadDraftActive(true);
     setSelectedThreadId(null);
-    setPendingWorkspacePath(input.workspacePath || null);
+    // The draft's workspace tri-state resolves exactly once, here at draft
+    // creation: an explicit selection (route, sidebar entry point, chip)
+    // wins; otherwise the then-current default. It never re-resolves on
+    // catalog refresh.
+    const selection =
+      input.workspaceSelection ??
+      resolveDefaultDraftWorkspace(visibleWorkspaceList(desktopState));
+    setPendingWorkspaceSelection(selection);
     setPendingWorkspaceMode("local");
     setPendingBotId(input.botId ?? null);
     if (input.agentId !== undefined) {
@@ -3384,7 +3389,7 @@ export function AppShell() {
     // sync, so the closure IS the latest value.
     desktopRouteStore.syncRoute({
       kind: "new-thread",
-      workspacePath: input.workspacePath || null,
+      workspacePath: routeWorkspaceFromDraftSelection(selection),
       agentId: input.agentId !== undefined
         ? input.agentId || desktopAgentCatalog.effectiveDefaultAgentId
         : pendingAgentId,
@@ -3444,7 +3449,9 @@ export function AppShell() {
       selectedNewThreadWorkspaceEntry,
     );
     enterNewThreadDraft({
-      workspacePath: nextWorkspace?.path || null,
+      workspaceSelection: nextWorkspace?.path
+        ? { kind: "path", path: nextWorkspace.path }
+        : null,
       agentId,
     });
     syncComposerPhase("");
@@ -3462,7 +3469,7 @@ export function AppShell() {
       onOpenThreadById: (threadId) => {
         return openExistingThread(threadId, "bot-root").then((opened) => {
           if (opened) {
-            setPendingWorkspacePath(null);
+            setPendingWorkspaceSelection(null);
             setPendingWorkspaceMode("local");
             setPendingBotId(null);
           }
@@ -3473,26 +3480,36 @@ export function AppShell() {
         newThreadDraftActiveRef.current &&
         selectedThreadIdRef.current === null &&
         pendingBotIdRef.current === groupId &&
-        pendingWorkspacePathRef.current === initialWorkspacePath,
+        draftSelectionWorkspacePath(pendingWorkspaceSelectionRef.current) ===
+          initialWorkspacePath,
       shouldOpenResolvedThread: (groupId, initialWorkspacePath) =>
         newThreadDraftActiveRef.current &&
         selectedThreadIdRef.current === null &&
         pendingBotIdRef.current === groupId &&
-        pendingWorkspacePathRef.current === initialWorkspacePath &&
+        draftSelectionWorkspacePath(pendingWorkspaceSelectionRef.current) ===
+          initialWorkspacePath &&
         !composerHasPayloadRef.current,
       setError,
       enterBotDraft: (workspacePath, botId) => {
         // agentId stays undefined: the legacy bot draft left the user's pick
         // untouched, and an async fallback must not write a stale closure
         // value back (review #TASK-1621).
-        enterNewThreadDraft({ workspacePath, botId });
+        enterNewThreadDraft({
+          workspaceSelection: workspacePath
+            ? { kind: "path", path: workspacePath }
+            : null,
+          botId,
+        });
       },
       // Background workspace correction for an already-open bot draft: the
       // sync helper's route-based guard makes this async-safe (review
       // #TASK-1627) — a draft the user already left is a no-op.
       setPendingWorkspacePath: (value) => {
-        setPendingWorkspacePath(value);
-        syncDraftRoute({ workspacePath: value });
+        const selection = value ? { kind: "path" as const, path: value } : null;
+        setPendingWorkspaceSelection(selection);
+        syncDraftRoute({
+          workspacePath: routeWorkspaceFromDraftSelection(selection),
+        });
       },
       syncComposerPhase,
     });
@@ -3506,9 +3523,9 @@ export function AppShell() {
       selectedNewThreadWorkspaceEntry,
       workspacePath,
       setError,
-      enterDraft: (nextWorkspacePath) => {
+      enterDraft: (selection) => {
         enterNewThreadDraft({
-          workspacePath: nextWorkspacePath,
+          workspaceSelection: selection,
           agentId: null,
         });
       },
@@ -3520,16 +3537,6 @@ export function AppShell() {
     setAddWorkspaceDialog({
       source: "new-thread",
       initialPath: pendingWorkspacePath || selectedWorkspaceEntry?.path || "",
-    });
-  }
-
-  async function handleAddWorkspaceForNewThread(): Promise<DesktopWorkspace | null> {
-    return new Promise((resolve) => {
-      setAddWorkspaceDialog({
-        source: "new-thread",
-        initialPath: pendingWorkspacePath || selectedWorkspaceEntry?.path || "",
-        resolve,
-      });
     });
   }
 
@@ -3571,7 +3578,9 @@ export function AppShell() {
     if (workspace) {
       if (request.source === "new-thread") {
         setNewThreadDraftActive(true);
-        setPendingWorkspacePath(workspace.path);
+        setPendingWorkspaceSelection(
+          workspace.path ? { kind: "path", path: workspace.path } : null,
+        );
         setPendingWorkspaceMode("local");
         requestComposerFocus();
         desktopRouteStore.syncRoute({
@@ -4001,14 +4010,9 @@ export function AppShell() {
       activeThread={activeThread}
       composerAgentOptions={composerAgentOptions}
       availableWorkspaceCount={availableWorkspaceCount}
-      newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-      newThreadWorkspaceMode={pendingWorkspaceMode}
-      preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-      selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
       threadAvatarCatalog={threadAvatarCatalog}
       botGroups={botGroups}
       botBindingDisabled={bindingMutation === "bot-binding"}
-      workspaceMutation={workspaceMutation}
       slashCommands={commands}
       slashCommandsLoaded={commandsLoaded}
       slashCommandsLoading={commandsLoading}
@@ -4027,9 +4031,6 @@ export function AppShell() {
       setError={setError}
       sideChatMessagesRef={sideChatMessagesRef}
       deferredQueueDrainByThreadRef={deferredQueueDrainByThreadRef}
-      onAddWorkspace={() => {
-        void handleAddWorkspace();
-      }}
       onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
       onResumeProviderSession={handleResumeProviderSession}
       onRetryFailedMessage={(message) => {
@@ -4179,6 +4180,24 @@ export function AppShell() {
         composerResetKey={composerResetKey}
         composerWorkspaceBranch={composerWorkspaceBranch}
         composerWorkspaceMode={composerWorkspaceMode}
+        draftWorkspaceSelection={pendingWorkspaceSelection}
+        draftWorkspaceMode={pendingWorkspaceMode}
+        draftWorkspaces={workspacePickerWorkspaces}
+        gatewayHome={desktopState?.gatewayHome ?? null}
+        workspaceAddBusy={workspaceMutation === "add"}
+        onDraftWorkspaceSelectionChange={(selection) => {
+          setPendingWorkspaceSelection(selection);
+          if (selection.kind !== "path") {
+            setPendingWorkspaceMode("local");
+          }
+          syncDraftRoute({
+            workspacePath: routeWorkspaceFromDraftSelection(selection),
+          });
+        }}
+        onDraftWorkspaceModeChange={setPendingWorkspaceMode}
+        onDraftAddWorkspace={() => {
+          void handleAddWorkspace();
+        }}
         activeThreadBot={activeThreadBot}
         activeThreadBotId={activeThreadBotId}
         botBindingDisabled={bindingMutation === "bot-binding"}
@@ -4210,11 +4229,6 @@ export function AppShell() {
           activeThreadInfo?.modelReasoningEffortOverride || null
         }
         threadSelectedServiceTier={activeThreadInfo?.modelServiceTierOverride || null}
-        newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-        newThreadWorkspaceMode={pendingWorkspaceMode}
-        onAddWorkspace={() => {
-          void handleAddWorkspace();
-        }}
         onAppendComposerAttachments={(files) => {
           void appendComposerAttachments(files);
         }}
@@ -4279,7 +4293,6 @@ export function AppShell() {
             modelServiceTier,
           });
         }}
-        onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
         onResumeProviderSession={handleResumeProviderSession}
         onRetryFailedMessage={(message) => {
           void handleRetryFailedMessage(message);
@@ -4336,15 +4349,9 @@ export function AppShell() {
           }));
           setPendingActiveCapsuleId(capsuleId);
         }}
-        onSelectWorkspace={(workspacePath) => {
-          setPendingWorkspaceMode("local");
-          void handleSelectWorkspace(workspacePath, null);
-        }}
         onSteerQueuedPrompt={(item) => {
           void handleSteerQueuedPrompt(item);
         }}
-        preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-        selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
         selectedThreadId={selectedThreadId}
         showAutomationRunInitialPlaceholder={showAutomationRunInitialPlaceholder}
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
@@ -4356,7 +4363,6 @@ export function AppShell() {
         threadAvatarCatalog={threadAvatarCatalog}
         visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
         visibleRemotePendingInputs={visibleRemotePendingInputs}
-        workspaceMutation={workspaceMutation}
       />
     );
   }

@@ -29,7 +29,7 @@ test('creating a thread clears its one-time agent override so the next draft use
     setSelectedThreadId: () => {},
     initializeThreadMessages: () => {},
     setNewThreadDraftActive: () => {},
-    setPendingWorkspacePath: () => {},
+    setPendingWorkspaceSelection: () => {},
     setPendingWorkspaceMode: () => {},
     setPendingBotId: () => {},
     setPendingAgentId: (value) => {

@@ -12,6 +12,9 @@ import {
 } from "react";
 import { ArrowDown, CircleAlert, GitBranch, Repeat2 } from 'lucide-react';
 
+import { WorkspaceComposerChip } from '../../components/WorkspaceComposerChip';
+import { CodexChipNoProjectIcon } from '../../components/codex-icons';
+
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
@@ -33,6 +36,7 @@ import type {
   DesktopThreadSummary,
   DesktopWorkspace,
   DesktopWorkspaceMode,
+  DraftWorkspaceSelection,
   PendingThreadInput,
   RenderRateLimit,
   RenderState,
@@ -469,6 +473,14 @@ type ThreadPageProps = {
   composerWorkspaceBranch: string | null;
   composerWorkspaceMode: DesktopWorkspaceMode | null;
   composerResetKey: number;
+  draftWorkspaceSelection: DraftWorkspaceSelection | null;
+  draftWorkspaceMode: DesktopWorkspaceMode;
+  draftWorkspaces: DesktopWorkspace[];
+  gatewayHome: string | null;
+  workspaceAddBusy: boolean;
+  onDraftWorkspaceSelectionChange: (selection: DraftWorkspaceSelection) => void;
+  onDraftWorkspaceModeChange: (workspaceMode: DesktopWorkspaceMode) => void;
+  onDraftAddWorkspace: () => void;
   activeThreadBot: DesktopBotConsoleSummary | null;
   activeThreadBotId: string | null;
   botBindingDisabled: boolean;
@@ -495,9 +507,6 @@ type ThreadPageProps = {
   threadSelectedModel?: string | null;
   threadSelectedReasoningEffort?: string | null;
   threadSelectedServiceTier?: string | null;
-  newThreadWorkspaceEntry: DesktopWorkspace | null;
-  newThreadWorkspaceMode: DesktopWorkspaceMode;
-  selectableNewThreadWorkspaces: DesktopWorkspace[];
   selectedThreadId: string | null;
   showAutomationRunInitialPlaceholder: boolean;
   showHistoryLoadingPlaceholder: boolean;
@@ -509,11 +518,9 @@ type ThreadPageProps = {
   threadAvatarCatalog: ThreadAvatarCatalog;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
-  workspaceMutation: string | null;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
   isComposingRef: MutableRefObject<boolean>;
   ignoreComposerSubmitUntilRef: MutableRefObject<number>;
-  onAddWorkspace: () => void;
   onAppendComposerAttachments: (files: File[]) => void;
   onCancelIntent: (threadId: string, intentId: string) => void;
   onComposerChange: (value: string) => void;
@@ -553,15 +560,12 @@ type ThreadPageProps = {
   onSelectThreadModel?: (model: string | null) => void;
   onSelectThreadReasoningEffort?: (effort: string | null) => void;
   onSelectThreadServiceTier?: (tier: string | null) => void;
-  onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
   onSelectBotBinding: (botId: string | null) => void;
-  onSelectWorkspace: (workspacePath: string) => void;
   onSteerQueuedPrompt: (intent: MessageIntent) => void;
   onOpenThreadById: (threadId: string) => void;
   onOpenCapsule?: (card: RenderCapsuleCard) => void;
-  preferredWorkspaceForNewThread: DesktopWorkspace | null;
 };
 
 export function ThreadPage({
@@ -588,6 +592,14 @@ export function ThreadPage({
   composerProviderType,
   composerWorkspaceBranch,
   composerWorkspaceMode,
+  draftWorkspaceSelection,
+  draftWorkspaceMode,
+  draftWorkspaces,
+  gatewayHome,
+  workspaceAddBusy,
+  onDraftWorkspaceSelectionChange,
+  onDraftWorkspaceModeChange,
+  onDraftAddWorkspace,
   composerResetKey,
   activeThreadBot,
   activeThreadBotId,
@@ -618,9 +630,6 @@ export function ThreadPage({
   threadSelectedModel,
   threadSelectedReasoningEffort,
   threadSelectedServiceTier,
-  newThreadWorkspaceEntry,
-  newThreadWorkspaceMode,
-  onAddWorkspace,
   onAppendComposerAttachments,
   onCancelIntent,
   onComposerChange,
@@ -647,15 +656,12 @@ export function ThreadPage({
   onSelectThreadModel,
   onSelectThreadReasoningEffort,
   onSelectThreadServiceTier,
-  onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
   onRetryFailedMessage,
   onSelectBotBinding,
-  onSelectWorkspace,
   onSteerQueuedPrompt,
   onOpenThreadById,
   onOpenCapsule,
-  selectableNewThreadWorkspaces,
   selectedThreadId,
   showAutomationRunInitialPlaceholder,
   showHistoryLoadingPlaceholder,
@@ -666,7 +672,6 @@ export function ThreadPage({
   threadLayoutStyle,
   threadAvatarCatalog,
   visibleRemotePendingInputs,
-  workspaceMutation,
 }: ThreadPageProps) {
   recordTranscriptRender("ThreadPage");
   const { t } = useI18n();
@@ -777,7 +782,19 @@ export function ThreadPage({
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
   const newThreadPromptTitle = "What do you want Garyx to build?";
-  const composerContext = selectedThreadId && composerWorkspaceMode ? (
+  const sentWorkspaceOrigin = activeThreadSummary?.workspaceOrigin || null;
+  const composerContext = !selectedThreadId && surfaceVariant !== "side-chat" ? (
+    <WorkspaceComposerChip
+      addWorkspaceBusy={workspaceAddBusy}
+      gatewayHome={gatewayHome}
+      onAddWorkspace={onDraftAddWorkspace}
+      onSelectionChange={onDraftWorkspaceSelectionChange}
+      onWorkspaceModeChange={onDraftWorkspaceModeChange}
+      selection={draftWorkspaceSelection}
+      workspaceMode={draftWorkspaceMode}
+      workspaces={draftWorkspaces}
+    />
+  ) : composerWorkspaceMode ? (
     <div
       aria-label={t("Workspace mode")}
       className="thread-composer-status"
@@ -787,6 +804,16 @@ export function ThreadPage({
         <span>
           {composerWorkspaceBranch?.trim() || t("Worktree")}
         </span>
+      </span>
+    </div>
+  ) : sentWorkspaceOrigin === "implicit" ? (
+    <div
+      aria-label={t("Workspace")}
+      className="thread-composer-status"
+    >
+      <span className="thread-composer-status-pill thread-composer-status-none">
+        <CodexChipNoProjectIcon size={14} />
+        <span>{t("No workspace")}</span>
       </span>
     </div>
   ) : null;
@@ -1188,14 +1215,7 @@ export function ThreadPage({
             !historyLoading &&
             !showAutomationRunInitialPlaceholder ? (
               <NewThreadEmptyState
-                newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-                onAddWorkspace={onAddWorkspace}
-                onSelectWorkspace={onSelectWorkspace}
-                onWorkspaceModeChange={onSelectNewThreadWorkspaceMode}
                 onResumeProviderSession={onResumeProviderSession}
-                selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
-                workspaceMode={newThreadWorkspaceMode}
-                workspaceMutation={workspaceMutation}
               />
             ) : null}
             </div>

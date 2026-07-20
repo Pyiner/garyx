@@ -80,6 +80,14 @@ function ThreadStage({ step, storyId }: { step: StoryStep; storyId: string }) {
       activeThreadTitle="Conversation State Storybook"
       activeThreadRunId={state.activeRunId}
       availableWorkspaceCount={1}
+      draftWorkspaceSelection={null}
+      draftWorkspaceMode="local"
+      draftWorkspaces={[]}
+      gatewayHome={null}
+      workspaceAddBusy={false}
+      onDraftWorkspaceSelectionChange={() => {}}
+      onDraftWorkspaceModeChange={() => {}}
+      onDraftAddWorkspace={() => {}}
       composer=""
       composerAttachmentInputRef={composerAttachmentInputRef}
       composerBrowserAnnotations={[]}
@@ -110,9 +118,6 @@ function ThreadStage({ step, storyId }: { step: StoryStep; storyId: string }) {
       isComposingRef={isComposingRef}
       messagesRef={messagesRef}
       newThreadSelectedAgentId="claude"
-      newThreadWorkspaceEntry={null}
-      newThreadWorkspaceMode="local"
-      onAddWorkspace={noop}
       onAppendComposerAttachments={noop}
       onCancelIntent={noop}
       onComposerChange={noop}
@@ -129,12 +134,10 @@ function ThreadStage({ step, storyId }: { step: StoryStep; storyId: string }) {
       onRemoveComposerBrowserAnnotation={noop}
       onReorderQueuedIntent={noop}
       onSelectNewThreadAgent={noop}
-      onSelectNewThreadWorkspaceMode={noop}
       onResumeProviderSession={async () => {}}
       onRetryFailedMessage={noop}
       onSelectBotBinding={noop}
       onOpenThreadById={noop}
-      onSelectWorkspace={noop}
       onSteerQueuedPrompt={noop}
       preferredWorkspaceForNewThread={null}
       selectableNewThreadWorkspaces={[]}
@@ -145,7 +148,6 @@ function ThreadStage({ step, storyId }: { step: StoryStep; storyId: string }) {
       threadAvatarCatalog={EMPTY_THREAD_AVATAR_CATALOG}
       visibleRemoteAwaitingAckInputs={[]}
       visibleRemotePendingInputs={[]}
-      workspaceMutation={null}
     />
   );
 }

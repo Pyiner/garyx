@@ -47,6 +47,16 @@ export type DesktopDirectoryListingErrorCode =
   | "not_a_directory"
   | "permission_denied";
 
+/**
+ * Draft workspace selection for an unsent new thread. Explicit tri-state:
+ * a concrete path, or the user's explicit "No workspace" choice. The
+ * default is resolved once when a draft is created (never re-resolved on
+ * list refresh), so a draft holds a concrete selection from birth.
+ */
+export type DraftWorkspaceSelection =
+  | { kind: "path"; path: string }
+  | { kind: "none" };
+
 export interface PinWorkspaceInput {
   workspacePath: string;
   pinned: boolean;

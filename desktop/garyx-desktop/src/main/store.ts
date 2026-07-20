@@ -1607,6 +1607,9 @@ export async function setDesktopThreadPinOrder(
 export async function createDesktopThread(input?: {
   title?: string;
   workspacePath?: string | null;
+  /** Explicit No-workspace draft: create without a workspace_dir so the
+   *  gateway provisions its private Garyx-managed thread workspace. */
+  noWorkspace?: boolean;
   workspaceMode?: "local" | "worktree";
   agentId?: string | null;
   model?: string | null;
@@ -1624,16 +1627,14 @@ export async function createDesktopThread(input?: {
     : null;
   const forkFromThreadId = input?.forkFromThreadId?.trim() || null;
   const providerBoundSource = Boolean(sdkSessionId || forkFromThreadId);
-  const explicitWorkspacePath = providerBoundSource ? null : normalizeWorkspacePathInput(input?.workspacePath);
-  let targetWorkspacePath: string | null = providerBoundSource ? null : current.selectedWorkspacePath;
-  let workspacePath = explicitWorkspacePath;
-  if (!workspacePath) {
-    workspacePath = targetWorkspacePath?.trim() || null;
-  }
-  if (!workspacePath) {
-    if (!targetWorkspacePath && !providerBoundSource) {
-      throw new Error('Choose an available folder before creating a new thread.');
-    }
+  const noWorkspace = Boolean(input?.noWorkspace);
+  let workspacePath = providerBoundSource || noWorkspace
+    ? null
+    : normalizeWorkspacePathInput(input?.workspacePath);
+  if (!workspacePath && !providerBoundSource && !noWorkspace) {
+    // Callers send an explicit selection (path or noWorkspace); reaching
+    // here is a programming error, not a user flow.
+    throw new Error('Workspace selection is required to create a thread.');
   }
   if (workspacePath) {
     const requestedWorkspacePath = workspacePath;

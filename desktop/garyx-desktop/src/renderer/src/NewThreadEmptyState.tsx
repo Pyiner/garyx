@@ -1,12 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Folder, GitBranch, History, Laptop, Plus, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useState } from "react";
+import { History, RefreshCw } from 'lucide-react';
 
 import type {
   DesktopProviderRecentSession,
   DesktopSessionProviderHint,
-  DesktopWorkspace,
-  DesktopWorkspaceGitStatus,
-  DesktopWorkspaceMode,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,23 +13,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { WorkspaceSelectDialog } from "@/components/WorkspacePathPicker";
 import { useI18n } from "./i18n";
-import {
-  loadWorkspaceGitStatusCached,
-  workspaceGitStatusCache,
-} from "./workspace-git-status-cache";
 
-const GIT_STATUS_CHECK_DELAY_MS = 120;
 const RESUME_PROVIDER_OPTIONS: Array<{
   value: DesktopSessionProviderHint;
   label: string;
@@ -41,27 +23,15 @@ const RESUME_PROVIDER_OPTIONS: Array<{
   { value: "claude", label: "Claude Code" },
 ];
 type NewThreadEmptyStateProps = {
-  newThreadWorkspaceEntry: DesktopWorkspace | null;
-  selectableNewThreadWorkspaces: DesktopWorkspace[];
-  workspaceMutation: string | null;
-  workspaceMode: DesktopWorkspaceMode;
-  onAddWorkspace: () => void;
-  onSelectWorkspace: (workspacePath: string) => void;
-  onWorkspaceModeChange: (workspaceMode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (
     sessionId: string,
     providerHint?: DesktopSessionProviderHint | null,
   ) => Promise<void>;
 };
 
+/** Workspace selection lives in the composer footer chip; this empty state
+ *  keeps only the Resume entry point. */
 export function NewThreadEmptyState({
-  newThreadWorkspaceEntry,
-  selectableNewThreadWorkspaces,
-  workspaceMutation,
-  workspaceMode,
-  onAddWorkspace,
-  onSelectWorkspace,
-  onWorkspaceModeChange,
   onResumeProviderSession,
 }: NewThreadEmptyStateProps) {
   const { t } = useI18n();
@@ -80,92 +50,9 @@ export function NewThreadEmptyState({
   const [recentSessionsError, setRecentSessionsError] = useState<string | null>(
     null,
   );
-  const [gitStatusResult, setGitStatusResult] = useState<{
-    workspacePath: string;
-    status: DesktopWorkspaceGitStatus;
-  } | null>(null);
-  const [gitStatusRefreshVersion, setGitStatusRefreshVersion] = useState(0);
-  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
-
   useEffect(() => {
     setResumeError(null);
   }, [resumeOpen, resumeSessionId]);
-
-  const selectedWorkspace = useMemo(
-    () =>
-      selectableNewThreadWorkspaces.find(
-        (workspace) => workspace.path === (newThreadWorkspaceEntry?.path || ""),
-      ) ??
-      selectableNewThreadWorkspaces[0] ??
-      null,
-    [newThreadWorkspaceEntry?.path, selectableNewThreadWorkspaces],
-  );
-  const selectedWorkspacePath = selectedWorkspace?.path?.trim() || "";
-  const worktreeCapable = Boolean(
-    gitStatusResult?.workspacePath === selectedWorkspacePath &&
-      gitStatusResult.status.isGitRepo,
-  );
-  useEffect(() => {
-    let cancelled = false;
-    setGitStatusResult(null);
-    if (!selectedWorkspacePath) {
-      onWorkspaceModeChange("local");
-      return;
-    }
-    const cachedStatus = workspaceGitStatusCache.get(selectedWorkspacePath);
-    if (cachedStatus) {
-      setGitStatusResult({
-        workspacePath: selectedWorkspacePath,
-        status: cachedStatus,
-      });
-      if (!cachedStatus.isGitRepo) {
-        onWorkspaceModeChange("local");
-      }
-      return;
-    }
-
-    const timeout = window.setTimeout(() => {
-      void loadWorkspaceGitStatusCached({
-        cache: workspaceGitStatusCache,
-        workspacePath: selectedWorkspacePath,
-        load: () =>
-          window.garyxDesktop.getWorkspaceGitStatus({
-            workspacePath: selectedWorkspacePath,
-          }),
-      })
-        .then((status) => {
-          if (cancelled) return;
-          setGitStatusResult({ workspacePath: selectedWorkspacePath, status });
-          if (!status.isGitRepo) {
-            onWorkspaceModeChange("local");
-          }
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setGitStatusResult(null);
-          onWorkspaceModeChange("local");
-        });
-    }, GIT_STATUS_CHECK_DELAY_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
-    };
-  }, [gitStatusRefreshVersion, onWorkspaceModeChange, selectedWorkspacePath]);
-
-  useEffect(() => {
-    if (!selectedWorkspacePath) {
-      return;
-    }
-    const refreshCachedNegative = () => {
-      if (workspaceGitStatusCache.invalidateNegative(selectedWorkspacePath)) {
-        setGitStatusRefreshVersion((current) => current + 1);
-      }
-    };
-    window.addEventListener("focus", refreshCachedNegative);
-    return () => {
-      window.removeEventListener("focus", refreshCachedNegative);
-    };
-  }, [selectedWorkspacePath]);
 
   function closeResume() {
     setResumeOpen(false);
@@ -248,68 +135,6 @@ export function NewThreadEmptyState({
     <>
       <div className="new-thread-empty-state">
         <div className="new-thread-option-row">
-          {selectableNewThreadWorkspaces.length ? (
-            <button
-              aria-label={t("Workspace for the new thread")}
-              className="new-thread-workspace-trigger"
-              onClick={() => setWorkspacePickerOpen(true)}
-              type="button"
-            >
-              <Folder aria-hidden size={16} strokeWidth={1.7} />
-              <span className="new-thread-menu-text">
-                {selectedWorkspace?.name ?? t("Select a workspace")}
-              </span>
-              <ChevronDown aria-hidden size={14} strokeWidth={1.8} />
-            </button>
-          ) : (
-            <Button
-              variant="outline"
-              className="new-thread-workspace-trigger justify-center"
-              disabled={workspaceMutation === "add"}
-              onClick={onAddWorkspace}
-            >
-              <Plus aria-hidden size={14} strokeWidth={1.8} />
-              {workspaceMutation === "add"
-                ? t("Opening folder…")
-                : t("Choose a folder to begin")}
-            </Button>
-          )}
-
-          {worktreeCapable ? (
-            <Select
-              onValueChange={(value) =>
-                onWorkspaceModeChange(value as DesktopWorkspaceMode)
-              }
-              value={workspaceMode}
-            >
-              <SelectTrigger
-                aria-label={t("Workspace mode")}
-                className="new-thread-mode-trigger"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent
-                align="start"
-                className="new-thread-mode-menu"
-                position="popper"
-                side="bottom"
-                sideOffset={-1}
-              >
-                <SelectGroup>
-                  <SelectLabel>{t("Workspace mode")}</SelectLabel>
-                  <SelectItem value="local">
-                    <Laptop aria-hidden size={16} strokeWidth={1.7} />
-                    <span className="new-thread-menu-text">{t("Local mode")}</span>
-                  </SelectItem>
-                  <SelectItem value="worktree">
-                    <GitBranch aria-hidden size={16} strokeWidth={1.7} />
-                    <span className="new-thread-menu-text">{t("Worktree")}</span>
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          ) : null}
-
           <Button
             variant="ghost"
             size="sm"
@@ -321,19 +146,6 @@ export function NewThreadEmptyState({
           </Button>
         </div>
       </div>
-
-      <WorkspaceSelectDialog
-        addWorkspaceBusy={workspaceMutation === "add"}
-        onAddWorkspace={onAddWorkspace}
-        onClose={() => setWorkspacePickerOpen(false)}
-        onSelect={(workspacePath) => {
-          onWorkspaceModeChange("local");
-          onSelectWorkspace(workspacePath);
-        }}
-        open={workspacePickerOpen}
-        selectedPath={selectedWorkspace?.path || ""}
-        workspaces={selectableNewThreadWorkspaces}
-      />
 
       <Dialog
         onOpenChange={(open) => {

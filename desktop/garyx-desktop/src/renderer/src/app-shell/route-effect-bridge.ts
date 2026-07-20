@@ -14,11 +14,12 @@ import type {
   DesktopSessionProviderHint,
   DesktopState,
   DesktopWorkspaceMode,
+  DraftWorkspaceSelection,
 } from "@shared/contracts";
 
 import type { SettingsTabId } from "../settings-tabs";
 import type { ToastTone } from "../toast";
-import type { DesktopRoute } from "./desktop-route";
+import { draftSelectionFromRouteWorkspace, type DesktopRoute } from "./desktop-route";
 import type { DesktopRouteStore } from "./desktop-route-store";
 
 import { isKnownThreadId } from "../thread-model";
@@ -51,7 +52,7 @@ type RouteEffectBridgeArgs = {
    * route-only entries (external hash, deep link).
    */
   enterNewThreadDraft: (input: {
-    workspacePath: string | null;
+    workspaceSelection: DraftWorkspaceSelection | null;
     agentId?: string | null;
     botId?: string | null;
   }) => void;
@@ -72,7 +73,9 @@ type RouteEffectBridgeArgs = {
   setPendingWorkspaceMode: React.Dispatch<
     React.SetStateAction<DesktopWorkspaceMode>
   >;
-  setPendingWorkspacePath: React.Dispatch<React.SetStateAction<string | null>>;
+  setPendingWorkspaceSelection: React.Dispatch<
+    React.SetStateAction<DraftWorkspaceSelection | null>
+  >;
   setSelectedThreadId: React.Dispatch<React.SetStateAction<string | null>>;
 };
 
@@ -91,7 +94,7 @@ export function useRouteEffectBridge({
   setConnection,
   setNewThreadDraftActive,
   setPendingWorkspaceMode,
-  setPendingWorkspacePath,
+  setPendingWorkspaceSelection,
   setSelectedThreadId,
 }: RouteEffectBridgeArgs): void {
   const deepLinkEventHandlerRef = useRef<(event: DesktopDeepLinkEvent) => void>(
@@ -151,7 +154,9 @@ export function useRouteEffectBridge({
           // draft-entry command with the route's params (no bot binding —
           // bots are not addressable in the hash).
           enterNewThreadDraft({
-            workspacePath: route.workspacePath || null,
+            workspaceSelection: draftSelectionFromRouteWorkspace(
+              route.workspacePath,
+            ),
             agentId: route.agentId || null,
             botId: null,
           });
@@ -175,7 +180,7 @@ export function useRouteEffectBridge({
           return;
         case "thread-home": {
           setNewThreadDraftActive(false);
-          setPendingWorkspacePath(null);
+          setPendingWorkspaceSelection(null);
           setPendingWorkspaceMode("local");
           // The application runs synchronously on the pre-commit render, so
           // the closure values are current (the functional updater guarded a

@@ -5,6 +5,7 @@ import type {
   DesktopWorkspace,
   DesktopWorkspaceMode,
   DesktopState,
+  DraftWorkspaceSelection,
   GaryxDesktopApi,
 } from "@shared/contracts";
 
@@ -51,7 +52,7 @@ export function startNewThreadDraft(input: {
    * from the state fold. Agent selection is owned by the shared draft command
    * and its effective-default resolution.
    */
-  enterDraft: (workspacePath: string | null) => void;
+  enterDraft: (selection: DraftWorkspaceSelection | null) => void;
   syncComposerPhase: (value: string) => void;
 }) {
   const nextWorkspace = input.workspacePath
@@ -65,7 +66,13 @@ export function startNewThreadDraft(input: {
         input.selectedNewThreadWorkspaceEntry,
       );
   input.setError(null);
-  input.enterDraft(nextWorkspace?.path || null);
+  // A contextual workspace (explicit param or the preferred chain) seeds the
+  // draft; otherwise null lets the draft-entry command resolve the default
+  // once. Explicit "No workspace" is never produced here — only the user
+  // picks it, via the composer chip.
+  input.enterDraft(
+    nextWorkspace?.path ? { kind: "path", path: nextWorkspace.path } : null,
+  );
   input.syncComposerPhase("");
 }
 
@@ -375,47 +382,17 @@ export async function updateThreadBotBinding(input: {
   }
 }
 
-export async function ensureWorkspaceForNewThread(input: {
-  api: GaryxDesktopApi;
-  preferredWorkspacePath?: string | null;
-  selectableWorkspaceCount: number;
-  onAddWorkspace?: () => Promise<DesktopWorkspace | null>;
-  setWorkspaceMutation: (
-    value: "assign" | "add" | "relink" | "remove" | null,
-  ) => void;
-  setDesktopState: (value: DesktopState) => void;
-  setError: (value: string | null) => void;
-}): Promise<string | null> {
-  if (input.preferredWorkspacePath) {
-    return input.preferredWorkspacePath;
-  }
-
-  if (input.selectableWorkspaceCount === 0) {
-    if (input.onAddWorkspace) {
-      const workspace = await input.onAddWorkspace();
-      return workspace?.path || null;
-    }
-
-    input.setError("Add a workspace before creating a thread.");
-    return null;
-  }
-
-  input.setError("Choose an available folder before creating a thread.");
-  return null;
-}
-
 export async function ensureThread(input: {
   api: GaryxDesktopApi;
   selectedThreadId?: string | null;
-  pendingWorkspacePath?: string | null;
+  /** Draft tri-state, resolved at draft creation. Null (no live draft
+   *  context) resolves like an explicit No-workspace create. */
+  pendingWorkspaceSelection?: DraftWorkspaceSelection | null;
   pendingWorkspaceMode?: DesktopWorkspaceMode;
   pendingAgentId?: string | null;
   pendingModel?: string | null;
   pendingModelReasoningEffort?: string | null;
   pendingModelServiceTier?: string | null;
-  preferredWorkspacePath?: string | null;
-  selectableWorkspaceCount: number;
-  onAddWorkspace?: () => Promise<DesktopWorkspace | null>;
   setWorkspaceMutation: (
     value: "assign" | "add" | "relink" | "remove" | null,
   ) => void;
@@ -423,7 +400,7 @@ export async function ensureThread(input: {
   setSelectedThreadId: (value: string | null) => void;
   initializeThreadMessages: (threadId: string) => void;
   setNewThreadDraftActive: (value: boolean) => void;
-  setPendingWorkspacePath: (value: string | null) => void;
+  setPendingWorkspaceSelection: (value: DraftWorkspaceSelection | null) => void;
   setPendingWorkspaceMode: (value: DesktopWorkspaceMode) => void;
   setPendingBotId: (value: string | null) => void;
   setPendingAgentId: (value: string | null) => void;
@@ -439,25 +416,16 @@ export async function ensureThread(input: {
   }
 
   const agentId = input.pendingAgentId?.trim() || null;
-  const workspacePath =
-    input.pendingWorkspacePath ||
-    (await ensureWorkspaceForNewThread({
-      api: input.api,
-      preferredWorkspacePath: input.preferredWorkspacePath,
-      selectableWorkspaceCount: input.selectableWorkspaceCount,
-      onAddWorkspace: input.onAddWorkspace,
-      setWorkspaceMutation: input.setWorkspaceMutation,
-      setDesktopState: input.setDesktopState,
-      setError: input.setError,
-    }));
-  if (!workspacePath) {
-    return null;
-  }
+  const selection = input.pendingWorkspaceSelection ?? { kind: "none" as const };
 
   try {
     const created = await input.api.createThread({
-      workspacePath,
-      workspaceMode: input.pendingWorkspaceMode || "local",
+      workspacePath: selection.kind === "path" ? selection.path : undefined,
+      noWorkspace: selection.kind === "none" ? true : undefined,
+      workspaceMode:
+        selection.kind === "path"
+          ? input.pendingWorkspaceMode || "local"
+          : "local",
       agentId,
       model: input.pendingModel?.trim() || undefined,
       modelReasoningEffort: input.pendingModelReasoningEffort?.trim() || undefined,
@@ -469,7 +437,7 @@ export async function ensureThread(input: {
     input.initializeThreadMessages(created.thread.id);
     threadId = created.thread.id;
     input.setNewThreadDraftActive(false);
-    input.setPendingWorkspacePath(null);
+    input.setPendingWorkspaceSelection(null);
     input.setPendingWorkspaceMode("local");
     input.setPendingBotId(null);
     // No explicit selection carries across thread creation. The next draft

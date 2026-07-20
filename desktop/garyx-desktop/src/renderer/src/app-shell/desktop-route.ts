@@ -1,6 +1,39 @@
+import type { DraftWorkspaceSelection } from '@shared/contracts';
+
 import type { SettingsTabId } from '../settings-tabs';
 
 import type { ContentView } from './types';
+
+/**
+ * Route encoding of the draft workspace tri-state. `workspacePath` carries an
+ * absolute path for an explicit workspace, the literal `none` for an explicit
+ * No-workspace draft (absolute paths can never collide with it), or null when
+ * the route does not pin a selection (the draft resolves its default once on
+ * entry).
+ */
+export const ROUTE_WORKSPACE_NONE = 'none';
+
+export function draftSelectionFromRouteWorkspace(
+  value: string | null | undefined,
+): DraftWorkspaceSelection | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed === ROUTE_WORKSPACE_NONE) {
+    return { kind: 'none' };
+  }
+  return { kind: 'path', path: trimmed };
+}
+
+export function routeWorkspaceFromDraftSelection(
+  selection: DraftWorkspaceSelection | null,
+): string | null {
+  if (!selection) {
+    return null;
+  }
+  return selection.kind === 'none' ? ROUTE_WORKSPACE_NONE : selection.path;
+}
 
 export type DesktopRoute =
   | { kind: 'thread-home' }

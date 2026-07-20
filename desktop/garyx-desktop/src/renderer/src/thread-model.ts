@@ -4,6 +4,7 @@ import type {
   DesktopThreadSummary,
   DesktopState,
   DesktopWorkspace,
+  DraftWorkspaceSelection,
   ThreadWorktreeInfo,
 } from '@shared/contracts';
 
@@ -248,6 +249,33 @@ function worktreeWorkspacePathKeys(threads: DesktopThreadSummary[]): Set<string>
     }
   }
   return keys;
+}
+
+/**
+ * Resolve the default draft workspace once, at draft creation. Latest
+ * thread activity wins; workspaces without activity fall back to the
+ * gateway's total order (the list is server-sorted); an empty list means
+ * an implicit No-workspace draft. Never called on list refresh — a live
+ * draft's selection must not drift.
+ */
+export function resolveDefaultDraftWorkspace(
+  workspaces: DesktopWorkspace[],
+): DraftWorkspaceSelection {
+  const candidates = workspaces.filter(
+    (workspace) => workspace.available && Boolean(workspace.path),
+  );
+  if (candidates.length === 0) {
+    return { kind: 'none' };
+  }
+  let best = candidates[0];
+  for (const workspace of candidates.slice(1)) {
+    const bestActivity = best.lastActivityAt || '';
+    const activity = workspace.lastActivityAt || '';
+    if (activity > bestActivity) {
+      best = workspace;
+    }
+  }
+  return { kind: 'path', path: best.path as string };
 }
 
 export function visibleWorkspaceList(state: DesktopState | null): DesktopWorkspace[] {
