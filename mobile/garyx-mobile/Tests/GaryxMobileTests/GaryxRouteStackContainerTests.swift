@@ -359,6 +359,84 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         )
     }
 
+    func testProductionDraftRouteNeverConnectsStagedDriverAcrossPromotion() throws {
+        let suiteName = "GaryxDraftRouteWiringTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = GaryxMobileModel(defaults: defaults)
+        let draft = entry(
+            1,
+            destination: .conversationDraft(draftID: "draft-direct")
+        )
+        let draftIdentity = GaryxRoutePresentationIdentity.entry(draft.id)
+        let draftRegistry = GaryxRouteLifecycleRegistry()
+        let draftHarness = Harness(
+            path: [draft],
+            routeLifecycleRegistry: draftRegistry,
+            routeHostBuilder: { [model, draftRegistry] node in
+                Self.productionConversationHost(
+                    node: node,
+                    model: model,
+                    routeLifecycleRegistry: draftRegistry
+                )
+            }
+        )
+        draftHarness.pumpUI(duration: 0.05)
+
+        XCTAssertEqual(
+            draftRegistry.observationCounts(for: draftIdentity),
+            .init(),
+            "a local draft must not own the staged lifecycle, readiness, or frame observers"
+        )
+        XCTAssertFalse(draftRegistry.hasPresentedFrameDemand)
+
+        XCTAssertTrue(
+            draftHarness.container.promoteVisibleDraft(
+                instanceID: draft.id,
+                draftID: "draft-direct",
+                threadID: "thread-promoted-direct"
+            )
+        )
+        draftHarness.pumpUI(duration: 0.05)
+
+        XCTAssertEqual(
+            draftRegistry.observationCounts(for: draftIdentity),
+            .init(),
+            "in-place promotion must retain the draft occurrence's direct presentation plan"
+        )
+        XCTAssertFalse(draftRegistry.hasPresentedFrameDemand)
+
+        let existing = entry(
+            2,
+            destination: .conversation(threadID: "thread-staged-control")
+        )
+        let existingIdentity = GaryxRoutePresentationIdentity.entry(existing.id)
+        let existingRegistry = GaryxRouteLifecycleRegistry()
+        let existingHarness = Harness(
+            path: [existing],
+            routeLifecycleRegistry: existingRegistry,
+            routeHostBuilder: { [model, existingRegistry] node in
+                Self.productionConversationHost(
+                    node: node,
+                    model: model,
+                    routeLifecycleRegistry: existingRegistry
+                )
+            }
+        )
+        existingHarness.pumpUI(duration: 0.05)
+
+        XCTAssertEqual(
+            existingRegistry.observationCounts(for: existingIdentity),
+            .init(lifecycle: 1, contentReady: 1, presentedFrames: 1),
+            "the sensitivity control must observe the unchanged staged gateway-thread driver"
+        )
+        XCTAssertTrue(existingRegistry.hasPresentedFrameDemand)
+
+        withExtendedLifetime((draftHarness, existingHarness)) {}
+    }
+
     func testPromotionDuringInteractivePopIsAppliedAfterCancellationWithoutInvalidatingGesture() {
         var draft = entry(2)
         draft.replacePayload(with: .conversationDraft(draftID: "draft-in-flight"))
@@ -1060,6 +1138,31 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         )
     }
 
+    private static func productionConversationHost(
+        node: GaryxRoutePresentationNode,
+        model: GaryxMobileModel,
+        routeLifecycleRegistry: GaryxRouteLifecycleRegistry
+    ) -> AnyView {
+        guard case .entry(let entry) = node else {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
+            GaryxConversationRouteView(
+                destination: entry.destination,
+                occurrenceID: entry.id
+            )
+            .environmentObject(model)
+            .environment(model.homeObservationStore)
+            .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
+            .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
+            .environment(\.garyxRouteLifecycleRegistry, routeLifecycleRegistry)
+            .environment(
+                \.garyxPresentationLeaseCoordinator,
+                model.productionRouteStore.presentationCoordinator
+            )
+        )
+    }
+
     private final class Probe {
         var mounted: [GaryxRoutePresentationIdentity] = []
         var unmounted: [GaryxRoutePresentationIdentity] = []
@@ -1162,13 +1265,28 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             preferences: GaryxRouteVisualPreferences = .init(
                 reduceMotion: false,
                 prefersCrossFadeTransitions: false
-            )
+            ),
+            routeLifecycleRegistry: GaryxRouteLifecycleRegistry? = nil,
+            routeHostBuilder: (@MainActor (GaryxRoutePresentationNode) -> AnyView)? = nil
         ) {
             var callbacks = GaryxRouteStackContainerCallbacks()
-            callbacks.hostMounted = { [probe] in probe.mounted.append($0) }
-            callbacks.hostUnmounted = { [probe] in probe.unmounted.append($0) }
+            callbacks.hostMounted = { [probe, routeLifecycleRegistry] identity in
+                probe.mounted.append(identity)
+                routeLifecycleRegistry?.hostMounted(identity)
+            }
+            callbacks.hostUnmounted = { [probe, routeLifecycleRegistry] identity in
+                probe.unmounted.append(identity)
+                routeLifecycleRegistry?.hostUnmounted(identity)
+            }
             callbacks.hostLifecycleChanged = { [probe] identity, phase in
                 probe.lifecycle[identity, default: []].append(phase)
+                routeLifecycleRegistry?.update(identity, lifecycle: phase)
+            }
+            callbacks.hasPresentedFrameDemand = { [routeLifecycleRegistry] in
+                routeLifecycleRegistry?.hasPresentedFrameDemand ?? false
+            }
+            callbacks.presentedFrame = { [routeLifecycleRegistry] in
+                routeLifecycleRegistry?.presentedFrame()
             }
             callbacks.phaseChanged = { [probe] in probe.phases.append($0) }
             callbacks.canonicalPathChanged = { [probe] in probe.paths.append($0) }
@@ -1197,8 +1315,11 @@ final class GaryxRouteStackContainerTests: XCTestCase {
                 ),
                 callbacks: callbacks,
                 preferencesProvider: { preferences },
-                hostBuilder: { [bodyCounter, hostBuildProbe] node in
+                hostBuilder: { [bodyCounter, hostBuildProbe, routeHostBuilder] node in
                     hostBuildProbe.record(node)
+                    if let routeHostBuilder {
+                        return routeHostBuilder(node)
+                    }
                     return AnyView(CountingRouteView(node: node, counter: bodyCounter))
                 }
             )

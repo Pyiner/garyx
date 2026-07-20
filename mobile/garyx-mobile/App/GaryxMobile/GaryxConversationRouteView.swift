@@ -11,6 +11,12 @@ final class GaryxRouteLifecycleRegistry {
     typealias PresentedFrameDemand = @MainActor () -> Bool
     typealias PresentedFrameObserver = @MainActor (TimeInterval?) -> Void
 
+    struct ObservationCounts: Equatable {
+        var lifecycle = 0
+        var contentReady = 0
+        var presentedFrames = 0
+    }
+
     private struct PresentedFrameSubscription {
         let demand: PresentedFrameDemand
         let observer: PresentedFrameObserver
@@ -141,6 +147,19 @@ final class GaryxRouteLifecycleRegistry {
         if presentedFrameSubscriptions[identity]?.isEmpty == true {
             presentedFrameSubscriptions[identity] = nil
         }
+    }
+
+    /// A deterministic diagnostic for route-wiring contract tests. Draft
+    /// occurrences have no staged presentation driver and therefore keep all
+    /// three counts at zero; gateway-thread occurrences own one of each.
+    func observationCounts(
+        for identity: GaryxRoutePresentationIdentity
+    ) -> ObservationCounts {
+        ObservationCounts(
+            lifecycle: observers[identity]?.count ?? 0,
+            contentReady: contentReadyObservers[identity]?.count ?? 0,
+            presentedFrames: presentedFrameSubscriptions[identity]?.count ?? 0
+        )
     }
 
     var hasPresentedFrameDemand: Bool {
