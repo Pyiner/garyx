@@ -215,6 +215,31 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         ))
     }
 
+    /// Reverts a local dispatch that was presented optimistically but whose
+    /// durable composer barrier never committed. No gateway request existed,
+    /// so this is cancellation rather than a user-visible send failure. The
+    /// prior runtime is restored only while this intent still owns the local
+    /// dispatch slot; a newer server transition wins otherwise.
+    public mutating func rollbackLocalDispatch(
+        threadId: String,
+        intentId: String,
+        previousRuntime: GaryxThreadRuntime?
+    ) {
+        machine.apply(.intentCancelled(threadId: threadId, intentId: intentId))
+        guard let runtime = machine.threadRuntimeByThread[threadId],
+              runtime.state == .dispatchingSync,
+              runtime.activeIntentId == intentId else {
+            return
+        }
+        machine.apply(.threadRuntime(
+            threadId: threadId,
+            state: previousRuntime?.state ?? .idle,
+            activeIntentId: previousRuntime?.activeIntentId,
+            remoteRunId: previousRuntime?.remoteRunId,
+            error: previousRuntime?.lastError
+        ))
+    }
+
     /// Releases a locally tracked run without failing its intent (legacy
     /// `clearActiveRunState(for:)`): the dispatch claim goes away, while a
     /// remotely observed run stays busy.

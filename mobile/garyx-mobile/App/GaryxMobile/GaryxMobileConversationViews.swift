@@ -313,8 +313,9 @@ struct GaryxConversationView: View {
                     }
                     updateScrollState(proxy: proxy) {
                         $0.messagesChanged(
-                            previousIds: oldValue.value.map(\.id),
-                            currentIds: newValue.value.map(\.id),
+                            previous: oldValue.value,
+                            current: newValue.value,
+                            id: \.id,
                             previousScopeIdentity: oldValue.scopeIdentity,
                             currentScopeIdentity: newValue.scopeIdentity,
                             hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
@@ -667,10 +668,10 @@ struct GaryxConversationView: View {
         liveStore.turnRows(in: model, isCanonicalTop: routeContext.isCanonicalTop)
     }
 
-    private var messageScrollObservation: GaryxConversationScrollObservation<[GaryxMobileMessage]> {
+    private var messageScrollObservation: GaryxConversationScrollObservation<[GaryxMobileMessageGeometry]> {
         GaryxConversationScrollObservation(
             scopeIdentity: liveStore.routeIdentity,
-            value: liveStore.messages(in: model)
+            value: liveStore.messages(in: model).map(GaryxMobileMessageGeometry.init)
         )
     }
 

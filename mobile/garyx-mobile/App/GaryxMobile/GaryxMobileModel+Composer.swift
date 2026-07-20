@@ -3,6 +3,24 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
 
+private struct GaryxOptimisticSendPresentation {
+    let runtimeGeneration: GaryxGatewayRequestToken
+    let text: String
+    let attachments: [GaryxMobileComposerAttachment]
+    let clientIntentId: String
+    let userMessage: GaryxMobileMessage
+    let assistantId: String
+    let initialThreadId: String?
+    let allowBusyFollowUp: Bool
+    let draftOptimisticMessages: [GaryxMobileMessage]
+    let shouldDispatch: Bool
+    let previousMessages: [GaryxMobileMessage]
+    let presentedMessages: [GaryxMobileMessage]
+    let previousRuntime: GaryxThreadRuntime?
+    let previousActiveAssistantId: String?
+    let beganRunDispatch: Bool
+}
+
 extension GaryxMobileModel {
     func makeComposerPresentationOperationContext(
         payload: GaryxComposerPayloadCoordinator
@@ -197,38 +215,62 @@ extension GaryxMobileModel {
             )
         }
         let clientIntentID = "mobile-\(UUID().uuidString)"
+        var optimisticPresentation: GaryxOptimisticSendPresentation?
         do {
             let payload = try await composerPayloadCoordinator.takeReadyPayload(
-                clientIntentID: clientIntentID
-            )
-            let text = payload.text
-                .replacingOccurrences(of: "\r\n", with: "\n")
-                .replacingOccurrences(of: "\r", with: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let attachments = payload.attachments.compactMap { item -> GaryxMobileComposerAttachment? in
-                guard let path = item.uploadedPath, !path.isEmpty else { return nil }
-                return GaryxMobileComposerAttachment(
-                    id: item.id.rawValue,
-                    kind: item.kind ?? "file",
-                    name: item.name ?? "attachment",
-                    mediaType: item.mediaType ?? "application/octet-stream",
-                    path: path,
-                    previewDataUrl: item.previewDataURL
+                clientIntentID: clientIntentID,
+                presentationTransaction: GaryxComposerSendPresentationTransaction(
+                    present: { prepared in
+                        optimisticPresentation = self.presentOptimisticSend(
+                            text: Self.normalizedComposerSendText(prepared.text),
+                            attachments: Self.mobileComposerAttachments(from: prepared.attachments),
+                            clientIntentId: prepared.clientIntentID
+                        )
+                    },
+                    rollback: {
+                        guard let presentation = optimisticPresentation else { return }
+                        self.rollbackOptimisticSend(presentation)
+                        optimisticPresentation = nil
+                    }
                 )
+            )
+            guard let optimisticPresentation else {
+                throw GaryxComposerPayloadRuntimeError.invalidTransition
             }
-            guard attachments.count == payload.attachments.count else {
-                throw GaryxComposerPayloadRuntimeError.attachmentNotUploaded
-            }
-            await send(
-                text,
-                attachments: attachments,
-                clientIntentId: payload.clientIntentID,
+            guard optimisticPresentation.shouldDispatch else { return true }
+            GaryxMobileHaptics.shared.play(.messageSendCommitted)
+            await dispatchPresentedSend(
+                optimisticPresentation,
                 delivery: payload.delivery
             )
             return true
         } catch {
             lastError = displayMessage(for: error)
             return false
+        }
+    }
+
+    private static func normalizedComposerSendText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func mobileComposerAttachments(
+        from attachments: [GaryxComposerAttachment]
+    ) -> [GaryxMobileComposerAttachment] {
+        attachments.map { item in
+            GaryxMobileComposerAttachment(
+                id: item.id.rawValue,
+                kind: item.kind ?? "file",
+                name: item.name ?? "attachment",
+                mediaType: item.mediaType ?? "application/octet-stream",
+                // Send readiness already proves every envelope attachment has
+                // a non-empty uploaded path before presentation can begin.
+                path: item.uploadedPath ?? "",
+                previewDataUrl: item.previewDataURL
+            )
         }
     }
 
@@ -329,9 +371,27 @@ extension GaryxMobileModel {
         clientIntentId suppliedClientIntentId: String? = nil,
         delivery: GaryxComposerDeliveryHandle? = nil
     ) async {
+        let presentation = presentOptimisticSend(
+            text: text,
+            attachments: attachments,
+            clientIntentId: suppliedClientIntentId ?? "mobile-\(UUID().uuidString)"
+        )
+        guard presentation.shouldDispatch else { return }
+        GaryxMobileHaptics.shared.play(.messageSendCommitted)
+        await dispatchPresentedSend(presentation, delivery: delivery)
+    }
+
+    /// Installs every local surface affected by a send without suspending:
+    /// transcript row, run claim, assistant ownership, and follow-up ordering.
+    /// The durable composer coordinator invokes this synchronously immediately
+    /// before it publishes the empty follow-up generation.
+    private func presentOptimisticSend(
+        text: String,
+        attachments: [GaryxMobileComposerAttachment],
+        clientIntentId: String
+    ) -> GaryxOptimisticSendPresentation {
         let runtimeGeneration = gatewayRequestToken
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
-        let clientIntentId = suppliedClientIntentId ?? "mobile-\(UUID().uuidString)"
         let userMessage = GaryxMobileMessage(
             id: Self.userOriginMessageId(clientIntentId),
             role: .user,
@@ -343,45 +403,119 @@ extension GaryxMobileModel {
             localState: .optimistic
         )
         let assistantId = "local-assistant-\(UUID().uuidString)"
-        var optimisticThreadId = selectedThread?.id
-        let allowBusyFollowUp = optimisticThreadId.map { isThreadBusy($0) } ?? false
+        let initialThreadId = selectedThread?.id
+        let allowBusyFollowUp = initialThreadId.map { isThreadBusy($0) } ?? false
         let draftOptimisticMessages = [userMessage]
-        if let optimisticThreadId {
+        let previousMessages = initialThreadId.map { cachedMessages(for: $0) } ?? messages
+        let previousRuntime = initialThreadId.flatMap {
+            runTracker.machine.threadRuntimeByThread[$0]
+        }
+        let previousActiveAssistantId = initialThreadId.flatMap {
+            activeAssistantMessageIdsByThread[$0]
+        }
+        var shouldDispatch = true
+        var beganRunDispatch = false
+        if let initialThreadId {
             if !allowBusyFollowUp {
-                finishActiveAssistantSegmentBeforeUserTurn(for: optimisticThreadId)
+                finishActiveAssistantSegmentBeforeUserTurn(for: initialThreadId)
             }
-            mutateMessages(for: optimisticThreadId) { messages in
+            mutateMessages(for: initialThreadId) { messages in
                 messages.append(userMessage)
             }
             if allowBusyFollowUp {
-                pendingDirectFollowUpsByThread[optimisticThreadId, default: []].append((
+                pendingDirectFollowUpsByThread[initialThreadId, default: []].append((
                     userId: userMessage.id,
                     assistantId: assistantId
                 ))
             } else {
-                activeAssistantMessageIdsByThread[optimisticThreadId] = assistantId
+                activeAssistantMessageIdsByThread[initialThreadId] = assistantId
             }
             // The run is active the instant the user sends. Non-busy sends
             // also show the tail thinking indicator immediately; busy
             // follow-ups wait until the provider ack defines the turn boundary.
-            guard runTracker.beginLocalDispatch(
-                threadId: optimisticThreadId,
+            beganRunDispatch = runTracker.beginLocalDispatch(
+                threadId: initialThreadId,
                 intentId: clientIntentId,
                 text: visibleUserText,
                 allowWhileBusy: allowBusyFollowUp
-            ) else {
-                markLatestLocalUserFailed(for: optimisticThreadId, message: "Thread is busy")
-                markStreamingAssistantComplete(for: optimisticThreadId, removeEmpty: true)
-                return
+            )
+            if !beganRunDispatch {
+                shouldDispatch = false
+                markLatestLocalUserFailed(for: initialThreadId, message: "Thread is busy")
+                markStreamingAssistantComplete(for: initialThreadId, removeEmpty: true)
             }
-            // The optimistic row/run state and its haptic commit in this same
-            // main-run-loop transaction, before the first network suspension.
-            GaryxMobileHaptics.shared.play(.messageSendCommitted)
         } else {
             messages = draftOptimisticMessages
-            GaryxMobileHaptics.shared.play(.messageSendCommitted)
         }
         GaryxConversationSendJitterProbe.shared?.optimisticRowAppended()
+        let presentedMessages = initialThreadId.map { cachedMessages(for: $0) } ?? messages
+        return GaryxOptimisticSendPresentation(
+            runtimeGeneration: runtimeGeneration,
+            text: text,
+            attachments: attachments,
+            clientIntentId: clientIntentId,
+            userMessage: userMessage,
+            assistantId: assistantId,
+            initialThreadId: initialThreadId,
+            allowBusyFollowUp: allowBusyFollowUp,
+            draftOptimisticMessages: draftOptimisticMessages,
+            shouldDispatch: shouldDispatch,
+            previousMessages: previousMessages,
+            presentedMessages: presentedMessages,
+            previousRuntime: previousRuntime,
+            previousActiveAssistantId: previousActiveAssistantId,
+            beganRunDispatch: beganRunDispatch
+        )
+    }
+
+    /// A failed durable barrier means no send existed. Remove only the local
+    /// transaction we installed; if unrelated stream data arrived during the
+    /// await, preserve it rather than restoring a stale whole-list snapshot.
+    private func rollbackOptimisticSend(_ presentation: GaryxOptimisticSendPresentation) {
+        if let threadId = presentation.initialThreadId {
+            if cachedMessages(for: threadId) == presentation.presentedMessages {
+                setMessages(presentation.previousMessages, for: threadId)
+            } else {
+                mutateMessages(for: threadId) { messages in
+                    messages.removeAll { $0.id == presentation.userMessage.id }
+                }
+            }
+            forgetPendingDirectFollowUp(
+                threadId: threadId,
+                userId: presentation.userMessage.id,
+                assistantId: presentation.assistantId
+            )
+            if activeAssistantMessageIdsByThread[threadId] == presentation.assistantId {
+                activeAssistantMessageIdsByThread[threadId] = presentation.previousActiveAssistantId
+            }
+            if presentation.beganRunDispatch {
+                runTracker.rollbackLocalDispatch(
+                    threadId: threadId,
+                    intentId: presentation.clientIntentId,
+                    previousRuntime: presentation.previousRuntime
+                )
+            }
+        } else if messages == presentation.presentedMessages {
+            messages = presentation.previousMessages
+        } else {
+            messages.removeAll { $0.id == presentation.userMessage.id }
+        }
+    }
+
+    private func dispatchPresentedSend(
+        _ presentation: GaryxOptimisticSendPresentation,
+        delivery: GaryxComposerDeliveryHandle?
+    ) async {
+        let runtimeGeneration = presentation.runtimeGeneration
+        let text = presentation.text
+        let attachments = presentation.attachments
+        let clientIntentId = presentation.clientIntentId
+        let userMessage = presentation.userMessage
+        let visibleUserText = userMessage.text
+        let assistantId = presentation.assistantId
+        var optimisticThreadId = presentation.initialThreadId
+        let allowBusyFollowUp = presentation.allowBusyFollowUp
+        let draftOptimisticMessages = presentation.draftOptimisticMessages
 
         #if DEBUG
         if let probe = GaryxConversationSendJitterProbe.shared,

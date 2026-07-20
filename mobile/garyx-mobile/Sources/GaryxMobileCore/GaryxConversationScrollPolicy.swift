@@ -322,21 +322,28 @@ public struct GaryxConversationScrollState: Equatable {
         return TailScrollRequest(reason: .tailUpdate, animated: false)
     }
 
-    /// Route-scoped messages changed. Identity comes from the old/new observed
-    /// values themselves instead of view-local lifecycle memory, so a cold
-    /// mount recognizes its first prepend and a thread switch can never borrow
-    /// another thread's colliding message ids.
-    public mutating func messagesChanged(
-        previousIds: [String],
-        currentIds: [String],
+    /// Route-scoped message geometry changed. The observed values deliberately
+    /// exclude storage-only materialization fields, so an optimistic message
+    /// becoming committed does not start another tail-scroll chain when its
+    /// visible layout stayed identical. Identity still comes from the values
+    /// themselves, so prepends and cross-thread switches remain unambiguous.
+    public mutating func messagesChanged<Layout: Equatable>(
+        previous: [Layout],
+        current: [Layout],
+        id: (Layout) -> String,
         previousScopeIdentity: String,
         currentScopeIdentity: String,
         hasTailContent: Bool
     ) -> TailScrollRequest? {
+        let threadUnchanged = previousScopeIdentity == currentScopeIdentity
+        self.hasTailContent = hasTailContent
+        guard !threadUnchanged || previous != current else { return nil }
+        let previousIds = previous.map(id)
+        let currentIds = current.map(id)
         let isHistoryPrepend = Self.preservesScrollForPrependedHistory(
             previousIds: previousIds,
             currentIds: currentIds,
-            threadUnchanged: previousScopeIdentity == currentScopeIdentity
+            threadUnchanged: threadUnchanged
         )
         return contentChanged(
             isInitialLoad: previousIds.isEmpty,

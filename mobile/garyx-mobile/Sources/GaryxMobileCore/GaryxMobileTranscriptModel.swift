@@ -34,6 +34,45 @@ struct GaryxMobileMessage: Identifiable, Equatable {
     var historyIndex: Int? = nil
 }
 
+/// The part of a message that can change transcript layout.
+///
+/// Scroll following observes this projection instead of the storage model.
+/// Remote materialization is allowed to replace provenance, history indexes,
+/// timestamps, and correlation metadata without pretending that the visible
+/// transcript grew. Text, rendered presentation, attachment shape, failure
+/// chrome, and tool content remain observable because they can change height.
+struct GaryxMobileMessageGeometry: Identifiable, Equatable {
+    struct Attachment: Equatable {
+        let id: String
+        let isImage: Bool
+        let name: String
+    }
+
+    let id: String
+    private let role: GaryxMobileMessage.Role
+    private let presentation: GaryxMobileMessagePresentation
+    private let attachments: [Attachment]
+    private let isStreaming: Bool
+    private let statusText: String?
+    private let failureIsRetryable: Bool
+    private let toolTraceGroup: GaryxMobileToolTraceGroup?
+
+    init(message: GaryxMobileMessage) {
+        id = message.id
+        role = message.role
+        presentation = GaryxMobileMessagePresentation.make(for: message)
+        attachments = message.attachments.map {
+            Attachment(id: $0.id, isImage: $0.isImage, name: $0.name)
+        }
+        isStreaming = message.isStreaming
+        statusText = message.statusText
+        failureIsRetryable = message.statusText?.isEmpty == false
+            && message.localState != nil
+            && message.localState != .remoteFinal
+        toolTraceGroup = message.toolTraceGroup
+    }
+}
+
 struct GaryxMobileMessageAttachment: Identifiable, Equatable {
     var id: String
     var kind: String

@@ -2,6 +2,36 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
+    func testDurableBarrierRollbackRestoresBusyRuntimeAndCancelsOnlyNewIntent() {
+        var tracker = GaryxConversationRunTracker()
+
+        XCTAssertTrue(tracker.beginLocalDispatch(threadId: "t1", intentId: "i1", text: "start"))
+        tracker.confirmChatStartAccepted(
+            requestedThreadId: "t1",
+            acceptedThreadId: "t1",
+            intentId: "i1",
+            runId: "run-1"
+        )
+        let previousRuntime = tracker.machine.threadRuntimeByThread["t1"]
+
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "i2",
+            text: "follow up",
+            allowWhileBusy: true
+        ))
+        tracker.rollbackLocalDispatch(
+            threadId: "t1",
+            intentId: "i2",
+            previousRuntime: previousRuntime
+        )
+
+        XCTAssertEqual(tracker.machine.intentsById["i1"]?.state, .remoteAccepted)
+        XCTAssertEqual(tracker.machine.intentsById["i2"]?.state, .cancelled)
+        XCTAssertEqual(tracker.machine.threadRuntimeByThread["t1"], previousRuntime)
+        XCTAssertTrue(tracker.isThreadBusy("t1"))
+    }
+
     func testCommittedRunCompleteClearsLocalDispatchWithoutStreamEvent() {
         var tracker = GaryxConversationRunTracker()
 

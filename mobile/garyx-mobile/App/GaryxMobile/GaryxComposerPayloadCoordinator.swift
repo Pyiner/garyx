@@ -29,6 +29,23 @@ struct GaryxComposerReadyPayload: Sendable {
     let delivery: GaryxComposerDeliveryHandle
 }
 
+/// The immutable user-visible envelope available when the input reducer seals
+/// a send. It intentionally precedes the durable delivery handle: the mobile
+/// transcript may present this row optimistically in the exact transaction
+/// that advances the live composer to its follow-up generation.
+struct GaryxComposerSendPresentationPayload: Sendable {
+    let text: String
+    let attachments: [GaryxComposerAttachment]
+    let clientIntentID: String
+}
+
+/// Couples optimistic transcript presentation to the composer's generation
+/// switch. If the durable send barrier fails, both surfaces roll back together.
+struct GaryxComposerSendPresentationTransaction {
+    let present: (GaryxComposerSendPresentationPayload) -> Void
+    let rollback: () -> Void
+}
+
 struct GaryxComposerCreateRebuildPayload: Sendable {
     let payload: GaryxComposerReadyPayload
     let ambiguousAfter: GaryxCreateDeliveryPhase?
@@ -1713,7 +1730,11 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     var currentText: String { snapshot.projection?.text ?? "" }
     var currentAttachments: [GaryxComposerAttachment] { snapshot.projection?.attachments ?? [] }
     var durableNotices: [GaryxComposerDurableNotice] { snapshot.notices }
-    var canSend: Bool { snapshot.projection?.readiness == .ready && !snapshot.isReadOnly }
+    var canSend: Bool {
+        sendCommitInFlightSessionID == nil
+            && snapshot.projection?.readiness == .ready
+            && !snapshot.isReadOnly
+    }
     var activeKey: GaryxComposerKey? { snapshot.projection?.key }
 
     func projection(forRouteKey key: GaryxComposerKey) -> GaryxComposerPayloadProjection? {
@@ -2173,7 +2194,10 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         publish(context: updated, readOnly: snapshot.isReadOnly)
     }
 
-    func takeReadyPayload(clientIntentID: String) async throws -> GaryxComposerReadyPayload {
+    func takeReadyPayload(
+        clientIntentID: String,
+        presentationTransaction: GaryxComposerSendPresentationTransaction? = nil
+    ) async throws -> GaryxComposerReadyPayload {
         guard let initialContext = durableContext else {
             throw GaryxComposerPayloadRuntimeError.unavailable
         }
@@ -2221,6 +2245,25 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         inputState = state
         sendCommitInFlightSessionID = sessionID
         snapshot.isReadOnly = false
+        presentationTransaction?.present(GaryxComposerSendPresentationPayload(
+            text: envelopeText,
+            attachments: preparation.attachments,
+            clientIntentID: preparation.clientIntentID
+        ))
+        // Project the follow-up generation before granting it to UIKit. The
+        // transcript row (above), SwiftUI payload projection, and UITextView
+        // replacement now enter one main-actor presentation transaction.
+        var presentedEntry = context.entry
+        presentedEntry.setText("", generation: preparation.followupGeneration)
+        for attachment in preparation.attachments {
+            presentedEntry.removeAttachment(attachment.id)
+        }
+        let presentedContext = GaryxComposerDurableContext(
+            snapshot: context.snapshot,
+            entry: presentedEntry
+        )
+        durableContext = presentedContext
+        publish(context: presentedContext, readOnly: false)
         grantCurrentConfigurationToLiveAdapter()
         let committed: GaryxComposerSendCommitResult
         do {
@@ -2230,19 +2273,25 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 provisionalText: state.textByGeneration[preparation.followupGeneration] ?? ""
             )
         } catch {
+            let commitError = error
             sendCommitInFlightSessionID = nil
             // Storage did not publish the barrier. Restore from the authoritative
             // Entry rather than leaving the adapter stranded in a sealed window.
             let restorationKey = durableContext?.entry.destination ?? context.entry.destination
-            let restored = try await persistence.activate(
-                scope: context.entry.scope,
-                key: restorationKey
-            )
-            durableContext = restored
-            installInputState(for: restored.entry)
-            publish(context: restored, readOnly: false)
-            grantCurrentConfigurationToLiveAdapter()
-            throw error
+            do {
+                let restored = try await persistence.activate(
+                    scope: context.entry.scope,
+                    key: restorationKey
+                )
+                durableContext = restored
+                installInputState(for: restored.entry)
+                presentationTransaction?.rollback()
+                publish(context: restored, readOnly: false)
+                grantCurrentConfigurationToLiveAdapter()
+            } catch {
+                presentationTransaction?.rollback()
+            }
+            throw commitError
         }
         let updated = committed.context
         // Freeze the adapter while the producer reconciles buffered follow-up

@@ -8,10 +8,11 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
     /// origin-bearing user turn. This pins both halves of the symptom:
     ///
     /// - optimistic -> committed keeps the exact same outer row and message id;
-    /// - that identity-preserving materialization still emits a second
-    ///   programmatic tail-scroll request, after the append already emitted one.
+    /// - the TASK-2523 baseline emitted a second programmatic tail-scroll
+    ///   request for that identity-preserving materialization, after the append.
     ///
-    /// The last assertion intentionally fails on the TASK-2523 baseline.
+    /// The last assertion failed on the TASK-2523 baseline and stays as the
+    /// regression gate for identity-preserving materialization.
     func testCapturedOriginMaterializationDoesNotScheduleSecondTailReanchor() throws {
         let origin = "mobile-00000000-0000-0000-0000-000000002523"
         let threadScope = "thread:send-jitter-capture"
@@ -90,12 +91,20 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
             committedMessages.map(\.id),
             "the materialization changes content/provenance, not visible row identity"
         )
+        let optimisticGeometry = optimisticMessages.map(GaryxMobileMessageGeometry.init)
+        let committedGeometry = committedMessages.map(GaryxMobileMessageGeometry.init)
+        XCTAssertEqual(
+            optimisticGeometry,
+            committedGeometry,
+            "committing the captured origin must not change visible message geometry"
+        )
 
         var scrollState = GaryxConversationScrollState()
         _ = scrollState.threadOpened()
         let appendRequest = scrollState.messagesChanged(
-            previousIds: priorMessages.map(\.id),
-            currentIds: optimisticMessages.map(\.id),
+            previous: priorMessages.map(GaryxMobileMessageGeometry.init),
+            current: optimisticGeometry,
+            id: \.id,
             previousScopeIdentity: threadScope,
             currentScopeIdentity: threadScope,
             hasTailContent: true
@@ -103,8 +112,9 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
         XCTAssertEqual(appendRequest, .init(reason: .tailUpdate, animated: false))
 
         let materializationRequest = scrollState.messagesChanged(
-            previousIds: optimisticMessages.map(\.id),
-            currentIds: committedMessages.map(\.id),
+            previous: optimisticGeometry,
+            current: committedGeometry,
+            id: \.id,
             previousScopeIdentity: threadScope,
             currentScopeIdentity: threadScope,
             hasTailContent: true

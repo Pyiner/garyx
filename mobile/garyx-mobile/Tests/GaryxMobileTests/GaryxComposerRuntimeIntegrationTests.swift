@@ -605,6 +605,167 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         }
     }
 
+    func testDurableSendBarrierFailureRollsBackComposerAndOptimisticRowTogether() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let failureGate = GaryxDurabilityBoundaryFailureGate()
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            testingHooks: .init(
+                durabilityBoundaryHook: { boundary in
+                    try failureGate.observe(boundary)
+                }
+            )
+        )
+        let suiteName = "GaryxSendPresentationRollback-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            composerPayloadCoordinator: coordinator
+        )
+        let thread = sendPresentationThread(id: "send-presentation-rollback")
+        try await waitUntil { coordinator.inputConfiguration() != nil }
+        model.selectedThread = thread
+        await coordinator.activate(
+            scope: model.gatewayRequestToken.scope,
+            key: .thread(thread.id)
+        )
+        try await waitUntil { coordinator.activeKey == .thread(thread.id) }
+
+        // Prime the hi-lo allocators so the armed failure lands on commitSend,
+        // after the presentation transaction has begun, rather than allocation.
+        try await persistText("allocator prime", in: coordinator)
+        let prime = try await coordinator.takeReadyPayload(clientIntentID: "prime-send")
+        try await coordinator.markTransportAttempted(prime.delivery)
+        try await coordinator.acknowledgeDelivery(prime.delivery)
+        try await persistText("message must be restored", in: coordinator)
+
+        let existing = GaryxMobileMessage(
+            id: "history:0",
+            role: .user,
+            text: "Existing row",
+            isStreaming: false,
+            localState: .remoteFinal,
+            historyIndex: 0
+        )
+        model.setMessages([existing], for: thread.id)
+
+        failureGate.arm()
+        let sent = await model.sendDraft()
+
+        XCTAssertFalse(sent)
+        XCTAssertEqual(model.cachedMessages(for: thread.id), [existing])
+        XCTAssertEqual(coordinator.currentText, "message must be restored")
+        XCTAssertEqual(coordinator.inputConfiguration()?.initialText, "message must be restored")
+        XCTAssertTrue(coordinator.canSend)
+        XCTAssertTrue(model.runTracker.busyThreadIds.isEmpty)
+        XCTAssertNil(model.pendingDirectFollowUpsByThread[thread.id])
+        XCTAssertNil(model.activeAssistantMessageIdsByThread[thread.id])
+        XCTAssertNotNil(model.lastError)
+    }
+
+    func testRapidSecondSendWaitsForFirstBarrierAndKeepsFollowupDraft() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = ComposerAsyncGate()
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            testingHooks: .init(beforeCommitSendReturns: { await gate.suspend() })
+        )
+        GaryxComposerDeliveryURLProtocolStub.requestHandler = { request in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: request.url ?? URL(string: "http://gateway.example.test")!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"status":"accepted","run_id":"rapid-run","thread_id":"rapid-send-thread"}"#.utf8)
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxComposerDeliveryURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxComposerDeliveryURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        let suiteName = "GaryxRapidSendPresentation-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = GaryxMobileModel(
+            defaults: defaults,
+            gatewayClientFactory: { gatewayConfiguration in
+                GaryxGatewayClient(
+                    configuration: gatewayConfiguration,
+                    session: session,
+                    retryPolicy: .disabled
+                )
+            },
+            composerPayloadCoordinator: coordinator
+        )
+        let thread = sendPresentationThread(id: "rapid-send-thread")
+        try await waitUntil { coordinator.inputConfiguration() != nil }
+        model.selectedThread = thread
+        await coordinator.activate(
+            scope: model.gatewayRequestToken.scope,
+            key: .thread(thread.id)
+        )
+        try await waitUntil { coordinator.activeKey == .thread(thread.id) }
+        try await persistText("first rapid message", in: coordinator)
+
+        let firstSend = Task { @MainActor in await model.sendDraft() }
+        await gate.waitUntilSuspended()
+        XCTAssertFalse(coordinator.canSend)
+        XCTAssertEqual(
+            model.cachedMessages(for: thread.id).filter { $0.localState == .optimistic }.count,
+            1
+        )
+
+        let followupConfiguration = try XCTUnwrap(coordinator.inputConfiguration())
+        coordinator.acceptText(
+            "second rapid message",
+            identity: .init(
+                composerKey: followupConfiguration.composerKey,
+                sessionID: followupConfiguration.sessionID,
+                inputSessionEpoch: followupConfiguration.epoch,
+                payloadGeneration: followupConfiguration.payloadGeneration,
+                reservationID: followupConfiguration.reservationID,
+                inputSequence: followupConfiguration.nextInputSequence
+            )
+        )
+        XCTAssertEqual(coordinator.currentText, "second rapid message")
+        let prematureSecondSend = await model.sendDraft()
+        XCTAssertFalse(
+            prematureSecondSend,
+            "a rapid tap must not start a second reservation while the first barrier settles"
+        )
+        XCTAssertEqual(
+            model.cachedMessages(for: thread.id).filter { $0.localState == .optimistic }.count,
+            1
+        )
+
+        await gate.resume()
+        let firstSent = await firstSend.value
+        XCTAssertTrue(firstSent)
+        XCTAssertEqual(coordinator.currentText, "second rapid message")
+        XCTAssertTrue(coordinator.canSend)
+
+        let secondSent = await model.sendDraft()
+        XCTAssertTrue(secondSent)
+        let optimisticTexts = model.cachedMessages(for: thread.id)
+            .filter { $0.role == .user && $0.localState == .optimistic }
+            .map(\.text)
+        XCTAssertEqual(optimisticTexts, ["first rapid message", "second rapid message"])
+        XCTAssertEqual(coordinator.currentText, "")
+    }
+
     func testRegisteringNewCanonicalOccurrenceRevokesPreviousLiveAdapterFirst() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1625,6 +1786,24 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
             from: Data(
                 "{\"kind\":\"file\",\"path\":\"\(path)\",\"name\":\"attachment.txt\",\"media_type\":\"text/plain\"}".utf8
             )
+        )
+    }
+
+    private func sendPresentationThread(id: String) -> GaryxThreadSummary {
+        GaryxThreadSummary(
+            id: id,
+            title: "Send presentation test",
+            createdAt: nil,
+            updatedAt: nil,
+            lastMessagePreview: "",
+            workspacePath: nil,
+            messageCount: nil,
+            agentId: nil,
+            providerType: nil,
+            recentRunId: nil,
+            activeRunId: nil,
+            runState: nil,
+            worktreePath: nil
         )
     }
 

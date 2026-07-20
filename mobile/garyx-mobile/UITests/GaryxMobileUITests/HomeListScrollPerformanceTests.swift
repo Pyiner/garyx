@@ -193,7 +193,8 @@ final class HomeListScrollPerformanceTests: XCTestCase {
     /// one direction to make room; any excess round trip is the whole-list
     /// shake reported in TASK-2523.
     ///
-    /// The final assertion intentionally fails on the TASK-2523 baseline.
+    /// The round-trip assertion failed on the TASK-2523 baseline and stays as
+    /// the frame-level regression gate.
     func testSendDoesNotRoundTripExistingTranscriptRows() throws {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
@@ -232,6 +233,8 @@ final class HomeListScrollPerformanceTests: XCTestCase {
             1,
             "FAILS ON BASELINE: an existing turn must not make a visible round trip while the new tail row materializes; \(report.rawLine)"
         )
+        XCTAssertGreaterThan(report.upwardY, 0)
+        XCTAssertEqual(report.downwardY, 0, accuracy: 0.5)
         XCTAssertEqual(report.directionReversals, 0)
     }
 

@@ -174,6 +174,20 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertFalse(state.showsScrollToBottomButton)
     }
 
+    func testSameIdentityGeometryGrowthStillFollowsTail() {
+        var state = GaryxConversationScrollState()
+        let request = state.messagesChanged(
+            previous: [1],
+            current: [2],
+            id: { _ in "same-message" },
+            previousScopeIdentity: "thread:a",
+            currentScopeIdentity: "thread:a",
+            hasTailContent: true
+        )
+
+        XCTAssertEqual(request, .init(reason: .tailUpdate, animated: false))
+    }
+
     func testTailGrowthWhileBrowsingShowsButtonInsteadOfScrolling() {
         var state = GaryxConversationScrollState()
         simulateUserScroll(&state)
@@ -329,8 +343,9 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         var scheduler = GaryxConversationTailScrollScheduler()
         let opening = scheduler.schedule(reason: state.threadOpened().reason)
         let switchUpdate = state.messagesChanged(
-            previousIds: ["history:5"],
-            currentIds: ["history:5"],
+            previous: ["history:5"],
+            current: ["history:5"],
+            id: { $0 },
             previousScopeIdentity: "thread:a",
             currentScopeIdentity: "thread:b",
             hasTailContent: true
@@ -849,8 +864,9 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         let previousIds = ["history:3", "history:4", "history:5"]
         let currentIds = ["history:0", "history:1", "history:2"] + previousIds
         let request = state.messagesChanged(
-            previousIds: previousIds,
-            currentIds: currentIds,
+            previous: previousIds,
+            current: currentIds,
+            id: { $0 },
             previousScopeIdentity: "thread:a",
             currentScopeIdentity: "thread:a",
             hasTailContent: true
