@@ -424,15 +424,16 @@ mod protocol;
 mod streaming;
 
 pub(crate) use inbound::build_inbound_request;
-pub(crate) use protocol::{
-    DiscordAttachment, DiscordMessageCreateEvent, DiscordMessageReference, DiscordUser,
-};
+pub(crate) use protocol::{DiscordAttachment, DiscordMessageCreateEvent};
+#[allow(unused_imports)]
+pub(crate) use protocol::{DiscordMessageReference, DiscordUser};
 pub(crate) use streaming::{DiscordStreamingCallbackConfig, build_discord_response_callback};
 
 use inbound::*;
 use media::*;
 use protocol::*;
-use streaming::*;
+#[cfg(test)]
+use streaming::DISCORD_TOOL_PLACEHOLDER_UPDATE_INTERVAL;
 
 #[cfg(test)]
 mod tests;
