@@ -84,6 +84,7 @@ impl From<GaryxDbError> for CapsuleError {
     fn from(error: GaryxDbError) -> Self {
         match error {
             GaryxDbError::BadRequest(message) => CapsuleError::bad_request(message),
+            GaryxDbError::NotFound(message) => CapsuleError::bad_request(message),
             GaryxDbError::ThreadArchived(thread_id) => {
                 CapsuleError::bad_request(format!("thread is archived: {thread_id}"))
             }

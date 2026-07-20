@@ -129,6 +129,9 @@ pub(super) const THREAD_META_SCHEMA_V2_COLUMNS: &[&str] = &[
     "projection_version",
     "projected_at",
 ];
+// `root_workspace_path` is a VIRTUAL generated column: it appears in
+// `PRAGMA table_xinfo` but intentionally not in `PRAGMA table_info`, so the
+// v2 column-shape guard above (which reads `table_info`) never sees it.
 
 pub(super) const THREAD_META_SCHEMA_V2_RETIRED_COLUMNS: &[&str] = &[
     "excluded_from_recent",
@@ -1887,7 +1890,7 @@ impl GaryxDbService {
                 params![CURRENT_THREAD_META_PROJECTION_VERSION],
             )?
         } else {
-            tx.execute_batch(
+            tx.execute_batch(&format!(
                 "DROP TABLE IF EXISTS thread_meta_schema_v2;
                  CREATE TABLE thread_meta_schema_v2 (
                     thread_id TEXT PRIMARY KEY,
@@ -1916,9 +1919,11 @@ impl GaryxDbService {
                     selected_model_service_tier TEXT,
                     sdk_session_id TEXT,
                     projection_version INTEGER NOT NULL DEFAULT 6,
-                    projected_at TEXT NOT NULL
+                    projected_at TEXT NOT NULL,
+                    root_workspace_path TEXT GENERATED ALWAYS AS ({expr}) VIRTUAL
                  ) STRICT;",
-            )?;
+                expr = crate::garyx_db::schema::THREAD_META_ROOT_WORKSPACE_PATH_EXPR,
+            ))?;
             tx.execute(
                 "INSERT INTO thread_meta_schema_v2 (
                     thread_id, workspace_dir, thread_type, thread_label, agent_id,

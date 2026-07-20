@@ -290,7 +290,8 @@ pub(super) fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             name TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            deleted_at TEXT
+            deleted_at TEXT,
+            pinned_at TEXT
         ) STRICT;
 
         CREATE TABLE IF NOT EXISTS capsules (
@@ -343,8 +344,10 @@ pub(super) fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             ON thread_channel_endpoints(channel, account_id);
         "#,
     )?;
+    ensure_thread_meta_root_workspace_column(conn)?;
     ensure_thread_meta_indexes(conn)?;
     ensure_workspaces_deleted_at_column(conn)?;
+    ensure_workspaces_pinned_at_column(conn)?;
     conn.execute_batch(
         r#"
         CREATE INDEX IF NOT EXISTS idx_workspaces_active_name_path
@@ -644,6 +647,58 @@ pub(super) fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbR
     Ok(())
 }
 
+pub(super) fn ensure_workspaces_pinned_at_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(workspaces)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "pinned_at" {
+            return Ok(());
+        }
+    }
+    conn.execute("ALTER TABLE workspaces ADD COLUMN pinned_at TEXT", [])?;
+    Ok(())
+}
+
+/// `root_workspace_path` is a virtual generated column: the root-workspace
+/// membership of a thread derived purely from immutable projected facts.
+/// Explicit threads map to their chosen `workspace_dir`, worktree threads map
+/// back to `worktree.source_workspace_dir`, and implicit Garyx-managed thread
+/// workspaces (`<data_dir parent>/thread-workspaces/<sanitized thread_id>`)
+/// map to NULL. The implicit rule is exact: the managed path segment embeds
+/// the row's own thread id (`workspace_mode::safe_thread_workspace_segment`
+/// replaces the `::` with dashes; thread ids are otherwise `[a-z0-9-]`), and
+/// that id cannot exist yet when a user picks a directory. Keep this
+/// expression in lockstep with `workspace_mode::thread_workspace_origin`.
+pub(super) const THREAD_META_ROOT_WORKSPACE_PATH_EXPR: &str = "CASE
+    WHEN workspace_dir IS NULL OR workspace_dir = '' THEN NULL
+    WHEN workspace_dir LIKE '%/thread-workspaces/' || REPLACE(thread_id, ':', '-') THEN NULL
+    ELSE COALESCE(
+        NULLIF(json_extract(worktree_json, '$.source_workspace_dir'), ''),
+        workspace_dir
+    )
+END";
+
+pub(super) fn ensure_thread_meta_root_workspace_column(conn: &Connection) -> GaryxDbResult<()> {
+    // VIRTUAL generated columns are hidden from `PRAGMA table_info`; only
+    // `table_xinfo` lists them.
+    let mut stmt = conn.prepare("PRAGMA table_xinfo(thread_meta)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "root_workspace_path" {
+            return Ok(());
+        }
+    }
+    drop(stmt);
+    conn.execute(
+        &format!(
+            "ALTER TABLE thread_meta ADD COLUMN root_workspace_path TEXT
+                 GENERATED ALWAYS AS ({THREAD_META_ROOT_WORKSPACE_PATH_EXPR}) VIRTUAL"
+        ),
+        [],
+    )?;
+    Ok(())
+}
+
 pub(super) fn ensure_capsules_favorited_at_column(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(capsules)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -681,7 +736,10 @@ pub(super) fn thread_meta_column_names(conn: &Connection) -> GaryxDbResult<Vec<S
 
 pub(super) fn ensure_thread_meta_indexes(conn: &Connection) -> GaryxDbResult<()> {
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_thread_meta_workspace
+        "CREATE INDEX IF NOT EXISTS idx_thread_meta_root_workspace
+             ON thread_meta(root_workspace_path, sort_updated_at_us DESC)
+             WHERE root_workspace_path IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_workspace
              ON thread_meta(workspace_dir);
          CREATE INDEX IF NOT EXISTS idx_thread_meta_type_updated
              ON thread_meta(thread_type, updated_at DESC);

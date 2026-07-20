@@ -180,6 +180,14 @@ fn thread_routes() -> Router<Arc<AppState>> {
                 .post(workspaces::upsert_workspace)
                 .delete(workspaces::delete_workspace),
         )
+        .route(
+            "/api/workspaces/pin",
+            axum::routing::post(workspaces::pin_workspace),
+        )
+        .route(
+            "/api/workspaces/rename",
+            axum::routing::post(workspaces::rename_workspace),
+        )
         .route("/api/capsules", axum::routing::get(capsules::list_capsules))
         .route(
             "/api/capsules/{id}",

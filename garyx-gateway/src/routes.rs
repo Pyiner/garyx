@@ -130,6 +130,7 @@ fn extend_json_object(payload: &mut Value, fields: Value) {
 fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
     let (status, code) = match &error {
         GaryxDbError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
+        GaryxDbError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
         GaryxDbError::ThreadArchived(_) => (StatusCode::GONE, "ThreadArchived"),
         GaryxDbError::LockPoisoned
         | GaryxDbError::Join(_)

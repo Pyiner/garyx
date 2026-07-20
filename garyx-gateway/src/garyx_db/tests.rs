@@ -5515,3 +5515,208 @@ fn automation_thread_runs_round_trip_and_finish() {
         Some("Daily")
     );
 }
+
+fn workspace_membership_meta_draft(
+    thread_id: &str,
+    workspace_dir: Option<&str>,
+    worktree_json: Option<&str>,
+    sort_updated_at_us: i64,
+    default_list_hidden: bool,
+) -> ThreadMetaProjectionDraft {
+    ThreadMetaProjectionDraft {
+        thread_id: thread_id.to_owned(),
+        thread_meta: ThreadMetaDraft {
+            thread_id: thread_id.to_owned(),
+            workspace_dir: workspace_dir.map(ToOwned::to_owned),
+            thread_type: "chat".to_owned(),
+            worktree_json: worktree_json.map(ToOwned::to_owned),
+            sort_updated_at_us,
+            default_list_hidden,
+            ..ThreadMetaDraft::default()
+        },
+        channel_endpoints: Vec::new(),
+    }
+}
+
+#[test]
+fn thread_meta_root_workspace_path_generated_column_maps_membership() {
+    let db = GaryxDbService::memory().expect("db opens");
+    // Explicit workspace thread → its own directory.
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::11111111-1111-1111-1111-111111111111",
+        Some("/workspace/root"),
+        None,
+        10,
+        false,
+    ))
+    .expect("explicit row");
+    // Worktree thread → back to the worktree's source workspace.
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::22222222-2222-2222-2222-222222222222",
+        Some("/data/worktrees/root/thread-2222"),
+        Some(r#"{"mode":"worktree","source_workspace_dir":"/workspace/root"}"#),
+        20,
+        false,
+    ))
+    .expect("worktree row");
+    // Implicit Garyx-managed thread workspace → no root membership. The
+    // managed segment is the sanitized thread id (`::` becomes dashes).
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::33333333-3333-3333-3333-333333333333",
+        Some("/data/thread-workspaces/thread--33333333-3333-3333-3333-333333333333"),
+        None,
+        30,
+        false,
+    ))
+    .expect("implicit row");
+
+    let conn = db.read_conn().expect("read conn");
+    let mut stmt = conn
+        .prepare("SELECT thread_id, root_workspace_path FROM thread_meta ORDER BY thread_id")
+        .expect("prepare");
+    let rows: Vec<(String, Option<String>)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "thread::11111111-1111-1111-1111-111111111111".to_owned(),
+                Some("/workspace/root".to_owned())
+            ),
+            (
+                "thread::22222222-2222-2222-2222-222222222222".to_owned(),
+                Some("/workspace/root".to_owned())
+            ),
+            (
+                "thread::33333333-3333-3333-3333-333333333333".to_owned(),
+                None
+            ),
+        ],
+    );
+}
+
+#[test]
+fn workspace_list_stats_aggregate_membership_in_total_order() {
+    let db = GaryxDbService::memory().expect("db opens");
+    for (name, path) in [
+        (None, "/workspace/alpha"),
+        (Some("Bravo"), "/workspace/bravo"),
+        (None, "/workspace/idle"),
+    ] {
+        db.upsert_workspace(WorkspaceDraft {
+            name: name.map(ToOwned::to_owned),
+            path: path.to_owned(),
+        })
+        .expect("workspace row");
+    }
+    db.set_workspace_pinned("/workspace/bravo", true)
+        .expect("pin bravo");
+
+    // Two visible alpha threads (one via a worktree), one hidden side chat
+    // that must not count, and one implicit thread that belongs nowhere.
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::11111111-1111-1111-1111-111111111111",
+        Some("/workspace/alpha"),
+        None,
+        1_000,
+        false,
+    ))
+    .expect("alpha direct");
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::22222222-2222-2222-2222-222222222222",
+        Some("/data/worktrees/alpha/thread-2222"),
+        Some(r#"{"source_workspace_dir":"/workspace/alpha"}"#),
+        3_000,
+        false,
+    ))
+    .expect("alpha worktree");
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::44444444-4444-4444-4444-444444444444",
+        Some("/workspace/alpha"),
+        None,
+        9_000,
+        true,
+    ))
+    .expect("alpha hidden side chat");
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::33333333-3333-3333-3333-333333333333",
+        Some("/data/thread-workspaces/thread--33333333-3333-3333-3333-333333333333"),
+        None,
+        5_000,
+        false,
+    ))
+    .expect("implicit thread");
+
+    let entries = db.list_workspaces_with_stats().expect("stats list");
+    let shaped: Vec<(&str, u64, Option<i64>, bool)> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.path.as_str(),
+                entry.thread_count,
+                entry.last_activity_us,
+                entry.pinned_at.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shaped,
+        vec![
+            // Pinned first regardless of activity.
+            ("/workspace/bravo", 0, None, true),
+            // Then latest activity (worktree thread counts toward alpha).
+            ("/workspace/alpha", 2, Some(3_000), false),
+            // Then the idle row by name/path.
+            ("/workspace/idle", 0, None, false),
+        ],
+    );
+}
+
+#[test]
+fn workspace_pin_and_rename_are_active_row_only_point_mutations() {
+    let db = GaryxDbService::memory().expect("db opens");
+    assert!(matches!(
+        db.set_workspace_pinned("/workspace/none", true),
+        Err(GaryxDbError::NotFound(_))
+    ));
+    assert!(matches!(
+        db.rename_workspace("/workspace/none", "Name"),
+        Err(GaryxDbError::NotFound(_))
+    ));
+
+    db.upsert_workspace(WorkspaceDraft {
+        name: None,
+        path: "/workspace/repo".to_owned(),
+    })
+    .expect("add workspace");
+    db.set_workspace_pinned("/workspace/repo", true)
+        .expect("pin");
+    db.rename_workspace("/workspace/repo", "Repo").expect("rename");
+
+    // Tombstoned rows are invisible to point mutations and never revived.
+    db.delete_workspace("/workspace/repo").expect("remove");
+    assert!(matches!(
+        db.set_workspace_pinned("/workspace/repo", true),
+        Err(GaryxDbError::NotFound(_))
+    ));
+    assert!(matches!(
+        db.rename_workspace("/workspace/repo", "Zombie"),
+        Err(GaryxDbError::NotFound(_))
+    ));
+    assert!(db.list_workspaces_with_stats().expect("list").is_empty());
+
+    // Explicit re-add revives the row but starts a fresh lifecycle: the
+    // previous pin does not survive removal.
+    db.upsert_workspace(WorkspaceDraft {
+        name: Some("Repo".to_owned()),
+        path: "/workspace/repo".to_owned(),
+    })
+    .expect("re-add");
+    let entries = db.list_workspaces_with_stats().expect("list again");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].pinned_at, None);
+    assert_eq!(entries[0].name.as_deref(), Some("Repo"));
+}

@@ -79,6 +79,8 @@ mod task_forest;
 pub enum GaryxDbError {
     #[error("BadRequest: {0}")]
     BadRequest(String),
+    #[error("NotFound: {0}")]
+    NotFound(String),
     #[error("thread is archived: {0}")]
     ThreadArchived(String),
     #[error("database lock poisoned")]

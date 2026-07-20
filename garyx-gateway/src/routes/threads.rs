@@ -515,6 +515,13 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
     let agent_id = data.get("agent_id").cloned().unwrap_or(Value::Null);
     let provider_type = data.get("provider_type").cloned().unwrap_or(Value::Null);
     let worktree = data.get("worktree").cloned().unwrap_or(Value::Null);
+    let workspace_origin =
+        crate::workspace_mode::thread_workspace_origin(thread_id, workspace_dir.as_str());
+    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
+        thread_id,
+        workspace_dir.as_str(),
+        &worktree,
+    );
     let recent_run_id = data
         .get("history")
         .and_then(|history| history.get("recent_committed_run_ids"))
@@ -530,6 +537,8 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
         "thread_type": thread_summary_type_from_record(data),
         "label": label,
         "workspace_dir": workspace_dir,
+        "workspace_origin": workspace_origin,
+        "root_workspace_path": root_workspace_path,
         "channel_bindings": channel_bindings,
         "updated_at": updated_at,
         "created_at": created_at,
@@ -550,12 +559,23 @@ pub(super) fn thread_summary_from_meta(record: &ThreadMetaRecord) -> Value {
         .as_deref()
         .and_then(|value| serde_json::from_str::<Value>(value).ok())
         .unwrap_or(Value::Null);
+    let workspace_origin = crate::workspace_mode::thread_workspace_origin(
+        &record.thread_id,
+        record.workspace_dir.as_deref(),
+    );
+    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
+        &record.thread_id,
+        record.workspace_dir.as_deref(),
+        &worktree,
+    );
     json!({
         "thread_id": record.thread_id.as_str(),
         "thread_key": record.thread_id.as_str(),
         "thread_type": record.thread_type.as_str(),
         "label": record.thread_label.as_deref(),
         "workspace_dir": record.workspace_dir.as_deref(),
+        "workspace_origin": workspace_origin,
+        "root_workspace_path": root_workspace_path,
         "channel_bindings": [],
         "updated_at": record.updated_at.as_deref(),
         "created_at": record.created_at.as_deref(),

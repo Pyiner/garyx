@@ -164,6 +164,7 @@ impl From<GaryxDbError> for MeetingError {
     fn from(error: GaryxDbError) -> Self {
         match error {
             GaryxDbError::BadRequest(message) => Self::bad_request(message),
+            GaryxDbError::NotFound(message) => Self::bad_request(message),
             GaryxDbError::ThreadArchived(thread_id) => {
                 Self::bad_request(format!("thread is archived: {thread_id}"))
             }
