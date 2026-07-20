@@ -88,8 +88,10 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         requestedPosition = restingPosition
         guard !isConfigured else {
             guard newExtent != extent else {
-                if state.phase == .idle, state.settledPosition != restingPosition {
-                    state.synchronize(to: restingPosition, extent: extent)
+                if state.reconcileRestingPositionIfIdle(
+                    restingPosition,
+                    extent: extent
+                ) {
                     publish()
                 }
                 return

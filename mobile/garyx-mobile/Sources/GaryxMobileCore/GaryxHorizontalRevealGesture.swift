@@ -124,6 +124,19 @@ public struct GaryxHorizontalRevealState: Equatable, Sendable {
         cancellationTarget = position
     }
 
+    /// Reconciles a remounted surface with its canonical resting position
+    /// without stealing an in-flight drag or settle from its current owner.
+    /// Returns whether reconciliation changed the reveal state.
+    @discardableResult
+    public mutating func reconcileRestingPositionIfIdle(
+        _ position: GaryxHorizontalRevealPosition,
+        extent: CGFloat
+    ) -> Bool {
+        guard phase == .idle, settledPosition != position else { return false }
+        synchronize(to: position, extent: extent)
+        return true
+    }
+
     /// Force-terminal reduction for lifecycle and ownership invalidations.
     ///
     /// The event is intentionally exhaustive even though every invalidation

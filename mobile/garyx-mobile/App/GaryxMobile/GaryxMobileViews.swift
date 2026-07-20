@@ -10,7 +10,7 @@ struct GaryxRootView: View {
 
     var body: some View {
         ZStack {
-            if homeObservationStore.isGatewayConfigured, case .ready = homeObservationStore.connectionState {
+            if homeObservationStore.rootSurface == .navigationShell {
                 GaryxShellView(
                     model: model,
                     shellStore: model.shellChromeStore,

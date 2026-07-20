@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+public enum GaryxRootSurface: Equatable, Sendable {
+    case navigationShell
+    case gatewaySetup
+}
+
 @MainActor
 @Observable
 public final class GaryxHomeObservationStore {
@@ -33,6 +38,16 @@ public final class GaryxHomeObservationStore {
         self.isLoadingMoreThreads = isLoadingMoreThreads
         self.hasMoreThreadSummaries = hasMoreThreadSummaries
         self.loadMoreFooterState = loadMoreFooterState
+    }
+
+    /// The existing root-view branch expressed as a pure, testable decision.
+    /// Changing this value replaces the complete navigation-shell occurrence,
+    /// including its UIKit-owned public edge recognizers.
+    public var rootSurface: GaryxRootSurface {
+        guard isGatewayConfigured, case .ready = connectionState else {
+            return .gatewaySetup
+        }
+        return .navigationShell
     }
 
     @discardableResult
