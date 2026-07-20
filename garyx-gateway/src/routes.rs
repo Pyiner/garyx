@@ -91,10 +91,10 @@ mod thread_summaries;
 mod threads;
 mod workspace_git;
 
+pub use crate::automation::debug_api::*;
 pub use bot_bindings::*;
 pub use bot_consoles::*;
 pub use channel_endpoints::*;
-pub use crate::automation::debug_api::*;
 pub use custom_agents::*;
 pub use diagnostics::*;
 pub use history::*;

@@ -21,7 +21,6 @@
 //!   `garyx_router::default_agent_from_config`, the shared derivation both
 //!   router construction and `update_config` call.
 
-
 use garyx_models::config::GaryxConfig;
 
 /// Values derived from `GaryxConfig` that both initial assembly and runtime

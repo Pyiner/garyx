@@ -1,19 +1,19 @@
 use super::*;
 use crate::automation::dispatch::{AutomationDispatchError, AutomationDispatchPort};
-use garyx_bridge::MultiProviderBridge;
-use garyx_channels::SendMessageResult;
-use garyx_router::MessageRouter;
+use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use chrono_tz::Tz;
-use garyx_models::config::CronJobKind;
-use async_trait::async_trait;
+use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::{BridgeError, ProviderRuntime};
+use garyx_channels::SendMessageResult;
 use garyx_channels::{ChannelDispatcher, ChannelInfo, OutboundMessage};
+use garyx_models::config::CronJobKind;
 use garyx_models::config::{CronAction, CronConfig, CronJobConfig, CronSchedule};
 use garyx_models::provider::{
     ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
 };
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogSink};
+use garyx_router::MessageRouter;
 use garyx_router::ThreadStore;
 use tempfile::TempDir;
 
@@ -1339,7 +1339,10 @@ async fn generated_automation_disabled_at_run_time_records_visible_failure() {
         .await;
     let (state, env) = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
 
-    let run = svc.run_now("automation-disabled-at-run", &env).await.unwrap();
+    let run = svc
+        .run_now("automation-disabled-at-run", &env)
+        .await
+        .unwrap();
     assert_eq!(run.status, JobRunStatus::Failed);
     assert!(
         run.error
@@ -1491,7 +1494,10 @@ async fn target_automation_runtime_uses_live_codex_binding_not_legacy_claude_job
         .await
         .unwrap();
 
-    let run = svc.run_now("automation-target-live-codex", &env).await.unwrap();
+    let run = svc
+        .run_now("automation-target-live-codex", &env)
+        .await
+        .unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
     assert_eq!(run.thread_id.as_deref(), Some(target_thread_id));
     assert_eq!(codex.calls(), 1, "the live target binding selects Codex");
@@ -1706,7 +1712,11 @@ async fn test_run_now_disabled_job_is_skipped() {
     .await
     .unwrap();
 
-    assert!(svc.run_now("disabled-now", &bare_exec_env()).await.is_none());
+    assert!(
+        svc.run_now("disabled-now", &bare_exec_env())
+            .await
+            .is_none()
+    );
     assert!(svc.list_runs(10, 0).await.is_empty());
 }
 
@@ -2151,8 +2161,7 @@ async fn test_stop_waits_for_inflight_cron_tick() {
             _run_id: &str,
             _message: &str,
             _extra_metadata: std::collections::HashMap<String, serde_json::Value>,
-        ) -> Result<garyx_models::provider::AgentDispatchOutcome, AutomationDispatchError>
-        {
+        ) -> Result<garyx_models::provider::AgentDispatchOutcome, AutomationDispatchError> {
             let _permit = self.gate.acquire().await.expect("gate closed");
             Err(AutomationDispatchError::StateUnavailable)
         }
@@ -2425,8 +2434,7 @@ fn test_build_followup_body_contains_metadata_block() {
         scheduled_at,
         delay_seconds_requested: 300,
     };
-    let body =
-        super::build_followup_body("followup_deadbeefdeadbeef", &payload, scheduled_for);
+    let body = super::build_followup_body("followup_deadbeefdeadbeef", &payload, scheduled_for);
     assert!(body.starts_with("<garyx_followup_metadata>"));
     assert!(body.contains("schedule_id: followup_deadbeefdeadbeef"));
     assert!(body.contains("delay_seconds_requested: 300"));
@@ -2910,7 +2918,10 @@ async fn validation_recomputes_invalid_valid_invalid_without_restart_and_is_not_
         Some("missing canonical target for agent turn")
     );
 
-    let first_run = svc.run_now("validation-transition", &bare_exec_env()).await.unwrap();
+    let first_run = svc
+        .run_now("validation-transition", &bare_exec_env())
+        .await
+        .unwrap();
     assert_eq!(first_run.status, JobRunStatus::Failed);
     assert_eq!(
         first_run.error.as_deref(),
@@ -3050,7 +3061,8 @@ async fn load_marks_threadless_agent_turn_and_system_event_invalid_from_disk_and
         bridge
             .set_default_provider_key("threadless-validation-provider")
             .await;
-        let (_state, env) = wire_front_door_state_with_agents(&svc, bridge, custom_agents.clone()).await;
+        let (_state, env) =
+            wire_front_door_state_with_agents(&svc, bridge, custom_agents.clone()).await;
 
         for (id, expected) in [
             ("disk-agent", "missing canonical target for agent turn"),
@@ -3137,4 +3149,76 @@ fn log_and_internal_dispatch_jobs_are_outside_agent_validation_contract() {
         ..make_job_config("internal-unaffected", 60)
     });
     assert!(validate_cron_job(&internal).is_none());
+}
+
+/// Tracing-target contract (arch-#14 review): the engine family kept the
+/// stable `garyx_gateway::cron` target across the module moves, so existing
+/// `RUST_LOG` filters, log aggregation, and alert rules keep working. Every
+/// engine event carries the explicit target; a module-path-derived target
+/// (`garyx_gateway::automation::engine…`) is a contract break.
+#[tokio::test]
+async fn engine_tracing_keeps_the_stable_cron_target() {
+    use std::sync::Mutex as PlainMutex;
+
+    struct TargetCapture {
+        targets: Arc<PlainMutex<Vec<String>>>,
+    }
+    impl tracing::Subscriber for TargetCapture {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            self.targets
+                .lock()
+                .expect("target capture lock")
+                .push(event.metadata().target().to_owned());
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    let targets = Arc::new(PlainMutex::new(Vec::new()));
+    let _guard = tracing::subscriber::set_default(TargetCapture {
+        targets: targets.clone(),
+    });
+
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+    let _ = ensure_dirs(tmp.path()).await;
+
+    // mod.rs path: duplicate start warn + scheduler lifecycle infos.
+    svc.start(bare_exec_env());
+    svc.start(bare_exec_env());
+
+    // execution.rs path: a Log job through run_now.
+    svc.add(make_job_config("tracing-target-probe", 3600))
+        .await
+        .unwrap();
+    svc.run_now("tracing-target-probe", &bare_exec_env())
+        .await
+        .unwrap();
+    svc.stop().await;
+
+    let captured = targets.lock().expect("target capture lock").clone();
+    let cron_events = captured
+        .iter()
+        .filter(|target| target.as_str() == "garyx_gateway::cron")
+        .count();
+    let drifted: Vec<&String> = captured
+        .iter()
+        .filter(|target| target.starts_with("garyx_gateway::automation"))
+        .collect();
+    assert!(
+        cron_events >= 2,
+        "expected engine events on the stable garyx_gateway::cron target, got: {captured:?}"
+    );
+    assert!(
+        drifted.is_empty(),
+        "engine events drifted to module-path targets: {drifted:?}"
+    );
 }

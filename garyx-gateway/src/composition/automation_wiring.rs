@@ -14,7 +14,9 @@ use std::sync::{Arc, Weak};
 use garyx_models::provider::AgentDispatchOutcome;
 
 use crate::app_state::AppState;
-use crate::automation::dispatch::{AutomationDispatchError, AutomationDispatchPort, AutomationExecEnv};
+use crate::automation::dispatch::{
+    AutomationDispatchError, AutomationDispatchPort, AutomationExecEnv,
+};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 
 /// [`AutomationDispatchPort`] implementation over the assembled gateway state.

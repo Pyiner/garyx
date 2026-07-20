@@ -121,10 +121,12 @@ followup-driven runs distinctly from organic user input:
   consumers and in `get(id)` for direct lookup.
 - On tick, `CronService::execute_job` notices the
   `CronJobKind::InternalDispatch` variant, renders the synthetic body
-  via `build_followup_body`, upgrades its `Weak<AppState>` back-
-  reference, and calls `dispatch_internal_message_to_thread`. Because
-  the `AppState` reference is held weakly, no circular `Arc` is
-  formed between `AppState` and `CronService`.
+  via `build_followup_body`, and dispatches through the
+  `AutomationDispatchPort` of its injected execution environment
+  (`composition::automation_wiring` implements the port over a
+  `Weak<AppState>` and calls `dispatch_internal_message_to_thread`).
+  The engine itself holds no `AppState` reference, so no circular
+  `Arc` is formed between `AppState` and `CronService`.
 
 ## Boundary handling & retries
 

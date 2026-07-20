@@ -11,11 +11,11 @@ mod model;
 mod schedule;
 mod store;
 
-pub use model::{CronJob, JobRunStatus, RunRecord};
-pub(crate) use model::validate_cron_job;
-pub(crate) use schedule::parse_once_timestamp;
 #[cfg(test)]
 pub(crate) use execution::build_followup_body;
+pub(crate) use model::validate_cron_job;
+pub use model::{CronJob, JobRunStatus, RunRecord};
+pub(crate) use schedule::parse_once_timestamp;
 
 #[allow(unused_imports)]
 use execution::*;
@@ -32,9 +32,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
 use chrono::Utc;
-use garyx_models::config::{
-    CronConfig, CronJobConfig,
-};
+use garyx_models::config::{CronConfig, CronJobConfig};
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
 
@@ -43,7 +41,6 @@ use super::dispatch::AutomationExecEnv;
 // ---------------------------------------------------------------------------
 // CronService
 // ---------------------------------------------------------------------------
-
 
 /// Cron scheduler service.
 ///
@@ -88,7 +85,7 @@ impl CronService {
         let mut map = HashMap::new();
         for mut job in disk_jobs {
             if let Err(error) = validate_cron_schedule(&job.schedule) {
-                tracing::warn!(
+                tracing::warn!(target: "garyx_gateway::cron",
                     job_id = %job.id,
                     error = %error,
                     "skipping persisted cron job with invalid schedule"
@@ -106,7 +103,7 @@ impl CronService {
             // the startup reconciliation that repairs interrupted threads
             // and tasks.
             if job.last_status == JobRunStatus::Running {
-                tracing::warn!(
+                tracing::warn!(target: "garyx_gateway::cron",
                     job_id = %job.id,
                     "resetting stale `Running` cron job left by an interrupted run/restart"
                 );
@@ -120,7 +117,7 @@ impl CronService {
         // Merge config-defined jobs.
         for cfg_job in &config.jobs {
             if let Err(error) = validate_cron_schedule(&cfg_job.schedule) {
-                tracing::warn!(
+                tracing::warn!(target: "garyx_gateway::cron",
                     job_id = %cfg_job.id,
                     error = %error,
                     "skipping config cron job with invalid schedule"
@@ -165,7 +162,7 @@ impl CronService {
         let runs = load_runs(&self.data_dir).await?;
         *self.runs.write().await = runs;
 
-        tracing::info!(count = self.jobs.read().await.len(), "cron jobs loaded");
+        tracing::info!(target: "garyx_gateway::cron", count = self.jobs.read().await.len(), "cron jobs loaded");
         Ok(())
     }
 
@@ -178,7 +175,7 @@ impl CronService {
     pub(crate) fn start(&self, env: AutomationExecEnv) {
         let mut stop_slot = self.stop_tx.lock().expect("cron stop_tx lock poisoned");
         if stop_slot.is_some() {
-            tracing::warn!("cron scheduler already running; duplicate start ignored");
+            tracing::warn!(target: "garyx_gateway::cron", "cron scheduler already running; duplicate start ignored");
             return;
         }
 
@@ -192,12 +189,12 @@ impl CronService {
         let data_dir = self.data_dir.clone();
 
         let task = tokio::spawn(async move {
-            tracing::info!("cron scheduler started");
+            tracing::info!(target: "garyx_gateway::cron", "cron scheduler started");
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
             loop {
                 tokio::select! {
                     _ = stop_rx.recv() => {
-                        tracing::info!("cron scheduler stopping");
+                        tracing::info!(target: "garyx_gateway::cron", "cron scheduler stopping");
                         break;
                     }
                     _ = interval.tick() => {
@@ -211,7 +208,7 @@ impl CronService {
                     }
                 }
             }
-            tracing::info!("cron scheduler stopped");
+            tracing::info!(target: "garyx_gateway::cron", "cron scheduler stopped");
         });
         *self
             .scheduler_task
@@ -304,7 +301,7 @@ impl CronService {
         let job = CronJob::from_config(&cfg);
         persist_job(&self.data_dir, &job).await?;
         self.jobs.write().await.insert(job.id.clone(), job.clone());
-        tracing::info!(job_id = %cfg.id, "cron job added");
+        tracing::info!(target: "garyx_gateway::cron", job_id = %cfg.id, "cron job added");
         Ok(job)
     }
 
@@ -325,9 +322,9 @@ impl CronService {
             .insert(new_job.id.clone(), new_job.clone());
         persist_job(&self.data_dir, &new_job).await?;
         if previous.is_some() {
-            tracing::info!(job_id = %cfg.id, "cron job replaced via upsert");
+            tracing::info!(target: "garyx_gateway::cron", job_id = %cfg.id, "cron job replaced via upsert");
         } else {
-            tracing::info!(job_id = %cfg.id, "cron job added via upsert");
+            tracing::info!(target: "garyx_gateway::cron", job_id = %cfg.id, "cron job added via upsert");
         }
         Ok((new_job, previous))
     }
@@ -362,7 +359,7 @@ impl CronService {
         };
 
         persist_job(&self.data_dir, &updated).await?;
-        tracing::info!(job_id = %id, "cron job updated");
+        tracing::info!(target: "garyx_gateway::cron", job_id = %id, "cron job updated");
         Ok(Some(updated))
     }
 
@@ -372,11 +369,10 @@ impl CronService {
         if removed {
             self.active_agent_runs.write().await.remove(id);
             delete_job_file(&self.data_dir, id).await?;
-            tracing::info!(job_id = %id, "cron job deleted");
+            tracing::info!(target: "garyx_gateway::cron", job_id = %id, "cron job deleted");
         }
         Ok(removed)
     }
-
 }
 
 #[cfg(test)]

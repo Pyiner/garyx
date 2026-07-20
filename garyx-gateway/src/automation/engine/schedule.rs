@@ -138,7 +138,10 @@ pub(super) fn next_cron_run_in_timezone<Z: TimeZone>(
 /// system zone.
 ///
 /// Pure so tests can pin the precedence without touching process env.
-pub(super) fn resolve_bare_cron_timezone(tz_env: Option<&str>, system_zone: Option<&str>) -> Option<Tz> {
+pub(super) fn resolve_bare_cron_timezone(
+    tz_env: Option<&str>,
+    system_zone: Option<&str>,
+) -> Option<Tz> {
     let parse = |value: Option<&str>| {
         value
             .map(str::trim)

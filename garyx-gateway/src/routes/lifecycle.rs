@@ -34,7 +34,10 @@ pub(super) fn cron_target_thread_id(value: &str) -> Option<String> {
     is_thread_key(stripped).then(|| stripped.to_owned())
 }
 
-pub(super) fn cron_job_references_thread(job: &crate::automation::CronJob, thread_id: &str) -> bool {
+pub(super) fn cron_job_references_thread(
+    job: &crate::automation::CronJob,
+    thread_id: &str,
+) -> bool {
     job.thread_id
         .as_deref()
         .map(str::trim)

@@ -2,16 +2,14 @@
 
 use chrono::{DateTime, Local, Utc};
 use chrono_tz::Tz;
-use garyx_models::config::{
-    CronAction, CronJobConfig, CronJobKind, CronSchedule,
-};
+use garyx_models::config::{CronAction, CronJobConfig, CronJobKind, CronSchedule};
 use serde::{Deserialize, Serialize};
 
 use garyx_models::thread_logs::is_canonical_thread_id;
 
 use super::schedule::{
-    has_non_empty_cron_text, machine_cron_timezone, next_cron_run_in_timezone,
-    parse_cron_schedule, parse_once_timestamp,
+    has_non_empty_cron_text, machine_cron_timezone, next_cron_run_in_timezone, parse_cron_schedule,
+    parse_once_timestamp,
 };
 
 // ---------------------------------------------------------------------------
@@ -158,7 +156,7 @@ impl CronJob {
                     // panic here would crash the create request and, via
                     // `advance`, the whole scheduler task. Legitimate intervals
                     // are bounded well below this by `MAX_INTERVAL_SECS`.
-                    tracing::warn!(
+                    tracing::warn!(target: "garyx_gateway::cron", 
                         interval_secs = *interval_secs,
                         "interval schedule overflows the representable timeline; parking next_run far in the future"
                     );
@@ -179,7 +177,7 @@ impl CronJob {
                                 return next;
                             }
                         } else {
-                            tracing::warn!(
+                            tracing::warn!(target: "garyx_gateway::cron", 
                                 timezone = tz_name,
                                 "invalid cron timezone, using machine local timezone"
                             );
@@ -239,7 +237,11 @@ impl CronJob {
     /// indefinitely), and `delete_after_run` is honored just like `Success`.
     /// All other statuses keep the prior behavior (bump counters, leave the
     /// schedule untouched).
-    pub(super) fn settle_after_run(&mut self, status: &JobRunStatus, started_at: DateTime<Utc>) -> bool {
+    pub(super) fn settle_after_run(
+        &mut self,
+        status: &JobRunStatus,
+        started_at: DateTime<Utc>,
+    ) -> bool {
         self.last_status = status.clone();
         match status {
             JobRunStatus::Success => self.advance(),

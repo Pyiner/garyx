@@ -336,7 +336,9 @@ mod tests {
     #[tokio::test]
     async fn schedules_literal_continue_followup() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let cron = Arc::new(crate::automation::CronService::new(tmp.path().to_path_buf()));
+        let cron = Arc::new(crate::automation::CronService::new(
+            tmp.path().to_path_buf(),
+        ));
         let state = crate::composition::app_bootstrap::AppStateBuilder::new(
             garyx_models::config::GaryxConfig::default(),
         )

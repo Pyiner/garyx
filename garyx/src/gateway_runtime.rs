@@ -24,9 +24,7 @@ use garyx_models::config_loader::{
 use garyx_models::local_paths::{
     default_session_data_dir, message_ledger_dir_for_data_dir, thread_transcripts_dir_for_data_dir,
 };
-use garyx_router::{
-    MessageLedgerStore, ThreadHistoryRepository, ThreadTranscriptStore,
-};
+use garyx_router::{MessageLedgerStore, ThreadHistoryRepository, ThreadTranscriptStore};
 
 use crate::commands::VERSION;
 use crate::config_support::{default_config_path_buf, load_config_or_default, print_diagnostics};
@@ -83,7 +81,7 @@ fn register_shutdown_teardowns(
     // pre-stack shutdown sequence did.
     teardown.push("cron_service", move || async move {
         match Arc::try_unwrap(cron_service) {
-            Ok(mut svc) => svc.stop().await,
+            Ok(svc) => svc.stop().await,
             Err(_) => tracing::debug!("Cron service still has outstanding references on shutdown"),
         }
     });
@@ -840,6 +838,67 @@ mod tests {
         assert_eq!(
             body["deliveryCapabilities"]["atomicCreateDispatch"], 1,
             "the production SQLite runtime must retain its atomic store handle"
+        );
+    }
+
+    /// Production-wiring guard (arch-#14 review): the assembly phase must
+    /// actually start the automation scheduler loop. Consumes the REAL
+    /// `RuntimeAssembler` output with a config-defined immediately-due Log
+    /// job and observes the loop executing it (a run record appears), so
+    /// deleting the `start_automation_scheduler` call — which would silently
+    /// stop every background due job — turns this red with no synthetic
+    /// re-wiring in the test body.
+    #[tokio::test]
+    async fn assembled_runtime_starts_the_automation_scheduler() {
+        use garyx_models::config::{CronAction, CronJobConfig, CronSchedule};
+        use std::time::Duration;
+
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let mut config = garyx_models::config::GaryxConfig::default();
+        config.sessions.data_dir = Some(temp.path().join("data").to_string_lossy().into_owned());
+        config.cron.jobs.push(CronJobConfig {
+            id: "assembly-scheduler-witness".to_owned(),
+            kind: Default::default(),
+            label: None,
+            // Due immediately on every tick; Log needs no provider runtime,
+            // so the ready gate never defers it.
+            schedule: CronSchedule::Interval { interval_secs: 0 },
+            ui_schedule: None,
+            action: CronAction::Log,
+            target: None,
+            message: None,
+            workspace_dir: None,
+            agent_id: None,
+            thread_id: None,
+            delete_after_run: false,
+            enabled: true,
+            system: true,
+        });
+
+        let RuntimeAssembly {
+            state,
+            bridge: _bridge,
+            cron_service,
+        } = RuntimeAssembler::new(temp.path().join("garyx.json"), config)
+            .with_channels_disabled(true)
+            .assemble()
+            .await
+            .expect("assembly");
+
+        let mut executed = false;
+        for _ in 0..80 {
+            if !cron_service.list_runs(1, 0).await.is_empty() {
+                executed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        cron_service.stop().await;
+        state.ops.meetings.shutdown_ingestion();
+        assert!(
+            executed,
+            "the assembled runtime never executed a due job: the assembly \
+             phase did not start the automation scheduler loop"
         );
     }
 
