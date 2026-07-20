@@ -143,8 +143,10 @@ user exit rather than remaining hidden in `notDispatched` or
   shared transition fixtures.
 - iOS runs every durable delivery and create fixture against
   `GaryxMobileCore`. The desktop conformance suite loads the same vocabulary
-  and fixture, and asserts the explicit `p0_g_follow_up` consumer marker; Mac
-  runtime consumption remains P0-G rather than a second client-local spec.
+  and fixture, and both clients assert the `implemented` consumer marker. The
+  Mac reducer now consumes the canonical conflict-set admission and
+  scope-authenticated multi-record evidence rules rather than maintaining a
+  second client-local spec.
 
 ## UI and accessibility acceptance
 
