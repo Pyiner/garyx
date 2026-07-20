@@ -491,6 +491,11 @@ async fn test_api_channel_ws_real_http_call() {
 async fn test_thread_lifecycle_real_http_api_e2e() {
     let provider = Arc::new(RecordingProvider::new());
     let state = make_state_with_recording_provider(provider).await;
+    let store_incarnation = state
+        .ops
+        .garyx_db
+        .store_incarnation_id()
+        .expect("store incarnation");
     let (base_url, shutdown_tx, handle) = spawn_http_server(state).await;
     let client = reqwest::Client::new();
     let mut ws = connect_chat_ws(&base_url).await;
@@ -672,6 +677,10 @@ async fn test_thread_lifecycle_real_http_api_e2e() {
 
     let delete_response: Value = client
         .delete(format!("{base_url}/api/threads/{manual_thread_id}"))
+        .json(&json!({
+            "operationId": uuid::Uuid::new_v4().to_string(),
+            "expectedStoreIncarnation": store_incarnation,
+        }))
         .send()
         .await
         .expect("delete thread response")
