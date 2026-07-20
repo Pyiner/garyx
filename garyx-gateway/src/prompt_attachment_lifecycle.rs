@@ -759,7 +759,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claimed_attachment_is_single_owner_and_terminal_cleanup_unlinks_it() {
+    async fn claimed_attachment_is_single_owner_and_survives_run_terminal() {
         let temp = tempdir().unwrap();
         let db = Arc::new(GaryxDbService::memory().unwrap());
         db.migrate_prompt_attachment_lifecycle_v1().unwrap();
@@ -824,11 +824,86 @@ mod tests {
 
         lifecycle.mark_run_terminal("run-one").await.unwrap();
 
-        assert!(!Path::new(&managed.path).exists());
+        assert!(
+            Path::new(&managed.path).exists(),
+            "a committed attachment remains conversation content after its provider run terminates"
+        );
         assert!(
             db.prompt_attachment_by_id(&managed.attachment_id)
                 .unwrap()
-                .is_none()
+                .is_some(),
+            "the attachment remains owned by its thread until thread cleanup"
+        );
+    }
+
+    /// RED reproduction for #TASK-2511's committed-attachment lifetime.
+    ///
+    /// Once this managed image has been claimed by a chat start, the committed
+    /// transcript keeps referencing its path after the provider run is gone.
+    /// Expiring that claim therefore turns a previously renderable message into
+    /// the permanent filename-only image placeholder seen by the client.
+    #[tokio::test]
+    async fn committed_chat_image_survives_claim_lease_expiry() {
+        let temp = tempdir().unwrap();
+        let db = Arc::new(GaryxDbService::memory().unwrap());
+        db.migrate_prompt_attachment_lifecycle_v1().unwrap();
+        let lifecycle = PromptAttachmentLifecycle::new(db.clone(), temp.path().to_path_buf());
+        let scope = IdempotencyScope {
+            identity: "committed-image-lifetime".to_owned(),
+            epoch: 1,
+        };
+        let uploaded = lifecycle
+            .upload(
+                Some(&scope),
+                vec![PromptAttachmentUpload {
+                    kind: PromptAttachmentKind::Image,
+                    name: "photo-1.jpg".to_owned(),
+                    media_type: "image/jpeg".to_owned(),
+                    bytes: vec![0xff, 0xd8, 0xff, 0xd9],
+                }],
+            )
+            .await
+            .unwrap();
+        let managed = uploaded.first().expect("managed image");
+        let mut committed_attachments = vec![PromptAttachment {
+            attachment_id: Some(managed.attachment_id.clone()),
+            kind: PromptAttachmentKind::Image,
+            path: managed.path.clone(),
+            name: managed.name.clone(),
+            media_type: managed.media_type.clone(),
+        }];
+        let claims = lifecycle
+            .prepare_claims((&scope.identity, scope.epoch), &mut committed_attachments)
+            .await
+            .unwrap();
+        let claimed_at = Utc::now();
+        lifecycle
+            .claim_standalone(
+                (&scope.identity, scope.epoch),
+                "thread::committed-image-lifetime",
+                DispatchAdmissionKind::ChatStart,
+                Some("intent-committed-image"),
+                Some("run-committed-image"),
+                "run-committed-image",
+                &claims,
+            )
+            .await
+            .unwrap();
+
+        lifecycle
+            .process_cleanup_once_at(claimed_at + CLAIM_LEASE + Duration::seconds(1))
+            .await
+            .unwrap();
+
+        assert!(
+            Path::new(&committed_attachments[0].path).exists(),
+            "a chat image remains conversation content after its dispatch lease expires"
+        );
+        assert!(
+            db.prompt_attachment_by_id(&managed.attachment_id)
+                .unwrap()
+                .is_some(),
+            "the durable attachment record must remain owned by its thread"
         );
     }
 

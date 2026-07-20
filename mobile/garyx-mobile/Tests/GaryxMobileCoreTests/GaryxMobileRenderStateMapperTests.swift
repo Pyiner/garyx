@@ -2,6 +2,121 @@
 import XCTest
 
 final class GaryxMobileRenderStateMapperTests: XCTestCase {
+    /// Passing boundary check for the #TASK-2511 RED gateway reproduction.
+    ///
+    /// This is the sanitized wire shape captured from the affected thread:
+    /// the committed user body carries an image backed by a managed `payload`
+    /// path, while render_state references that body by seq/origin id. It pins
+    /// that SSE decoding and the dumb render-state mapper do not drop the
+    /// attachment before the thumbnail loader receives it.
+    func testCapturedManagedImageFramePreservesAttachmentThroughRenderMapper() throws {
+        let path = "/Users/test/.garyx/data/prompt-attachments-v1/attachment:00000000-0000-0000-0000-000000000001/payload"
+        let raw = #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::image-echo-repro",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::image-echo-repro",
+              "seq": 1,
+              "message": {
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "control": { "kind": "run_start" }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::image-echo-repro",
+              "seq": 2,
+              "message": {
+                "role": "user",
+                "text": "Test image prompt",
+                "content": [
+                  { "type": "text", "text": "Test image prompt" },
+                  {
+                    "type": "image",
+                    "media_type": "image/jpeg",
+                    "name": "photo-1.jpg",
+                    "path": "\#(path)"
+                  }
+                ],
+                "metadata": {
+                  "origin_id": "mobile-00000000-0000-0000-0000-000000000001",
+                  "client": "garyx-mobile",
+                  "attachments": [
+                    {
+                      "attachment_id": "attachment:00000000-0000-0000-0000-000000000001",
+                      "kind": "image",
+                      "media_type": "image/jpeg",
+                      "name": "photo-1.jpg",
+                      "path": "\#(path)"
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 2,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "user_turn:origin:mobile-00000000-0000-0000-0000-000000000001",
+                "user": {
+                  "id": "origin:mobile-00000000-0000-0000-0000-000000000001",
+                  "seq": 2,
+                  "role": "user"
+                },
+                "activity": [],
+                "started_at": null,
+                "finished_at": null
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": []
+          }
+        }
+        """#
+
+        var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 0, replayScope: .resume)
+        let result = processor.processPayload(raw, threadId: "thread::image-echo-repro")
+        XCTAssertNil(result.reconnect)
+        guard case let .applyCommittedMessages(committed) = try XCTUnwrap(result.actions.first),
+              case let .applyRenderSnapshot(snapshot) = try XCTUnwrap(result.actions.last) else {
+            return XCTFail("frame must apply committed bodies before render_state")
+        }
+
+        let messages = GaryxMobileTranscriptMapper.mobileMessages(from: committed)
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: messages,
+            transcriptMessages: committed
+        )
+        let attachment = try XCTUnwrap(rows.only?.userBlock?.message.attachments.only)
+
+        XCTAssertEqual(attachment.name, "photo-1.jpg")
+        XCTAssertEqual(attachment.mediaType, "image/jpeg")
+        XCTAssertEqual(attachment.path, path)
+        XCTAssertNil(attachment.dataUrl)
+        XCTAssertNil(attachment.remoteUrl)
+        XCTAssertEqual(
+            GaryxMobileFileLink.previewTarget(
+                forLocalFilePath: try XCTUnwrap(attachment.path),
+                workspacePaths: []
+            ),
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/Users/test/.garyx/data/prompt-attachments-v1/attachment:00000000-0000-0000-0000-000000000001",
+                path: "payload"
+            )
+        )
+    }
+
     func testFrameDecodesServerFieldNames() throws {
         let json = """
         {

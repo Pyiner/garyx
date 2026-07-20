@@ -180,6 +180,64 @@ async fn chat_attachment_upload_creates_scoped_managed_row() {
     assert_eq!(row.byte_size, 15);
 }
 
+/// RED reproduction for #TASK-2511.
+///
+/// The affected transcript stores the original image name/media type next to
+/// the managed attachment path, but the iOS echo loader can only dereference
+/// that path through the workspace-file preview route. Managed storage names
+/// the immutable payload `payload`, so this exercises the real upload ->
+/// transcript-path -> preview shape without committing the user's image.
+#[tokio::test]
+async fn managed_chat_image_remains_previewable_for_transcript_echo() {
+    let data_dir = tempdir().unwrap();
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(data_dir.path().join("data").display().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+
+    let result = write_uploaded_chat_attachments(
+        &state,
+        UploadChatAttachmentsBody {
+            idempotency_scope: Some(IdempotencyScope {
+                identity: "image-echo-repro".to_owned(),
+                epoch: 1,
+            }),
+            files: vec![UploadChatAttachment {
+                kind: PromptAttachmentKind::Image,
+                name: "photo-1.jpg".to_owned(),
+                media_type: Some("image/jpeg".to_owned()),
+                data_base64: BASE64.encode(&jpeg),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let uploaded = result.files.first().expect("uploaded image");
+    let managed_path = Path::new(&uploaded.path);
+    assert_eq!(
+        managed_path.file_name().and_then(|name| name.to_str()),
+        Some("payload")
+    );
+    let preview = build_preview(
+        managed_path
+            .parent()
+            .expect("managed attachment directory")
+            .display()
+            .to_string(),
+        Some("payload".to_owned()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        preview.preview_kind, "image",
+        "a managed image referenced by a committed user message must load as an image thumbnail"
+    );
+    assert_eq!(preview.media_type, "image/jpeg");
+    assert_eq!(preview.data_base64, Some(BASE64.encode(jpeg)));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn listing_tolerates_unreadable_child_directories() {
