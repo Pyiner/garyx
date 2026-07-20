@@ -158,6 +158,10 @@ struct GaryxCapsulesView: View {
         anchors: [String: Anchor<CGRect>]
     ) -> some View {
         if galleryMorphState.isPresented, let selection = galleryMorphSelection {
+            // Keep the destination's safe-area environment intact: only the
+            // scrim ignores safe areas. Expanding this reader into them would
+            // move the focused preview's interactive glass chrome underneath
+            // the Dynamic Island at the morph endpoint.
             GeometryReader { geometry in
                 let liveSourceRect = anchors[selection.id].map { geometry[$0] }
                 let sourceRect = liveSourceRect
@@ -203,7 +207,6 @@ struct GaryxCapsulesView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .ignoresSafeArea()
         }
     }
 
