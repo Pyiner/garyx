@@ -1,0 +1,58 @@
+{
+  "type": "thread_render_frame",
+  "thread_id": "thread::send-jitter-capture",
+  "events": [
+    {
+      "type": "committed_message",
+      "thread_id": "thread::send-jitter-capture",
+      "seq": 372,
+      "message": {
+        "role": "user",
+        "kind": "user_input",
+        "text": "A long mobile message that wraps across several composer lines before it is sent.",
+        "metadata": {
+          "client": "garyx-mobile",
+          "client_intent_id": "mobile-00000000-0000-0000-0000-000000002523",
+          "origin_id": "mobile-00000000-0000-0000-0000-000000002523"
+        }
+      }
+    }
+  ],
+  "render_state": {
+    "based_on_seq": 372,
+    "rows": [
+      { "kind": "user_turn", "id": "user_turn:seq:1", "user": { "id": "seq:1", "seq": 1, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:2", "user": { "id": "seq:2", "seq": 2, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:3", "user": { "id": "seq:3", "seq": 3, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:4", "user": { "id": "seq:4", "seq": 4, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:5", "user": { "id": "seq:5", "seq": 5, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:6", "user": { "id": "seq:6", "seq": 6, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:7", "user": { "id": "seq:7", "seq": 7, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:8", "user": { "id": "seq:8", "seq": 8, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:9", "user": { "id": "seq:9", "seq": 9, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:10", "user": { "id": "seq:10", "seq": 10, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:11", "user": { "id": "seq:11", "seq": 11, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:12", "user": { "id": "seq:12", "seq": 12, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:13", "user": { "id": "seq:13", "seq": 13, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:14", "user": { "id": "seq:14", "seq": 14, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:15", "user": { "id": "seq:15", "seq": 15, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:16", "user": { "id": "seq:16", "seq": 16, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:17", "user": { "id": "seq:17", "seq": 17, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:18", "user": { "id": "seq:18", "seq": 18, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:19", "user": { "id": "seq:19", "seq": 19, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:20", "user": { "id": "seq:20", "seq": 20, "role": "user" }, "activity": [] },
+      { "kind": "user_turn", "id": "user_turn:seq:21", "user": { "id": "seq:21", "seq": 21, "role": "user" }, "activity": [] },
+      {
+        "kind": "user_turn",
+        "id": "user_turn:origin:mobile-00000000-0000-0000-0000-000000002523",
+        "user": {
+          "id": "origin:mobile-00000000-0000-0000-0000-000000002523",
+          "seq": 372,
+          "role": "user"
+        },
+        "activity": []
+      }
+    ],
+    "tailActivity": "thinking"
+  }
+}

@@ -802,6 +802,18 @@ extension GaryxMobileModel {
         ]
         if routePushFixture == "empty" {
             messages = []
+        } else if routePushFixture == "send-jitter" {
+            messages = (1...21).map { seq in
+                GaryxMobileMessage(
+                    id: "seq:\(seq)",
+                    role: .user,
+                    text: "Existing captured turn \(seq)",
+                    timestamp: "21:\(String(format: "%02d", seq))",
+                    isStreaming: false,
+                    localState: .remoteFinal,
+                    historyIndex: seq - 1
+                )
+            }
         } else if routePushFixture == "long" {
             messages = (0..<24).flatMap { turn in
                 [
@@ -837,6 +849,22 @@ extension GaryxMobileModel {
                     rows: []
                 )
                 threadHistoryLoadedIds.remove(selectedThread.id)
+            } else if routePushFixture == "send-jitter" {
+                renderSnapshotsByThread[selectedThread.id] = GaryxRenderSnapshot(
+                    basedOnSeq: 371,
+                    rows: (1...21).map { seq in
+                        .userTurn(GaryxRenderUserTurnRow(
+                            id: "user_turn:seq:\(seq)",
+                            user: GaryxRenderMessageRef(
+                                id: "seq:\(seq)",
+                                seq: seq,
+                                role: "user"
+                            ),
+                            activity: []
+                        ))
+                    }
+                )
+                threadHistoryLoadedIds.insert(selectedThread.id)
             } else {
                 renderSnapshotsByThread[selectedThread.id] = GaryxRenderSnapshot(
                     basedOnSeq: 2,

@@ -526,6 +526,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         let revealCoordinator = context.coordinator
         model.attachGlobalRevealHostOccurrence(revealCoordinator.revealHostOccurrenceID)
         let pushProbe = GaryxRoutePushPerformanceProbe.shared
+        let sendJitterProbe = GaryxConversationSendJitterProbe.shared
         let routeLifecycleRegistry = GaryxRouteLifecycleRegistry()
         #if DEBUG
         let diagnostics = GaryxProductionRouteDiagnostics.makeIfEnabled()
@@ -642,6 +643,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             ? .rightToLeft
             : .leftToRight
         pushProbe?.install(in: container)
+        sendJitterProbe?.install(in: container)
         let drawerInteraction = model.drawerRevealInteraction
         container.homeLeadingEdgeInteraction = GaryxRouteEdgePanInteraction(
             isEligible: { [weak revealCoordinator] in

@@ -84,6 +84,11 @@ private final class GaryxTurnRowGeometryBox {
         minYByRowId[rowId]
     }
 
+    func bottommostRow() -> (id: String, minY: CGFloat)? {
+        minYByRowId.max { lhs, rhs in lhs.value < rhs.value }
+            .map { (id: $0.key, minY: $0.value) }
+    }
+
     /// Drop rows that left the transcript so a long session cannot grow the
     /// map without bound.
     func retain(only rowIds: Set<String>) {
@@ -275,9 +280,26 @@ struct GaryxConversationView: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
+                    GaryxConversationSendJitterProbe.shared?.attach(
+                        routeIdentity: liveStore.routeIdentity,
+                        scrollView: { [hostScrollViewBox] in
+                            hostScrollViewBox.currentScrollView()
+                        },
+                        bottommostRow: { [rowGeometryBox] in
+                            rowGeometryBox.bottommostRow()
+                        },
+                        rowMinY: { [rowGeometryBox] rowID in
+                            rowGeometryBox.minY(of: rowID)
+                        }
+                    )
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
                     scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
+                }
+                .onDisappear {
+                    GaryxConversationSendJitterProbe.shared?.detach(
+                        routeIdentity: liveStore.routeIdentity
+                    )
                 }
                 .onChange(of: liveStore.routeIdentity) { _, _ in
                     setRuntimePanelVisible(false)

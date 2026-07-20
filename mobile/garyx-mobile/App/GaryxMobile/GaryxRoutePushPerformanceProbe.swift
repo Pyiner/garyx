@@ -463,3 +463,284 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         return String(format: "%.3f", value * 1_000)
     }
 }
+
+/// Opt-in frame probe for the send-time transcript displacement reported by
+/// TASK-2523. It tracks one pre-existing tail turn in viewport coordinates;
+/// a stable send may move that turn once to make room for the new row, but it
+/// must not move it down and then back up as composer, content, and explicit
+/// tail anchors settle independently.
+///
+/// Enable with `GARYX_MOBILE_SEND_JITTER_PROBE=1`. The deterministic report is
+/// exposed through accessibility and written to the app cache as
+/// `garyx-send-jitter-probe.txt`.
+@MainActor
+final class GaryxConversationSendJitterProbe: NSObject {
+    private struct Attachment {
+        let scrollView: () -> UIScrollView?
+        let bottommostRow: () -> (id: String, minY: CGFloat)?
+        let rowMinY: (_ rowID: String) -> CGFloat?
+    }
+
+    private struct Sample {
+        let elapsed: CFTimeInterval
+        let offsetY: CGFloat
+        let viewportHeight: CGFloat
+        let contentHeight: CGFloat
+        let adjustedBottomInset: CGFloat
+        let anchorViewportY: CGFloat
+    }
+
+    static let shared: GaryxConversationSendJitterProbe? = {
+        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_SEND_JITTER_PROBE"] == "1" else {
+            return nil
+        }
+        return GaryxConversationSendJitterProbe()
+    }()
+
+    /// The UI regression fixture stops before transport and materializes the
+    /// captured committed shape locally. Normal app runs never enter it.
+    let usesCapturedMaterializationFixture = ProcessInfo.processInfo.environment[
+        "GARYX_MOBILE_SEND_JITTER_FIXTURE"
+    ] == "1"
+
+    private let statusLabel = UILabel()
+    private weak var container: GaryxRouteStackContainer?
+    private var attachments: [String: Attachment] = [:]
+    private var displayLink: CADisplayLink?
+    private var activeRouteIdentity: String?
+    private var anchorRowID: String?
+    private var beginTimestamp: CFTimeInterval?
+    private var optimisticTimestamp: CFTimeInterval?
+    private var committedTimestamp: CFTimeInterval?
+    private var samples: [Sample] = []
+    private var transactionCount = 0
+
+    func install(in container: GaryxRouteStackContainer) {
+        guard self.container == nil else { return }
+        self.container = container
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .monospacedSystemFont(ofSize: 7, weight: .regular)
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.94)
+        statusLabel.numberOfLines = 2
+        statusLabel.isUserInteractionEnabled = false
+        statusLabel.accessibilityIdentifier = "send-jitter-probe-report"
+        statusLabel.text = "GARYX_SEND_JITTER_PROBE state=ready"
+        statusLabel.accessibilityValue = statusLabel.text
+        container.view.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.leadingAnchor.constraint(equalTo: container.view.leadingAnchor, constant: 8),
+            statusLabel.trailingAnchor.constraint(equalTo: container.view.trailingAnchor, constant: -8),
+            statusLabel.topAnchor.constraint(
+                equalTo: container.view.safeAreaLayoutGuide.topAnchor,
+                constant: 2
+            ),
+        ])
+
+        let link = CADisplayLink(target: self, selector: #selector(stepDisplayLink(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(
+            minimum: 80,
+            maximum: 120,
+            preferred: 120
+        )
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    func attach(
+        routeIdentity: String,
+        scrollView: @escaping () -> UIScrollView?,
+        bottommostRow: @escaping () -> (id: String, minY: CGFloat)?,
+        rowMinY: @escaping (_ rowID: String) -> CGFloat?
+    ) {
+        attachments[routeIdentity] = Attachment(
+            scrollView: scrollView,
+            bottommostRow: bottommostRow,
+            rowMinY: rowMinY
+        )
+    }
+
+    func detach(routeIdentity: String) {
+        guard activeRouteIdentity != routeIdentity else { return }
+        attachments[routeIdentity] = nil
+    }
+
+    func beginSend(routeIdentity: String) {
+        guard beginTimestamp == nil else { return }
+        transactionCount += 1
+        guard let attachment = attachments[routeIdentity],
+              let scrollView = attachment.scrollView(),
+              scrollView.window != nil,
+              let anchor = attachment.bottommostRow() else {
+            publish(
+                "GARYX_SEND_JITTER_PROBE transaction=\(transactionCount) error=missing_visible_anchor"
+            )
+            return
+        }
+        activeRouteIdentity = routeIdentity
+        anchorRowID = anchor.id
+        let now = CACurrentMediaTime()
+        beginTimestamp = now
+        optimisticTimestamp = nil
+        committedTimestamp = nil
+        samples = []
+        recordSample(at: now)
+    }
+
+    func optimisticRowAppended() {
+        guard beginTimestamp != nil else { return }
+        optimisticTimestamp = CACurrentMediaTime()
+    }
+
+    func committedRowMaterialized() {
+        guard beginTimestamp != nil else { return }
+        committedTimestamp = CACurrentMediaTime()
+    }
+
+    @objc private func stepDisplayLink(_ link: CADisplayLink) {
+        guard let beginTimestamp else { return }
+        guard link.timestamp >= beginTimestamp else { return }
+        recordSample(at: link.timestamp)
+        if link.timestamp - beginTimestamp >= 0.85 {
+            finish()
+        }
+    }
+
+    private func recordSample(at timestamp: CFTimeInterval) {
+        guard let beginTimestamp,
+              let routeIdentity = activeRouteIdentity,
+              let attachment = attachments[routeIdentity],
+              let anchorRowID,
+              let anchorMinY = attachment.rowMinY(anchorRowID),
+              let scrollView = attachment.scrollView() else { return }
+        samples.append(Sample(
+            elapsed: max(0, timestamp - beginTimestamp),
+            offsetY: scrollView.contentOffset.y,
+            viewportHeight: scrollView.bounds.height,
+            contentHeight: scrollView.contentSize.height,
+            adjustedBottomInset: scrollView.adjustedContentInset.bottom,
+            anchorViewportY: anchorMinY - scrollView.contentOffset.y
+        ))
+    }
+
+    private func finish() {
+        guard let beginTimestamp, let first = samples.first, let last = samples.last else {
+            reset()
+            return
+        }
+        var travel: CGFloat = 0
+        var upwardTravel: CGFloat = 0
+        var downwardTravel: CGFloat = 0
+        var reversals = 0
+        var priorDirection = 0
+        var changedSamples = [first]
+        for (previous, current) in zip(samples, samples.dropFirst()) {
+            let delta = current.anchorViewportY - previous.anchorViewportY
+            if abs(delta) >= 0.25
+                || abs(current.viewportHeight - previous.viewportHeight) >= 0.25
+                || abs(current.contentHeight - previous.contentHeight) >= 0.25
+                || abs(current.adjustedBottomInset - previous.adjustedBottomInset) >= 0.25 {
+                changedSamples.append(current)
+            }
+            guard abs(delta) >= 0.5 else { continue }
+            travel += abs(delta)
+            if delta > 0 {
+                downwardTravel += delta
+            } else {
+                upwardTravel += -delta
+            }
+            let direction = delta > 0 ? 1 : -1
+            if priorDirection != 0, priorDirection != direction {
+                reversals += 1
+            }
+            priorDirection = direction
+        }
+        if changedSamples.last?.elapsed != last.elapsed {
+            changedSamples.append(last)
+        }
+        let net = last.anchorViewportY - first.anchorViewportY
+        let excess = max(0, travel - abs(net))
+        let report = [
+            "GARYX_SEND_JITTER_PROBE",
+            "transaction=\(transactionCount)",
+            "anchor_row_id=\(anchorRowID ?? "missing")",
+            "frame_count=\(samples.count)",
+            "start_y=\(number(first.anchorViewportY))",
+            "end_y=\(number(last.anchorViewportY))",
+            "net_y=\(number(net))",
+            "travel_y=\(number(travel))",
+            "excess_y=\(number(excess))",
+            "up_y=\(number(upwardTravel))",
+            "down_y=\(number(downwardTravel))",
+            "direction_reversals=\(reversals)",
+            "viewport_delta=\(number(last.viewportHeight - first.viewportHeight))",
+            "content_delta=\(number(last.contentHeight - first.contentHeight))",
+            "bottom_inset_delta=\(number(last.adjustedBottomInset - first.adjustedBottomInset))",
+            "optimistic_ms=\(milliseconds(delta(optimisticTimestamp, beginTimestamp)))",
+            "committed_ms=\(milliseconds(delta(committedTimestamp, beginTimestamp)))",
+        ].joined(separator: " ")
+        let trace = changedSamples.map { sample in
+            [
+                milliseconds(sample.elapsed),
+                number(sample.anchorViewportY),
+                number(sample.offsetY),
+                number(sample.viewportHeight),
+                number(sample.contentHeight),
+                number(sample.adjustedBottomInset),
+            ].joined(separator: ":")
+        }.joined(separator: ",")
+        publish(report)
+        writeReport(report: report, trace: trace)
+        print(report)
+        print("GARYX_SEND_JITTER_TRACE columns=elapsed_ms:anchor_y:offset_y:viewport_h:content_h:bottom_inset values=\(trace)")
+        reset()
+    }
+
+    private func publish(_ line: String) {
+        statusLabel.text = line
+        statusLabel.accessibilityValue = line
+        if let container {
+            container.view.bringSubviewToFront(statusLabel)
+        }
+    }
+
+    private func writeReport(report: String, trace: String) {
+        guard let cacheURL = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first else { return }
+        let reportURL = cacheURL.appendingPathComponent(
+            "garyx-send-jitter-probe.txt",
+            isDirectory: false
+        )
+        let body = report + "\n" + trace + "\n"
+        try? body.write(to: reportURL, atomically: true, encoding: .utf8)
+    }
+
+    private func reset() {
+        activeRouteIdentity = nil
+        anchorRowID = nil
+        beginTimestamp = nil
+        optimisticTimestamp = nil
+        committedTimestamp = nil
+        samples = []
+    }
+
+    private func delta(
+        _ later: CFTimeInterval?,
+        _ earlier: CFTimeInterval?
+    ) -> CFTimeInterval {
+        guard let later, let earlier else { return -1 }
+        return max(0, later - earlier)
+    }
+
+    private func milliseconds(_ value: CFTimeInterval) -> String {
+        guard value >= 0 else { return "-1" }
+        return String(format: "%.3f", value * 1_000)
+    }
+
+    private func number(_ value: CGFloat) -> String {
+        String(format: "%.3f", value)
+    }
+}

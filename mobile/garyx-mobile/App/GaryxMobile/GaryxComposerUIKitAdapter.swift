@@ -341,6 +341,7 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         context.coordinator.installCallbacks(on: view)
         view.grantLive(configuration)
         onRegister(view)
+        seedSendJitterFixtureIfNeeded(on: view)
         requestDebugFocusIfNeeded(on: view)
         return view
     }
@@ -383,6 +384,16 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         DispatchQueue.main.async { [weak view] in
             view?.requestFocus()
         }
+        #endif
+    }
+
+    private func seedSendJitterFixtureIfNeeded(on view: GaryxComposerOrderedTextView) {
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_SEND_JITTER_FIXTURE"] == "1",
+              view.text.isEmpty else { return }
+        view.replaceLiveText(
+            "This captured mobile message deliberately wraps across four composer lines before send so the floating composer changes height while the optimistic user turn appears at the transcript tail. Reproducing the whole-list displacement must be deterministic."
+        )
         #endif
     }
 

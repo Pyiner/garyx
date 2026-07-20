@@ -28,6 +28,22 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         let prewarmReadyAtPush: Double
     }
 
+    private struct SendJitterProbeReport {
+        let rawLine: String
+        let frameCount: Double
+        let netY: Double
+        let travelY: Double
+        let excessY: Double
+        let upwardY: Double
+        let downwardY: Double
+        let directionReversals: Double
+        let viewportDelta: Double
+        let contentDelta: Double
+        let bottomInsetDelta: Double
+        let optimisticMilliseconds: Double
+        let committedMilliseconds: Double
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -170,6 +186,55 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         )
     }
 
+    /// Sanitized simulator replay of the reported send shape: 21 committed
+    /// turns, a four-line composer, optimistic origin insertion, then the same
+    /// origin materialized by the captured committed render row. The probe
+    /// follows turn 21 on every display frame. A stable send can move it in
+    /// one direction to make room; any excess round trip is the whole-list
+    /// shake reported in TASK-2523.
+    ///
+    /// The final assertion intentionally fails on the TASK-2523 baseline.
+    func testSendDoesNotRoundTripExistingTranscriptRows() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "chat"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] = "send-jitter"
+        app.launchEnvironment["GARYX_MOBILE_SEND_JITTER_PROBE"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_SEND_JITTER_FIXTURE"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 10))
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let live = NSPredicate(format: "label == %@", "composer-live")
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: live, object: composer)],
+                timeout: 10
+            ),
+            .completed,
+            "production composer never received live adapter ownership"
+        )
+        let send = app.buttons["Send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 10))
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        let report = try XCTUnwrap(waitForSendJitterReport(in: app))
+        print(
+            "PROFILE send_jitter frame_count=\(report.frameCount) net_y=\(report.netY) travel_y=\(report.travelY) excess_y=\(report.excessY) up_y=\(report.upwardY) down_y=\(report.downwardY) reversals=\(report.directionReversals) viewport_delta=\(report.viewportDelta) content_delta=\(report.contentDelta) bottom_inset_delta=\(report.bottomInsetDelta) optimistic_ms=\(report.optimisticMilliseconds) committed_ms=\(report.committedMilliseconds)"
+        )
+        XCTAssertGreaterThanOrEqual(report.frameCount, 20)
+        XCTAssertGreaterThan(report.contentDelta, 0)
+        XCTAssertLessThanOrEqual(
+            report.excessY,
+            1,
+            "FAILS ON BASELINE: an existing turn must not make a visible round trip while the new tail row materializes; \(report.rawLine)"
+        )
+        XCTAssertEqual(report.directionReversals, 0)
+    }
+
     private func assertArchitectureGateThresholds(
         _ report: ProbeReport,
         file: StaticString = #filePath,
@@ -303,6 +368,59 @@ final class HomeListScrollPerformanceTests: XCTestCase {
                     liveRevealObserved: liveRevealObserved,
                     messagePreparationCompleted: messagePreparationCompleted,
                     prewarmReadyAtPush: prewarmReadyAtPush
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return nil
+    }
+
+    private func waitForSendJitterReport(
+        in app: XCUIApplication
+    ) -> SendJitterProbeReport? {
+        let reportElement = app.staticTexts["send-jitter-probe-report"]
+        guard reportElement.waitForExistence(timeout: 5) else { return nil }
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline {
+            let line = (reportElement.value as? String) ?? reportElement.label
+            if line.contains("transaction=1 "), line.contains("excess_y=") {
+                print("PROFILE send_jitter_raw \(line)")
+                let fields = Dictionary(
+                    uniqueKeysWithValues: line.split(separator: " ").compactMap {
+                        field -> (String, Double)? in
+                        let parts = field.split(separator: "=", maxSplits: 1)
+                        guard parts.count == 2, let value = Double(parts[1]) else { return nil }
+                        return (String(parts[0]), value)
+                    }
+                )
+                guard let frameCount = fields["frame_count"],
+                      let netY = fields["net_y"],
+                      let travelY = fields["travel_y"],
+                      let excessY = fields["excess_y"],
+                      let upwardY = fields["up_y"],
+                      let downwardY = fields["down_y"],
+                      let directionReversals = fields["direction_reversals"],
+                      let viewportDelta = fields["viewport_delta"],
+                      let contentDelta = fields["content_delta"],
+                      let bottomInsetDelta = fields["bottom_inset_delta"],
+                      let optimisticMilliseconds = fields["optimistic_ms"],
+                      let committedMilliseconds = fields["committed_ms"] else {
+                    return nil
+                }
+                return SendJitterProbeReport(
+                    rawLine: line,
+                    frameCount: frameCount,
+                    netY: netY,
+                    travelY: travelY,
+                    excessY: excessY,
+                    upwardY: upwardY,
+                    downwardY: downwardY,
+                    directionReversals: directionReversals,
+                    viewportDelta: viewportDelta,
+                    contentDelta: contentDelta,
+                    bottomInsetDelta: bottomInsetDelta,
+                    optimisticMilliseconds: optimisticMilliseconds,
+                    committedMilliseconds: committedMilliseconds
                 )
             }
             Thread.sleep(forTimeInterval: 0.05)

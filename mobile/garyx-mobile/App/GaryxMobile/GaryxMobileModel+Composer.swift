@@ -191,6 +191,11 @@ extension GaryxMobileModel {
                 || !projectedItems.isEmpty else {
             return false
         }
+        if let threadID = selectedThread?.id {
+            GaryxConversationSendJitterProbe.shared?.beginSend(
+                routeIdentity: "thread:\(threadID)"
+            )
+        }
         let clientIntentID = "mobile-\(UUID().uuidString)"
         do {
             let payload = try await composerPayloadCoordinator.takeReadyPayload(
@@ -376,6 +381,66 @@ extension GaryxMobileModel {
             messages = draftOptimisticMessages
             GaryxMobileHaptics.shared.play(.messageSendCommitted)
         }
+        GaryxConversationSendJitterProbe.shared?.optimisticRowAppended()
+
+        #if DEBUG
+        if let probe = GaryxConversationSendJitterProbe.shared,
+           probe.usesCapturedMaterializationFixture,
+           let optimisticThreadId {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 90_000_000)
+                guard let self,
+                      selectedThread?.id == optimisticThreadId else { return }
+                probe.committedRowMaterialized()
+                mutateMessages(for: optimisticThreadId) { messages in
+                    guard let index = messages.firstIndex(where: { $0.id == userMessage.id }) else {
+                        return
+                    }
+                    messages[index].localState = .remoteFinal
+                    messages[index].historyIndex = 371
+                    messages[index].timestamp = "22:14"
+                }
+                if let snapshot = renderSnapshot(for: optimisticThreadId) {
+                    let committedRowID = "user_turn:\(userMessage.id)"
+                    let alreadyContainsCommittedRow = snapshot.rows.contains { row in
+                        guard case .userTurn(let turn) = row else { return false }
+                        return turn.id == committedRowID
+                    }
+                    let rows = alreadyContainsCommittedRow
+                        ? snapshot.rows
+                        : snapshot.rows + [
+                            .userTurn(GaryxRenderUserTurnRow(
+                                id: committedRowID,
+                                user: GaryxRenderMessageRef(
+                                    id: userMessage.id,
+                                    seq: 372,
+                                    role: "user"
+                                ),
+                                activity: []
+                            )),
+                        ]
+                    setRenderSnapshot(
+                        GaryxRenderSnapshot(
+                            basedOnSeq: 372,
+                            rows: rows,
+                            tailActivity: .thinking,
+                            activeToolGroupId: snapshot.activeToolGroupId,
+                            progressLocus: snapshot.progressLocus,
+                            filteredPlaceholders: snapshot.filteredPlaceholders,
+                            rateLimit: snapshot.rateLimit,
+                            window: snapshot.window,
+                            rowsHash: snapshot.rowsHash
+                        ),
+                        for: optimisticThreadId
+                    )
+                }
+                if let delivery {
+                    try? await composerPayloadCoordinator.acknowledgeDelivery(delivery)
+                }
+            }
+            return
+        }
+        #endif
 
         do {
             // A create-delivery record extends the already committed message
