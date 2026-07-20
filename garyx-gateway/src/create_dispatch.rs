@@ -1670,10 +1670,8 @@ async fn run_create_and_dispatch(
                         message,
                     );
                 };
-                match crate::routes::resolve_main_endpoint_by_bot_fresh(
-                    &state, channel, account_id,
-                )
-                .await
+                match crate::routes::resolve_main_endpoint_by_bot_fresh(&state, channel, account_id)
+                    .await
                 {
                     Ok(Some(_)) => Some(RequestedCreateBinding::PublicBot {
                         bot_id: binding.bot_id.clone(),
@@ -1735,9 +1733,9 @@ async fn run_create_and_dispatch(
                         Ok(None) => Err(EndpointBindingMutationError::Incompatible(format!(
                             "bot '{bot_id}' has no resolved main endpoint"
                         ))),
-                        Err(error) => Err(EndpointBindingMutationError::Projection(
-                            error.to_string(),
-                        )),
+                        Err(error) => {
+                            Err(EndpointBindingMutationError::Projection(error.to_string()))
+                        }
                     }
                 })
                 .await
@@ -2495,10 +2493,8 @@ mod tests {
         };
         let dispatch_fingerprint =
             crate::conversation_admission::chat_request_fingerprint(&request);
-        let create_intent_id = format!(
-            "implicit:{:x}",
-            Sha256::digest(client_intent_id.as_bytes())
-        );
+        let create_intent_id =
+            format!("implicit:{:x}", Sha256::digest(client_intent_id.as_bytes()));
         let create_key = CreateIntentKey {
             scope_identity: scope_identity.to_owned(),
             scope_epoch: 1,
@@ -2538,8 +2534,8 @@ mod tests {
                     account_id: "main".to_owned(),
                     binding_key: "api-user".to_owned(),
                     chat_id: "api-user".to_owned(),
-                    delivery_target_type:
-                        garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+                    delivery_target_type: garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID
+                        .to_owned(),
                     delivery_target_id: "api-user".to_owned(),
                     display_label: "api/main/api-user".to_owned(),
                     // This value represents a later server preparation and
