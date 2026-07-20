@@ -87,6 +87,7 @@ pub struct AntigravityClientConfig {
     pub transcript_poll_interval: Duration, // current default: 250 ms
     pub discovery_timeout: Duration,        // current default: 30 s
     pub shutdown_grace: Duration,           // current default: 2 s
+    pub run_timeout_grace: Duration,        // current default: 10 s
 }
 
 pub struct AntigravityRunRequest {
@@ -166,7 +167,7 @@ pub struct AntigravityRunOutcome {
 
 impl AntigravityClient {
     pub async fn probe(&self) -> Result<(), AntigravityError>;
-    pub async fn run_streaming(
+    pub async fn execute(
         &self,
         request: AntigravityRunRequest,
         on_event: &(dyn Fn(AntigravityEvent) + Send + Sync),

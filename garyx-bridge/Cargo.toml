@@ -8,6 +8,7 @@ homepage.workspace = true
 description = "Provider adapters for the garyx AI chat gateway"
 
 [dependencies]
+antigravity-sdk = { workspace = true }
 garyx-models = { workspace = true }
 garyx-router = { workspace = true }
 claude-agent-sdk = { workspace = true }
