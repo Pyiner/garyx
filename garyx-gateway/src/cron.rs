@@ -2,13 +2,15 @@ use garyx_router::ThreadStoreExt;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
 use garyx_bridge::MultiProviderBridge;
+#[cfg(test)]
 use garyx_channels::ChannelDispatcher;
 #[cfg(test)]
 use garyx_channels::{OutboundMessage, SendMessageResult};
@@ -16,8 +18,8 @@ use garyx_channels::{OutboundMessage, SendMessageResult};
 use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{
     CronAction, CronConfig, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
-    McpServerConfig,
 };
+use garyx_models::provider::AgentDispatchOutcome;
 #[cfg(test)]
 use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, is_canonical_thread_id};
@@ -31,8 +33,6 @@ use crate::agent_identity::create_thread_for_agent_reference;
 use crate::custom_agents::CustomAgentStore;
 use crate::delivery_target::resolve_delivery_target_with_recovery;
 use crate::garyx_db::{AutomationThreadRunDraft, GaryxDbService};
-use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
-use crate::server::AppState;
 use crate::skills::sync_default_external_user_skills;
 
 /// Upper bound on interval schedules, in seconds (100 years). Kept far below
@@ -96,6 +96,63 @@ enum FollowupAttemptError {
     Dropped(String),
     /// Retryable transient failure carrying the underlying error text.
     Transient(String),
+}
+
+/// Error from [`AutomationDispatchPort::dispatch_internal_message`].
+#[derive(Debug)]
+pub(crate) enum AutomationDispatchError {
+    /// The owning gateway state is gone (shutdown); non-retryable.
+    StateUnavailable,
+    /// The front-door dispatch itself failed; the string is the routed error.
+    Dispatch(String),
+}
+
+/// Narrow gateway-state operations the scheduler needs at execution time.
+///
+/// The engine has no `AppState` knowledge: this port is implemented at the
+/// composition layer (`composition::automation_wiring`), which is the only
+/// place allowed to hold a handle back to the assembled application state.
+#[async_trait::async_trait]
+pub(crate) trait AutomationDispatchPort: Send + Sync {
+    /// Whether the provider runtime finished starting. Gates execution of
+    /// jobs that need a live provider runtime.
+    fn provider_runtime_ready(&self) -> bool;
+
+    /// Invalidate gateway sync caches after an automation thread was created.
+    async fn invalidate_gateway_sync_caches(&self);
+
+    /// Inject a synthetic user turn into `thread_id` through the
+    /// internal-inbound front door (router inbound semantics, transcript user
+    /// turn, busy queueing, channel echo).
+    async fn dispatch_internal_message(
+        &self,
+        thread_id: &str,
+        run_id: &str,
+        message: &str,
+        extra_metadata: HashMap<String, serde_json::Value>,
+    ) -> Result<AgentDispatchOutcome, AutomationDispatchError>;
+}
+
+/// Execution environment for scheduled jobs.
+///
+/// Constructed once from the assembled application state
+/// (`composition::automation_wiring::automation_exec_env`) and handed to the
+/// scheduler loop at [`CronService::start`] — or per call for
+/// [`CronService::run_now`]. Replaces the retired trio of late-injection
+/// channels (`set_app_state` / `set_garyx_db` / `set_dispatch_runtime`): a
+/// scheduler that could observe a half-injected runtime no longer exists by
+/// construction.
+#[derive(Clone)]
+pub(crate) struct AutomationExecEnv {
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) router: Arc<tokio::sync::Mutex<MessageRouter>>,
+    pub(crate) bridge: Arc<MultiProviderBridge>,
+    pub(crate) thread_logs: Arc<dyn ThreadLogSink>,
+    pub(crate) custom_agents: Arc<CustomAgentStore>,
+    /// `None` skips automation thread-run association recording (tests
+    /// without a gateway database).
+    pub(crate) garyx_db: Option<Arc<GaryxDbService>>,
+    pub(crate) port: Arc<dyn AutomationDispatchPort>,
 }
 
 /// Persisted state for a single cron job.
@@ -692,94 +749,38 @@ async fn persist_runs(data_dir: &Path, runs: &VecDeque<RunRecord>) -> std::io::R
 
 const MAX_RUN_HISTORY: usize = 200;
 
-#[derive(Clone)]
-struct CronDispatchRuntime {
-    thread_store: Arc<dyn ThreadStore>,
-    router: Arc<tokio::sync::Mutex<MessageRouter>>,
-    bridge: Arc<MultiProviderBridge>,
-    thread_logs: Arc<dyn ThreadLogSink>,
-    custom_agents: Arc<CustomAgentStore>,
-}
-
 /// Cron scheduler service.
 ///
-/// Lifecycle: `start()` spawns a background tokio task that ticks every second,
-/// checking whether any job is due. `stop()` sends a signal to terminate the loop.
+/// Lifecycle: `start(env)` spawns a background tokio task that ticks every
+/// second, checking whether any job is due. `stop()` sends a signal to
+/// terminate the loop. The execution environment is injected exactly once at
+/// start time; there are no post-construction mutation channels.
 pub struct CronService {
     data_dir: PathBuf,
     jobs: Arc<RwLock<HashMap<String, CronJob>>>,
     runs: Arc<RwLock<VecDeque<RunRecord>>>,
     active_agent_runs: Arc<RwLock<HashMap<String, String>>>,
     /// Send () to stop the scheduler loop.
-    stop_tx: Option<mpsc::Sender<()>>,
-    scheduler_task: Option<JoinHandle<()>>,
-    /// Optional bridge+router runtime for agent-turn/system-event actions.
-    dispatch_runtime: Arc<RwLock<Option<CronDispatchRuntime>>>,
-    /// Weak handle to the owning [`AppState`]. Populated by
-    /// `AppStateBuilder::build` *after* the `Arc<AppState>` exists, so the
-    /// scheduler can call back into [`dispatch_internal_message_to_thread`]
-    /// without forming an `Arc<AppState>` ↔ `Arc<CronService>` cycle.
-    ///
-    /// Uses [`OnceLock`] because the weak ref is established exactly once at
-    /// startup and never replaced.
-    app_state_weak: Arc<OnceLock<Weak<AppState>>>,
-    /// Gateway SQLite store used for user-facing automation thread associations.
-    garyx_db: Arc<OnceLock<Arc<GaryxDbService>>>,
+    stop_tx: StdMutex<Option<mpsc::Sender<()>>>,
+    scheduler_task: StdMutex<Option<JoinHandle<()>>>,
 }
 
 impl CronService {
     /// Create a new CronService.
     ///
-    /// Does NOT start the scheduler loop. Call `start()` after creation.
+    /// Does NOT start the scheduler loop. Call `start(env)` after creation.
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
             jobs: Arc::new(RwLock::new(HashMap::new())),
             runs: Arc::new(RwLock::new(VecDeque::new())),
             active_agent_runs: Arc::new(RwLock::new(HashMap::new())),
-            stop_tx: None,
-            scheduler_task: None,
-            dispatch_runtime: Arc::new(RwLock::new(None)),
-            app_state_weak: Arc::new(OnceLock::new()),
-            garyx_db: Arc::new(OnceLock::new()),
+            stop_tx: StdMutex::new(None),
+            scheduler_task: StdMutex::new(None),
         }
     }
 
-    /// Install the back-reference to the owning [`AppState`].
-    ///
-    /// Must be called once after `Arc::new(AppState)` so internal-dispatch
-    /// cron jobs (e.g. those produced by `mcp__garyx__schedule_followup`)
-    /// can synthesize a user turn into the target thread when they fire.
-    /// Subsequent calls are no-ops: the `Arc<AppState>` identity is stable
-    /// for the gateway's lifetime.
-    pub fn set_app_state(&self, weak: Weak<AppState>) {
-        let _ = self.app_state_weak.set(weak);
-    }
-
-    pub fn set_garyx_db(&self, garyx_db: Arc<GaryxDbService>) {
-        let _ = self.garyx_db.set(garyx_db);
-    }
-
     /// Attach bridge+router runtime for agent-turn/system-event dispatch.
-    pub async fn set_dispatch_runtime(
-        &self,
-        thread_store: Arc<dyn ThreadStore>,
-        router: Arc<tokio::sync::Mutex<MessageRouter>>,
-        bridge: Arc<MultiProviderBridge>,
-        _channel_dispatcher: Arc<dyn ChannelDispatcher>,
-        thread_logs: Arc<dyn ThreadLogSink>,
-        _managed_mcp_servers: HashMap<String, McpServerConfig>,
-        custom_agents: Arc<CustomAgentStore>,
-    ) {
-        *self.dispatch_runtime.write().await = Some(CronDispatchRuntime {
-            thread_store,
-            router,
-            bridge,
-            thread_logs,
-            custom_agents,
-        });
-    }
-
     /// Load persisted jobs from disk, then merge config-defined jobs
     /// (config jobs take precedence for schedule/action, but persisted
     /// runtime state like run_count is preserved).
@@ -873,22 +874,26 @@ impl CronService {
     }
 
     /// Start the scheduler loop as a background task.
-    pub fn start(&mut self) {
-        if self.stop_tx.is_some() {
+    /// Start the scheduler loop with its execution environment.
+    ///
+    /// Called once after the application state is assembled (see
+    /// `composition::automation_wiring::start_automation_scheduler`); the env
+    /// is owned by the loop for its whole lifetime.
+    pub(crate) fn start(&self, env: AutomationExecEnv) {
+        let mut stop_slot = self.stop_tx.lock().expect("cron stop_tx lock poisoned");
+        if stop_slot.is_some() {
             tracing::warn!("cron scheduler already running; duplicate start ignored");
             return;
         }
 
         let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
-        self.stop_tx = Some(stop_tx);
+        *stop_slot = Some(stop_tx);
+        drop(stop_slot);
 
         let jobs = self.jobs.clone();
         let runs = self.runs.clone();
         let active_agent_runs = self.active_agent_runs.clone();
         let data_dir = self.data_dir.clone();
-        let dispatch_runtime = self.dispatch_runtime.clone();
-        let app_state_weak = self.app_state_weak.clone();
-        let garyx_db = self.garyx_db.clone();
 
         let task = tokio::spawn(async move {
             tracing::info!("cron scheduler started");
@@ -905,24 +910,35 @@ impl CronService {
                             &runs,
                             &active_agent_runs,
                             &data_dir,
-                            &dispatch_runtime,
-                            &app_state_weak,
-                            &garyx_db,
+                            &env,
                         ).await;
                     }
                 }
             }
             tracing::info!("cron scheduler stopped");
         });
-        self.scheduler_task = Some(task);
+        *self
+            .scheduler_task
+            .lock()
+            .expect("cron scheduler_task lock poisoned") = Some(task);
     }
 
     /// Stop the scheduler loop.
-    pub async fn stop(&mut self) {
-        if let Some(tx) = self.stop_tx.take() {
+    pub async fn stop(&self) {
+        let stop_tx = self
+            .stop_tx
+            .lock()
+            .expect("cron stop_tx lock poisoned")
+            .take();
+        if let Some(tx) = stop_tx {
             let _ = tx.send(()).await;
         }
-        if let Some(task) = self.scheduler_task.take() {
+        let task = self
+            .scheduler_task
+            .lock()
+            .expect("cron scheduler_task lock poisoned")
+            .take();
+        if let Some(task) = task {
             let _ = task.await;
         }
     }
@@ -1066,7 +1082,7 @@ impl CronService {
     }
 
     /// Execute a specific job immediately.
-    pub async fn run_now(&self, id: &str) -> Option<RunRecord> {
+    pub(crate) async fn run_now(&self, id: &str, env: &AutomationExecEnv) -> Option<RunRecord> {
         let invalid = {
             let mut jobs = self.jobs.write().await;
             let job = jobs.get_mut(id)?;
@@ -1086,14 +1102,7 @@ impl CronService {
             let _ = Self::append_run_record(&self.data_dir, &self.runs, record.clone()).await;
             return Some(record);
         }
-        if !Self::provider_runtime_ready_for_job(
-            &self.jobs,
-            &self.dispatch_runtime,
-            &self.app_state_weak,
-            id,
-        )
-        .await
-        {
+        if !Self::provider_runtime_ready_for_job(&self.jobs, env, id).await {
             tracing::info!(
                 job_id = %id,
                 "cron run_now skipped: provider runtime is still starting"
@@ -1105,7 +1114,7 @@ impl CronService {
             &self.data_dir,
             &self.jobs,
             &self.active_agent_runs,
-            &self.dispatch_runtime,
+            env,
             id,
         )
         .await
@@ -1121,40 +1130,25 @@ impl CronService {
         }
         let run_id = Uuid::new_v4().to_string();
         let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
-        let garyx_db = self.garyx_db.get().cloned();
-        let (record, prepared_thread_id) = match Self::prepare_job_for_execution(
-            &self.jobs,
-            id,
-            &run_id,
-            &self.dispatch_runtime,
-            &self.app_state_weak,
-            garyx_db.clone(),
-        )
-        .await
-        {
-            Ok(prepared_job) => {
-                let prepared_thread_id = if should_cleanup_prepared_thread {
-                    prepared_job.thread_id.clone()
-                } else {
-                    None
-                };
-                (
-                    Self::execute_job(
-                        &prepared_job,
-                        &self.active_agent_runs,
-                        &self.dispatch_runtime,
-                        &self.app_state_weak,
-                        &run_id,
+        let (record, prepared_thread_id) =
+            match Self::prepare_job_for_execution(&self.jobs, id, &run_id, env).await {
+                Ok(prepared_job) => {
+                    let prepared_thread_id = if should_cleanup_prepared_thread {
+                        prepared_job.thread_id.clone()
+                    } else {
+                        None
+                    };
+                    (
+                        Self::execute_job(&prepared_job, &self.active_agent_runs, env, &run_id)
+                            .await,
+                        prepared_thread_id,
                     )
-                    .await,
-                    prepared_thread_id,
-                )
-            }
-            Err(error) => {
-                tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
-                (Self::failed_run_record(&job, &run_id, error), None)
-            }
-        };
+                }
+                Err(error) => {
+                    tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
+                    (Self::failed_run_record(&job, &run_id, error), None)
+                }
+            };
 
         // Update runtime job state.
         let mut should_delete = false;
@@ -1171,13 +1165,9 @@ impl CronService {
             }
         }
         if record.status != JobRunStatus::Success {
-            Self::cleanup_rejected_automation_thread(
-                &self.dispatch_runtime,
-                prepared_thread_id.as_deref(),
-            )
-            .await;
+            Self::cleanup_rejected_automation_thread(env, prepared_thread_id.as_deref()).await;
         }
-        Self::finish_recorded_automation_thread_run(garyx_db.as_ref(), &record).await;
+        Self::finish_recorded_automation_thread_run(env.garyx_db.as_ref(), &record).await;
         if should_delete {
             let _ = delete_job_file(&self.data_dir, id).await;
         }
@@ -1205,8 +1195,7 @@ impl CronService {
 
     async fn provider_runtime_ready_for_job(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        env: &AutomationExecEnv,
         id: &str,
     ) -> bool {
         let requires_provider_runtime = {
@@ -1224,20 +1213,17 @@ impl CronService {
         if !requires_provider_runtime {
             return true;
         }
-        if let Some(state) = app_state_weak.get().and_then(Weak::upgrade) {
-            return state.provider_runtime_ready();
-        }
-        dispatch_runtime.read().await.is_some()
+        env.port.provider_runtime_ready()
     }
 
     async fn claim_job_for_execution(
         data_dir: &Path,
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        env: &AutomationExecEnv,
         id: &str,
     ) -> Option<CronJob> {
-        Self::clear_inactive_agent_run(active_agent_runs, dispatch_runtime, id).await;
+        Self::clear_inactive_agent_run(active_agent_runs, env, id).await;
         let has_active_agent_run = active_agent_runs.read().await.contains_key(id);
         let claimed = {
             let mut map = jobs.write().await;
@@ -1259,7 +1245,7 @@ impl CronService {
 
     async fn clear_inactive_agent_run(
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        env: &AutomationExecEnv,
         job_id: &str,
     ) {
         let run_id = active_agent_runs.read().await.get(job_id).cloned();
@@ -1267,13 +1253,7 @@ impl CronService {
             return;
         };
 
-        let is_active = if let Some(runtime) = dispatch_runtime.read().await.clone() {
-            runtime.bridge.is_run_active(&run_id).await
-        } else {
-            false
-        };
-
-        if !is_active {
+        if !env.bridge.is_run_active(&run_id).await {
             active_agent_runs.write().await.remove(job_id);
         }
     }
@@ -1341,9 +1321,7 @@ impl CronService {
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         id: &str,
         run_id: &str,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
-        garyx_db: Option<Arc<GaryxDbService>>,
+        env: &AutomationExecEnv,
     ) -> Result<CronJob, String> {
         let current = {
             let map = jobs.read().await;
@@ -1360,15 +1338,10 @@ impl CronService {
             .ok_or_else(|| format!("automation {} is missing workspace_dir", current.id))?;
         let label = Self::automation_label(&current);
         let agent_id = Self::trimmed_non_empty(current.agent_id.as_deref());
-        let runtime = dispatch_runtime
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| "cron dispatch runtime unavailable".to_owned())?;
         let (thread_id, _, _) = create_thread_for_agent_reference(
-            runtime.thread_store.clone(),
-            runtime.bridge.clone(),
-            runtime.custom_agents.clone(),
+            env.thread_store.clone(),
+            env.bridge.clone(),
+            env.custom_agents.clone(),
             Self::automation_thread_options(
                 &current.id,
                 &label,
@@ -1380,7 +1353,7 @@ impl CronService {
         .await
         .map_err(|error| format!("failed to create automation thread: {error}"))?;
 
-        if let Some(garyx_db) = garyx_db.as_ref() {
+        if let Some(garyx_db) = env.garyx_db.as_ref() {
             let draft = AutomationThreadRunDraft {
                 automation_id: current.id.clone(),
                 run_id: run_id.to_owned(),
@@ -1397,7 +1370,7 @@ impl CronService {
                 .run_blocking(move |db| db.upsert_automation_thread_run(draft))
                 .await
             {
-                let _ = delete_thread_record(&runtime.thread_store, &thread_id).await;
+                let _ = delete_thread_record(&env.thread_store, &thread_id).await;
                 return Err(format!(
                     "failed to record automation thread association: {error}"
                 ));
@@ -1406,9 +1379,7 @@ impl CronService {
 
         let mut updated = current;
         updated.thread_id = Some(thread_id.clone());
-        if let Some(app_state) = app_state_weak.get().and_then(Weak::upgrade) {
-            app_state.invalidate_gateway_sync_caches().await;
-        }
+        env.port.invalidate_gateway_sync_caches().await;
 
         Ok(updated)
     }
@@ -1457,7 +1428,7 @@ impl CronService {
     }
 
     async fn cleanup_rejected_automation_thread(
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        env: &AutomationExecEnv,
         prepared_thread_id: Option<&str>,
     ) {
         let Some(prepared_thread_id) = prepared_thread_id
@@ -1467,11 +1438,7 @@ impl CronService {
             return;
         };
 
-        let Some(runtime) = dispatch_runtime.read().await.clone() else {
-            return;
-        };
-
-        if let Err(error) = delete_thread_record(&runtime.thread_store, prepared_thread_id).await {
+        if let Err(error) = delete_thread_record(&env.thread_store, prepared_thread_id).await {
             tracing::warn!(
                 thread_id = prepared_thread_id,
                 error = %error,
@@ -1481,15 +1448,12 @@ impl CronService {
     }
 
     /// Called every tick to find and execute due jobs.
-    #[allow(clippy::too_many_arguments)]
     async fn tick(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         runs: &Arc<RwLock<VecDeque<RunRecord>>>,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         data_dir: &Path,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
-        garyx_db: &Arc<OnceLock<Arc<GaryxDbService>>>,
+        env: &AutomationExecEnv,
     ) {
         // Collect due job IDs under a read lock.
         let due_ids: Vec<String> = {
@@ -1501,9 +1465,7 @@ impl CronService {
         };
 
         for id in due_ids {
-            if !Self::provider_runtime_ready_for_job(jobs, dispatch_runtime, app_state_weak, &id)
-                .await
-            {
+            if !Self::provider_runtime_ready_for_job(jobs, env, &id).await {
                 tracing::debug!(
                     job_id = %id,
                     "cron tick skipped due job while provider runtime is starting"
@@ -1511,53 +1473,32 @@ impl CronService {
                 continue;
             }
 
-            let Some(job) = Self::claim_job_for_execution(
-                data_dir,
-                jobs,
-                active_agent_runs,
-                dispatch_runtime,
-                &id,
-            )
-            .await
+            let Some(job) =
+                Self::claim_job_for_execution(data_dir, jobs, active_agent_runs, env, &id).await
             else {
                 continue;
             };
             let run_id = Uuid::new_v4().to_string();
             let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
-            let garyx_db_handle = garyx_db.get().cloned();
-            let (record, prepared_thread_id) = match Self::prepare_job_for_execution(
-                jobs,
-                &id,
-                &run_id,
-                dispatch_runtime,
-                app_state_weak,
-                garyx_db_handle.clone(),
-            )
-            .await
-            {
-                Ok(prepared_job) => {
-                    let prepared_thread_id = if should_cleanup_prepared_thread {
-                        prepared_job.thread_id.clone()
-                    } else {
-                        None
-                    };
-                    (
-                        Self::execute_job(
-                            &prepared_job,
-                            active_agent_runs,
-                            dispatch_runtime,
-                            app_state_weak,
-                            &run_id,
+            let (record, prepared_thread_id) =
+                match Self::prepare_job_for_execution(jobs, &id, &run_id, env).await {
+                    Ok(prepared_job) => {
+                        let prepared_thread_id = if should_cleanup_prepared_thread {
+                            prepared_job.thread_id.clone()
+                        } else {
+                            None
+                        };
+                        (
+                            Self::execute_job(&prepared_job, active_agent_runs, env, &run_id)
+                                .await,
+                            prepared_thread_id,
                         )
-                        .await,
-                        prepared_thread_id,
-                    )
-                }
-                Err(error) => {
-                    tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
-                    (Self::failed_run_record(&job, &run_id, error), None)
-                }
-            };
+                    }
+                    Err(error) => {
+                        tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
+                        (Self::failed_run_record(&job, &run_id, error), None)
+                    }
+                };
 
             // Update state under write lock.
             let mut should_delete = false;
@@ -1574,13 +1515,9 @@ impl CronService {
                 }
             }
             if record.status != JobRunStatus::Success {
-                Self::cleanup_rejected_automation_thread(
-                    dispatch_runtime,
-                    prepared_thread_id.as_deref(),
-                )
-                .await;
+                Self::cleanup_rejected_automation_thread(env, prepared_thread_id.as_deref()).await;
             }
-            Self::finish_recorded_automation_thread_run(garyx_db_handle.as_ref(), &record).await;
+            Self::finish_recorded_automation_thread_run(env.garyx_db.as_ref(), &record).await;
             if should_delete {
                 let _ = delete_job_file(data_dir, &id).await;
             }
@@ -1593,8 +1530,7 @@ impl CronService {
     async fn execute_job(
         job: &CronJob,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        env: &AutomationExecEnv,
         run_id: &str,
     ) -> RunRecord {
         let run_id = run_id.to_owned();
@@ -1619,7 +1555,7 @@ impl CronService {
                     job,
                     &run_id,
                     payload,
-                    app_state_weak,
+                    env,
                     FOLLOWUP_RETRY_BASE_BACKOFF,
                 )
                 .await
@@ -1652,8 +1588,7 @@ impl CronService {
                             &run_id,
                             &message,
                             active_agent_runs,
-                            dispatch_runtime,
-                            app_state_weak,
+                            env,
                         )
                         .await
                         {
@@ -1710,7 +1645,7 @@ impl CronService {
         job: &CronJob,
         run_id: &str,
         payload: &InternalDispatchJobPayload,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        env: &AutomationExecEnv,
         base_backoff: Duration,
     ) -> Result<(), String> {
         Self::run_followup_with_retry(
@@ -1718,7 +1653,7 @@ impl CronService {
             base_backoff,
             &job.id,
             run_id,
-            |_attempt| Self::dispatch_internal_followup_once(job, run_id, payload, app_state_weak),
+            |_attempt| Self::dispatch_internal_followup_once(job, run_id, payload, env),
         )
         .await
     }
@@ -1797,14 +1732,14 @@ impl CronService {
     /// followup with its own earlier `schedule_followup` call (and so telemetry
     /// can distinguish followups from organic user input).
     ///
-    /// A missing thread_id / app_state back-reference, or a thread that is no
+    /// A missing thread_id / unavailable gateway state, or a thread that is no
     /// longer present in the thread store, yields `Dropped` (retrying cannot
     /// help). Any other dispatch error yields `Transient`.
     async fn dispatch_internal_followup_once(
         job: &CronJob,
         run_id: &str,
         payload: &InternalDispatchJobPayload,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        env: &AutomationExecEnv,
     ) -> Result<(), FollowupAttemptError> {
         let thread_id = Self::trimmed_non_empty(job.thread_id.as_deref()).ok_or_else(|| {
             FollowupAttemptError::Dropped(format!(
@@ -1813,25 +1748,10 @@ impl CronService {
             ))
         })?;
 
-        let app_state = app_state_weak
-            .get()
-            .and_then(Weak::upgrade)
-            .ok_or_else(|| {
-                FollowupAttemptError::Dropped(
-                    "cron app_state back-reference is not installed".to_owned(),
-                )
-            })?;
-
         // Explicit pre-check: if the originating thread was deleted before the
         // followup fired, drop it now rather than relying on string-matching the
         // dispatch error.
-        if app_state
-            .threads
-            .thread_store
-            .get_logged(&thread_id)
-            .await
-            .is_none()
-        {
+        if env.thread_store.get_logged(&thread_id).await.is_none() {
             return Err(FollowupAttemptError::Dropped(format!(
                 "thread not found: {thread_id}"
             )));
@@ -1870,27 +1790,24 @@ impl CronService {
             );
         }
 
-        dispatch_internal_message_to_thread(
-            &app_state,
-            &thread_id,
-            run_id,
-            &body,
-            InternalDispatchOptions {
-                extra_metadata,
-                ..Default::default()
-            },
-        )
-        .await
-        .map(|_outcome| ())
-        .map_err(|error| {
-            // A thread deleted between the pre-check and dispatch surfaces here
-            // as the dispatch sentinel — still a non-retryable drop.
-            if error.starts_with("thread not found") {
-                FollowupAttemptError::Dropped(error)
-            } else {
-                FollowupAttemptError::Transient(error)
-            }
-        })
+        env.port
+            .dispatch_internal_message(&thread_id, run_id, &body, extra_metadata)
+            .await
+            .map(|_outcome| ())
+            .map_err(|error| match error {
+                AutomationDispatchError::StateUnavailable => FollowupAttemptError::Dropped(
+                    "gateway app state is unavailable".to_owned(),
+                ),
+                // A thread deleted between the pre-check and dispatch surfaces
+                // here as the dispatch sentinel — still a non-retryable drop.
+                AutomationDispatchError::Dispatch(error) => {
+                    if error.starts_with("thread not found") {
+                        FollowupAttemptError::Dropped(error)
+                    } else {
+                        FollowupAttemptError::Transient(error)
+                    }
+                }
+            })
     }
 
     /// Dispatch a scheduled prompt into an existing thread through the
@@ -1902,21 +1819,18 @@ impl CronService {
     /// Returns the run id that owns the reply — the requested one for a fresh
     /// run, or the already-active run's id when the prompt was queued into it
     /// — so run records and automation activity resolve the real transcript.
-    #[allow(clippy::too_many_arguments)]
     async fn dispatch_agent_turn_via_thread(
         job: &CronJob,
         run_id: &str,
         message: &str,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
-        runtime: &CronDispatchRuntime,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        env: &AutomationExecEnv,
         thread_key: &str,
     ) -> Result<String, String> {
         let automation_job = is_automation_prompt_job(job);
         let source = if automation_job { "automation" } else { "cron" };
 
-        runtime
-            .thread_logs
+        env.thread_logs
             .record_event(
                 ThreadLogEvent::info(thread_key, "automation", "scheduled dispatch started")
                     .with_run_id(run_id.to_owned())
@@ -1936,11 +1850,6 @@ impl CronService {
             );
         }
 
-        let app_state = app_state_weak
-            .get()
-            .and_then(Weak::upgrade)
-            .ok_or_else(|| "cron app_state back-reference is not installed".to_owned())?;
-
         let mut extra_metadata = HashMap::new();
         extra_metadata.insert("source".to_owned(), serde_json::json!(source));
         if automation_job {
@@ -1953,17 +1862,16 @@ impl CronService {
             serde_json::json!(format!("{:?}", job.action)),
         );
 
-        let result = dispatch_internal_message_to_thread(
-            &app_state,
-            thread_key,
-            run_id,
-            message,
-            InternalDispatchOptions {
-                extra_metadata,
-                ..Default::default()
-            },
-        )
-        .await;
+        let result = env
+            .port
+            .dispatch_internal_message(thread_key, run_id, message, extra_metadata)
+            .await
+            .map_err(|error| match error {
+                AutomationDispatchError::StateUnavailable => {
+                    "gateway app state is unavailable".to_owned()
+                }
+                AutomationDispatchError::Dispatch(error) => error,
+            });
 
         match result {
             Ok(outcome) => {
@@ -1976,8 +1884,7 @@ impl CronService {
                     .write()
                     .await
                     .insert(job.id.clone(), effective_run_id.clone());
-                runtime
-                    .thread_logs
+                env.thread_logs
                     .record_event(
                         ThreadLogEvent::info(
                             thread_key,
@@ -1997,8 +1904,7 @@ impl CronService {
                 Ok(effective_run_id)
             }
             Err(error) => {
-                runtime
-                    .thread_logs
+                env.thread_logs
                     .record_event(
                         ThreadLogEvent::error(
                             thread_key,
@@ -2020,15 +1926,8 @@ impl CronService {
         run_id: &str,
         message: &str,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
-        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
-        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        env: &AutomationExecEnv,
     ) -> Result<String, String> {
-        let runtime = dispatch_runtime
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| "cron dispatch runtime unavailable".to_owned())?;
-
         let configured_target = job
             .target
             .as_deref()
@@ -2041,7 +1940,7 @@ impl CronService {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let thread_record = runtime
+            let thread_record = env
                 .thread_store
                 .get(thread_id)
                 .await
@@ -2058,7 +1957,7 @@ impl CronService {
                 } else {
                     target.strip_prefix("thread:").unwrap_or(target).to_owned()
                 };
-                let thread_record = runtime
+                let thread_record = env
                     .thread_store
                     .get(&key)
                     .await
@@ -2066,10 +1965,10 @@ impl CronService {
                     .ok_or_else(|| format!("cron target thread not found: {key}"))?;
                 (key, Some(thread_record))
             } else {
-                let resolved = resolve_delivery_target_with_recovery(&runtime.router, target)
+                let resolved = resolve_delivery_target_with_recovery(&env.router, target)
                     .await
                     .ok_or_else(|| format!("unable to resolve cron delivery target: {target}"))?;
-                let thread_record = runtime
+                let thread_record = env
                     .thread_store
                     .get(&resolved.0)
                     .await
@@ -2098,8 +1997,7 @@ impl CronService {
                 run_id,
                 message,
                 active_agent_runs,
-                &runtime,
-                app_state_weak,
+                env,
                 &thread_key,
             )
             .await;

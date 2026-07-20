@@ -1,7 +1,7 @@
 use super::*;
 use async_trait::async_trait;
 use garyx_bridge::{BridgeError, ProviderRuntime};
-use garyx_channels::{ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, OutboundMessage};
+use garyx_channels::{ChannelDispatcher, ChannelInfo, OutboundMessage};
 use garyx_models::config::{CronAction, CronConfig, CronJobConfig, CronSchedule};
 use garyx_models::provider::{
     ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
@@ -9,6 +9,65 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogSink};
 use garyx_router::ThreadStore;
 use tempfile::TempDir;
+
+/// Test [`AutomationDispatchPort`]: the readiness flag is fixed, and any
+/// front-door dispatch degrades to `StateUnavailable` — mirroring an engine
+/// whose gateway state is gone (or, with `ready: false`, still starting).
+struct TestDispatchPort {
+    ready: bool,
+}
+
+#[async_trait]
+impl AutomationDispatchPort for TestDispatchPort {
+    fn provider_runtime_ready(&self) -> bool {
+        self.ready
+    }
+
+    async fn invalidate_gateway_sync_caches(&self) {}
+
+    async fn dispatch_internal_message(
+        &self,
+        _thread_id: &str,
+        _run_id: &str,
+        _message: &str,
+        _extra_metadata: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<garyx_models::provider::AgentDispatchOutcome, AutomationDispatchError> {
+        Err(AutomationDispatchError::StateUnavailable)
+    }
+}
+
+/// Execution env over `store` with no gateway state behind the port: the
+/// ready gate is open, but any front-door dispatch reports
+/// `StateUnavailable`. Mirrors the retired "dispatch runtime installed,
+/// AppState back-reference missing" fixture semantics.
+fn stateless_exec_env(store: Arc<dyn ThreadStore>) -> AutomationExecEnv {
+    stateless_exec_env_with(store, Arc::new(MultiProviderBridge::new()), true)
+}
+
+fn stateless_exec_env_with(
+    store: Arc<dyn ThreadStore>,
+    bridge: Arc<MultiProviderBridge>,
+    ready: bool,
+) -> AutomationExecEnv {
+    AutomationExecEnv {
+        thread_store: store.clone(),
+        router: Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
+            store,
+            garyx_models::config::GaryxConfig::default(),
+        ))),
+        bridge,
+        thread_logs: Arc::new(NoopThreadLogSink),
+        custom_agents: Arc::new(crate::custom_agents::CustomAgentStore::new()),
+        garyx_db: None,
+        port: Arc::new(TestDispatchPort { ready }),
+    }
+}
+
+/// Execution env for jobs that never touch the thread store (Log actions,
+/// schedule math, persistence round-trips).
+fn bare_exec_env() -> AutomationExecEnv {
+    stateless_exec_env(Arc::new(garyx_router::InMemoryThreadStore::new()))
+}
 
 #[derive(Default)]
 struct RecordingDispatcher {
@@ -170,12 +229,12 @@ impl ProviderRuntime for MetadataRecordingProvider {
 
 /// Wire a cron service and a pre-registered bridge into a production-shaped
 /// `AppState` so AgentTurn jobs that resolve to a real thread can dispatch
-/// through the internal-inbound front door. Returns the state; the cron
-/// dispatch runtime shares the state's thread store and router.
+/// through the internal-inbound front door. Returns the state plus the
+/// production execution env built from it (same thread store and router).
 async fn wire_front_door_state(
     svc: &Arc<CronService>,
     bridge: Arc<MultiProviderBridge>,
-) -> Arc<crate::server::AppState> {
+) -> (Arc<crate::server::AppState>, AutomationExecEnv) {
     wire_front_door_state_with_agents(
         svc,
         bridge,
@@ -188,7 +247,7 @@ async fn wire_front_door_state_with_agents(
     svc: &Arc<CronService>,
     bridge: Arc<MultiProviderBridge>,
     custom_agents: Arc<crate::custom_agents::CustomAgentStore>,
-) -> Arc<crate::server::AppState> {
+) -> (Arc<crate::server::AppState>, AutomationExecEnv) {
     let state = crate::composition::app_bootstrap::AppStateBuilder::new(
         garyx_models::config::GaryxConfig::default(),
     )
@@ -200,17 +259,8 @@ async fn wire_front_door_state_with_agents(
         .set_thread_store(state.threads.thread_store.clone())
         .await;
     bridge.set_event_tx(state.ops.events.sender()).await;
-    svc.set_dispatch_runtime(
-        state.threads.thread_store.clone(),
-        state.threads.router.clone(),
-        bridge,
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        custom_agents,
-    )
-    .await;
-    state
+    let env = crate::composition::automation_wiring::automation_exec_env(&state);
+    (state, env)
 }
 
 #[async_trait]
@@ -411,9 +461,7 @@ async fn test_tick_does_not_claim_provider_job_before_runtime_ready() {
         &cron.runs,
         &cron.active_agent_runs,
         tmp.path(),
-        &cron.dispatch_runtime,
-        &cron.app_state_weak,
-        &cron.garyx_db,
+        &crate::composition::automation_wiring::automation_exec_env(&_state),
     )
     .await;
 
@@ -428,7 +476,7 @@ async fn test_tick_does_not_claim_provider_job_before_runtime_ready() {
 }
 
 #[tokio::test]
-async fn test_tick_does_not_claim_provider_job_before_app_state_is_installed() {
+async fn test_tick_does_not_claim_provider_job_when_state_is_unavailable() {
     let tmp = TempDir::new().unwrap();
     let cron = CronService::new(tmp.path().to_path_buf());
     let mut cfg = make_job_config("pre-state-agent", 0);
@@ -442,15 +490,17 @@ async fn test_tick_does_not_claim_provider_job_before_app_state_is_installed() {
         &cron.runs,
         &cron.active_agent_runs,
         tmp.path(),
-        &cron.dispatch_runtime,
-        &cron.app_state_weak,
-        &cron.garyx_db,
+        &stateless_exec_env_with(
+            Arc::new(garyx_router::InMemoryThreadStore::new()),
+            Arc::new(MultiProviderBridge::new()),
+            false,
+        ),
     )
     .await;
 
     assert!(
         cron.list_runs(10, 0).await.is_empty(),
-        "the first production scheduler tick must not record a startup failure before AppState is wired"
+        "a scheduler whose gateway state is unavailable must not record a startup failure"
     );
     assert_eq!(
         cron.get("pre-state-agent").await.unwrap().last_status,
@@ -801,7 +851,7 @@ async fn test_run_now() {
     let _ = ensure_dirs(tmp.path()).await;
 
     svc.add(make_job_config("rn1", 9999)).await.unwrap();
-    let record = svc.run_now("rn1").await.unwrap();
+    let record = svc.run_now("rn1", &bare_exec_env()).await.unwrap();
     assert_eq!(record.job_id, "rn1");
     assert_eq!(record.status, JobRunStatus::Success);
     assert!(record.duration_ms.is_some());
@@ -832,7 +882,7 @@ async fn test_run_now_advances_interval_schedule() {
         .unwrap()
         .next_run;
 
-    let record = svc.run_now("rn-advance").await.unwrap();
+    let record = svc.run_now("rn-advance", &bare_exec_env()).await.unwrap();
     assert_eq!(record.status, JobRunStatus::Success);
 
     let after = svc
@@ -872,7 +922,7 @@ async fn test_run_now_disables_once_job_after_success() {
     .await
     .unwrap();
 
-    let record = svc.run_now("rn-once").await.unwrap();
+    let record = svc.run_now("rn-once", &bare_exec_env()).await.unwrap();
     assert_eq!(record.status, JobRunStatus::Success);
 
     let job = svc
@@ -889,11 +939,6 @@ async fn test_run_now_disables_once_job_after_success() {
 async fn test_tick_failure_does_not_advance_schedule() {
     let tmp = TempDir::new().unwrap();
     let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
-    let _state = crate::composition::app_bootstrap::AppStateBuilder::new(
-        garyx_models::config::GaryxConfig::default(),
-    )
-    .with_cron_service(svc.clone())
-    .build();
     let _ = ensure_dirs(tmp.path()).await;
 
     svc.add(CronJobConfig {
@@ -928,9 +973,7 @@ async fn test_tick_failure_does_not_advance_schedule() {
         &svc.runs,
         &svc.active_agent_runs,
         tmp.path(),
-        &svc.dispatch_runtime,
-        &svc.app_state_weak,
-        &svc.garyx_db,
+        &stateless_exec_env(Arc::new(garyx_router::InMemoryThreadStore::new())),
     )
     .await;
 
@@ -977,7 +1020,7 @@ async fn test_run_now_delete_after_run_removes_job_and_file() {
     .await
     .unwrap();
 
-    let record = svc.run_now("delete-now").await.unwrap();
+    let record = svc.run_now("delete-now", &bare_exec_env()).await.unwrap();
     assert_eq!(record.status, JobRunStatus::Success);
 
     let jobs = svc.list().await;
@@ -1171,16 +1214,7 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
         )
         .await
         .unwrap();
-    let runtime = Arc::new(RwLock::new(Some(CronDispatchRuntime {
-        thread_store: store.clone(),
-        router: Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store,
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        bridge: Arc::new(MultiProviderBridge::new()),
-        thread_logs: Arc::new(NoopThreadLogSink),
-        custom_agents: Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    })));
+    let env = stateless_exec_env(store);
     let job = CronJob {
         id: "recover-delivery".to_owned(),
         kind: Default::default(),
@@ -1206,20 +1240,12 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
 
     let active_agent_runs = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
     // A thread-like target whose record exists routes through the
-    // internal-inbound front door; this fixture installs no AppState
-    // back-reference, so the front-door branch is the one that must fail.
-    let app_state_weak: Arc<OnceLock<Weak<AppState>>> = Arc::new(OnceLock::new());
-    let err = CronService::dispatch_agent_turn(
-        &job,
-        "run-1",
-        "ping",
-        &active_agent_runs,
-        &runtime,
-        &app_state_weak,
-    )
-    .await
-    .expect_err("front door requires an installed app_state back-reference");
-    assert!(err.contains("app_state back-reference"));
+    // internal-inbound front door; this fixture's port has no gateway state
+    // behind it, so the front-door branch is the one that must fail.
+    let err = CronService::dispatch_agent_turn(&job, "run-1", "ping", &active_agent_runs, &env)
+        .await
+        .expect_err("front door requires an available gateway state");
+    assert!(err.contains("gateway app state is unavailable"));
 }
 
 #[tokio::test]
@@ -1252,9 +1278,9 @@ async fn test_successful_automation_run_persists_thread_id() {
         .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
         .await;
     bridge.set_default_provider_key("automation-success").await;
-    let _state = wire_front_door_state(&svc, bridge).await;
+    let (_state, env) = wire_front_door_state(&svc, bridge).await;
 
-    let run = svc.run_now("automation-persist").await.unwrap();
+    let run = svc.run_now("automation-persist", &env).await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
     assert!(run.thread_id.is_some());
 
@@ -1304,9 +1330,9 @@ async fn generated_automation_disabled_at_run_time_records_visible_failure() {
     bridge
         .set_default_provider_key("disabled-at-run-provider")
         .await;
-    let state = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
+    let (state, env) = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
 
-    let run = svc.run_now("automation-disabled-at-run").await.unwrap();
+    let run = svc.run_now("automation-disabled-at-run", &env).await.unwrap();
     assert_eq!(run.status, JobRunStatus::Failed);
     assert!(
         run.error
@@ -1361,7 +1387,7 @@ async fn test_bound_automation_run_reuses_existing_thread() {
         .set_enabled("claude", false)
         .await
         .expect("disable existing target binding");
-    let state = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
+    let (state, env) = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
     let store = state.threads.thread_store.clone();
     store
         .set(
@@ -1379,7 +1405,7 @@ async fn test_bound_automation_run_reuses_existing_thread() {
         .await
         .unwrap();
 
-    let run = svc.run_now("automation-bound").await.unwrap();
+    let run = svc.run_now("automation-bound", &env).await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
     assert_eq!(run.thread_id.as_deref(), Some(target_thread_id));
 
@@ -1438,7 +1464,7 @@ async fn target_automation_runtime_uses_live_codex_binding_not_legacy_claude_job
     bridge
         .set_default_provider_key("legacy-claude-provider")
         .await;
-    let state = wire_front_door_state(&svc, bridge).await;
+    let (state, env) = wire_front_door_state(&svc, bridge).await;
     state
         .threads
         .thread_store
@@ -1458,7 +1484,7 @@ async fn target_automation_runtime_uses_live_codex_binding_not_legacy_claude_job
         .await
         .unwrap();
 
-    let run = svc.run_now("automation-target-live-codex").await.unwrap();
+    let run = svc.run_now("automation-target-live-codex", &env).await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
     assert_eq!(run.thread_id.as_deref(), Some(target_thread_id));
     assert_eq!(codex.calls(), 1, "the live target binding selects Codex");
@@ -1501,7 +1527,7 @@ async fn test_bound_automation_dispatches_through_internal_inbound_front_door() 
         .register_provider("front-door-recorder", provider.clone())
         .await;
     bridge.set_default_provider_key("front-door-recorder").await;
-    let state = wire_front_door_state(&svc, bridge).await;
+    let (state, env) = wire_front_door_state(&svc, bridge).await;
     state
         .threads
         .thread_store
@@ -1516,7 +1542,7 @@ async fn test_bound_automation_dispatches_through_internal_inbound_front_door() 
         .await
         .unwrap();
 
-    let run = svc.run_now("automation-front-door").await.unwrap();
+    let run = svc.run_now("automation-front-door", &env).await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
 
     // The scheduled prompt reached the provider as an ordinary inbound
@@ -1578,21 +1604,9 @@ async fn test_bound_automation_missing_target_thread_fails_without_cleanup() {
     .unwrap();
 
     let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    svc.set_dispatch_runtime(
-        store.clone(),
-        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store.clone(),
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        Arc::new(MultiProviderBridge::new()),
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    )
-    .await;
+    let env = stateless_exec_env(store.clone());
 
-    let run = svc.run_now("automation-missing-bound").await.unwrap();
+    let run = svc.run_now("automation-missing-bound", &env).await.unwrap();
 
     assert_eq!(run.status, JobRunStatus::Failed);
     assert_eq!(run.thread_id.as_deref(), Some(missing_thread_id));
@@ -1637,21 +1651,9 @@ async fn test_failed_automation_run_now_cleans_up_failed_thread() {
     .await
     .unwrap();
 
-    svc.set_dispatch_runtime(
-        store.clone(),
-        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store.clone(),
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        Arc::new(MultiProviderBridge::new()),
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    )
-    .await;
+    let env = stateless_exec_env(store.clone());
 
-    let run = svc.run_now("automation-keep-thread").await.unwrap();
+    let run = svc.run_now("automation-keep-thread", &env).await.unwrap();
     assert_eq!(run.status, JobRunStatus::Failed);
     let failed_thread_id = run.thread_id.clone().expect("failed thread id");
 
@@ -1667,7 +1669,7 @@ async fn test_failed_automation_run_now_cleans_up_failed_thread() {
 async fn test_run_now_missing_job() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());
-    assert!(svc.run_now("nonexistent").await.is_none());
+    assert!(svc.run_now("nonexistent", &bare_exec_env()).await.is_none());
 }
 
 #[tokio::test]
@@ -1697,7 +1699,7 @@ async fn test_run_now_disabled_job_is_skipped() {
     .await
     .unwrap();
 
-    assert!(svc.run_now("disabled-now").await.is_none());
+    assert!(svc.run_now("disabled-now", &bare_exec_env()).await.is_none());
     assert!(svc.list_runs(10, 0).await.is_empty());
 }
 
@@ -1708,7 +1710,7 @@ async fn test_update_job_keeps_runtime_state() {
     let _ = ensure_dirs(tmp.path()).await;
 
     svc.add(make_job_config("upd1", 60)).await.unwrap();
-    svc.run_now("upd1").await.unwrap();
+    svc.run_now("upd1", &bare_exec_env()).await.unwrap();
 
     let updated = svc
         .update(
@@ -2009,7 +2011,7 @@ async fn test_config_merge_preserves_runtime_state() {
 
     // Add a job and run it.
     svc.add(make_job_config("merge1", 60)).await.unwrap();
-    svc.run_now("merge1").await.unwrap();
+    svc.run_now("merge1", &bare_exec_env()).await.unwrap();
 
     // Reload with config that changes the interval.
     let cfg = garyx_models::config::CronConfig {
@@ -2084,10 +2086,10 @@ async fn test_load_recomputes_next_run_after_schedule_change() {
 #[tokio::test]
 async fn test_start_stop_lifecycle() {
     let tmp = TempDir::new().unwrap();
-    let mut svc = CronService::new(tmp.path().to_path_buf());
+    let svc = CronService::new(tmp.path().to_path_buf());
     let _ = ensure_dirs(tmp.path()).await;
 
-    svc.start();
+    svc.start(bare_exec_env());
     // Let it tick a couple times.
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     svc.stop().await;
@@ -2097,7 +2099,7 @@ async fn test_start_stop_lifecycle() {
 #[tokio::test]
 async fn test_stop_waits_for_inflight_cron_tick() {
     let tmp = TempDir::new().unwrap();
-    let mut svc = CronService::new(tmp.path().to_path_buf());
+    let svc = CronService::new(tmp.path().to_path_buf());
     let _ = ensure_dirs(tmp.path()).await;
 
     svc.add(CronJobConfig {
@@ -2124,24 +2126,36 @@ async fn test_stop_waits_for_inflight_cron_tick() {
     bridge
         .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
         .await;
-    svc.set_dispatch_runtime(
-        store.clone(),
-        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store,
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        bridge,
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    )
-    .await;
 
-    let dispatch_runtime = svc.dispatch_runtime.clone();
-    let dispatch_guard = dispatch_runtime.write().await;
-    svc.start();
-    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    // A port whose front-door dispatch blocks until released: the tick that
+    // reaches it stays in flight, so stop() must wait for that tick.
+    struct BlockingPort {
+        gate: Arc<tokio::sync::Semaphore>,
+    }
+    #[async_trait]
+    impl AutomationDispatchPort for BlockingPort {
+        fn provider_runtime_ready(&self) -> bool {
+            true
+        }
+        async fn invalidate_gateway_sync_caches(&self) {}
+        async fn dispatch_internal_message(
+            &self,
+            _thread_id: &str,
+            _run_id: &str,
+            _message: &str,
+            _extra_metadata: std::collections::HashMap<String, serde_json::Value>,
+        ) -> Result<garyx_models::provider::AgentDispatchOutcome, AutomationDispatchError>
+        {
+            let _permit = self.gate.acquire().await.expect("gate closed");
+            Err(AutomationDispatchError::StateUnavailable)
+        }
+    }
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let mut env = stateless_exec_env_with(store, bridge, true);
+    env.port = Arc::new(BlockingPort { gate: gate.clone() });
+
+    svc.start(env);
+    tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
     {
         let mut stop_future = std::pin::pin!(svc.stop());
         let stop_early = tokio::select! {
@@ -2150,11 +2164,11 @@ async fn test_stop_waits_for_inflight_cron_tick() {
         };
         assert!(!stop_early);
 
-        drop(dispatch_guard);
+        gate.add_permits(1);
         stop_future.as_mut().await;
     }
-    assert!(svc.stop_tx.is_none());
-    assert!(svc.scheduler_task.is_none());
+    assert!(svc.stop_tx.lock().unwrap().is_none());
+    assert!(svc.scheduler_task.lock().unwrap().is_none());
 }
 
 #[tokio::test]
@@ -2188,11 +2202,12 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         .register_provider("counting-automation", provider.clone())
         .await;
     bridge.set_default_provider_key("counting-automation").await;
-    let _state = wire_front_door_state(&svc, bridge).await;
+    let (_state, env) = wire_front_door_state(&svc, bridge).await;
 
     let run_now_task = {
         let svc = svc.clone();
-        tokio::spawn(async move { svc.run_now("single-flight").await })
+        let env = env.clone();
+        tokio::spawn(async move { svc.run_now("single-flight", &env).await })
     };
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     CronService::tick(
@@ -2200,9 +2215,7 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         &svc.runs,
         &svc.active_agent_runs,
         tmp.path(),
-        &svc.dispatch_runtime,
-        &svc.app_state_weak,
-        &svc.garyx_db,
+        &env,
     )
     .await;
     let _ = run_now_task.await.unwrap();
@@ -2213,19 +2226,18 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
 #[tokio::test]
 async fn test_start_is_idempotent() {
     let tmp = TempDir::new().unwrap();
-    let mut svc = CronService::new(tmp.path().to_path_buf());
+    let svc = CronService::new(tmp.path().to_path_buf());
     let _ = ensure_dirs(tmp.path()).await;
 
-    svc.start();
-    let first_sender = svc.stop_tx.clone();
-    assert!(first_sender.is_some());
+    svc.start(bare_exec_env());
+    assert!(svc.stop_tx.lock().unwrap().is_some());
 
     // Second start should be ignored and keep current run loop.
-    svc.start();
-    assert!(svc.stop_tx.is_some());
+    svc.start(bare_exec_env());
+    assert!(svc.stop_tx.lock().unwrap().is_some());
 
     svc.stop().await;
-    assert!(svc.stop_tx.is_none());
+    assert!(svc.stop_tx.lock().unwrap().is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -2613,9 +2625,7 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
         &cron.runs,
         &cron.active_agent_runs,
         tmp.path(),
-        &cron.dispatch_runtime,
-        &cron.app_state_weak,
-        &cron.garyx_db,
+        &crate::composition::automation_wiring::automation_exec_env(&state),
     )
     .await;
 
@@ -2769,8 +2779,8 @@ async fn test_internal_dispatch_drops_when_thread_missing() {
         .with_cron_service(cron.clone())
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
         .build();
-    // Keep the builder result alive for the duration of the tick so the cron
-    // service's weak app_state back-reference can upgrade.
+    // Keep the builder result alive for the duration of the tick so the
+    // execution env's dispatch port can upgrade its state handle.
     let _state = state;
 
     let thread_id = "thread::followup-deleted-target";
@@ -2814,9 +2824,7 @@ async fn test_internal_dispatch_drops_when_thread_missing() {
         &cron.runs,
         &cron.active_agent_runs,
         tmp.path(),
-        &cron.dispatch_runtime,
-        &cron.app_state_weak,
-        &cron.garyx_db,
+        &crate::composition::automation_wiring::automation_exec_env(&_state),
     )
     .await;
 
@@ -2895,7 +2903,7 @@ async fn validation_recomputes_invalid_valid_invalid_without_restart_and_is_not_
         Some("missing canonical target for agent turn")
     );
 
-    let first_run = svc.run_now("validation-transition").await.unwrap();
+    let first_run = svc.run_now("validation-transition", &bare_exec_env()).await.unwrap();
     assert_eq!(first_run.status, JobRunStatus::Failed);
     assert_eq!(
         first_run.error.as_deref(),
@@ -2961,7 +2969,7 @@ async fn scheduler_claim_revalidates_stale_validation_fail_closed() {
         tmp.path(),
         &svc.jobs,
         &svc.active_agent_runs,
-        &svc.dispatch_runtime,
+        &bare_exec_env(),
         "stale-validation",
     )
     .await;
@@ -3035,7 +3043,7 @@ async fn load_marks_threadless_agent_turn_and_system_event_invalid_from_disk_and
         bridge
             .set_default_provider_key("threadless-validation-provider")
             .await;
-        let _state = wire_front_door_state_with_agents(&svc, bridge, custom_agents.clone()).await;
+        let (_state, env) = wire_front_door_state_with_agents(&svc, bridge, custom_agents.clone()).await;
 
         for (id, expected) in [
             ("disk-agent", "missing canonical target for agent turn"),
@@ -3050,7 +3058,7 @@ async fn load_marks_threadless_agent_turn_and_system_event_invalid_from_disk_and
                 "availability={availability} id={id}"
             );
             let run = svc
-                .run_now(id)
+                .run_now(id, &env)
                 .await
                 .expect("invalid run is visibly recorded");
             assert_eq!(run.status, JobRunStatus::Failed);

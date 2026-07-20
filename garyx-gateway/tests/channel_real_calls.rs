@@ -346,21 +346,6 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
         .with_garyx_db(garyx_db)
         .build();
     state
-        .ops
-        .cron_service
-        .as_ref()
-        .expect("cron service configured")
-        .set_dispatch_runtime(
-            state.threads.thread_store.clone(),
-            state.threads.router.clone(),
-            state.integration.bridge.clone(),
-            state.channel_dispatcher(),
-            state.ops.thread_logs.clone(),
-            HashMap::new(),
-            state.ops.custom_agents.clone(),
-        )
-        .await;
-    state
         .integration
         .bridge
         .set_thread_store(state.threads.thread_store.clone())

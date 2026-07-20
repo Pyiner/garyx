@@ -21,9 +21,8 @@
 //!   `garyx_router::default_agent_from_config`, the shared derivation both
 //!   router construction and `update_config` call.
 
-use std::collections::HashMap;
 
-use garyx_models::config::{GaryxConfig, McpServerConfig};
+use garyx_models::config::GaryxConfig;
 
 /// Values derived from `GaryxConfig` that both initial assembly and runtime
 /// hot-reload consume.
@@ -35,8 +34,6 @@ pub struct RuntimeConfigProjection {
     /// Meetings ingestion join-retry window (`gateway.meetings`), clamped by
     /// `effective_join_retry_window_secs`.
     pub meeting_join_retry_window_secs: u64,
-    /// Managed MCP server definitions handed to the cron dispatch runtime.
-    pub managed_mcp_servers: HashMap<String, McpServerConfig>,
     /// Plugin self-update master switch (`plugins.auto_update`). Hot:
     /// applied to the process-wide shared AtomicBool on every config
     /// apply — never requires a channel-plugin rebuild.
@@ -51,7 +48,6 @@ impl RuntimeConfigProjection {
                 .gateway
                 .meetings
                 .effective_join_retry_window_secs(),
-            managed_mcp_servers: config.mcp_servers.clone(),
             plugin_auto_update: config.plugins.auto_update,
         }
     }

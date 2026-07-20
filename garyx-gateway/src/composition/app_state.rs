@@ -418,26 +418,16 @@ impl AppState {
                 );
             }
         }
-        let managed_mcp_servers = projection.managed_mcp_servers;
-        self.replace_channel_dispatcher(dispatcher.clone());
+        self.replace_channel_dispatcher(dispatcher);
         self.replace_config(config.clone());
         {
             let mut router = self.threads.router.lock().await;
             router.update_config(config.clone());
         }
-        if let Some(cron_service) = &self.ops.cron_service {
-            cron_service
-                .set_dispatch_runtime(
-                    self.threads.thread_store.clone(),
-                    self.threads.router.clone(),
-                    self.integration.bridge.clone(),
-                    dispatcher,
-                    self.ops.thread_logs.clone(),
-                    managed_mcp_servers,
-                    self.ops.custom_agents.clone(),
-                )
-                .await;
-        }
+        // The automation scheduler needs no re-injection here: its execution
+        // environment is built once from these same stable Arcs at scheduler
+        // start (composition::automation_wiring), and the readiness gate below
+        // is observed live through its dispatch port.
         self.mark_provider_runtime_ready();
         // Phase-7 single derivation point: when the rebuild-inputs
         // projection (channels section + gateway.public_url, see

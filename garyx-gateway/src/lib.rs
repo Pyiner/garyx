@@ -83,6 +83,7 @@ pub(crate) use application::chat::prepare as chat_application;
 pub(crate) use application::chat::shared as chat_shared;
 pub(crate) use composition::app_bootstrap;
 pub(crate) use composition::app_state;
+pub(crate) use composition::automation_wiring;
 pub(crate) use composition::event_stream_hub;
 pub(crate) use composition::lifecycle as server_lifecycle;
 pub(crate) use composition::mcp_metrics;

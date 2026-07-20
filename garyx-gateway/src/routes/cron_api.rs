@@ -332,7 +332,10 @@ pub async fn debug_run_system_cron_job(
             Json(json!({ "error": "not_found", "message": "no such system cron job", "id": id })),
         )
             .into_response(),
-        Some(_) => match cron.run_now(&id).await {
+        Some(_) => match cron
+            .run_now(&id, &crate::automation_wiring::automation_exec_env(&state))
+            .await
+        {
             Some(record) => Json(json!({
                 "ran": true,
                 "run": debug_run_json(&record),

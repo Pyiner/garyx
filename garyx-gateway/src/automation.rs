@@ -1235,7 +1235,8 @@ pub async fn run_automation_now(
         Err(error) => return error,
     };
 
-    let Some(run) = service.run_now(&id).await else {
+    let env = crate::automation_wiring::automation_exec_env(&state);
+    let Some(run) = service.run_now(&id, &env).await else {
         return invalid("automation is disabled or missing");
     };
     let thread_id = run.thread_id.clone();

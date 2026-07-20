@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use garyx_bridge::MultiProviderBridge;
 use garyx_channels::{BuiltInPluginDiscoverer, ChannelPluginManager};
-use garyx_gateway::server::{AppState, AppStateBuilder, Gateway};
+use garyx_gateway::server::{AppState, AppStateBuilder, Gateway, start_automation_scheduler};
 use garyx_gateway::{CronService, ThreadFileLogger, default_thread_log_dir};
 use garyx_models::config::GaryxConfig;
 use garyx_models::config_loader::{
@@ -270,21 +270,19 @@ mod phases {
         } = imported;
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
 
-        let mut cron_service_raw = CronService::new(PathBuf::from(&session_data_dir));
+        let cron_service = Arc::new(CronService::new(PathBuf::from(&session_data_dir)));
         let cron_boot_config = config.cron.clone();
-        match cron_service_raw.load(&cron_boot_config).await {
-            Ok(()) => {
-                cron_service_raw.start();
-                tracing::info!(
-                    configured_jobs = cron_boot_config.jobs.len(),
-                    "Cron service started"
-                );
-            }
+        // The scheduler loop itself starts only after the AppState is
+        // assembled (`start_automation_scheduler` below): its execution
+        // environment is built from the assembled state in one shot instead
+        // of being late-injected into an already-running loop.
+        let cron_loaded = match cron_service.load(&cron_boot_config).await {
+            Ok(()) => true,
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to initialize cron service");
+                false
             }
-        }
-        let cron_service = Arc::new(cron_service_raw);
+        };
 
         let restart_tokens = parse_restart_tokens_from_env();
         if !restart_tokens.is_empty() {
@@ -342,17 +340,16 @@ mod phases {
             .await;
         bridge.set_thread_history(state.threads.history.clone());
         bridge.set_event_tx(state.ops.events.sender()).await;
-        cron_service
-            .set_dispatch_runtime(
-                state.threads.thread_store.clone(),
-                state.threads.router.clone(),
-                bridge.clone(),
-                state.channel_dispatcher(),
-                state.ops.thread_logs.clone(),
-                config.mcp_servers.clone(),
-                state.ops.custom_agents.clone(),
-            )
-            .await;
+        // Start the automation scheduler only now that the assembled state
+        // exists and the bridge is bound to its final stores: the loop's
+        // execution env is built from the state in one shot instead of being
+        // late-injected into an already-running loop.
+        if cron_loaded && start_automation_scheduler(&state) {
+            tracing::info!(
+                configured_jobs = cron_boot_config.jobs.len(),
+                "Cron service started"
+            );
+        }
         // Phase-7: installing the channel-plugin rebuilder is a
         // mandatory assembly step, not an optional call sites may
         // forget — the only way to obtain a RuntimeAssembly is through

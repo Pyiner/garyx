@@ -18,6 +18,7 @@ const GRACEFUL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub use crate::app_bootstrap::{AppStateBuilder, create_app_state, create_app_state_with_bridge};
 pub use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
+pub use crate::automation_wiring::start_automation_scheduler;
 pub use crate::event_stream_hub::EventStreamHub;
 pub use crate::mcp_metrics::{
     McpToolCallCount, McpToolDurationStat, McpToolMetrics, McpToolMetricsSnapshot,

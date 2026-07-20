@@ -519,16 +519,6 @@ impl AppStateBuilder {
             },
         });
 
-        // Install the weak back-reference into the CronService so
-        // internal-dispatch cron jobs (e.g. `schedule_followup`) can call back
-        // into the `AppState` to dispatch synthetic user turns when they fire.
-        // Must happen after `Arc::new(AppState)` to avoid an Arc<AppState> ↔
-        // Arc<CronService> cycle; `OnceLock::set` makes it idempotent in case
-        // build() is ever called more than once for the same cron service.
-        if let Some(cron_service) = state.ops.cron_service.as_ref() {
-            cron_service.set_app_state(Arc::downgrade(&state));
-            cron_service.set_garyx_db(state.ops.garyx_db.clone());
-        }
         lifecycle.attach_state(Arc::downgrade(&state));
         crate::create_resources::spawn_create_resource_cleanup_worker(&state);
 
