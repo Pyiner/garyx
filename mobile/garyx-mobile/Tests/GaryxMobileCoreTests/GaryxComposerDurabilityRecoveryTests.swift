@@ -109,6 +109,66 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         XCTAssertEqual(report.deliveryDispositions[successfulSend.delivery.id], .acknowledged)
     }
 
+    func testRelaunchSilentlyRestoresUndispatchedMessageWhenCurrentDraftIsEmpty() async throws {
+        let fixture = try makeFixture()
+        let send: GaryxComposerCommitSend
+        do {
+            let preKillStore = try GaryxSQLiteComposerDurabilityStore(
+                databaseURL: fixture.databaseURL
+            )
+            send = try makeCommitSend(followupText: "")
+            let committed = try await preKillStore.commitSend(send)
+            let currentDraft = try XCTUnwrap(
+                committed.payloadStore.entry(entryID, scope: scope)
+            )
+            XCTAssertEqual(currentDraft.currentText, "")
+            XCTAssertTrue(currentDraft.attachments.isEmpty)
+            XCTAssertEqual(send.delivery.phase, .notDispatched)
+        }
+
+        let relaunchedStore = try GaryxSQLiteComposerDurabilityStore(
+            databaseURL: fixture.databaseURL
+        )
+        let report = try await GaryxComposerDurabilityLaunchRecovery(
+            durability: relaunchedStore,
+            scopes: GaryxGatewayScopeRegistry(initialActiveScope: scope)
+        ).recover()
+        XCTAssertEqual(report.undispatchedDeliverySettlements, 1)
+
+        let recovered = try await relaunchedStore.load()
+        let recoveredEntryID = GaryxComposerPayloadEntryID(
+            rawValue: "undispatched-recovery-\(send.delivery.id.rawValue)"
+        )
+        let conflictSetID = GaryxPayloadConflictSetID(
+            rawValue: "undispatched-recovery-\(send.delivery.id.rawValue)"
+        )
+        let conflict = recovered.conflicts[conflictSetID]
+        let notices = GaryxComposerDurableNoticeProjector.project(
+            snapshot: recovered,
+            hostEntryID: entryID,
+            hasInteractionOwner: true
+        )
+
+        XCTAssertEqual(
+            recovered.payloadStore.entry(entryID, scope: scope)?.currentText,
+            "message",
+            "an empty current draft should silently adopt the recovered message"
+        )
+        XCTAssertNil(
+            recovered.payloadStore.entry(recoveredEntryID, scope: scope),
+            "silent adoption should not leave a second candidate entry"
+        )
+        XCTAssertFalse(
+            conflict?.pendingDecision ?? false,
+            "an empty current draft must not require a payload-conflict decision"
+        )
+        XCTAssertNil(conflict, "silent adoption should settle the conflict domain")
+        XCTAssertTrue(
+            notices.isEmpty,
+            "an empty composer must not show 'Recovered message is ready'; actual titles: \(notices.map(\.title))"
+        )
+    }
+
     func testLaunchSynthesizesRevokedFiveStepFinalAsTUAtGPlusTwoAndClosesOnce() async throws {
         let fixture = try makeFixture()
         let store = try GaryxSQLiteComposerDurabilityStore(databaseURL: fixture.databaseURL)
@@ -1833,10 +1893,11 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
     }
 
     private func makeCommitSend(
+        followupText: String = "next",
         includeProducerDrained: Bool = false
     ) throws -> GaryxComposerCommitSend {
         var entry = makeEntry(text: "message")
-        entry.setText("next", generation: 11)
+        entry.setText(followupText, generation: 11)
         var barrier = GaryxSendCommitBarrier(
             entryID: entryID,
             scope: scope,
@@ -1863,7 +1924,9 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             ),
             .sealed
         )
-        XCTAssertTrue(barrier.replaceProvisionalText("next", lifecycle: entry.lifecycle.snapshot))
+        XCTAssertTrue(
+            barrier.replaceProvisionalText(followupText, lifecycle: entry.lifecycle.snapshot)
+        )
         let settlement = try XCTUnwrap(
             barrier.durableCommit(
                 deliveryID: GaryxDeliveryRecordID(rawValue: "transport-delivery"),
