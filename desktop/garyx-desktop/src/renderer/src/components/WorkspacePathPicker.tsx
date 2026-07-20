@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Search as SearchIcon } from 'lucide-react';
 
 import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
@@ -547,6 +547,10 @@ export function WorkspacePathPicker({
 
   const adapter = useWorkspaceDataAdapter();
   const workspaceEpoch = useWorkspaceEpoch();
+  const workspaceEpochRef = useRef(workspaceEpoch);
+  useEffect(() => {
+    workspaceEpochRef.current = workspaceEpoch;
+  }, [workspaceEpoch]);
   const [fetchedCatalog, setFetchedCatalog] = useState<{
     workspaces: DesktopWorkspace[];
     gatewayHome: string | null;
@@ -585,17 +589,26 @@ export function WorkspacePathPicker({
 
   async function addWorkspace(path: string, name?: string | null) {
     setSavingAdd(true);
+    const epoch = workspaceEpoch;
     try {
       const added = onAddWorkspace
         ? await onAddWorkspace(path)
         : await adapter.addWorkspace(path, name);
+      if (epoch !== workspaceEpochRef.current) {
+        return;
+      }
+      // The catalog changed; drop the cached copy so the next open lists
+      // the new row.
+      setFetchedCatalog(null);
       if (!added?.path) {
         return;
       }
       onChange(normalizeWorkspacePath(added.path));
       setAddOpen(false);
     } finally {
-      setSavingAdd(false);
+      if (epoch === workspaceEpochRef.current) {
+        setSavingAdd(false);
+      }
     }
   }
 

@@ -657,19 +657,29 @@ export function SideChatPanel({
     );
   }
   if (!sideChatThreadId) {
+    // The side thread inherits the source's workspace; the pre-creation
+    // frame renders the server-owned provenance — an implicit source shows
+    // "No workspace", never its managed private path.
+    const inheritedOrigin = activeThread?.workspaceOrigin || null;
     const inheritedWorkspacePath =
-      activeThread?.rootWorkspacePath ?? activeThread?.workspacePath ?? null;
+      inheritedOrigin === "implicit"
+        ? null
+        : activeThread?.rootWorkspacePath ?? activeThread?.workspacePath ?? null;
+    const inheritedLabel =
+      inheritedOrigin === "implicit"
+        ? t("No workspace")
+        : inheritedWorkspacePath;
     return (
       <div className="side-tool-empty">
         {sideChatCreating
           ? t("Starting…")
           : sideChatError || t("Start a focused side thread.")}
-        {inheritedWorkspacePath ? (
+        {inheritedLabel ? (
           <span
             className="side-chat-inherited-workspace"
-            title={inheritedWorkspacePath}
+            title={inheritedWorkspacePath || undefined}
           >
-            {inheritedWorkspacePath}
+            {inheritedLabel}
           </span>
         ) : null}
       </div>

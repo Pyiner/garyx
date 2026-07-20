@@ -161,7 +161,11 @@ Codex row grammar, pixel-faithful:
     removal of its selected workspace.
   - The tri-state flows through route state, draft persistence, composer
     state, and the create payload. "Create thread in X" entry points seed
-    the draft with `path(X)`. An explicit `none` is never overridden.
+    the draft with `path(X)`. An explicit `none` is never overridden. The
+    `thread-home` rest route carries no workspace param by design — its
+    draft composer still resolves and holds a concrete selection in state,
+    and the tri-state enters the route the moment the draft becomes an
+    explicit `new-thread` route.
 - **Mode control**: the local/worktree mode select renders next to the chip
   when the selected workspace is worktree-capable (existing gating).
   Display copy stops saying "Local" (misleading in a pure-remote model):

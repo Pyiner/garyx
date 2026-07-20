@@ -9,6 +9,7 @@
 .workspace-picker-popover {
   z-index: 70;
   width: 260px;
+  padding: var(--menu-surface-padding);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -30,8 +31,10 @@
   padding: 0;
   background: transparent;
   color: var(--color-token-text-primary);
+  /* Captured reference: 16px / 445 / 24px line. */
   font-size: var(--menu-item-font-size);
   font-weight: var(--menu-item-font-weight);
+  line-height: 1.5;
 }
 
 .workspace-picker-search-input::placeholder {

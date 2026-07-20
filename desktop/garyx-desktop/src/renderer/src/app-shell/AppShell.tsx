@@ -2809,11 +2809,12 @@ export function AppShell() {
     // draft AND the thread-home empty state (its composer is a draft too).
     const draftComposerVisible =
       contentView === "thread" && !selectedThreadId;
+    // An empty catalog is a valid answer (→ explicit none), not a reason
+    // to stay unresolved; hydration completing is what gates this.
     if (
       !draftComposerVisible ||
       pendingWorkspaceSelection !== null ||
-      !desktopState ||
-      desktopState.workspaces.length === 0
+      !desktopState
     ) {
       return;
     }
@@ -2836,15 +2837,30 @@ export function AppShell() {
   // rendering rows or issuing requests against the previous gateway; late
   // responses from the old epoch are rejected by the DesktopState ingress
   // and per-request cancellation.
-  const workspaceEpoch = desktopState?.entitiesGatewayUrl || "";
+  // The epoch is a connection GENERATION, not the gateway URL: switching
+  // A -> B -> A produces three distinct epochs, so a late result from the
+  // first A connection can never be accepted after returning to A. Every
+  // switch closes the transient workspace surfaces and resets mutation
+  // busy state (a stale mutation's own cleanup is epoch-guarded and must
+  // not touch the new epoch's state).
+  const workspaceGatewayKey = desktopState?.entitiesGatewayUrl || "";
+  const workspaceGatewayKeyRef = useRef(workspaceGatewayKey);
+  const workspaceEpochCounterRef = useRef(0);
+  const [workspaceEpoch, setWorkspaceEpoch] = useState("g0");
   const workspaceEpochRef = useRef(workspaceEpoch);
   useEffect(() => {
-    if (workspaceEpochRef.current === workspaceEpoch) {
+    if (workspaceGatewayKeyRef.current === workspaceGatewayKey) {
       return;
     }
-    workspaceEpochRef.current = workspaceEpoch;
+    workspaceGatewayKeyRef.current = workspaceGatewayKey;
+    workspaceEpochCounterRef.current += 1;
+    const nextEpoch = `g${workspaceEpochCounterRef.current}`;
+    workspaceEpochRef.current = nextEpoch;
+    setWorkspaceEpoch(nextEpoch);
     setWorkspaceMenuOpenPath(null);
     setWorkspaceRenameTarget(null);
+    setWorkspaceRenameSaving(false);
+    setWorkspaceMutation(null);
     setAddWorkspaceDialog((current) => {
       current?.resolve?.(null);
       return null;
@@ -2852,7 +2868,7 @@ export function AppShell() {
     // Cached git statuses are keyed by path only; a different gateway's
     // filesystem must not answer for them.
     workspaceGitStatusCache.clear();
-  }, [workspaceEpoch]);
+  }, [workspaceGatewayKey]);
 
   /** Late workspace-mutation results from a previous gateway epoch are
    *  complete no-ops: don't touch drafts, routes, or dialogs with them. */
@@ -3638,7 +3654,9 @@ export function AppShell() {
       );
       return null;
     } finally {
-      setWorkspaceMutation(null);
+      if (isCurrentWorkspaceEpoch(epoch)) {
+        setWorkspaceMutation(null);
+      }
     }
   }
 
@@ -3739,7 +3757,9 @@ export function AppShell() {
           : "Failed to remove workspace",
       );
     } finally {
-      setWorkspaceMutation(null);
+      if (isCurrentWorkspaceEpoch(epoch)) {
+        setWorkspaceMutation(null);
+      }
     }
   }
 
@@ -3812,7 +3832,9 @@ export function AppShell() {
           : "Failed to rename workspace",
       );
     } finally {
-      setWorkspaceRenameSaving(false);
+      if (isCurrentWorkspaceEpoch(epoch)) {
+        setWorkspaceRenameSaving(false);
+      }
     }
   }
 

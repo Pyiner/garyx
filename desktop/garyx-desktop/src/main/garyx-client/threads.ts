@@ -502,6 +502,16 @@ function mapStandardThreadSummary(
     context,
   );
   requireNullableStringField(record, "active_run_id", context);
+  const rootWorkspacePath = optionalNullableStringField(
+    record,
+    "root_workspace_path",
+    `${context}.root_workspace_path`,
+  );
+  const workspaceOrigin = optionalNullableStringField(
+    record,
+    "workspace_origin",
+    `${context}.workspace_origin`,
+  );
   const lastMessagePreview = requireMetaPreview
     ? requireNullableStringField(record, "last_message_preview", context)
     : null;
@@ -518,6 +528,8 @@ function mapStandardThreadSummary(
       lastUserMessage?.trim() ||
       "",
     workspacePath,
+    rootWorkspacePath,
+    workspaceOrigin,
     messageCount,
     agentId,
     recentRunId,

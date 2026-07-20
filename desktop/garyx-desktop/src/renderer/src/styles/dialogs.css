@@ -1162,6 +1162,9 @@ button.new-thread-mode-trigger[data-state="open"] {
  * 12.5px radius, 14px label). */
 .workspace-add-dialog [data-slot="dialog-footer"] button {
   height: 32px;
+  padding: 6px 16px;
   border-radius: 12.5px;
   font-size: 14px;
+  font-weight: 445;
+  line-height: 18px;
 }

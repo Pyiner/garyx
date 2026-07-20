@@ -136,7 +136,7 @@ export function WorkspaceComposerChip({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [onWorkspaceModeChange, selectedPath]);
+  }, [onWorkspaceModeChange, selectedPath, workspaceEpoch]);
 
   const worktreeCapable = Boolean(
     selectedPath &&

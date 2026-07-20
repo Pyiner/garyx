@@ -1052,16 +1052,10 @@ async fn create_thread_legacy(state: Arc<AppState>, body: CreateThreadBody) -> i
     // path embeds the source's id, not the fork's.
     let fork_workspace_origin = fork_source.as_ref().map(
         |(source_thread_id, source_thread_data, _, _)| {
-            let source_workspace_dir = workspace_dir_from_value(source_thread_data);
-            let recorded = source_thread_data
-                .get("workspace_origin")
-                .and_then(Value::as_str);
-            crate::workspace_mode::effective_workspace_origin(
+            crate::workspace_mode::fork_inherited_workspace_origin(
                 source_thread_id,
-                source_workspace_dir.as_deref(),
-                recorded,
+                source_thread_data,
             )
-            .to_owned()
         },
     );
     let options = ThreadEnsureOptions {

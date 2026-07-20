@@ -100,6 +100,24 @@ pub(crate) fn effective_workspace_origin(
     }
 }
 
+/// A fork inherits the source thread's workspace AND its provenance: a fork
+/// of an implicit thread stays implicit even though the managed path embeds
+/// the source's id, not the fork's.
+pub(crate) fn fork_inherited_workspace_origin(
+    source_thread_id: &str,
+    source_thread_data: &serde_json::Value,
+) -> String {
+    let source_workspace_dir = source_thread_data
+        .get("workspace_dir")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let recorded = source_thread_data
+        .get("workspace_origin")
+        .and_then(serde_json::Value::as_str);
+    effective_workspace_origin(source_thread_id, source_workspace_dir, recorded).to_owned()
+}
+
 /// The root-workspace membership of one thread: explicit threads map to
 /// their chosen directory, worktree threads map back to the worktree's
 /// source workspace, implicit threads map to None. This Rust function is
