@@ -14,6 +14,8 @@ use super::provider_factory::{
 };
 use super::state::{BridgeRunIndex, BridgeTopologyState};
 
+const AGENT_RUNTIME_SNAPSHOT_PATCH_FIELDS: &[&str] = &["metadata", "updated_at"];
+
 pub(super) fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
     AgentProviderConfig {
         provider_type: provider_type.as_slug().to_owned(),
@@ -511,7 +513,7 @@ impl MultiProviderBridge {
                 let patch = match ThreadRecordPatch::from_diff(
                     observed,
                     record,
-                    &["metadata", "updated_at"],
+                    AGENT_RUNTIME_SNAPSHOT_PATCH_FIELDS,
                 ) {
                     Ok(patch) => patch,
                     Err(error) => {
@@ -610,5 +612,18 @@ impl MultiProviderBridge {
         self.inner.thread_workspace_bindings.write().await.clear();
         *self.inner.run_index.write().await = BridgeRunIndex::default();
         self.inner.active_thread_persistence.lock().await.clear();
+    }
+}
+
+#[cfg(test)]
+mod patch_contract_tests {
+    use super::*;
+
+    #[test]
+    fn agent_runtime_snapshot_patch_allowlist_matches_contract() {
+        assert_eq!(
+            AGENT_RUNTIME_SNAPSHOT_PATCH_FIELDS,
+            &["metadata", "updated_at"]
+        );
     }
 }

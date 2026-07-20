@@ -33,6 +33,14 @@ const TASK_RECORD_PATCH_FIELDS: &[&str] = &[
     "metadata",
     "workspace_dir",
 ];
+const TASK_CREATION_PATCH_FIELDS: &[&str] = &[
+    "label",
+    "thread_title_source",
+    "provider_thread_title",
+    "thread_kind",
+    "task",
+    "updated_at",
+];
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
 static TASK_THREAD_LOCKS: OnceLock<StdMutex<HashMap<String, TaskThreadLock>>> = OnceLock::new();
@@ -44,6 +52,18 @@ async fn patch_task_record(
     desired: &Value,
 ) -> Result<(), TaskServiceError> {
     let patch = ThreadRecordPatch::from_diff(observed, desired, TASK_RECORD_PATCH_FIELDS)
+        .map_err(store_error)?;
+    store.patch(thread_id, patch).await.map_err(store_error)?;
+    Ok(())
+}
+
+async fn patch_task_creation_record(
+    store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    observed: &Value,
+    desired: &Value,
+) -> Result<(), TaskServiceError> {
+    let patch = ThreadRecordPatch::from_diff(observed, desired, TASK_CREATION_PATCH_FIELDS)
         .map_err(store_error)?;
     store.patch(thread_id, patch).await.map_err(store_error)?;
     Ok(())
@@ -571,7 +591,8 @@ impl TaskService {
         }
         set_task_thread_title(&mut record, &task)?;
         set_task_on_record(&mut record, &task)?;
-        patch_task_record(&self.thread_store, &thread_id, &observed_record, &record).await?;
+        patch_task_creation_record(&self.thread_store, &thread_id, &observed_record, &record)
+            .await?;
         Ok((thread_id, task))
     }
 

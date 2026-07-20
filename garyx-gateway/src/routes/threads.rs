@@ -10,6 +10,14 @@ pub(super) const DEFAULT_RECENT_THREAD_LIMIT: usize = 30;
 
 pub(super) const MAX_RECENT_THREAD_LIMIT: usize = 200;
 
+const IMPORTED_HISTORY_PATCH_FIELDS: &[&str] = &[
+    "last_user_preview",
+    "last_assistant_preview",
+    "message_count",
+    "history",
+    "updated_at",
+];
+
 #[derive(Deserialize)]
 pub struct ListThreadsParams {
     /// Maximum number of threads to return.
@@ -212,18 +220,8 @@ pub(super) async fn seed_imported_thread_history(
     }
     let observed = thread_data.clone();
     materialize_imported_thread_history(state, thread_id, thread_data, messages).await?;
-    let patch = ThreadRecordPatch::from_diff(
-        &observed,
-        thread_data,
-        &[
-            "last_user_preview",
-            "last_assistant_preview",
-            "message_count",
-            "history",
-            "updated_at",
-        ],
-    )
-    .map_err(|error| error.to_string())?;
+    let patch = ThreadRecordPatch::from_diff(&observed, thread_data, IMPORTED_HISTORY_PATCH_FIELDS)
+        .map_err(|error| error.to_string())?;
     state
         .threads
         .thread_store

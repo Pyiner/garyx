@@ -31,6 +31,7 @@ use crate::workspace_mode::ensure_implicit_thread_workspace_for_config;
 
 const LEGACY_DEFAULT_THREAD_LABEL: &str = "Fresh Thread";
 const PROMPT_THREAD_TITLE_SOURCE: &str = "garyx_prompt";
+const PROVIDER_TYPE_PATCH_FIELDS: &[&str] = &["provider_type", "updated_at"];
 
 #[derive(Debug)]
 pub(crate) enum ChatPreparationError {
@@ -345,17 +346,14 @@ async fn persist_thread_provider_type_if_missing(
         "updated_at".to_owned(),
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
-    let patch = match ThreadRecordPatch::from_diff(
-        &observed,
-        &thread_data,
-        &["provider_type", "updated_at"],
-    ) {
-        Ok(patch) => patch,
-        Err(error) => {
-            tracing::warn!(thread_id, error = %error, "invalid provider-type patch");
-            return false;
-        }
-    };
+    let patch =
+        match ThreadRecordPatch::from_diff(&observed, &thread_data, PROVIDER_TYPE_PATCH_FIELDS) {
+            Ok(patch) => patch,
+            Err(error) => {
+                tracing::warn!(thread_id, error = %error, "invalid provider-type patch");
+                return false;
+            }
+        };
     match state.threads.thread_store.patch(thread_id, patch).await {
         Ok(_) => true,
         Err(error) => {

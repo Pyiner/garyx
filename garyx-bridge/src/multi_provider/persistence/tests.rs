@@ -78,6 +78,24 @@ fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     ))
 }
 
+#[test]
+fn streaming_and_terminal_patch_allowlist_matches_contract() {
+    assert_eq!(
+        RUN_PERSISTENCE_PATCH_FIELDS,
+        &[
+            "pending_user_inputs",
+            "provider_sdk_session_ids",
+            "provider_type",
+            "provider_key",
+            "sdk_session_id",
+            "history",
+            "last_user_preview",
+            "last_assistant_preview",
+            "updated_at",
+        ]
+    );
+}
+
 #[tokio::test]
 async fn streaming_persistence_cannot_resurrect_a_binding_moved_after_its_read() {
     let previous_owner = "thread::previous-owner";

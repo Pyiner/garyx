@@ -1,6 +1,13 @@
 use super::*;
 use garyx_router::{ThreadPatchResult, ThreadRecordPatch, ThreadStoreExt};
 
+const PROVIDER_THREAD_TITLE_PATCH_FIELDS: &[&str] = &[
+    "label",
+    "provider_thread_title",
+    "thread_title_source",
+    "updated_at",
+];
+
 pub(super) fn summarize_text(value: &str, limit: usize) -> String {
     let sanitized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = sanitized.trim();
@@ -77,22 +84,14 @@ pub(super) async fn persist_provider_thread_title_if_missing(
         "updated_at".to_owned(),
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
-    let patch = match ThreadRecordPatch::from_diff(
-        &observed,
-        &value,
-        &[
-            "label",
-            "provider_thread_title",
-            "thread_title_source",
-            "updated_at",
-        ],
-    ) {
-        Ok(patch) => patch,
-        Err(error) => {
-            tracing::warn!(thread_id, error = %error, "invalid provider thread-title patch");
-            return None;
-        }
-    };
+    let patch =
+        match ThreadRecordPatch::from_diff(&observed, &value, PROVIDER_THREAD_TITLE_PATCH_FIELDS) {
+            Ok(patch) => patch,
+            Err(error) => {
+                tracing::warn!(thread_id, error = %error, "invalid provider thread-title patch");
+                return None;
+            }
+        };
     match store.patch(thread_id, patch).await {
         Ok(ThreadPatchResult::Applied) => Some(title),
         Ok(ThreadPatchResult::Unchanged) => None,
@@ -113,5 +112,23 @@ pub(super) fn forward_applied_thread_title_update(
         callback(StreamEvent::ThreadTitleUpdated {
             title: title.to_owned(),
         });
+    }
+}
+
+#[cfg(test)]
+mod patch_contract_tests {
+    use super::*;
+
+    #[test]
+    fn provider_thread_title_patch_allowlist_matches_contract() {
+        assert_eq!(
+            PROVIDER_THREAD_TITLE_PATCH_FIELDS,
+            &[
+                "label",
+                "provider_thread_title",
+                "thread_title_source",
+                "updated_at",
+            ]
+        );
     }
 }

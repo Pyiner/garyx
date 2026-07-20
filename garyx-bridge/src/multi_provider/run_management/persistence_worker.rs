@@ -1,6 +1,8 @@
 use super::*;
 use garyx_router::{ThreadRecordPatch, ThreadStoreExt};
 
+const MODEL_RUNTIME_SNAPSHOT_PATCH_FIELDS: &[&str] = &["metadata", "updated_at"];
+
 pub(super) fn insert_snapshot_field(
     metadata: &mut Map<String, Value>,
     snapshot_key: &str,
@@ -98,14 +100,17 @@ pub(super) async fn persist_thread_runtime_snapshot(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
-    let patch =
-        match ThreadRecordPatch::from_diff(&observed, &thread_data, &["metadata", "updated_at"]) {
-            Ok(patch) => patch,
-            Err(error) => {
-                tracing::warn!(thread_id, error = %error, "invalid runtime snapshot patch");
-                return;
-            }
-        };
+    let patch = match ThreadRecordPatch::from_diff(
+        &observed,
+        &thread_data,
+        MODEL_RUNTIME_SNAPSHOT_PATCH_FIELDS,
+    ) {
+        Ok(patch) => patch,
+        Err(error) => {
+            tracing::warn!(thread_id, error = %error, "invalid runtime snapshot patch");
+            return;
+        }
+    };
     if let Err(error) = store.patch(thread_id, patch).await {
         tracing::warn!(thread_id, error = %error, "runtime snapshot patch did not persist");
     }
@@ -562,4 +567,17 @@ pub(super) fn spawn_partial_thread_persistence_worker(
     });
 
     (event_tx, task)
+}
+
+#[cfg(test)]
+mod patch_contract_tests {
+    use super::*;
+
+    #[test]
+    fn model_runtime_snapshot_patch_allowlist_matches_contract() {
+        assert_eq!(
+            MODEL_RUNTIME_SNAPSHOT_PATCH_FIELDS,
+            &["metadata", "updated_at"]
+        );
+    }
 }
