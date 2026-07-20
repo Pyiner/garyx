@@ -535,11 +535,22 @@ impl ClaudeSDKClient {
                                     if let IncomingRequestPayload::HookCallback(hook) = &req.request
                                         && hook.callback_id == STOP_HOOK_OBSERVER_CALLBACK_ID
                                     {
-                                        // Forward the observation in-band BEFORE
-                                        // acking so consumers always see it ahead
-                                        // of the turn's result message, then
-                                        // answer with an empty hook output so the
-                                        // stop is never blocked or delayed.
+                                        // ACK first: the CLI awaits this hook
+                                        // response to finish its stop processing,
+                                        // while the observation forward below can
+                                        // block on consumer backpressure. The
+                                        // empty hook output must never be delayed
+                                        // by a slow consumer.
+                                        let ack = ControlResponseMessage::success(
+                                            &req.request_id,
+                                            serde_json::json!({}),
+                                        );
+                                        if let Ok(line) = serde_json::to_string(&ack) {
+                                            let _ = transport.write(&(line + "\n")).await;
+                                        }
+                                        // Forward before reading the next stdout
+                                        // line so the observation stays ordered
+                                        // ahead of the turn's result message.
                                         let observation =
                                             stop_hook_observation_message(hook.input.as_ref());
                                         if msg_tx.send(Ok(observation)).await.is_err() {
@@ -547,10 +558,7 @@ impl ClaudeSDKClient {
                                                 "Message receiver dropped, discarding stop-hook observation"
                                             );
                                         }
-                                        Some(ControlResponseMessage::success(
-                                            &req.request_id,
-                                            serde_json::json!({}),
-                                        ))
+                                        None
                                     } else {
                                         Some(
                                             incoming_control_response(req, can_use_tool.clone())

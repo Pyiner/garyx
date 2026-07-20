@@ -439,6 +439,12 @@ fn test_build_sdk_options_defaults() {
         ])
     );
 
+    // Stop-hook observer: the production wiring behind the post-result
+    // stdin-close gate. Without it the provider never receives stop-hook
+    // observations and the truncation protection silently degrades to
+    // stream events only.
+    assert!(sdk_opts.stop_hook_observer);
+
     // Extra args
     assert!(sdk_opts.extra_args.contains_key("replay-user-messages"));
 
@@ -2168,6 +2174,65 @@ async fn test_stop_hook_observation_empty_list_releases_prior_hold() {
         source.remaining_at_first_end_input,
         Some(1),
         "stdin must close only after the empty observation released the hold"
+    );
+}
+
+/// Protocol-permitted no-wake edge: a stop-hook hold with a suppressed
+/// continuation (no follow-up turn ever arrives) must NOT close stdin —
+/// killing live background work is worse than holding — and the 1h stream
+/// idle timeout is the deliberate backstop that eventually fails the run.
+#[tokio::test(start_paused = true)]
+async fn test_stop_hook_hold_without_wake_turn_hits_idle_backstop_without_closing_stdin() {
+    let provider = make_provider();
+    provider
+        .initialize_pending_inputs("run-stop-hook-no-wake")
+        .await;
+
+    let mut source = ScriptedMessageSource::new(vec![
+        (0, scripted_assistant_text("interim summary")),
+        (
+            10,
+            scripted_stop_hook_observation(json!([
+                {"id": "bg-1", "type": "shell", "status": "running"}
+            ])),
+        ),
+        (20, scripted_success_result("sdk-session-1")),
+        // The task's terminal notification arrives, but the protocol
+        // suppressed the follow-up turn: no wake rows, no fresh stop
+        // observation, ever.
+        (
+            5_000,
+            scripted_system(
+                "task_notification",
+                json!({
+                    "type": "system",
+                    "subtype": "task_notification",
+                    "task_id": "bg-1",
+                    "status": "completed",
+                    "prevent_continuation": true,
+                }),
+            ),
+        ),
+        // Pending far beyond the 1h idle ceiling so the timeout can fire.
+        (
+            4_000_000,
+            scripted_system("status", json!({"type": "system", "subtype": "status"})),
+        ),
+    ]);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let error = provider
+        .process_messages_streaming("run-stop-hook-no-wake", "thread::test", &mut source, &cb)
+        .await
+        .expect_err("run should fail on the idle backstop");
+
+    assert!(
+        matches!(&error, BridgeError::RunFailed(message) if message.contains("idle")),
+        "expected stream-idle failure, got: {error:?}"
+    );
+    assert_eq!(
+        source.end_input_calls, 0,
+        "stdin must never close while the stop hook reports live background work"
     );
 }
 

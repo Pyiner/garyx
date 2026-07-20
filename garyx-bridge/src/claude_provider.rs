@@ -1859,10 +1859,15 @@ impl ClaudeCliProvider {
                     Ok(Message::System(sys_msg)) => {
                         if sys_msg.subtype == STOP_HOOK_OBSERVATION_SUBTYPE {
                             // Synthetic SDK-side observation (not a CLI stream
-                            // event): it only feeds the stdin-close gate. When
-                            // the task later settles, the CLI's notification
-                            // wakes a follow-up turn whose own stop refreshes
-                            // this snapshot, so a held stdin always converges.
+                            // event): it only feeds the stdin-close gate. A
+                            // held stdin normally converges when the settled
+                            // task's notification wakes a follow-up turn whose
+                            // own stop refreshes this snapshot. When the
+                            // protocol suppresses that continuation (e.g. a
+                            // `prevent_continuation` notification or a hook
+                            // `continue:false`), the 1h stream idle timeout is
+                            // the deliberate backstop: holding up to the
+                            // ceiling beats killing live background work.
                             if let Some(background_work) =
                                 stop_hook_reports_background_work(&sys_msg.data)
                             {

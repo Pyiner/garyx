@@ -384,9 +384,10 @@ pub struct ClaudeAgentOptions {
     ///
     /// When enabled, each turn stop fires a `hook_callback` control request
     /// whose `StopHookInput` carries the CLI's authoritative in-flight
-    /// background-task list. The client answers immediately with an empty
-    /// hook output (never blocking the stop) and forwards the observation
-    /// in-band as a synthetic [`SystemMessage`] with subtype
+    /// background-task list. The client first writes the empty hook output
+    /// (the ACK is independent of consumer backpressure, so the stop is
+    /// never blocked or delayed), then forwards the observation in-band as
+    /// a synthetic [`SystemMessage`] with subtype
     /// [`STOP_HOOK_OBSERVATION_SUBTYPE`](crate::STOP_HOOK_OBSERVATION_SUBTYPE),
     /// ordered ahead of the turn's result message on the same stream.
     pub stop_hook_observer: bool,

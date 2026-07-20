@@ -320,6 +320,108 @@ printf '%s\\n' \"$response\" > '{resp}'\n",
     let _ = fs::remove_file(resp_marker);
 }
 
+/// The Stop-hook ACK must reach the CLI even when the SDK message channel is
+/// saturated and the consumer is not draining: the CLI awaits the hook
+/// response to finish its stop processing, so it must never queue behind the
+/// observation forward. The observation still stays ordered ahead of the
+/// turn's result once the consumer drains.
+#[tokio::test]
+async fn test_stop_hook_ack_is_not_blocked_by_consumer_backpressure() {
+    let ack_marker = std::env::temp_dir().join(format!(
+        "claude-sdk-stop-hook-backpressure-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    // 256 filler messages fill the channel completely (capacity 256) while
+    // the test deliberately does not consume; the observation forward then
+    // blocks, and only an ACK written before it can reach the script.
+    let script = write_mock_claude_script(
+        "stop-hook-backpressure",
+        &format!(
+            "#!/bin/sh\n\
+IFS= read -r line || exit 1\n\
+request_id=$(printf '%s\\n' \"$line\" | sed -E 's/.*\"request_id\":\"([^\"]+)\".*/\\1/')\n\
+printf '%s\\n' \"{{\\\"type\\\":\\\"control_response\\\",\\\"response\\\":{{\\\"subtype\\\":\\\"success\\\",\\\"request_id\\\":\\\"$request_id\\\",\\\"response\\\":{{}}}}}}\"\n\
+i=0\n\
+while [ $i -lt 256 ]; do\n\
+  printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"filler\"}}'\n\
+  i=$((i+1))\n\
+done\n\
+printf '%s\\n' '{{\"type\":\"control_request\",\"request_id\":\"req_hook_bp\",\"request\":{{\"subtype\":\"hook_callback\",\"callback_id\":\"garyx_stop_hook_observer\",\"input\":{{\"hook_event_name\":\"Stop\",\"background_tasks\":[{{\"id\":\"bg-bp\",\"status\":\"running\"}}]}}}}}}'\n\
+IFS= read -r response || exit 2\n\
+printf '%s\\n' \"$response\" > '{ack}'\n\
+printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"session-bp\"}}'\n",
+            ack = ack_marker.to_string_lossy()
+        ),
+    );
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        stop_hook_observer: true,
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    client
+        .connect(None)
+        .await
+        .expect("streaming connect should succeed");
+
+    // The ACK must appear while the channel is full and nothing consumes.
+    let mut ack_seen = false;
+    for _ in 0..250 {
+        if ack_marker.exists() {
+            ack_seen = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        ack_seen,
+        "stop-hook ACK must not wait for the consumer to drain the channel"
+    );
+    let response: Value =
+        serde_json::from_str(fs::read_to_string(&ack_marker).unwrap().trim()).unwrap();
+    assert_eq!(response["response"]["subtype"], "success");
+    assert_eq!(response["response"]["request_id"], "req_hook_bp");
+
+    // Draining now must yield the observation strictly before the result.
+    let mut rx = client
+        .take_message_receiver()
+        .expect("message receiver should be available");
+    let order = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut order = Vec::new();
+        while let Some(message) = rx.recv().await {
+            match message {
+                Ok(Message::System(system))
+                    if system.subtype == super::STOP_HOOK_OBSERVATION_SUBTYPE =>
+                {
+                    order.push("observation");
+                }
+                Ok(Message::Result(_)) => {
+                    order.push("result");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        order
+    })
+    .await
+    .expect("stream should drain");
+    assert_eq!(
+        order,
+        vec!["observation", "result"],
+        "observation must stay ordered ahead of the result"
+    );
+
+    client.finish().await.expect("finish should succeed");
+    let _ = fs::remove_file(script);
+    let _ = fs::remove_file(ack_marker);
+}
+
 #[tokio::test]
 async fn test_connect_without_stop_hook_observer_sends_null_hooks() {
     let init_marker = std::env::temp_dir().join(format!(
