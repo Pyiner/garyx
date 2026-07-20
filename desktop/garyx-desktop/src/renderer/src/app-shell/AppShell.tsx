@@ -54,6 +54,7 @@ import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 import { WorkspaceRenameDialog } from "../components/WorkspaceRenameDialog";
+import { workspaceGitStatusCache } from "../workspace-git-status-cache";
 // Side-effect import: wires cross-store capsule cache invalidation (a `/serve`
 // 404 in either the HTML or thumbnail store tombstones the other for that id).
 import "./capsule-cache";
@@ -2798,6 +2799,34 @@ export function AppShell() {
     }
   }, [pendingWorkspaceSelection, selectedThreadId]);
 
+  // A draft that entered before the workspace catalog loaded (cold start,
+  // startup route without a workspace param) resolves its default here —
+  // still exactly once: the effect only fires while the selection is
+  // unresolved, and a resolved draft never re-enters it.
+  useEffect(() => {
+    if (
+      !newThreadDraftActive ||
+      selectedThreadId ||
+      pendingWorkspaceSelection !== null ||
+      !desktopState ||
+      desktopState.workspaces.length === 0
+    ) {
+      return;
+    }
+    const resolved = resolveDefaultDraftWorkspace(
+      visibleWorkspaceList(desktopState),
+    );
+    setPendingWorkspaceSelection(resolved);
+    syncDraftRoute({
+      workspacePath: routeWorkspaceFromDraftSelection(resolved),
+    });
+  }, [
+    desktopState,
+    newThreadDraftActive,
+    pendingWorkspaceSelection,
+    selectedThreadId,
+  ]);
+
   // Gateway switch = a new workspace universe (single-gateway scoping,
   // design §4.4). Close every transient workspace surface so nothing keeps
   // rendering rows or issuing requests against the previous gateway; late
@@ -2816,7 +2845,17 @@ export function AppShell() {
       current?.resolve?.(null);
       return null;
     });
+    // Cached git statuses are keyed by path only; a different gateway's
+    // filesystem must not answer for them.
+    workspaceGitStatusCache.clear();
   }, [workspaceEpoch]);
+
+  /** Late workspace-mutation results from a previous gateway epoch are
+   *  complete no-ops: don't touch drafts, routes, or dialogs with them. */
+  const isCurrentWorkspaceEpoch = useCallback(
+    (epoch: string) => workspaceEpochRef.current === epoch,
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -3573,11 +3612,15 @@ export function AppShell() {
   ): Promise<DesktopWorkspace | null> {
     setError(null);
     setWorkspaceMutation("add");
+    const epoch = workspaceEpochRef.current;
     try {
       const result = await requestDesktopStateResult(
         () => window.garyxDesktop.addWorkspaceByPath({ path, name }),
         (response) => response.state,
       );
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return null;
+      }
       setDesktopState(result.state);
       return result.workspace || null;
     } catch (workspaceError) {
@@ -3700,6 +3743,7 @@ export function AppShell() {
     }
     setError(null);
     setWorkspaceMenuOpenPath(null);
+    const epoch = workspaceEpochRef.current;
     try {
       const nextState = await requestDesktopState(() =>
         window.garyxDesktop.pinWorkspace({
@@ -3707,6 +3751,9 @@ export function AppShell() {
           pinned,
         }),
       );
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return;
+      }
       setDesktopState(nextState);
     } catch (pinError) {
       setError(
@@ -3725,6 +3772,7 @@ export function AppShell() {
     }
     setError(null);
     setWorkspaceRenameSaving(true);
+    const epoch = workspaceEpochRef.current;
     try {
       const nextState = await requestDesktopState(() =>
         window.garyxDesktop.renameWorkspace({
@@ -3732,6 +3780,9 @@ export function AppShell() {
           name,
         }),
       );
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return;
+      }
       setDesktopState(nextState);
       setWorkspaceRenameTarget(null);
     } catch (renameError) {
@@ -5164,7 +5215,6 @@ export function AppShell() {
                 }}
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}
-                workspaceMutation={workspaceMutation}
               />
             ) : isBotsView ? (
               <BotConsolePage

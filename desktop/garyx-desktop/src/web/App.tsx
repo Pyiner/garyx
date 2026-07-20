@@ -14,12 +14,20 @@ import { useWebStatusState } from './use-web-status-state';
 import { buildWebRouteHref, resolveWebRoute, type WebRoute } from './web-route';
 import {
   addWorkspace as webAddWorkspace,
+  fetchWorkspaceCatalog as webFetchWorkspaceCatalog,
   listWorkspaceDirectories as webListWorkspaceDirectories,
 } from './web-api';
 
 const webWorkspaceDataAdapter: WorkspaceDataAdapter = {
   listDirectories(input) {
     return webListWorkspaceDirectories(input);
+  },
+  async listCatalog() {
+    const catalog = await webFetchWorkspaceCatalog();
+    return {
+      workspaces: catalog.workspaces,
+      gatewayHome: catalog.gatewayHome,
+    };
   },
   async addWorkspace(path, name) {
     const catalog = await webAddWorkspace({ path, name });

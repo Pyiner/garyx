@@ -65,11 +65,12 @@ pub(crate) async fn ensure_implicit_thread_workspace_for_config(
     Ok(workspace_dir.display().to_string())
 }
 
-/// Server-owned workspace provenance for one thread, derived from immutable
-/// facts: the implicit Garyx-managed thread workspace path embeds the
-/// thread's own sanitized id, which cannot exist when a user picks a
-/// directory. Keep in lockstep with the SQL twin
-/// `schema::THREAD_META_ROOT_WORKSPACE_PATH_EXPR`.
+/// Inferred workspace provenance for one thread, from immutable facts: the
+/// implicit Garyx-managed thread workspace path embeds the thread's own
+/// sanitized id, which cannot exist when a user picks a directory. This is
+/// the fallback for records that predate the persisted `workspace_origin`
+/// field; new implicit creations write the field explicitly at creation
+/// time, and the projection persists whichever value applies.
 pub(crate) fn thread_workspace_origin(thread_id: &str, workspace_dir: Option<&str>) -> &'static str {
     let Some(dir) = workspace_dir.map(str::trim).filter(|dir| !dir.is_empty()) else {
         return "implicit";
@@ -85,16 +86,31 @@ pub(crate) fn thread_workspace_origin(thread_id: &str, workspace_dir: Option<&st
     }
 }
 
-/// The root-workspace membership of one thread: explicit threads map to their
-/// chosen directory, worktree threads map back to the worktree's source
-/// workspace, implicit threads map to None. Rust twin of the
-/// `thread_meta.root_workspace_path` generated column.
-pub(crate) fn thread_root_workspace_path(
+/// Resolve a thread's effective provenance: a persisted record value wins;
+/// records that predate the field fall back to inference.
+pub(crate) fn effective_workspace_origin(
     thread_id: &str,
+    workspace_dir: Option<&str>,
+    recorded_origin: Option<&str>,
+) -> &'static str {
+    match recorded_origin.map(str::trim) {
+        Some("implicit") => "implicit",
+        Some("explicit") => "explicit",
+        _ => thread_workspace_origin(thread_id, workspace_dir),
+    }
+}
+
+/// The root-workspace membership of one thread: explicit threads map to
+/// their chosen directory, worktree threads map back to the worktree's
+/// source workspace, implicit threads map to None. This Rust function is
+/// the only derivation — the projection writes its result into the plain
+/// `thread_meta.root_workspace_path` column in the same transaction.
+pub(crate) fn thread_root_workspace_path(
+    origin: &str,
     workspace_dir: Option<&str>,
     worktree: &serde_json::Value,
 ) -> Option<String> {
-    if thread_workspace_origin(thread_id, workspace_dir) == "implicit" {
+    if origin == "implicit" {
         return None;
     }
     let source = worktree
@@ -164,12 +180,12 @@ mod tests {
     #[test]
     fn root_workspace_path_maps_worktrees_back_to_their_source() {
         assert_eq!(
-            thread_root_workspace_path(THREAD_ID, Some("/workspace/repo"), &json!(null)),
+            thread_root_workspace_path("explicit", Some("/workspace/repo"), &json!(null)),
             Some("/workspace/repo".to_owned()),
         );
         assert_eq!(
             thread_root_workspace_path(
-                THREAD_ID,
+                "explicit",
                 Some("/data/worktrees/repo/thread-aaaa"),
                 &json!({ "source_workspace_dir": "/workspace/repo" }),
             ),
@@ -177,7 +193,7 @@ mod tests {
         );
         assert_eq!(
             thread_root_workspace_path(
-                THREAD_ID,
+                "implicit",
                 Some(
                     "/data/thread-workspaces/thread--aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
                 ),
@@ -188,13 +204,41 @@ mod tests {
     }
 
     #[test]
-    fn implicit_workspace_segment_matches_the_sql_replace_twin() {
-        // The generated column matches with REPLACE(thread_id, ':', '-');
-        // the Rust sanitizer must produce exactly that shape for canonical
-        // thread ids or the two derivations would disagree.
+    fn recorded_origin_wins_over_inference() {
         assert_eq!(
-            safe_thread_workspace_segment(THREAD_ID),
-            THREAD_ID.replace(':', "-"),
+            effective_workspace_origin(THREAD_ID, Some("/workspace/repo"), Some("implicit")),
+            "implicit",
+        );
+        assert_eq!(
+            effective_workspace_origin(THREAD_ID, None, Some("explicit")),
+            "explicit",
+        );
+        // Unknown or missing recorded values fall back to inference.
+        assert_eq!(
+            effective_workspace_origin(THREAD_ID, Some("/workspace/repo"), Some("weird")),
+            "explicit",
+        );
+        assert_eq!(
+            effective_workspace_origin(THREAD_ID, None, None),
+            "implicit",
+        );
+    }
+
+    #[test]
+    fn inference_handles_unusual_but_legal_thread_ids() {
+        // Thread ids are only prefix-validated; the sanitizer replaces every
+        // non-alphanumeric character. The single Rust derivation must agree
+        // with the managed-path layout for these too (the retired SQL
+        // generated column replaced only `:` and disagreed here).
+        let unusual = "thread::with/slash";
+        let managed = format!(
+            "/data/thread-workspaces/{}",
+            safe_thread_workspace_segment(unusual)
+        );
+        assert_eq!(safe_thread_workspace_segment(unusual), "thread--with-slash");
+        assert_eq!(
+            thread_workspace_origin(unusual, Some(&managed)),
+            "implicit",
         );
     }
 }

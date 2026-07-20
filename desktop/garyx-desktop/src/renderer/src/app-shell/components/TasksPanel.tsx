@@ -82,7 +82,6 @@ type TasksPanelProps = {
   agents: DesktopCustomAgent[];
   botGroups: DesktopBotConsoleSummary[];
   workspaces: DesktopWorkspace[];
-  workspaceMutation: string | null;
   onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onOpenThread: (threadId: string) => void;
   onTaskCreated?: () => void;
@@ -237,7 +236,6 @@ export function TasksPanel({
   agents,
   botGroups,
   workspaces,
-  workspaceMutation,
   onAddWorkspace,
   onOpenThread,
   onTaskCreated,
@@ -914,11 +912,6 @@ export function TasksPanel({
                 <FieldLabel>{t('Workspace')}</FieldLabel>
                 <div className="tasks-workspace-controls">
                   <WorkspacePathPicker
-                    addWorkspaceLabel={
-                      workspaceMutation === 'add'
-                        ? t('Opening folder…')
-                        : t('Add workspace')
-                    }
                     onAddWorkspace={onAddWorkspace}
                     onChange={handleDraftWorkspaceChange}
                     placeholder={t('Select a workspace')}

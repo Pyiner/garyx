@@ -515,10 +515,18 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
     let agent_id = data.get("agent_id").cloned().unwrap_or(Value::Null);
     let provider_type = data.get("provider_type").cloned().unwrap_or(Value::Null);
     let worktree = data.get("worktree").cloned().unwrap_or(Value::Null);
-    let workspace_origin =
-        crate::workspace_mode::thread_workspace_origin(thread_id, workspace_dir.as_str());
-    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
+    let recorded_origin = data
+        .get("workspace_origin")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let workspace_origin = crate::workspace_mode::effective_workspace_origin(
         thread_id,
+        workspace_dir.as_str(),
+        recorded_origin,
+    );
+    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
+        workspace_origin,
         workspace_dir.as_str(),
         &worktree,
     );
@@ -559,15 +567,22 @@ pub(super) fn thread_summary_from_meta(record: &ThreadMetaRecord) -> Value {
         .as_deref()
         .and_then(|value| serde_json::from_str::<Value>(value).ok())
         .unwrap_or(Value::Null);
-    let workspace_origin = crate::workspace_mode::thread_workspace_origin(
-        &record.thread_id,
-        record.workspace_dir.as_deref(),
-    );
-    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
-        &record.thread_id,
-        record.workspace_dir.as_deref(),
-        &worktree,
-    );
+    // Projected columns are the persisted truth for meta-backed summaries.
+    let workspace_origin = record
+        .workspace_origin
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            crate::workspace_mode::effective_workspace_origin(
+                &record.thread_id,
+                record.workspace_dir.as_deref(),
+                None,
+            )
+            .to_owned()
+        });
+    let root_workspace_path = record.root_workspace_path.clone();
     json!({
         "thread_id": record.thread_id.as_str(),
         "thread_key": record.thread_id.as_str(),
@@ -1105,6 +1120,7 @@ async fn create_thread_legacy(state: Arc<AppState>, body: CreateThreadBody) -> i
                             &thread_id,
                             None,
                             Some(workspace_dir),
+                            Some("implicit"),
                         )
                         .await
                     }
@@ -1202,6 +1218,7 @@ pub async fn update_thread(
         &thread_id,
         body.label.clone(),
         body.workspace_dir.clone(),
+        Some("explicit"),
     )
     .await
     {

@@ -209,7 +209,7 @@ async fn update_thread_record_preserves_workspace_when_not_provided() {
         .await
         .unwrap();
 
-    let updated = update_thread_record(&store, "thread::keep", Some("After".to_owned()), None)
+    let updated = update_thread_record(&store, "thread::keep", Some("After".to_owned()), None, None)
         .await
         .unwrap();
 
@@ -242,6 +242,7 @@ async fn update_thread_record_explicit_label_clears_provider_title() {
         "thread::title",
         Some("Human Title".to_owned()),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -265,7 +266,7 @@ async fn update_thread_record_rejects_clearing_workspace() {
         .await
         .unwrap();
 
-    let error = update_thread_record(&store, "thread::clear", None, Some("   ".to_owned()))
+    let error = update_thread_record(&store, "thread::clear", None, Some("   ".to_owned()), None)
         .await
         .unwrap_err();
 
@@ -296,6 +297,7 @@ async fn update_thread_record_rejects_workspace_change() {
         "thread::move",
         None,
         Some("/tmp/workspace-b".to_owned()),
+        None,
     )
     .await
     .unwrap_err();
@@ -326,6 +328,7 @@ async fn update_thread_record_allows_initial_workspace_set() {
         "thread::initial",
         None,
         Some("/tmp/workspace-c".to_owned()),
+        Some("explicit"),
     )
     .await
     .unwrap();
@@ -355,6 +358,7 @@ async fn update_thread_record_allows_same_workspace_value() {
         "thread::same",
         Some("Same".to_owned()),
         Some("/tmp/workspace-d".to_owned()),
+        None,
     )
     .await
     .unwrap();

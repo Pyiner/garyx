@@ -515,6 +515,27 @@ mod tests {
         assert_eq!(typed_code(file), "not_a_directory");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_listing_rejects_unreadable_directories_with_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let locked = temp.path().join("locked");
+        fs::create_dir(&locked).await.unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let denied = build_directory_listing(Some(locked.to_string_lossy().to_string()))
+            .await
+            .expect_err("unreadable directory is rejected");
+        assert_eq!(typed_code(denied), "permission_denied");
+
+        // Restore permissions so the tempdir can be cleaned up.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod restore");
+    }
+
     #[tokio::test]
     async fn directory_listing_without_path_starts_at_the_gateway_home() {
         let listing = build_directory_listing(None).await.expect("home listing");

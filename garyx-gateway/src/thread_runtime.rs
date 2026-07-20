@@ -413,6 +413,8 @@ mod tests {
                 default_list_hidden: draft.default_list_hidden,
                 sort_updated_at_us: draft.sort_updated_at_us,
                 search_text: draft.search_text,
+                root_workspace_path: draft.root_workspace_path,
+                workspace_origin: draft.workspace_origin,
                 projection_version: 6,
                 projected_at: "2026-01-01T00:00:00Z".to_owned(),
             };

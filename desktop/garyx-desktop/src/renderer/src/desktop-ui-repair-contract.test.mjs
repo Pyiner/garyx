@@ -44,79 +44,74 @@ function classToken(token) {
   return new RegExp(`(^|[^A-Za-z0-9_-])${escaped}(?=$|[^A-Za-z0-9_-])`, 'm');
 }
 
-test('workspace picker recipe stays in the always-loaded dialog owner', () => {
+test('workspace picker recipe stays in an always-loaded owner stylesheet', () => {
   const entryCss = read('styles.css');
+  const pickerCss = read('styles/workspace-picker.css');
   const dialogsCss = read('styles/dialogs.css');
-  const rules = parseRules(dialogsCss);
+  const rules = parseRules(pickerCss);
+  const dialogRules = parseRules(dialogsCss);
 
+  assert.equal(
+    entryCss.match(/@import "\.\/styles\/workspace-picker\.css";/g)?.length,
+    1,
+    'styles.css must import the picker owner exactly once',
+  );
   assert.equal(
     entryCss.match(/@import "\.\/styles\/dialogs\.css";/g)?.length,
     1,
     'styles.css must import the dialog owner exactly once',
   );
 
+  // The shared picker body (WorkspacePickerContent) has one stylesheet
+  // owner for both hosts (composer chip popover + in-form dialog).
   for (const selector of [
-    '.workspace-picker-dialog',
     '.workspace-picker-search',
+    '.workspace-picker-search-input',
     '.workspace-picker-list',
-    '.workspace-picker-row',
-    '.workspace-picker-name',
-    '.workspace-picker-path',
-    '.workspace-picker-check',
+    '.workspace-picker-item',
+    '.workspace-picker-item-name',
+    '.workspace-picker-item-path',
     '.workspace-picker-empty',
     '.workspace-picker-footer',
+    '.workspace-picker-popover',
   ]) {
     assert.ok(
       rules.some((rule) => rule.selectors.includes(selector)),
-      `dialogs.css must own ${selector}`,
+      `workspace-picker.css must own ${selector}`,
+    );
+    assert.ok(
+      !dialogRules.some((rule) => rule.selectors.includes(selector)),
+      `dialogs.css must not fork ${selector}`,
     );
   }
 
-  expectRule(rules, '.workspace-picker-dialog', [
+  // The dialog host chrome stays with the dialog owner.
+  assert.ok(
+    dialogRules.some((rule) => rule.selectors.includes('.workspace-picker-dialog')),
+    'dialogs.css owns the dialog host chrome',
+  );
+
+  expectRule(rules, '.workspace-picker-item', [
     'display: flex',
-    'flex-direction: column',
+    'width: 100%',
   ]);
-  expectRule(rules, '.workspace-picker-dialog [data-slot="dialog-close"]', [
-    'top: 8px',
-    'right: 14px',
+  expectRule(rules, '.workspace-picker-item-name', [
+    'overflow: hidden',
+    'text-overflow: ellipsis',
+    'white-space: nowrap',
   ]);
-  expectRule(rules, '.workspace-picker-search', [
-    'position: relative',
-    'display: flex',
-    'align-items: center',
-  ]);
-  expectRule(rules, '.workspace-picker-search svg', [
-    'position: absolute',
-    'left: 11px',
-  ]);
-  expectRule(rules, '.workspace-picker-search input', [
+  expectRule(rules, '.workspace-picker-item-path', [
     'flex: 1',
-    'padding-left: 33px',
+    'min-width: 0',
+    'overflow: hidden',
+    'text-overflow: ellipsis',
+    'white-space: nowrap',
   ]);
   expectRule(rules, '.workspace-picker-list', [
     'display: flex',
     'flex-direction: column',
-    'max-height: 320px',
     'overflow-y: auto',
   ]);
-  expectRule(rules, '.workspace-picker-row', [
-    'display: flex',
-    'width: 100%',
-    'min-width: 0',
-  ]);
-  expectRule(rules, '.workspace-picker-name', [
-    'overflow: hidden',
-    'text-overflow: ellipsis',
-    'white-space: nowrap',
-  ]);
-  expectRule(rules, '.workspace-picker-path', [
-    'flex: 1',
-    'min-width: 0',
-    'overflow: hidden',
-    'text-overflow: ellipsis',
-    'white-space: nowrap',
-  ]);
-  expectRule(rules, '.workspace-picker-check', ['flex: none']);
 });
 
 test('audited orphan hooks are either retired or have a real owner', () => {

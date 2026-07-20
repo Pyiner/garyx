@@ -151,11 +151,14 @@ Codex row grammar, pixel-faithful:
 - **Draft selection is an explicit tri-state**, not a nullable string:
   - `path(<absolute path>)` — user picked a workspace.
   - `none` — user explicitly chose No workspace.
-  - Unset drafts resolve a default **once at draft creation**: most recently
-    active workspace (shared order ignoring pinning? No — first row of the
-    shared total order); empty list → `none`. After resolution the draft
-    stores a concrete `path`/`none` and never drifts on refresh or list
-    changes.
+  - Unset drafts resolve a default **once at draft creation**: the first
+    available row of the shared total order (the gateway list arrives
+    pre-sorted, so a pinned row wins over a more recently active one);
+    empty list → `none`. A draft that entered before the catalog loaded
+    resolves its default once, when the catalog arrives. After resolution
+    the draft stores a concrete `path`/`none` and never drifts on refresh
+    or list changes — the only sanctioned re-resolution of a live draft is
+    removal of its selected workspace.
   - The tri-state flows through route state, draft persistence, composer
     state, and the create payload. "Create thread in X" entry points seed
     the draft with `path(X)`. An explicit `none` is never overridden.
@@ -170,9 +173,10 @@ Codex row grammar, pixel-faithful:
   the path (displayed even when it is not in the root list — membership in
   the root list is presentation-irrelevant).
 - The old empty-state top trigger is removed; Resume session stays.
-- **Side chats**: the side-chat composer uses the same chip and controller
-  (its current no-op workspace callbacks are removed); a side chat draft
-  behaves like any new-thread draft.
+- **Side chats**: a side chat forks its workspace from the source thread —
+  there is nothing to choose, so the chip never renders for side chats.
+  The composer shows the inherited workspace read-only from the first
+  frame (its former no-op workspace callbacks are removed).
 - All other picker embedders (tasks panel, agent form, MCP settings,
   automation/bot dialogs via `DirectoryInput`, gateway settings, web
   settings) keep the field-trigger form factor and open the same picker
@@ -300,12 +304,18 @@ The existing upsert both resets omitted fields and clears `deleted_at`
 
 ### 5.5 Thread workspace provenance
 
-Thread metadata gains an immutable, server-owned `workspace_origin`:
+Thread records gain a persisted, server-owned `workspace_origin`:
 `explicit` (user-chosen path, including worktree threads) or `implicit`
-(Garyx-managed No-workspace directory). Set at thread creation, delivered
-with thread meta to clients, never recomputed client-side. This is the
-render source for the sent-thread footer state (§4.2) — clients must not
-infer "No workspace" from list membership or path shape.
+(Garyx-managed No-workspace directory). It is written into the record
+when the workspace first lands (implicit provisioning and explicit
+update paths both stamp it) and never rewritten afterwards; the
+projection persists it as a column and thread summaries deliver it to
+clients. Records that predate the field fall back to a deterministic
+server-side inference (the managed path embeds the thread's own
+sanitized id), applied once by the membership cutover for existing
+projection rows. Clients never compute provenance — the sent-thread
+footer renders the delivered value, and an explicit path renders even
+when it is not in the root list.
 
 ## 6. Client changes (desktop)
 

@@ -344,7 +344,7 @@ pub(super) fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             ON thread_channel_endpoints(channel, account_id);
         "#,
     )?;
-    ensure_thread_meta_root_workspace_column(conn)?;
+    ensure_thread_meta_membership_columns(conn)?;
     ensure_thread_meta_indexes(conn)?;
     ensure_workspaces_deleted_at_column(conn)?;
     ensure_workspaces_pinned_at_column(conn)?;
@@ -659,43 +659,51 @@ pub(super) fn ensure_workspaces_pinned_at_column(conn: &Connection) -> GaryxDbRe
     Ok(())
 }
 
-/// `root_workspace_path` is a virtual generated column: the root-workspace
-/// membership of a thread derived purely from immutable projected facts.
-/// Explicit threads map to their chosen `workspace_dir`, worktree threads map
-/// back to `worktree.source_workspace_dir`, and implicit Garyx-managed thread
-/// workspaces (`<data_dir parent>/thread-workspaces/<sanitized thread_id>`)
-/// map to NULL. The implicit rule is exact: the managed path segment embeds
-/// the row's own thread id (`workspace_mode::safe_thread_workspace_segment`
-/// replaces the `::` with dashes; thread ids are otherwise `[a-z0-9-]`), and
-/// that id cannot exist yet when a user picks a directory. Keep this
-/// expression in lockstep with `workspace_mode::thread_workspace_origin`.
-pub(super) const THREAD_META_ROOT_WORKSPACE_PATH_EXPR: &str = "CASE
-    WHEN workspace_dir IS NULL OR workspace_dir = '' THEN NULL
-    WHEN workspace_dir LIKE '%/thread-workspaces/' || REPLACE(thread_id, ':', '-') THEN NULL
-    ELSE COALESCE(
-        NULLIF(json_extract(worktree_json, '$.source_workspace_dir'), ''),
-        workspace_dir
-    )
-END";
-
-pub(super) fn ensure_thread_meta_root_workspace_column(conn: &Connection) -> GaryxDbResult<()> {
-    // VIRTUAL generated columns are hidden from `PRAGMA table_info`; only
-    // `table_xinfo` lists them.
+/// `root_workspace_path` and `workspace_origin` are plain projected columns
+/// written by the same-transaction projection derivation. The single source
+/// of truth for both derivations is Rust
+/// (`workspace_mode::thread_workspace_origin` /
+/// `thread_root_workspace_path`), so there is no SQL twin to drift — the
+/// legacy VIRTUAL generated column (whose `REPLACE(thread_id, ':', '-')`
+/// could disagree with the full sanitizer on unusual thread ids) is dropped
+/// on sight. Historical rows are populated by the versioned
+/// `thread_meta_workspace_membership_v1` cutover.
+pub(super) fn ensure_thread_meta_membership_columns(conn: &Connection) -> GaryxDbResult<()> {
+    // A worktree that ran an earlier revision may still carry the retired
+    // VIRTUAL generated column; table_xinfo sees it, table_info does not.
     let mut stmt = conn.prepare("PRAGMA table_xinfo(thread_meta)")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(6)?))
+    })?;
+    let mut has_root = false;
+    let mut root_is_generated = false;
+    let mut has_origin = false;
     for row in rows {
-        if row? == "root_workspace_path" {
-            return Ok(());
+        let (name, hidden) = row?;
+        if name == "root_workspace_path" {
+            has_root = true;
+            root_is_generated = hidden != 0;
+        } else if name == "workspace_origin" {
+            has_origin = true;
         }
     }
     drop(stmt);
-    conn.execute(
-        &format!(
-            "ALTER TABLE thread_meta ADD COLUMN root_workspace_path TEXT
-                 GENERATED ALWAYS AS ({THREAD_META_ROOT_WORKSPACE_PATH_EXPR}) VIRTUAL"
-        ),
-        [],
-    )?;
+    if root_is_generated {
+        conn.execute("ALTER TABLE thread_meta DROP COLUMN root_workspace_path", [])?;
+        has_root = false;
+    }
+    if !has_root {
+        conn.execute(
+            "ALTER TABLE thread_meta ADD COLUMN root_workspace_path TEXT",
+            [],
+        )?;
+    }
+    if !has_origin {
+        conn.execute(
+            "ALTER TABLE thread_meta ADD COLUMN workspace_origin TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 

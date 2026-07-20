@@ -77,12 +77,25 @@ test('workspace sidebar groups use only user-saved workspace rows', () => {
       codexWorktreeStorage,
     ],
     threads: [
-      makeThread('thread-manual', manualWithThread.path),
-      makeThread('thread-inferred', inferredWithThread.path),
+      makeThread('thread-manual', manualWithThread.path, {
+        rootWorkspacePath: manualWithThread.path,
+      }),
+      makeThread('thread-inferred', inferredWithThread.path, {
+        rootWorkspacePath: inferredWithThread.path,
+      }),
+      // A worktree thread's membership comes from the server-derived root;
+      // its runtime path never groups it anywhere.
       makeThread('thread-worktree', worktreeWorkspace.path, {
+        rootWorkspacePath: manualWithThread.path,
         worktree: {
           worktreeDir: worktreeWorkspace.path,
         },
+      }),
+      // An implicit thread (server root null) belongs to no workspace even
+      // though its runtime path exists.
+      makeThread('thread-implicit', '/Users/test/data/thread-workspaces/thread--implicit', {
+        rootWorkspacePath: null,
+        workspaceOrigin: 'implicit',
       }),
     ],
   });
@@ -102,7 +115,7 @@ test('workspace sidebar groups use only user-saved workspace rows', () => {
   assert.equal(groups.find((group) => group.workspace.path === inferredWithThread.path), undefined);
   assert.deepEqual(
     groups.find((group) => group.workspace.path === manualWithThread.path)?.threads.map((thread) => thread.id),
-    ['thread-manual'],
+    ['thread-manual', 'thread-worktree'],
   );
   assert.equal(groups[0].canManageWorkspace, true);
   assert.equal(groups[1].canManageWorkspace, true);

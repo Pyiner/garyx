@@ -31,6 +31,11 @@ pub struct ThreadMetaRecord {
     pub default_list_hidden: bool,
     pub sort_updated_at_us: i64,
     pub search_text: String,
+    /// Server-owned workspace membership: worktree threads map to their
+    /// source workspace, implicit Garyx-managed thread workspaces to None.
+    pub root_workspace_path: Option<String>,
+    /// Server-owned provenance: "explicit" or "implicit".
+    pub workspace_origin: Option<String>,
     pub projection_version: i64,
     pub projected_at: String,
 }
@@ -62,6 +67,8 @@ pub struct ThreadMetaDraft {
     pub default_list_hidden: bool,
     pub sort_updated_at_us: i64,
     pub search_text: String,
+    pub root_workspace_path: Option<String>,
+    pub workspace_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -102,6 +109,8 @@ pub(super) fn thread_meta_record_from_row(
         sdk_session_id: row.get(24)?,
         projection_version: row.get(25)?,
         projected_at: row.get(26)?,
+        root_workspace_path: row.get(27)?,
+        workspace_origin: row.get(28)?,
     })
 }
 
@@ -171,6 +180,8 @@ pub(super) fn upsert_thread_meta(
     let selected_model_service_tier =
         normalize_optional(meta.selected_model_service_tier.as_deref());
     let sdk_session_id = normalize_optional(meta.sdk_session_id.as_deref());
+    let root_workspace_path = normalize_optional(meta.root_workspace_path.as_deref());
+    let workspace_origin = normalize_optional(meta.workspace_origin.as_deref());
 
     tx.execute(
         "INSERT INTO thread_meta (
@@ -181,9 +192,10 @@ pub(super) fn upsert_thread_meta(
             sort_updated_at_us, search_text,
             provider_key, selected_model, selected_model_reasoning_effort,
             selected_model_service_tier, sdk_session_id,
-            projection_version, projected_at
+            projection_version, projected_at,
+            root_workspace_path, workspace_origin
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
@@ -209,6 +221,8 @@ pub(super) fn upsert_thread_meta(
             default_list_hidden = excluded.default_list_hidden,
             sort_updated_at_us = excluded.sort_updated_at_us,
             search_text = excluded.search_text,
+            root_workspace_path = excluded.root_workspace_path,
+            workspace_origin = excluded.workspace_origin,
             projection_version = excluded.projection_version,
             projected_at = excluded.projected_at",
         params![
@@ -239,6 +253,8 @@ pub(super) fn upsert_thread_meta(
             sdk_session_id,
             CURRENT_THREAD_META_PROJECTION_VERSION,
             recorded_at,
+            root_workspace_path,
+            workspace_origin,
         ],
     )?;
     Ok(())
@@ -316,7 +332,8 @@ impl GaryxDbService {
                           default_list_hidden, sort_updated_at_us,
                           search_text, provider_key, selected_model,
                           selected_model_reasoning_effort, selected_model_service_tier,
-                          sdk_session_id, projection_version, projected_at
+                          sdk_session_id, projection_version, projected_at,
+                          root_workspace_path, workspace_origin
                    FROM thread_meta";
         let order = " ORDER BY COALESCE(updated_at, projected_at) DESC, thread_id ASC
                       LIMIT ?1 OFFSET ?2";
@@ -373,7 +390,8 @@ impl GaryxDbService {
                     default_list_hidden, sort_updated_at_us,
                     search_text, provider_key, selected_model,
                     selected_model_reasoning_effort, selected_model_service_tier,
-                    sdk_session_id, projection_version, projected_at
+                    sdk_session_id, projection_version, projected_at,
+                    root_workspace_path, workspace_origin
              FROM thread_meta
              ORDER BY thread_id ASC",
         )?;

@@ -45,15 +45,16 @@ test('route round-trip preserves the draft tri-state', () => {
   assert.deepEqual(draftSelectionFromRouteWorkspace('none'), { kind: 'none' });
 });
 
-test('default resolution prefers latest activity, then server order', () => {
-  const byActivity = resolveDefaultDraftWorkspace([
-    workspace({ path: '/Users/test/a', lastActivityAt: '2026-07-01T00:00:00Z' }),
-    workspace({ path: '/Users/test/b', lastActivityAt: '2026-07-20T00:00:00Z' }),
-    workspace({ path: '/Users/test/c', lastActivityAt: null }),
+test('default resolution takes the first available row of the server total order', () => {
+  // The gateway list is pre-sorted (pinned, activity, name, path); the
+  // default is its first available row — a pinned-but-stale first row wins
+  // over a more recently active later row.
+  const pinnedFirst = resolveDefaultDraftWorkspace([
+    workspace({ path: '/Users/test/pinned', pinned: true, lastActivityAt: '2026-07-01T00:00:00Z' }),
+    workspace({ path: '/Users/test/busy', lastActivityAt: '2026-07-20T00:00:00Z' }),
   ]);
-  assert.deepEqual(byActivity, { kind: 'path', path: '/Users/test/b' });
+  assert.deepEqual(pinnedFirst, { kind: 'path', path: '/Users/test/pinned' });
 
-  // No activity anywhere → the first row of the server total order.
   const byOrder = resolveDefaultDraftWorkspace([
     workspace({ path: '/Users/test/first' }),
     workspace({ path: '/Users/test/second' }),

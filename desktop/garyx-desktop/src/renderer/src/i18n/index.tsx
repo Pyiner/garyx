@@ -759,6 +759,7 @@ const zhCN: Record<string, string> = {
   'Copy file path': '复制文件路径',
   'Copy Mobile Link': '复制移动端链接',
   'Copy path': '复制路径',
+  'New thread': '新建线程',
   'Folder path': '文件夹路径',
   'Edit folder path': '编辑文件夹路径',
   'Type an absolute folder path': '输入绝对路径',

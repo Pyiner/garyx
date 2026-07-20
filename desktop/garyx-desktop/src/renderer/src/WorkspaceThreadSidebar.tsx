@@ -247,7 +247,6 @@ export function WorkspaceThreadSidebar({
                     aria-expanded={isExpanded}
                     className="workspace-row-main"
                     onClick={() => toggleExpanded(workspacePath)}
-                    tabIndex={-1}
                     type="button"
                   >
                     <div className="workspace-row-copy">
@@ -295,8 +294,7 @@ export function WorkspaceThreadSidebar({
                             onClick={(event) => {
                               event.stopPropagation();
                             }}
-                            tabIndex={-1}
-                            type="button"
+                                    type="button"
                           >
                             <CodexProjectActionsIcon size={16} />
                           </button>
@@ -369,8 +367,7 @@ export function WorkspaceThreadSidebar({
                         event.stopPropagation();
                         onCreateThreadForWorkspace(workspacePath);
                       }}
-                      tabIndex={-1}
-                      type="button"
+                        type="button"
                     >
                       <CodexProjectNewThreadIcon size={16} />
                     </button>
@@ -385,7 +382,6 @@ export function WorkspaceThreadSidebar({
                       event.stopPropagation();
                       toggleExpanded(workspacePath);
                     }}
-                    tabIndex={-1}
                     type="button"
                   >
                     <ChevronDownIcon

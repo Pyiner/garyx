@@ -594,6 +594,10 @@ pub async fn update_thread_record(
     thread_id: &str,
     label: Option<String>,
     workspace_dir: Option<String>,
+    // Server-owned provenance, persisted when the workspace first lands on
+    // the record ("explicit" | "implicit"). Immutable thereafter: it is only
+    // written in the None -> Some transition below.
+    workspace_origin: Option<&str>,
 ) -> Result<Value, String> {
     let Some(mut value) = store
         .get(thread_id)
@@ -636,6 +640,15 @@ pub async fn update_thread_record(
             (Some(_), Some(_)) => {}
             (None, Some(requested)) => {
                 obj.insert("workspace_dir".to_owned(), Value::String(requested));
+                if let Some(origin) = workspace_origin
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                {
+                    obj.insert(
+                        "workspace_origin".to_owned(),
+                        Value::String(origin.to_owned()),
+                    );
+                }
             }
             (None, None) => {
                 obj.insert("workspace_dir".to_owned(), Value::Null);
@@ -654,6 +667,7 @@ pub async fn update_thread_record(
             "thread_title_source",
             "provider_thread_title",
             "workspace_dir",
+            "workspace_origin",
             "updated_at",
         ],
     )

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { ArrowLeft, Check, Check as CheckIcon, ChevronDown, ChevronRight, CircleMinus, Folder, Folder as FolderIcon, FolderOpen, Plus, Search as SearchIcon } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Search as SearchIcon } from 'lucide-react';
 
 import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
 
@@ -19,6 +19,7 @@ import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { decodeDirectoryListingError } from '@shared/workspace-payload';
 import { useWorkspaceDataAdapter } from './workspace-data-adapter';
+import { WorkspacePickerContent } from './WorkspacePickerContent';
 
 export type WorkspacePathPickerProps = {
   value: string;
@@ -32,7 +33,7 @@ export type WorkspacePathPickerProps = {
   fieldClassName?: string;
   triggerClassName?: string;
   contentClassName?: string;
-  addWorkspaceLabel?: string;
+  gatewayHome?: string | null;
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
 };
 
@@ -375,7 +376,7 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="wide">
+      <DialogContent className="workspace-add-dialog" size="compact">
         <DialogHeader>
           <DialogTitle>{t('Add Workspace')}</DialogTitle>
           <DialogDescription>{t('Choose a folder')}</DialogDescription>
@@ -417,7 +418,7 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
               }}
               type="button"
             >
-              {saving ? t('Saving...') : t('Save')}
+              {saving ? t('Saving...') : t('Add workspace')}
             </Button>
           ) : null}
         </DialogFooter>
@@ -426,71 +427,50 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
   );
 }
 
-/** Row shape for {@link WorkspaceSelectDialog}; `DesktopWorkspace` satisfies it. */
-export type WorkspaceSelectDialogWorkspace = Pick<DesktopWorkspace, 'name' | 'path' | 'available'>;
-
 export type WorkspaceSelectDialogProps = {
   open: boolean;
   /** Defaults to "Choose workspace". */
   title?: string;
-  workspaces?: WorkspaceSelectDialogWorkspace[];
+  workspaces?: DesktopWorkspace[];
+  gatewayHome?: string | null;
   /** Offer a "No workspace" row that selects the empty path. */
   allowEmpty?: boolean;
   selectedPath?: string;
   onSelect: (workspacePath: string) => void;
   onClose: () => void;
-  /** Renders the "Choose folder…" footer row that opens the caller's
+  /** Renders the "Add workspace…" footer row that opens the caller's
    * add-workspace flow. */
   onAddWorkspace?: () => void;
-  addWorkspaceLabel?: string;
   addWorkspaceBusy?: boolean;
 };
 
-/** Shared floating workspace picker: search field, workspace rows, and a
- * "Choose folder…" footer. Every workspace selector — the new-thread picker
- * and the in-form pickers — opens this dialog. */
+/** Shared floating workspace picker: every in-form workspace selector opens
+ * this dialog, whose body is the same {@link WorkspacePickerContent} the
+ * composer chip popover renders — one picker, two hosts. */
 export function WorkspaceSelectDialog({
   open,
   title,
   workspaces = [],
+  gatewayHome = null,
   allowEmpty = false,
   selectedPath = '',
   onSelect,
   onClose,
   onAddWorkspace,
-  addWorkspaceLabel,
   addWorkspaceBusy = false,
 }: WorkspaceSelectDialogProps) {
   const { t } = useI18n();
-  const [query, setQuery] = useState('');
   const selectedKey = workspacePathKey(selectedPath);
-  const normalizedQuery = query.trim().toLowerCase();
-  const matchesQuery = (name: string, path: string | null) =>
-    !normalizedQuery ||
-    name.toLowerCase().includes(normalizedQuery) ||
-    (path || '').toLowerCase().includes(normalizedQuery);
-
   const seenPaths = new Set<string>();
-  const localRows = workspaces.filter((workspace) => {
+  const pickerWorkspaces = workspaces.filter((workspace) => {
     const key = workspacePathKey(workspace.path);
     if (!key) return true;
     if (seenPaths.has(key)) return false;
     seenPaths.add(key);
     return true;
   });
-  // Keep a selected-but-unlisted path visible so the check mark always has
-  // a row (parity with the old in-form dropdown's "current value" item).
-  const rows: WorkspaceSelectDialogWorkspace[] =
-    selectedKey && !seenPaths.has(selectedKey)
-      ? [
-          { name: workspaceLabel(selectedPath), path: selectedPath.trim(), available: true },
-          ...localRows,
-        ]
-      : localRows;
-  const filteredRows = rows.filter((workspace) => matchesQuery(workspace.name, workspace.path));
 
   const closeDialog = () => {
-    setQuery('');
     onClose();
   };
 
@@ -505,98 +485,26 @@ export function WorkspaceSelectDialog({
         <DialogHeader>
           <DialogTitle>{title || t('Choose workspace')}</DialogTitle>
         </DialogHeader>
-        <div className="workspace-picker-search">
-          <SearchIcon aria-hidden size={15} strokeWidth={1.7} />
-          <Input
-            autoFocus
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('Search projects')}
-            value={query}
-          />
-        </div>
-        <div className="workspace-picker-list">
-          {allowEmpty && !normalizedQuery ? (
-            <button
-              className="workspace-picker-row"
-              data-active={selectedKey ? undefined : ''}
-              onClick={() => {
-                onSelect('');
-                closeDialog();
-              }}
-              type="button"
-            >
-              <CircleMinus aria-hidden size={16} strokeWidth={1.7} />
-              <span className="workspace-picker-name">{t('No workspace')}</span>
-              {selectedKey ? null : (
-                <CheckIcon
-                  aria-hidden
-                  className="workspace-picker-check"
-                  size={15}
-                  strokeWidth={2}
-                />
-              )}
-            </button>
-          ) : null}
-          {filteredRows.map((workspace) => {
-            const rowKey = workspacePathKey(workspace.path);
-            const isSelected = Boolean(rowKey && rowKey === selectedKey);
-            return (
-              <button
-                className="workspace-picker-row"
-                data-active={isSelected ? '' : undefined}
-                disabled={!workspace.available || !workspace.path}
-                key={workspace.path || workspace.name}
-                onClick={() => {
-                  if (!workspace.path) {
-                    return;
-                  }
-                  onSelect(workspace.path);
-                  closeDialog();
-                }}
-                type="button"
-              >
-                <FolderIcon aria-hidden size={16} strokeWidth={1.7} />
-                <span className="workspace-picker-name">
-                  {workspace.available && workspace.path
-                    ? workspace.name
-                    : t('{name} (Unavailable)', { name: workspace.name })}
-                </span>
-                <span className="workspace-picker-path">{workspace.path}</span>
-                {isSelected ? (
-                  <CheckIcon
-                    aria-hidden
-                    className="workspace-picker-check"
-                    size={15}
-                    strokeWidth={2}
-                  />
-                ) : null}
-              </button>
-            );
-          })}
-          {!filteredRows.length ? (
-            <p className="workspace-picker-empty">{t('No matching projects.')}</p>
-          ) : null}
-        </div>
-        {onAddWorkspace ? (
-          <div className="workspace-picker-footer">
-            <button
-              className="workspace-picker-row"
-              disabled={addWorkspaceBusy}
-              onClick={() => {
-                closeDialog();
-                onAddWorkspace();
-              }}
-              type="button"
-            >
-              <Plus aria-hidden size={15} strokeWidth={1.8} />
-              <span className="workspace-picker-name">
-                {addWorkspaceBusy
-                  ? t('Opening folder…')
-                  : addWorkspaceLabel || t('Choose folder…')}
-              </span>
-            </button>
-          </div>
-        ) : null}
+        <WorkspacePickerContent
+          addWorkspaceBusy={addWorkspaceBusy}
+          allowNone={allowEmpty}
+          gatewayHome={gatewayHome}
+          noneSelected={allowEmpty && !selectedKey}
+          onAddWorkspace={onAddWorkspace ? () => {
+            closeDialog();
+            onAddWorkspace();
+          } : undefined}
+          onSelectNone={() => {
+            onSelect('');
+            closeDialog();
+          }}
+          onSelectPath={(path) => {
+            onSelect(path);
+            closeDialog();
+          }}
+          selectedPath={selectedPath}
+          workspaces={pickerWorkspaces}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -613,7 +521,7 @@ export function WorkspacePathPicker({
   className,
   fieldClassName,
   triggerClassName,
-  addWorkspaceLabel,
+  gatewayHome = null,
   onAddWorkspace,
 }: WorkspacePathPickerProps) {
   const { t } = useI18n();
@@ -638,6 +546,33 @@ export function WorkspacePathPicker({
   ].filter(Boolean).join(' ') || undefined;
 
   const adapter = useWorkspaceDataAdapter();
+  const [fetchedCatalog, setFetchedCatalog] = useState<{
+    workspaces: DesktopWorkspace[];
+    gatewayHome: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pickerOpen || workspaces.length > 0 || fetchedCatalog) {
+      return;
+    }
+    let cancelled = false;
+    void adapter
+      .listCatalog()
+      .then((catalog) => {
+        if (!cancelled) setFetchedCatalog(catalog);
+      })
+      .catch(() => {
+        // The picker still renders (browse/add remain available).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [adapter, fetchedCatalog, pickerOpen, workspaces.length]);
+
+  const effectiveWorkspaces = workspaces.length > 0
+    ? selectableWorkspaces
+    : fetchedCatalog?.workspaces ?? [];
+  const effectiveGatewayHome = gatewayHome ?? fetchedCatalog?.gatewayHome ?? null;
 
   async function addWorkspace(path: string, name?: string | null) {
     setSavingAdd(true);
@@ -686,14 +621,14 @@ export function WorkspacePathPicker({
         ) : null}
       </Field>
       <WorkspaceSelectDialog
-        addWorkspaceLabel={addWorkspaceLabel}
         allowEmpty={allowEmpty}
+        gatewayHome={effectiveGatewayHome}
         onAddWorkspace={() => setAddOpen(true)}
         onClose={() => setPickerOpen(false)}
         onSelect={onChange}
         open={pickerOpen}
         selectedPath={trimmed}
-        workspaces={selectableWorkspaces}
+        workspaces={effectiveWorkspaces}
       />
       <WorkspaceAddDialog
         initialPath={trimmed}
@@ -739,7 +674,7 @@ export function WorkspacePathPickerDialog({
         if (!nextOpen && !saving) onCancel();
       }}
     >
-      <DialogContent size="wide">
+      <DialogContent className="workspace-add-dialog" size="compact">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
@@ -781,7 +716,7 @@ export function WorkspacePathPickerDialog({
               }}
               type="button"
             >
-              {saving ? t('Saving...') : t('Save')}
+              {saving ? t('Saving...') : t('Add workspace')}
             </Button>
           ) : null}
         </DialogFooter>

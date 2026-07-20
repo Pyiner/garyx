@@ -4903,6 +4903,8 @@ fn thread_meta_projection_round_trip_and_remove() {
         thread_meta: ThreadMetaDraft {
             thread_id: "thread::project".to_owned(),
             workspace_dir: Some("/work/project".to_owned()),
+            root_workspace_path: Some("/work/project".to_owned()),
+            workspace_origin: Some("explicit".to_owned()),
             thread_type: "chat".to_owned(),
             thread_label: Some("Project Thread".to_owned()),
             agent_id: Some("codex".to_owned()),
@@ -5523,19 +5525,29 @@ fn workspace_membership_meta_draft(
     sort_updated_at_us: i64,
     default_list_hidden: bool,
 ) -> ThreadMetaProjectionDraft {
-    ThreadMetaProjectionDraft {
-        thread_id: thread_id.to_owned(),
-        thread_meta: ThreadMetaDraft {
-            thread_id: thread_id.to_owned(),
-            workspace_dir: workspace_dir.map(ToOwned::to_owned),
-            thread_type: "chat".to_owned(),
-            worktree_json: worktree_json.map(ToOwned::to_owned),
-            sort_updated_at_us,
-            default_list_hidden,
-            ..ThreadMetaDraft::default()
-        },
-        channel_endpoints: Vec::new(),
+    // Route through the real projection derivation: the membership columns
+    // (root_workspace_path / workspace_origin) are written by it, and these
+    // tests must exercise that write path rather than hand-built drafts.
+    let mut data = serde_json::json!({
+        "updated_at": chrono::DateTime::from_timestamp_micros(sort_updated_at_us)
+            .expect("timestamp")
+            .to_rfc3339(),
+    });
+    if let Some(workspace_dir) = workspace_dir {
+        data["workspace_dir"] = serde_json::Value::String(workspace_dir.to_owned());
     }
+    if let Some(worktree_json) = worktree_json {
+        data["worktree"] =
+            serde_json::from_str(worktree_json).expect("worktree fixture parses");
+    }
+    if default_list_hidden {
+        data["source"] = serde_json::Value::String("side_chat".to_owned());
+        data["hidden"] = serde_json::Value::Bool(true);
+    }
+    crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run(
+        thread_id, &data, None,
+    )
+    .expect("projection draft")
 }
 
 #[test]
@@ -5596,6 +5608,69 @@ fn thread_meta_root_workspace_path_generated_column_maps_membership() {
             ),
         ],
     );
+}
+
+#[test]
+fn membership_projection_handles_unusual_thread_ids_and_cutover_backfills() {
+    let db = GaryxDbService::memory().expect("db opens");
+    // An unusual but legal thread id: prefix-validated only. Its managed
+    // implicit path uses the full sanitizer (all non-alphanumerics).
+    let unusual = "thread::11111111-1111-1111-1111-11111111111%";
+    let managed = "/data/thread-workspaces/thread--11111111-1111-1111-1111-11111111111";
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        unusual,
+        Some(managed),
+        None,
+        10,
+        false,
+    ))
+    .expect("unusual implicit row");
+    let conn = db.read_conn().expect("read conn");
+    let (root, origin): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT root_workspace_path, workspace_origin FROM thread_meta WHERE thread_id = ?1",
+            params![unusual],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!(root, None, "sanitized managed path must map to no root");
+    assert_eq!(origin.as_deref(), Some("implicit"));
+    drop(conn);
+
+    // Cutover backfill: blank the columns as if written by an older
+    // revision, then run the versioned migration and expect the identical
+    // derivation to repopulate them.
+    {
+        let conn = db.conn().expect("writer");
+        conn.execute(
+            "UPDATE thread_meta SET root_workspace_path = NULL, workspace_origin = NULL",
+            [],
+        )
+        .expect("blank");
+        conn.execute(
+            "DELETE FROM projection_states WHERE projection_name = 'thread_meta_workspace_membership_v1'",
+            [],
+        )
+        .expect("clear marker");
+    }
+    let summary = db
+        .migrate_thread_meta_workspace_membership_v1()
+        .expect("cutover");
+    assert!(!summary.already_completed);
+    assert_eq!(summary.updated_row_count, 1);
+    let rerun = db
+        .migrate_thread_meta_workspace_membership_v1()
+        .expect("cutover rerun");
+    assert!(rerun.already_completed);
+    let conn = db.read_conn().expect("read conn");
+    let origin: Option<String> = conn
+        .query_row(
+            "SELECT workspace_origin FROM thread_meta WHERE thread_id = ?1",
+            params![unusual],
+            |row| row.get(0),
+        )
+        .expect("row");
+    assert_eq!(origin.as_deref(), Some("implicit"));
 }
 
 #[test]

@@ -818,6 +818,7 @@ async fn set_title_does_not_overwrite_manually_renamed_thread() {
         &thread_id,
         Some("Manual thread title".to_owned()),
         None,
+        None,
     )
     .await
     .unwrap();

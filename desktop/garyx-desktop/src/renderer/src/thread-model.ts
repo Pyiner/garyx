@@ -225,57 +225,23 @@ function workspacePathKey(path?: string | null): string {
   return path?.trim().toLowerCase() || '';
 }
 
-function isManagedWorktreePath(path?: string | null): boolean {
-  const normalized = workspacePathKey(path).replace(/\\/g, '/');
-  return normalized.includes('/.garyx/worktrees/') ||
-    normalized.includes('/.codex/worktrees/');
-}
-
-function worktreeWorkspacePathKeys(threads: DesktopThreadSummary[]): Set<string> {
-  const keys = new Set<string>();
-  for (const thread of threads) {
-    if (!thread.worktree) {
-      continue;
-    }
-    for (const path of [
-      thread.workspacePath,
-      thread.worktree.worktreeDir,
-      thread.worktree.path,
-    ]) {
-      const key = workspacePathKey(path);
-      if (key) {
-        keys.add(key);
-      }
-    }
-  }
-  return keys;
-}
-
 /**
- * Resolve the default draft workspace once, at draft creation. Latest
- * thread activity wins; workspaces without activity fall back to the
- * gateway's total order (the list is server-sorted); an empty list means
- * an implicit No-workspace draft. Never called on list refresh — a live
- * draft's selection must not drift.
+ * Resolve the default draft workspace once, at draft creation: the first
+ * available row of the gateway's shared total order (pinned, activity,
+ * name, path). Never called on list refresh — a live draft's selection
+ * must not drift (the only sanctioned re-resolution is removal of the
+ * selected workspace).
  */
 export function resolveDefaultDraftWorkspace(
   workspaces: DesktopWorkspace[],
 ): DraftWorkspaceSelection {
-  const candidates = workspaces.filter(
+  // The gateway list arrives in the shared total order (pinned, then
+  // latest activity, then name/path); the default is simply its first
+  // available row. An empty catalog means an implicit No-workspace draft.
+  const best = workspaces.find(
     (workspace) => workspace.available && Boolean(workspace.path),
   );
-  if (candidates.length === 0) {
-    return { kind: 'none' };
-  }
-  let best = candidates[0];
-  for (const workspace of candidates.slice(1)) {
-    const bestActivity = best.lastActivityAt || '';
-    const activity = workspace.lastActivityAt || '';
-    if (activity > bestActivity) {
-      best = workspace;
-    }
-  }
-  return { kind: 'path', path: best.path as string };
+  return best?.path ? { kind: 'path', path: best.path } : { kind: 'none' };
 }
 
 export function visibleWorkspaceList(state: DesktopState | null): DesktopWorkspace[] {
@@ -283,16 +249,11 @@ export function visibleWorkspaceList(state: DesktopState | null): DesktopWorkspa
     return [];
   }
 
-  const worktreeKeys = worktreeWorkspacePathKeys(state.threads);
+  // The gateway's explicit root list is the truth: rows only exist through
+  // explicit adds, so no client-side path heuristics may hide them.
   return state.workspaces.filter((workspace) => {
     const key = workspacePathKey(workspace.path);
-    return Boolean(
-      workspace.kind === 'local' &&
-        key &&
-        !workspace.managed &&
-        !isManagedWorktreePath(workspace.path) &&
-        !worktreeKeys.has(key),
-    );
+    return Boolean(workspace.kind === 'local' && key && !workspace.managed);
   });
 }
 
@@ -343,10 +304,10 @@ export function buildWorkspaceThreadGroups(input: {
 
   const threadsByWorkspacePath = new Map<string, DesktopThreadSummary[]>();
   for (const thread of input.state.threads) {
-    // Server-derived membership: worktree threads group under their source
-    // workspace, implicit threads under none. workspacePath is only a
-    // fallback for rows from gateways predating root_workspace_path.
-    const key = workspacePathKey(thread.rootWorkspacePath ?? thread.workspacePath);
+    // Server-derived membership only: worktree threads group under their
+    // source workspace, implicit threads (root null) under none. There is no
+    // runtime-path fallback — desktop and gateway ship together.
+    const key = workspacePathKey(thread.rootWorkspacePath ?? null);
     if (!key) {
       continue;
     }

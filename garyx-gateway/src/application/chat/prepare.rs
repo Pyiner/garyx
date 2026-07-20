@@ -619,6 +619,7 @@ async fn prepare_chat_request_with_mode(
                 "label",
                 "thread_title_source",
                 "workspace_dir",
+                "workspace_origin",
                 "updated_at",
             ],
         )
@@ -734,14 +735,17 @@ async fn resolve_runtime_workspace_dir(
         });
     }
 
-    let workspace_dir = match requested_workspace_dir {
-        Some(workspace_dir) => workspace_dir,
-        None => ensure_implicit_thread_workspace_for_config(&state.config_snapshot(), thread_id)
-            .await
-            .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
-                thread_id: thread_id.to_owned(),
-                error,
-            })?,
+    let (workspace_dir, workspace_origin) = match requested_workspace_dir {
+        Some(workspace_dir) => (workspace_dir, "explicit"),
+        None => (
+            ensure_implicit_thread_workspace_for_config(&state.config_snapshot(), thread_id)
+                .await
+                .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+                    thread_id: thread_id.to_owned(),
+                    error,
+                })?,
+            "implicit",
+        ),
     };
 
     let mut thread_cache_maybe_stale = false;
@@ -751,6 +755,7 @@ async fn resolve_runtime_workspace_dir(
             thread_id,
             None,
             Some(workspace_dir.clone()),
+            Some(workspace_origin),
         )
         .await
         .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
@@ -798,14 +803,17 @@ async fn resolve_runtime_workspace_dir_deferred(
         });
     }
 
-    let workspace_dir = match requested_workspace_dir {
-        Some(workspace_dir) => workspace_dir,
-        None => ensure_implicit_thread_workspace_for_config(&state.config_snapshot(), thread_id)
-            .await
-            .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
-                thread_id: thread_id.to_owned(),
-                error,
-            })?,
+    let (workspace_dir, workspace_origin) = match requested_workspace_dir {
+        Some(workspace_dir) => (workspace_dir, "explicit"),
+        None => (
+            ensure_implicit_thread_workspace_for_config(&state.config_snapshot(), thread_id)
+                .await
+                .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+                    thread_id: thread_id.to_owned(),
+                    error,
+                })?,
+            "implicit",
+        ),
     };
     let object = desired_thread_data.as_object_mut().ok_or_else(|| {
         ChatPreparationError::ThreadUpdateConflict {
@@ -816,6 +824,10 @@ async fn resolve_runtime_workspace_dir_deferred(
     object.insert(
         "workspace_dir".to_owned(),
         Value::String(workspace_dir.clone()),
+    );
+    object.insert(
+        "workspace_origin".to_owned(),
+        Value::String(workspace_origin.to_owned()),
     );
     object.insert(
         "updated_at".to_owned(),

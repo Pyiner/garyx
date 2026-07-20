@@ -1,0 +1,108 @@
+/* The one workspace picker body (WorkspacePickerContent): shared by the
+ * composer chip popover and the in-form select dialog. Surface identity
+ * (background/radius/shadow) comes from menu-popover-surface in menus.css
+ * for the popover host; only picker layout lives here. Reference width is
+ * the captured Codex picker (260px). */
+
+/* Surface identity (background/radius/shadow) comes from the shared
+ * menu-popover-surface class in menus.css; only layout lives here. */
+.workspace-picker-popover {
+  z-index: 70;
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspace-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--menu-separator-color);
+  color: var(--color-token-description-foreground);
+}
+
+.workspace-picker-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-token-text-primary);
+  font-size: var(--menu-item-font-size);
+  font-weight: var(--menu-item-font-weight);
+}
+
+.workspace-picker-search-input::placeholder {
+  color: var(--color-token-description-foreground);
+}
+
+.workspace-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 3px 0;
+}
+
+.workspace-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--menu-item-gap);
+  width: 100%;
+  border: 0;
+  margin: 0;
+  padding: var(--menu-item-padding-y) var(--menu-item-padding-x);
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--color-token-text-primary);
+  font-size: var(--menu-item-font-size);
+  font-weight: var(--menu-item-font-weight);
+  line-height: var(--menu-item-line-height);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-picker-item:hover {
+  background: var(--menu-item-hover-bg);
+}
+
+.workspace-picker-item svg {
+  flex: none;
+  opacity: var(--menu-item-icon-opacity);
+}
+
+.workspace-picker-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-picker-item-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.workspace-picker-empty {
+  padding: 8px 10px;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+}
+
+.workspace-picker-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-top: 1px solid var(--menu-separator-color);
+  padding-top: 3px;
+}
+

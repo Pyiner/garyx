@@ -21,11 +21,24 @@ export interface WorkspaceDataAdapter {
     path: string,
     name?: string | null,
   ): Promise<DesktopWorkspace | null>;
+  /** The gateway workspace catalog (server order, gateway home) for picker
+   *  hosts whose surface does not already hold it. */
+  listCatalog(): Promise<{
+    workspaces: DesktopWorkspace[];
+    gatewayHome: string | null;
+  }>;
 }
 
 const electronWorkspaceDataAdapter: WorkspaceDataAdapter = {
   listDirectories(input) {
     return window.garyxDesktop.listWorkspaceDirectories(input);
+  },
+  async listCatalog() {
+    const state = await window.garyxDesktop.getState();
+    return {
+      workspaces: state.workspaces,
+      gatewayHome: state.gatewayHome ?? null,
+    };
   },
   async addWorkspace(path, name) {
     const result = await requestDesktopStateResult(

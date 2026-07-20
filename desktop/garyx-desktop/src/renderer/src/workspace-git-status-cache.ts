@@ -19,6 +19,11 @@ export class WorkspaceGitStatusCache {
     this.ttlMs = options.ttlMs ?? WORKSPACE_GIT_STATUS_CACHE_TTL_MS;
   }
 
+  /** Gateway switch: cached statuses belong to the previous machine. */
+  clear(): void {
+    this.entries.clear();
+  }
+
   get(workspacePath: string, now = Date.now()): DesktopWorkspaceGitStatus | null {
     const key = workspacePath.trim();
     const entry = key ? this.entries.get(key) : undefined;

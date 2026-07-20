@@ -683,6 +683,9 @@ export function SideChatPanel({
         sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
       }
       availableWorkspaceCount={availableWorkspaceCount}
+      forkSourceWorkspacePath={
+        activeThread?.rootWorkspacePath ?? activeThread?.workspacePath ?? null
+      }
       draftWorkspaceSelection={null}
       draftWorkspaceMode="local"
       draftWorkspaces={[]}

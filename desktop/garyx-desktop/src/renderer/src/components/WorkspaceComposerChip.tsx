@@ -10,12 +10,8 @@ import type {
 import {
   CodexChipNoProjectIcon,
   CodexChipProjectIcon,
-  CodexNewProjectIcon,
-  CodexNoWorkspaceIcon,
-  CodexPickerCheckIcon,
-  CodexPickerProjectIcon,
-  CodexPickerSearchIcon,
 } from './codex-icons';
+import { WorkspacePickerContent } from './WorkspacePickerContent';
 import {
   Popover,
   PopoverContent,
@@ -77,7 +73,6 @@ export function WorkspaceComposerChip({
 }: WorkspaceComposerChipProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
   const [gitStatusRepoPath, setGitStatusRepoPath] = useState<string | null>(null);
 
   const selectedPath = selection?.kind === 'path' ? selection.path : null;
@@ -141,15 +136,6 @@ export function WorkspaceComposerChip({
       (selectedWorkspace?.gitRepo || gitStatusRepoPath === selectedPath),
   );
 
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredWorkspaces = normalizedQuery
-    ? workspaces.filter((workspace) => {
-        const name = workspace.name.toLowerCase();
-        const path = (workspace.path || '').toLowerCase();
-        return name.includes(normalizedQuery) || path.includes(normalizedQuery);
-      })
-    : workspaces;
-
   const chipLabel =
     selection?.kind === 'none'
       ? t('No workspace')
@@ -158,19 +144,13 @@ export function WorkspaceComposerChip({
 
   const pick = (next: DraftWorkspaceSelection) => {
     setOpen(false);
-    setQuery('');
     onSelectionChange(next);
   };
 
   return (
     <div className="workspace-chip-cluster">
       <Popover
-        onOpenChange={(nextOpen) => {
-          setOpen(nextOpen);
-          if (!nextOpen) {
-            setQuery('');
-          }
-        }}
+        onOpenChange={setOpen}
         open={open}
       >
         <PopoverTrigger asChild>
@@ -193,73 +173,20 @@ export function WorkspaceComposerChip({
           side="top"
           sideOffset={8}
         >
-          <div className="workspace-picker-search">
-            <CodexPickerSearchIcon size={16} />
-            <input
-              aria-label={t('Search workspaces')}
-              autoFocus
-              className="workspace-picker-search-input"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('Search workspaces')}
-              value={query}
-            />
-          </div>
-          <div className="workspace-picker-list" role="listbox">
-            {filteredWorkspaces.length === 0 ? (
-              <div className="workspace-picker-empty">{t('No matches')}</div>
-            ) : (
-              filteredWorkspaces.map((workspace) => {
-                const path = workspace.path || '';
-                const checked = selection?.kind === 'path' && selection.path === path;
-                return (
-                  <button
-                    aria-selected={checked}
-                    className="workspace-picker-item"
-                    key={path || workspace.name}
-                    onClick={() => {
-                      if (path) {
-                        pick({ kind: 'path', path });
-                      }
-                    }}
-                    role="option"
-                    type="button"
-                  >
-                    <CodexPickerProjectIcon size={16} />
-                    <span className="workspace-picker-item-name">{workspace.name}</span>
-                    <span className="workspace-picker-item-path">
-                      {path ? abbreviatePath(path, gatewayHome) : ''}
-                    </span>
-                    {checked ? <CodexPickerCheckIcon size={17} /> : null}
-                  </button>
-                );
-              })
-            )}
-          </div>
-          <div className="workspace-picker-footer">
-            <button
-              className="workspace-picker-item"
-              disabled={addWorkspaceBusy}
-              onClick={() => {
-                setOpen(false);
-                setQuery('');
-                onAddWorkspace();
-              }}
-              type="button"
-            >
-              <CodexNewProjectIcon size={16} />
-              <span className="workspace-picker-item-name">{t('Add workspace…')}</span>
-            </button>
-            <button
-              aria-selected={selection?.kind === 'none'}
-              className="workspace-picker-item"
-              onClick={() => pick({ kind: 'none' })}
-              type="button"
-            >
-              <CodexNoWorkspaceIcon size={16} />
-              <span className="workspace-picker-item-name">{t('No workspace')}</span>
-              {selection?.kind === 'none' ? <CodexPickerCheckIcon size={17} /> : null}
-            </button>
-          </div>
+          <WorkspacePickerContent
+            addWorkspaceBusy={addWorkspaceBusy}
+            allowNone
+            gatewayHome={gatewayHome}
+            noneSelected={selection?.kind === 'none'}
+            onAddWorkspace={() => {
+              setOpen(false);
+              onAddWorkspace();
+            }}
+            onSelectNone={() => pick({ kind: 'none' })}
+            onSelectPath={(path) => pick({ kind: 'path', path })}
+            selectedPath={selectedPath}
+            workspaces={workspaces}
+          />
         </PopoverContent>
       </Popover>
 

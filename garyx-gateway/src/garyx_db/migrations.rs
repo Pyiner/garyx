@@ -10,6 +10,11 @@ pub(crate) const THREAD_META_SCHEMA_MIGRATION_NAME: &str = "thread_meta_schema_v
 
 pub(super) const THREAD_META_SCHEMA_MIGRATION_VERSION: i64 = 2;
 
+pub(crate) const THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_NAME: &str =
+    "thread_meta_workspace_membership_v1";
+
+pub(super) const THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION: i64 = 1;
+
 pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thread_kind_v1";
 
 pub(super) const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
@@ -128,10 +133,9 @@ pub(super) const THREAD_META_SCHEMA_V2_COLUMNS: &[&str] = &[
     "sdk_session_id",
     "projection_version",
     "projected_at",
+    "root_workspace_path",
+    "workspace_origin",
 ];
-// `root_workspace_path` is a VIRTUAL generated column: it appears in
-// `PRAGMA table_xinfo` but intentionally not in `PRAGMA table_info`, so the
-// v2 column-shape guard above (which reads `table_info`) never sees it.
 
 pub(super) const THREAD_META_SCHEMA_V2_RETIRED_COLUMNS: &[&str] = &[
     "excluded_from_recent",
@@ -667,6 +671,7 @@ impl GaryxDbService {
         self.migrate_recent_membership_v2()?;
         self.migrate_canonical_exclusion_strip_v3()?;
         self.migrate_thread_meta_schema_v2()?;
+        self.migrate_thread_meta_workspace_membership_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         self.migrate_dispatch_admission_ledger_v1()?;
         self.recover_stale_dispatch_admissions()?;
@@ -1640,6 +1645,91 @@ impl GaryxDbService {
         })
     }
 
+    /// Populate the workspace-membership projection columns
+    /// (`root_workspace_path`, `workspace_origin`) for rows written before
+    /// this revision. One import-generation-aware, versioned transaction;
+    /// every value comes from the same Rust derivation the live projection
+    /// uses, so a later record write produces the identical result.
+    pub(crate) fn migrate_thread_meta_workspace_membership_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_NAME,
+            THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION,
+        )?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let rows: Vec<(String, Option<String>, Option<String>, Option<String>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT tm.thread_id, tm.workspace_dir, tm.worktree_json,
+                        json_extract(record.body, '$.workspace_origin')
+                   FROM thread_meta AS tm
+                   LEFT JOIN thread_records AS record ON record.key = tm.thread_id",
+            )?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            let mut rows = Vec::new();
+            for row in mapped {
+                rows.push(row?);
+            }
+            rows
+        };
+        let source_row_count = i64::try_from(rows.len()).unwrap_or(i64::MAX);
+
+        let mut updated_row_count = 0usize;
+        for (thread_id, workspace_dir, worktree_json, recorded_origin) in rows {
+            let worktree: Value = worktree_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str(value).ok())
+                .unwrap_or(Value::Null);
+            let origin = crate::workspace_mode::effective_workspace_origin(
+                &thread_id,
+                workspace_dir.as_deref(),
+                recorded_origin.as_deref(),
+            );
+            let root = crate::workspace_mode::thread_root_workspace_path(
+                origin,
+                workspace_dir.as_deref(),
+                &worktree,
+            );
+            updated_row_count += tx.execute(
+                "UPDATE thread_meta
+                    SET root_workspace_path = ?2, workspace_origin = ?3
+                  WHERE thread_id = ?1
+                    AND (
+                        root_workspace_path IS NOT ?2
+                        OR workspace_origin IS NOT ?3
+                    )",
+                params![thread_id, root, origin],
+            )?;
+        }
+        record_projection_state_tx(
+            &tx,
+            THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_NAME,
+            THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
+    }
+
     /// Persist task identity on legacy backing threads. The migration is a
     /// one-shot, set-based transaction: canonical bodies and both type
     /// projections move together, while activity timestamps and titles stay
@@ -1890,7 +1980,7 @@ impl GaryxDbService {
                 params![CURRENT_THREAD_META_PROJECTION_VERSION],
             )?
         } else {
-            tx.execute_batch(&format!(
+            tx.execute_batch(
                 "DROP TABLE IF EXISTS thread_meta_schema_v2;
                  CREATE TABLE thread_meta_schema_v2 (
                     thread_id TEXT PRIMARY KEY,
@@ -1920,10 +2010,10 @@ impl GaryxDbService {
                     sdk_session_id TEXT,
                     projection_version INTEGER NOT NULL DEFAULT 6,
                     projected_at TEXT NOT NULL,
-                    root_workspace_path TEXT GENERATED ALWAYS AS ({expr}) VIRTUAL
+                    root_workspace_path TEXT,
+                    workspace_origin TEXT
                  ) STRICT;",
-                expr = crate::garyx_db::schema::THREAD_META_ROOT_WORKSPACE_PATH_EXPR,
-            ))?;
+            )?;
             tx.execute(
                 "INSERT INTO thread_meta_schema_v2 (
                     thread_id, workspace_dir, thread_type, thread_label, agent_id,
@@ -1934,7 +2024,7 @@ impl GaryxDbService {
                     default_list_hidden, sort_updated_at_us, search_text,
                     provider_key, selected_model, selected_model_reasoning_effort,
                     selected_model_service_tier, sdk_session_id, projection_version,
-                    projected_at
+                    projected_at, root_workspace_path, workspace_origin
                  )
                  SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
                         provider_type, created_at, updated_at, message_count,
@@ -1943,7 +2033,8 @@ impl GaryxDbService {
                         last_delivery_context_json, last_delivery_updated_at,
                         default_list_hidden, sort_updated_at_us, search_text,
                         provider_key, selected_model, selected_model_reasoning_effort,
-                        selected_model_service_tier, sdk_session_id, ?1, projected_at
+                        selected_model_service_tier, sdk_session_id, ?1, projected_at,
+                        root_workspace_path, workspace_origin
                    FROM thread_meta",
                 params![CURRENT_THREAD_META_PROJECTION_VERSION],
             )?;

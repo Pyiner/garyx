@@ -1132,23 +1132,6 @@ button.recent-feed-footer.failed:hover {
   opacity: 0.82;
 }
 
-.left-rail .workspace-row {
-  min-height: 32px;
-  padding: 0 5px 0 8px;
-  font-size: var(--text-base);
-  font-weight: 430;
-  line-height: 18.5714px;
-}
-
-.left-rail .workspace-row-main {
-  min-height: 30px;
-}
-
-.left-rail .workspace-name {
-  font-size: var(--text-base);
-  line-height: 18.5714px;
-}
-
 .left-rail .workspace-row-copy .icon:not(.sidebar-section-chevron),
 .left-rail .bot-row-logo {
   width: 16px;
