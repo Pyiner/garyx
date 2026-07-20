@@ -95,7 +95,18 @@ export async function ensureSideChatThread(
         }),
         (response) => response.state,
       );
-      setDesktopState(created.state);
+      // `created.thread` is the authoritative summary (provenance included)
+      // for a hidden child that never appears in the regular thread list;
+      // seed it into the sessions cache so the side chat renders its
+      // inherited workspace from the first frame, not after history lands.
+      setDesktopState({
+        ...created.state,
+        sessions: created.state.sessions.some(
+          (session) => session.id === created.thread.id,
+        )
+          ? created.state.sessions
+          : [...created.state.sessions, created.thread],
+      });
       mirror.updateMessagesByThread((current: MessageMap) => ({
         ...current,
         [created.thread.id]: current[created.thread.id] || [],

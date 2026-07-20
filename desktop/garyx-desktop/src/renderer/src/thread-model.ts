@@ -90,6 +90,8 @@ export function threadSummariesEquivalent(
     && left.updatedAt === right.updatedAt
     && left.lastMessagePreview === right.lastMessagePreview
     && (left.workspacePath ?? null) === (right.workspacePath ?? null)
+    && (left.rootWorkspacePath ?? null) === (right.rootWorkspacePath ?? null)
+    && (left.workspaceOrigin ?? null) === (right.workspaceOrigin ?? null)
     && (left.messageCount ?? null) === (right.messageCount ?? null)
     && (left.agentId ?? null) === (right.agentId ?? null)
     && (left.recentRunId ?? null) === (right.recentRunId ?? null)

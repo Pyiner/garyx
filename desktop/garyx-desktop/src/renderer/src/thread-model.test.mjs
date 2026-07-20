@@ -132,6 +132,25 @@ test('selectedThread can resolve cached hidden session threads', () => {
   assert.equal(selectedThread(state, hiddenChild.id)?.id, hiddenChild.id);
 });
 
+test('provenance-only updates are not equivalent (history upgrades must apply)', () => {
+  const base = () =>
+    makeThread('thread-prov', '/Users/test/project', {
+      rootWorkspacePath: null,
+      workspaceOrigin: null,
+    });
+  const upgraded = {
+    ...base(),
+    workspaceOrigin: 'implicit',
+  };
+  assert.equal(threadSummariesEquivalent(base(), base()), true);
+  assert.equal(threadSummariesEquivalent(base(), upgraded), false);
+  const rootUpgraded = {
+    ...base(),
+    rootWorkspacePath: '/Users/test/project',
+  };
+  assert.equal(threadSummariesEquivalent(base(), rootUpgraded), false);
+});
+
 test('threadSummariesEquivalent treats re-fetched identical summaries as equal', () => {
   const makeSummary = () =>
     makeThread('thread-side-chat', '/Users/test/project', {

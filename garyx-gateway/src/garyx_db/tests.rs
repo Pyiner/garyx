@@ -5786,6 +5786,36 @@ fn workspace_list_stats_aggregate_membership_in_total_order() {
 }
 
 #[test]
+fn workspace_sort_path_tie_breaker_orders_shuffled_same_name_rows() {
+    // The SQL feed arrives path-ordered, which masks the final comparator;
+    // a deliberately shuffled in-memory vector is what makes it load-bearing
+    // (dropping the path comparator leaves this input unsorted).
+    let entry = |path: &str| WorkspaceListEntry {
+        name: Some("Same Name".to_owned()),
+        path: path.to_owned(),
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+        pinned_at: None,
+        thread_count: 0,
+        last_activity_us: None,
+    };
+    let mut entries = vec![
+        entry("/workspace/twin-c"),
+        entry("/workspace/twin-a"),
+        entry("/workspace/twin-b"),
+    ];
+    sort_workspace_list_entries(&mut entries);
+    assert_eq!(
+        entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(),
+        vec![
+            "/workspace/twin-a",
+            "/workspace/twin-b",
+            "/workspace/twin-c",
+        ],
+    );
+}
+
+#[test]
 fn workspace_total_order_pins_activity_and_path_tie_breakers() {
     let db = GaryxDbService::memory().expect("db opens");
     // Activity order deliberately CONFLICTS with name order: dropping the

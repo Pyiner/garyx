@@ -2985,9 +2985,16 @@ export function AppShell() {
           setSelectedThreadId(null);
           setPendingWorkspaceSelection(
             draftSelectionFromRouteWorkspace(startupRoute.workspacePath) ??
-              resolveDefaultDraftWorkspace(
-                visibleWorkspaceList(hydratedState),
-              ),
+              // A failed catalog hydration (empty fallback + workspaces
+              // remote error) is not an answer: stay unresolved and let
+              // the one-shot effect resolve after a successful fetch.
+              (hydratedState.remoteErrors?.some(
+                (error) => error.source === "workspaces",
+              )
+                ? null
+                : resolveDefaultDraftWorkspace(
+                    visibleWorkspaceList(hydratedState),
+                  )),
           );
           setPendingWorkspaceMode("local");
           setPendingAgentId(
