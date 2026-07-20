@@ -346,30 +346,13 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         XCTAssertTrue(retryable.markTransportAttempted())
         XCTAssertFalse(retryable.markTransportAttempted(), "attempt boundary is exactly once")
         XCTAssertTrue(retryable.markAmbiguous())
-        var conflicts = makeConflictSet("restore")
-        let beforeRecord = retryable
-        XCTAssertEqual(
-            GaryxDeliveryDraftRecoveryReducer.restore(
-                record: &retryable,
-                conflictSet: &conflicts,
-                candidate: conflictCandidate("restore"),
-                membershipDurabilityAvailable: false
-            ),
-            .rejectedConflictDurability
-        )
-        XCTAssertEqual(retryable, beforeRecord)
-        XCTAssertTrue(conflicts.candidates.isEmpty)
         let recovery = GaryxDeliveryDraftRecoveryReducer.restore(
-            record: &retryable,
-            conflictSet: &conflicts,
-            candidate: conflictCandidate("restore"),
-            membershipDurabilityAvailable: true
+            record: &retryable
         )
         guard case .restored(let restored) = recovery else {
             return XCTFail("expected restored envelope, got \(recovery)")
         }
         XCTAssertEqual(restored.text, "message")
-        XCTAssertEqual(conflicts.candidates.map(\.entryID), [conflictCandidate("restore").entryID])
         XCTAssertEqual(retryable.phase, .abandoned)
         XCTAssertEqual(retryable.userDisposition, .restoredToDraft)
         XCTAssertNil(retryable.envelope)
@@ -394,8 +377,6 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
     func testDeliveryEvidenceAndUserDispositionAreOrthogonalInBothOrders() {
         for evidenceFirst in [false, true] {
             var record = makeDelivery(evidenceFirst ? "evidence-first" : "disposition-first")
-            var conflicts = makeConflictSet(evidenceFirst ? "evidence" : "disposition")
-            let candidate = conflictCandidate(evidenceFirst ? "evidence" : "disposition")
             _ = record.markTransportAttempted()
             _ = record.markAmbiguous()
             if evidenceFirst {
@@ -403,19 +384,13 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
                 XCTAssertEqual(record.evidence, .serverAcknowledged)
                 XCTAssertEqual(
                     GaryxDeliveryDraftRecoveryReducer.restore(
-                        record: &record,
-                        conflictSet: &conflicts,
-                        candidate: candidate,
-                        membershipDurabilityAvailable: true
+                        record: &record
                     ),
                     .rejectedNotAmbiguous
                 )
             } else {
                 guard case .restored = GaryxDeliveryDraftRecoveryReducer.restore(
-                    record: &record,
-                    conflictSet: &conflicts,
-                    candidate: candidate,
-                    membershipDurabilityAvailable: true
+                    record: &record
                 ) else {
                     return XCTFail("expected restore before evidence")
                 }
@@ -470,12 +445,8 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
             XCTAssertTrue(record.markAmbiguous())
 
             if restoredToDraft {
-                var conflict = makeConflictSet(suffix)
                 guard case .restored = GaryxDeliveryDraftRecoveryReducer.restore(
-                    record: &record,
-                    conflictSet: &conflict,
-                    candidate: conflictCandidate(suffix),
-                    membershipDurabilityAvailable: true
+                    record: &record
                 ) else {
                     return XCTFail("expected restored-to-draft disposition")
                 }
@@ -683,12 +654,8 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
         var restored = makeDelivery("restored")
         XCTAssertTrue(restored.markTransportAttempted())
         XCTAssertTrue(restored.markAmbiguous())
-        var conflicts = makeConflictSet("scope-restored")
         guard case .restored = GaryxDeliveryDraftRecoveryReducer.restore(
-            record: &restored,
-            conflictSet: &conflicts,
-            candidate: conflictCandidate("scope-restored"),
-            membershipDurabilityAvailable: true
+            record: &restored
         ) else {
             return XCTFail("expected restore")
         }
@@ -1017,20 +984,6 @@ final class GaryxComposerDeliveryProtocolTests: XCTestCase {
 
     private func deliveryID(_ value: String) -> GaryxDeliveryRecordID {
         GaryxDeliveryRecordID(rawValue: value)
-    }
-
-    private func makeConflictSet(_ value: String) -> GaryxPayloadConflictSet {
-        GaryxPayloadConflictSet(
-            id: GaryxPayloadConflictSetID(rawValue: "conflict-\(value)"),
-            scope: scope
-        )
-    }
-
-    private func conflictCandidate(_ value: String) -> GaryxPayloadConflictCandidate {
-        GaryxPayloadConflictCandidate(
-            entryID: GaryxComposerPayloadEntryID(rawValue: "candidate-\(value)"),
-            label: "Recovered draft"
-        )
     }
 
     private func makeDelivery(

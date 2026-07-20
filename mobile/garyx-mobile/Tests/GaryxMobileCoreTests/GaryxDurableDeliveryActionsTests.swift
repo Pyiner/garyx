@@ -4,7 +4,44 @@ import XCTest
 final class GaryxDurableDeliveryActionsTests: XCTestCase {
     private let scope = GaryxGatewayScope(identity: "test-gateway", epoch: 4)
 
-    func testUndispatchedRecoveryRestoresConflictAndReclaimsQuota() async throws {
+    func testUndispatchedRecoveryAdoptsIntoWhitespaceOnlyHostWithoutNotice() async throws {
+        let fixture = try await makeAmbiguousFixture(
+            deliveryIsAmbiguous: false,
+            currentText: " \n\t "
+        )
+        var snapshot = try await fixture.store.load()
+        let generation = try await fixture.store.allocatePayloadGeneration()
+        snapshot = try await fixture.store.load()
+        let recoveredID = GaryxComposerPayloadEntryID(rawValue: "unused-recovered-entry")
+        let plan = try XCTUnwrap(
+            GaryxUndispatchedDeliveryRecoveryPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: fixture.deliveryID,
+                recoveredEntryID: recoveredID,
+                recoveredLifecycleNonce: "unused-recovered-token",
+                recoveredGeneration: generation,
+                conflictSetID: .init(rawValue: "unused-conflict"),
+                incompleteAttachmentFeedbackID: .init(rawValue: "unused-feedback")
+            )
+        )
+        XCTAssertEqual(plan.placement, .adoptedIntoHost)
+        snapshot = try await fixture.store.commit(plan.transaction)
+
+        let host = try XCTUnwrap(snapshot.payloadStore.entry(fixture.entryID, scope: scope))
+        XCTAssertEqual(host.currentText, "sealed message")
+        XCTAssertEqual(host.attachments.values.first?.uploadedPath, "prompt/file.png")
+        XCTAssertNil(snapshot.payloadStore.entry(recoveredID, scope: scope))
+        XCTAssertTrue(snapshot.conflicts.isEmpty)
+        XCTAssertTrue(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID,
+                hasInteractionOwner: true
+            ).isEmpty
+        )
+    }
+
+    func testUndispatchedRecoveryDefersBehindCurrentDraftAndReclaimsQuota() async throws {
         let fixture = try await makeAmbiguousFixture(deliveryIsAmbiguous: false)
         var snapshot = try await fixture.store.load()
         let generation = try await fixture.store.allocatePayloadGeneration()
@@ -21,6 +58,10 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
                 conflictSetID: conflictID,
                 incompleteAttachmentFeedbackID: .init(rawValue: "undispatched-feedback")
             )
+        )
+        XCTAssertEqual(
+            plan.placement,
+            .deferred(entryID: recoveredID, conflictSetID: conflictID)
         )
         snapshot = try await fixture.store.commit(plan.transaction)
 
@@ -52,7 +93,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
                 hostEntryID: fixture.entryID,
                 hasInteractionOwner: true
             ).map(\.kind),
-            [.payloadConflict]
+            []
         )
     }
 
@@ -101,8 +142,8 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             hostEntryID: fixture.entryID,
             hasInteractionOwner: true
         )
-        XCTAssertEqual(notices.map(\.kind), [.payloadConflict, .feedback])
-        XCTAssertEqual(notices.last?.title, "Some attachments could not be restored")
+        XCTAssertEqual(notices.map(\.kind), [.feedback])
+        XCTAssertEqual(notices.first?.title, "Some attachments could not be restored")
 
         let acknowledgement = try XCTUnwrap(
             GaryxFeedbackAcknowledgementPlanner.plan(
@@ -115,7 +156,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         XCTAssertEqual(snapshot.feedback[feedbackID]?.phase, .acknowledged)
     }
 
-    func testRestoreExitPublishesConflictWithoutOverwritingFollowupThenResolvesAtomically() async throws {
+    func testRestoreExitDefersWithoutOverwritingThenAdoptsWhenHostBecomesEmpty() async throws {
         let fixture = try await makeAmbiguousFixture()
         var snapshot = try await fixture.store.load()
         let recoveryGeneration = try await fixture.store.allocatePayloadGeneration()
@@ -149,23 +190,146 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         )
         XCTAssertEqual(snapshot.conflicts[conflictID]?.candidates.count, 2)
 
+        var emptiedHost = try XCTUnwrap(
+            snapshot.payloadStore.entry(fixture.entryID, scope: scope)
+        )
+        emptiedHost.setText("", generation: emptiedHost.currentGeneration)
+        snapshot = try await fixture.store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "finish current draft before deferred adoption",
+                mutations: [.upsertEntry(emptiedHost)]
+            )
+        )
+        let candidate = try XCTUnwrap(
+            GaryxDeferredDraftAdoptionPlanner.candidate(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID
+            )
+        )
         let replacementGeneration = try await fixture.store.allocatePayloadGeneration()
         snapshot = try await fixture.store.load()
-        let resolution = try XCTUnwrap(
-            GaryxRecoveredDraftResolutionPlanner.useRecoveredDraft(
+        let adoption = try XCTUnwrap(
+            GaryxDeferredDraftAdoptionPlanner.plan(
                 snapshot: snapshot,
-                conflictSetID: conflictID,
-                hostEntryID: fixture.entryID,
-                recoveredEntryID: recoveredID,
+                candidate: candidate,
                 replacementGeneration: replacementGeneration
             )
         )
-        snapshot = try await fixture.store.commit(resolution.transaction)
+        snapshot = try await fixture.store.commit(adoption.transaction)
         let host = try XCTUnwrap(snapshot.payloadStore.entry(fixture.entryID, scope: scope))
         XCTAssertEqual(host.currentText, "sealed message")
         XCTAssertEqual(host.attachments.values.first?.uploadedPath, "prompt/file.png")
         XCTAssertNil(snapshot.payloadStore.entry(recoveredID, scope: scope))
         XCTAssertNil(snapshot.conflicts[conflictID])
+    }
+
+    func testDeferredAdoptionUsesRecoveryGenerationOrder() throws {
+        let hostID = GaryxComposerPayloadEntryID(rawValue: "ordered-host")
+        let earlyID = GaryxComposerPayloadEntryID(rawValue: "ordered-early")
+        let lateID = GaryxComposerPayloadEntryID(rawValue: "ordered-late")
+        var store = GaryxComposerPayloadStore()
+        for (id, generation, text) in [
+            (hostID, UInt64(10), ""),
+            (earlyID, UInt64(12), "early recovery"),
+            (lateID, UInt64(13), "late recovery"),
+        ] {
+            XCTAssertTrue(
+                store.insert(
+                    .init(
+                        id: id,
+                        scope: scope,
+                        destination: .draft(id.rawValue),
+                        lifecycleToken: .init(entryID: id, nonce: "token-\(id.rawValue)"),
+                        currentGeneration: generation,
+                        text: text
+                    )
+                )
+            )
+        }
+
+        func conflict(
+            id: GaryxPayloadConflictSetID,
+            recoveredEntryID: GaryxComposerPayloadEntryID
+        ) -> GaryxPayloadConflictSet {
+            var value = GaryxPayloadConflictSet(id: id, scope: scope)
+            XCTAssertTrue(
+                value.admitCandidate(
+                    .init(entryID: hostID, label: "Current draft"),
+                    membershipDurabilityAvailable: true
+                )
+            )
+            XCTAssertTrue(
+                value.admitCandidate(
+                    .init(entryID: recoveredEntryID, label: "Recovered send"),
+                    membershipDurabilityAvailable: true
+                )
+            )
+            return value
+        }
+
+        let lateConflict = conflict(
+            id: .init(rawValue: "a-lexically-first-late"),
+            recoveredEntryID: lateID
+        )
+        let earlyConflict = conflict(
+            id: .init(rawValue: "z-lexically-last-early"),
+            recoveredEntryID: earlyID
+        )
+        var queuedStore = store
+        let newDeliveryID = GaryxDeliveryRecordID(rawValue: "ordered-new-recovery")
+        var queuedHost = try XCTUnwrap(queuedStore.entry(hostID, scope: scope))
+        queuedHost.addDeliveryReference(newDeliveryID)
+        queuedStore.update(queuedHost)
+        let newDelivery = GaryxDeliveryRecord(
+            id: newDeliveryID,
+            scope: scope,
+            entryID: hostID,
+            reservationID: .init(rawValue: 14),
+            correlationID: "ordered-new-intent",
+            envelope: .init(
+                text: "new recovery",
+                attachmentIDs: [],
+                generation: 14,
+                clientIntentID: "ordered-new-intent"
+            )
+        )
+        let snapshot = GaryxComposerDurabilitySnapshot(
+            payloadStore: queuedStore,
+            conflicts: [
+                lateConflict.id: lateConflict,
+                earlyConflict.id: earlyConflict,
+            ],
+            deliveries: [newDeliveryID: newDelivery],
+            generationHighWatermark: 32
+        )
+
+        XCTAssertEqual(
+            GaryxDeferredDraftAdoptionPlanner.candidate(
+                snapshot: snapshot,
+                hostEntryID: hostID
+            )?.recoveredEntryID,
+            earlyID
+        )
+        let newRecovery = try XCTUnwrap(
+            GaryxUndispatchedDeliveryRecoveryPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: newDeliveryID,
+                recoveredEntryID: .init(rawValue: "ordered-new-entry"),
+                recoveredLifecycleNonce: "ordered-new-token",
+                recoveredGeneration: 15,
+                conflictSetID: .init(rawValue: "ordered-new-conflict"),
+                incompleteAttachmentFeedbackID: .init(rawValue: "ordered-new-feedback")
+            )
+        )
+        XCTAssertEqual(
+            newRecovery.placement,
+            .deferred(
+                entryID: .init(rawValue: "ordered-new-entry"),
+                conflictSetID: .init(rawValue: "ordered-new-conflict")
+            ),
+            "a newer recovery must not jump ahead when an older deferred payload is ready"
+        )
     }
 
     func testDuplicateExitCreatesNewIntentAndLateEvidenceOnlyClaimsOriginal() async throws {
@@ -197,7 +361,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         XCTAssertEqual(committed.deliveries[duplicateID]?.evidence, GaryxDeliveryEvidence.none)
     }
 
-    func testCreateResponseLossRestoreSettlesUndispatchedEnvelopeAndConflictAtomically() async throws {
+    func testCreateResponseLossRestoreDefersBehindCurrentDraftAtomically() async throws {
         let fixture = try await makeAmbiguousFixture(deliveryIsAmbiguous: false)
         var snapshot = try await fixture.store.load()
         var create = GaryxCreateDeliveryState(
@@ -227,6 +391,10 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
                 conflictSetID: conflictID
             )
         )
+        XCTAssertEqual(
+            plan.placement,
+            .deferred(entryID: recoveredID, conflictSetID: conflictID)
+        )
         snapshot = try await fixture.store.commit(plan.transaction)
 
         XCTAssertEqual(snapshot.deliveries[fixture.deliveryID]?.phase, .abandoned)
@@ -243,6 +411,13 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             "sealed message"
         )
         XCTAssertEqual(snapshot.conflicts[conflictID]?.candidates.count, 2)
+        XCTAssertTrue(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID,
+                hasInteractionOwner: true
+            ).isEmpty
+        )
     }
 
     func testCreateResponseLossRebuildChangesBothIntentsAndKeepsLateEvidenceIsolated() async throws {
@@ -422,7 +597,8 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
 
     private func makeAmbiguousFixture(
         deliveryIsAmbiguous: Bool = true,
-        includeAttachmentSnapshot: Bool = true
+        includeAttachmentSnapshot: Bool = true,
+        currentText: String = "live follow-up"
     ) async throws -> (
         store: GaryxFakeComposerDurabilityStore,
         entryID: GaryxComposerPayloadEntryID,
@@ -446,7 +622,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             destination: .thread("thread::test"),
             lifecycleToken: .init(entryID: entryID, nonce: "delivery-token"),
             currentGeneration: 11,
-            text: "live follow-up"
+            text: currentText
         )
         entry.addDeliveryReference(deliveryID)
         var ledger = GaryxProvisionalReservationLedger(

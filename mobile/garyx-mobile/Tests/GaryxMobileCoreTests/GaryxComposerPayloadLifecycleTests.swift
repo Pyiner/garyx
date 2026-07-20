@@ -1029,11 +1029,59 @@ final class GaryxComposerPayloadLifecycleTests: XCTestCase {
             )
         }
         XCTAssertEqual(set.candidates.count, 3)
-        XCTAssertTrue(set.pendingDecision)
-        for candidate in set.candidates.map(\.entryID) {
-            set.resolve(entryID: candidate)
-        }
-        XCTAssertFalse(set.pendingDecision)
+    }
+
+    func testLegacyPendingDecisionDecodesAsNoninteractiveConflictMembership() throws {
+        let set = GaryxPayloadConflictSet(
+            id: .init(rawValue: "legacy-conflict"),
+            scope: scope,
+            candidates: [
+                .init(
+                    entryID: .init(rawValue: "legacy-entry"),
+                    label: "Recovered send"
+                ),
+            ]
+        )
+        let currentData = try JSONEncoder().encode(set)
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: currentData) as? [String: Any]
+        )
+        legacyObject["pendingDecision"] = true
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+
+        XCTAssertEqual(try JSONDecoder().decode(GaryxPayloadConflictSet.self, from: legacyData), set)
+        let reencodedObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: currentData) as? [String: Any]
+        )
+        XCTAssertNil(reencodedObject["pendingDecision"])
+    }
+
+    func testMeaningfulCurrentPayloadProtectsAttachmentsAndInFlightOperations() {
+        var entry = makeEntry(text: " \n\t ")
+        XCTAssertFalse(entry.hasMeaningfulCurrentPayload)
+
+        let attachment = GaryxComposerAttachment(
+            id: .init(rawValue: "meaningful-attachment"),
+            stagedAssetID: .init(rawValue: "meaningful-asset"),
+            generation: entry.currentGeneration,
+            byteCount: 1
+        )
+        entry.addAttachment(attachment)
+        XCTAssertTrue(entry.hasMeaningfulCurrentPayload)
+
+        entry.removeAttachment(attachment.id)
+        XCTAssertFalse(entry.hasMeaningfulCurrentPayload)
+        entry.addOperation(
+            .init(
+                scope: scope,
+                entryID: entry.id,
+                generation: entry.currentGeneration,
+                reservationID: nil,
+                branch: .followup,
+                operationID: .init(rawValue: "meaningful-operation")
+            )
+        )
+        XCTAssertTrue(entry.hasMeaningfulCurrentPayload)
     }
 
     func testIdentityFiveEventsHaveDistinctDestructiveAuthority() throws {

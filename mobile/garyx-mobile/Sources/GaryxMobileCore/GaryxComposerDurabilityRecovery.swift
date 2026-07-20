@@ -96,6 +96,9 @@ public actor GaryxComposerDurabilityLaunchRecovery {
                 report.createSettlements += 1
                 continue
             }
+            if try await recoverOneDeferredDraft() {
+                continue
+            }
             if try await recoverOneUndispatchedDelivery() {
                 report.undispatchedDeliverySettlements += 1
                 continue
@@ -175,10 +178,10 @@ public actor GaryxComposerDurabilityLaunchRecovery {
     }
 
     /// A bare message that never crossed the durable attempt gate is known not
-    /// to have reached transport. Restore it through the conflict domain and
-    /// terminalize its outbox record in one transaction, reclaiming quota
-    /// without risking a duplicate send. Multi-stage creates keep their own
-    /// honest create-ambiguity exit instead.
+    /// to have reached transport. Restore it through automatic composer
+    /// placement and terminalize its outbox record in one transaction,
+    /// reclaiming quota without risking a duplicate send. Multi-stage creates
+    /// keep their own honest create-ambiguity exit instead.
     private func recoverOneUndispatchedDelivery() async throws -> Bool {
         let beforeAllocation = try await durability.load()
         guard let candidate = beforeAllocation.deliveries.values
@@ -210,6 +213,30 @@ public actor GaryxComposerDurabilityLaunchRecovery {
         ) else {
             throw GaryxComposerDurabilityRecoveryError
                 .undispatchedDeliveryCannotConverge(candidate.id)
+        }
+        _ = try await durability.commit(plan.transaction)
+        return true
+    }
+
+    /// A recovered payload deferred behind newer composer input remains
+    /// durable and invisible until its host is empty. Relaunch then adopts the
+    /// earliest eligible payload without presenting a choice or overwriting the
+    /// user's current intent.
+    private func recoverOneDeferredDraft() async throws -> Bool {
+        let beforeAllocation = try await durability.load()
+        guard let candidate = GaryxDeferredDraftAdoptionPlanner.candidate(
+            snapshot: beforeAllocation
+        ) else {
+            return false
+        }
+        let replacementGeneration = try await durability.allocatePayloadGeneration()
+        let snapshot = try await durability.load()
+        guard let plan = GaryxDeferredDraftAdoptionPlanner.plan(
+            snapshot: snapshot,
+            candidate: candidate,
+            replacementGeneration: replacementGeneration
+        ) else {
+            return true
         }
         _ = try await durability.commit(plan.transaction)
         return true

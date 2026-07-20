@@ -5,7 +5,7 @@ final class DurableDeliveryInteractionTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testUnknownSendRestoresThroughConflictWithoutOverwritingCurrentDraft() {
+    func testUnknownSendRestoresWithoutASecondDecisionCard() {
         let app = launchFixture()
         let restore = app.buttons["Restore uncertain send as draft"]
         XCTAssertTrue(restore.waitForExistence(timeout: 3))
@@ -13,14 +13,11 @@ final class DurableDeliveryInteractionTests: XCTestCase {
 
         restore.tap()
 
-        waitForStatus("restore:conflict", in: app)
+        waitForStatus("restore:automatic", in: app)
         XCTAssertFalse(app.staticTexts["Send status unknown"].exists)
-        XCTAssertTrue(app.staticTexts["Recovered message is ready"].waitForExistence(timeout: 3))
-        let keepCurrent = app.buttons["Keep current message draft"]
-        XCTAssertTrue(keepCurrent.waitForExistence(timeout: 3))
-        keepCurrent.tap()
-        waitForStatus("conflict:current", in: app)
         XCTAssertFalse(app.staticTexts["Recovered message is ready"].exists)
+        XCTAssertFalse(app.buttons["Use recovered message draft"].exists)
+        XCTAssertFalse(app.buttons["Keep current message draft"].exists)
     }
 
     func testDuplicateRiskExitRequiresExplicitWarningAndFreshIntentAction() {
@@ -74,7 +71,7 @@ final class DurableDeliveryInteractionTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Upload did not finish"].exists)
     }
 
-    func testAmbiguousCreateOffersConflictRestoreAndDuplicateRiskRebuild() {
+    func testAmbiguousCreateRestoresWithoutASecondDecisionCard() {
         var app = launchFixture(
             scenario: "create",
             expectedNoticeTitle: "Conversation creation status unknown"
@@ -89,8 +86,8 @@ final class DurableDeliveryInteractionTests: XCTestCase {
         XCTAssertTrue(rebuild.isHittable)
 
         restore.tap()
-        waitForStatus("create:restore:conflict", in: app)
-        XCTAssertTrue(app.staticTexts["Recovered message is ready"].waitForExistence(timeout: 3))
+        waitForStatus("create:restore:automatic", in: app)
+        XCTAssertFalse(app.staticTexts["Recovered message is ready"].exists)
 
         app.terminate()
         app = launchFixture(

@@ -37,15 +37,18 @@ struct GaryxComposerCreateRebuildPayload: Sendable {
 
 struct GaryxComposerRuntimeTestingHooks: Sendable {
     var beforePrepareSendReturns: (@Sendable () async -> Void)?
+    var beforeCommitSendReturns: (@Sendable () async -> Void)?
     var finalizationFailuresBeforeSuccess: Int
     var durabilityBoundaryHook: GaryxSQLiteComposerDurabilityStore.BoundaryHook
 
     init(
         beforePrepareSendReturns: (@Sendable () async -> Void)? = nil,
+        beforeCommitSendReturns: (@Sendable () async -> Void)? = nil,
         finalizationFailuresBeforeSuccess: Int = 0,
         durabilityBoundaryHook: @escaping GaryxSQLiteComposerDurabilityStore.BoundaryHook = { _ in }
     ) {
         self.beforePrepareSendReturns = beforePrepareSendReturns
+        self.beforeCommitSendReturns = beforeCommitSendReturns
         self.finalizationFailuresBeforeSuccess = finalizationFailuresBeforeSuccess
         self.durabilityBoundaryHook = durabilityBoundaryHook
     }
@@ -128,6 +131,7 @@ private actor GaryxComposerPayloadPersistenceQueue {
     private let durability: GaryxSQLiteComposerDurabilityStore
     private let staging: GaryxComposerStagedAssetStore
     private let beforePrepareSendReturns: (@Sendable () async -> Void)?
+    private let beforeCommitSendReturns: (@Sendable () async -> Void)?
     private var finalizationFailuresRemaining: Int
     private var acceptedInputSequences: [GaryxComposerInputSessionID: UInt64] = [:]
     private var launchRecoveryCompleted = false
@@ -154,6 +158,7 @@ private actor GaryxComposerPayloadPersistenceQueue {
             quotaLimitBytes: quotaLimitBytes
         )
         beforePrepareSendReturns = testingHooks.beforePrepareSendReturns
+        beforeCommitSendReturns = testingHooks.beforeCommitSendReturns
         finalizationFailuresRemaining = testingHooks.finalizationFailuresBeforeSuccess
     }
 
@@ -203,7 +208,18 @@ private actor GaryxComposerPayloadPersistenceQueue {
             $0.destination == key && $0.lifecycle.phase == .active
         } ?? []
         if matches.count == 1, let entry = matches.first {
-            return GaryxComposerDurableContext(snapshot: snapshot, entry: entry)
+            let adoption = try await adoptDeferredRecoveryIfHostEmpty(
+                snapshot: snapshot,
+                hostEntryID: entry.id
+            )
+            guard let adoptedEntry = adoption.snapshot.payloadStore.entry(entry.id, scope: scope)
+            else {
+                throw GaryxComposerPayloadRuntimeError.invalidTransition
+            }
+            return GaryxComposerDurableContext(
+                snapshot: adoption.snapshot,
+                entry: adoptedEntry
+            )
         }
         guard matches.isEmpty else {
             throw GaryxComposerPayloadRuntimeError.invalidTransition
@@ -676,6 +692,9 @@ private actor GaryxComposerPayloadPersistenceQueue {
                 mutations: [.upsertBarrier(barrier)]
             )
         )
+        if let beforeCommitSendReturns {
+            await beforeCommitSendReturns()
+        }
         guard let updated = released.payloadStore.entry(
             preparation.entryID,
             scope: preparation.scope
@@ -692,6 +711,63 @@ private actor GaryxComposerPayloadPersistenceQueue {
                 lifecycle: preparation.lifecycle
             )
         )
+    }
+
+    func adoptDeferredRecoveryIfHostEmpty(
+        hostEntryID: GaryxComposerPayloadEntryID,
+        scope: GaryxGatewayScope
+    ) async throws -> GaryxComposerDurableContext? {
+        await acquireTransactionGate()
+        defer { releaseTransactionGate() }
+        let snapshot = try await durability.load()
+        let adoption = try await adoptDeferredRecoveryIfHostEmpty(
+            snapshot: snapshot,
+            hostEntryID: hostEntryID
+        )
+        guard adoption.adopted,
+              let entry = adoption.snapshot.payloadStore.entry(hostEntryID, scope: scope) else {
+            return nil
+        }
+        return .init(snapshot: adoption.snapshot, entry: entry)
+    }
+
+    private func adoptDeferredRecoveryIfHostEmpty(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        hostEntryID: GaryxComposerPayloadEntryID
+    ) async throws -> (snapshot: GaryxComposerDurabilitySnapshot, adopted: Bool) {
+        guard let candidate = GaryxDeferredDraftAdoptionPlanner.candidate(
+            snapshot: snapshot,
+            hostEntryID: hostEntryID
+        ) else {
+            return (snapshot, false)
+        }
+        let replacementGeneration = try await durability.allocatePayloadGeneration()
+        let current = try await durability.load()
+        guard let plan = GaryxDeferredDraftAdoptionPlanner.plan(
+            snapshot: current,
+            candidate: candidate,
+            replacementGeneration: replacementGeneration
+        ) else {
+            return (current, false)
+        }
+        return (try await durability.commit(plan.transaction), true)
+    }
+
+    /// Placement is already durable before this best-effort queue advance.
+    /// If the extra adoption write fails, every recovered payload remains
+    /// rooted and a later activation or launch recovery retries it.
+    private func advanceDeferredRecoveryIfPossible(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        hostEntryID: GaryxComposerPayloadEntryID
+    ) async -> GaryxComposerDurabilitySnapshot {
+        do {
+            return try await adoptDeferredRecoveryIfHostEmpty(
+                snapshot: snapshot,
+                hostEntryID: hostEntryID
+            ).snapshot
+        } catch {
+            return snapshot
+        }
     }
 
     /// Publishes the producer-drained boundary and the N+1 snapshot together.
@@ -902,7 +978,11 @@ private actor GaryxComposerPayloadPersistenceQueue {
             throw GaryxComposerPayloadRuntimeError.invalidTransition
         }
         let committed = try await durability.commit(plan.transaction)
-        return context(for: handle, in: committed)
+        let settled = await advanceDeferredRecoveryIfPossible(
+            snapshot: committed,
+            hostEntryID: handle.entryID
+        )
+        return context(for: handle, in: settled)
     }
 
     func markDeliveryAmbiguous(
@@ -986,7 +1066,11 @@ private actor GaryxComposerPayloadPersistenceQueue {
             throw GaryxComposerPayloadRuntimeError.invalidTransition
         }
         let committed = try await durability.commit(plan.transaction)
-        guard let context = context(for: handle, in: committed) else {
+        let settled = await advanceDeferredRecoveryIfPossible(
+            snapshot: committed,
+            hostEntryID: handle.entryID
+        )
+        guard let context = context(for: handle, in: settled) else {
             throw GaryxComposerPayloadRuntimeError.staleActivation
         }
         return GaryxComposerAmbiguousExitResult(
@@ -1055,13 +1139,21 @@ private actor GaryxComposerPayloadPersistenceQueue {
             throw GaryxComposerPayloadRuntimeError.invalidTransition
         }
         let committed = try await durability.commit(plan.transaction)
-        guard let create = committed.createDeliveries[key],
+        guard let committedCreate = committed.createDeliveries[key],
+              let hostEntryID = committedCreate.entryID else {
+            throw GaryxComposerPayloadRuntimeError.staleActivation
+        }
+        let settled = await advanceDeferredRecoveryIfPossible(
+            snapshot: committed,
+            hostEntryID: hostEntryID
+        )
+        guard let create = settled.createDeliveries[key],
               let entryID = create.entryID,
-              let entry = committed.payloadStore.entry(entryID, scope: key.scope) else {
+              let entry = settled.payloadStore.entry(entryID, scope: key.scope) else {
             throw GaryxComposerPayloadRuntimeError.staleActivation
         }
         return GaryxComposerAmbiguousExitResult(
-            context: .init(snapshot: committed, entry: entry),
+            context: .init(snapshot: settled, entry: entry),
             envelope: plan.envelope,
             delivery: nil
         )
@@ -1110,46 +1202,6 @@ private actor GaryxComposerPayloadPersistenceQueue {
             ),
             plan.ambiguousAfter
         )
-    }
-
-    func resolveRecoveredDraft(
-        conflictSetID: GaryxPayloadConflictSetID,
-        recoveredEntryID: GaryxComposerPayloadEntryID,
-        host: GaryxComposerDurableContext,
-        useRecovered: Bool
-    ) async throws -> GaryxComposerDurableContext {
-        await acquireTransactionGate()
-        defer { releaseTransactionGate() }
-        let replacementGeneration: UInt64?
-        if useRecovered {
-            replacementGeneration = try await durability.allocatePayloadGeneration()
-        } else {
-            replacementGeneration = nil
-        }
-        let snapshot = try await durability.load()
-        let plan: GaryxRecoveredDraftResolutionPlan?
-        if let replacementGeneration {
-            plan = GaryxRecoveredDraftResolutionPlanner.useRecoveredDraft(
-                snapshot: snapshot,
-                conflictSetID: conflictSetID,
-                hostEntryID: host.entry.id,
-                recoveredEntryID: recoveredEntryID,
-                replacementGeneration: replacementGeneration
-            )
-        } else {
-            plan = GaryxRecoveredDraftResolutionPlanner.keepCurrentDraft(
-                snapshot: snapshot,
-                conflictSetID: conflictSetID,
-                hostEntryID: host.entry.id,
-                recoveredEntryID: recoveredEntryID
-            )
-        }
-        guard let plan else { throw GaryxComposerPayloadRuntimeError.invalidTransition }
-        let committed = try await durability.commit(plan.transaction)
-        guard let entry = committed.payloadStore.entry(host.entry.id, scope: host.entry.scope) else {
-            throw GaryxComposerPayloadRuntimeError.staleActivation
-        }
-        return .init(snapshot: committed, entry: entry)
     }
 
     func ingestDeliveryEvidence(
@@ -1439,6 +1491,15 @@ private actor GaryxComposerPayloadPersistenceQueue {
             throw GaryxComposerPayloadRuntimeError.invalidTransition
         }
         guard let entry = matches.first, entry.isReclaimable else { return nil }
+        guard GaryxDeferredDraftAdoptionPlanner.candidate(
+            snapshot: snapshot,
+            hostEntryID: entry.id
+        ) == nil else {
+            // The empty host is the durable destination of an unsent recovered
+            // payload. Keep it rooted until activation, send completion, or
+            // launch recovery can adopt the payload atomically.
+            return nil
+        }
         _ = try await durability.commit(
             .init(
                 expectedRevision: snapshot.revision,
@@ -2145,7 +2206,6 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
             throw GaryxComposerPayloadRuntimeError.staleActivation
         }
         let envelopeText = state.currentText
-        let sequenceAtSeal = state.lastAppliedSequence
         guard state.beginSend(
             reservationID: preparation.reservationID,
             followupGeneration: preparation.followupGeneration,
@@ -2185,6 +2245,11 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
             throw error
         }
         let updated = committed.context
+        // Freeze the adapter while the producer reconciles buffered follow-up
+        // input with a deferred recovery. This keeps a keystroke admitted
+        // during commitSend from being replaced by the older recovered payload.
+        snapshot.isReadOnly = true
+        grantCurrentConfigurationToLiveAdapter()
         guard durableContext?.entry.id == updated.entry.id,
               var settledState = inputState,
               settledState.session.sessionID == sessionID,
@@ -2196,6 +2261,8 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 scopes: scopes
               ) else {
             sendCommitInFlightSessionID = nil
+            snapshot.isReadOnly = false
+            grantCurrentConfigurationToLiveAdapter()
             throw GaryxComposerPayloadRuntimeError.invalidTransition
         }
 
@@ -2210,29 +2277,46 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         )
         durableContext = localContext
         inputState = settledState
-        sendCommitInFlightSessionID = nil
-        publish(context: localContext, readOnly: false)
-        grantCurrentConfigurationToLiveAdapter()
-
-        if followupSequence > sequenceAtSeal {
-            do {
-                let flushed = try await persistence.persistText(
-                    context: updated,
-                    sessionID: sessionID,
-                    sequence: followupSequence,
-                    generation: followupGeneration,
-                    text: followupText
-                )
-                if inputState?.session.sessionID == sessionID,
-                   inputState?.lastAppliedSequence == followupSequence {
-                    durableContext = flushed
-                    publish(context: flushed, readOnly: false)
-                }
-            } catch {
-                // The follow-up remains visible. Its next ordered event retries
-                // the same generation while the sealed envelope stays durable.
-            }
+        var authoritativeContext = localContext
+        var followupIsDurable = true
+        do {
+            authoritativeContext = try await persistence.persistText(
+                context: updated,
+                sessionID: sessionID,
+                sequence: followupSequence,
+                generation: followupGeneration,
+                text: followupText
+            )
+        } catch {
+            // Keep the buffered follow-up visible and skip automatic adoption.
+            // Its next ordered event retries while the recovered payload stays
+            // durably deferred.
+            followupIsDurable = false
         }
+
+        if followupIsDurable,
+           let adopted = try? await persistence.adoptDeferredRecoveryIfHostEmpty(
+               hostEntryID: updated.entry.id,
+               scope: updated.entry.scope
+           ) {
+            durableContext = adopted
+            sendCommitInFlightSessionID = nil
+            installInputState(for: adopted.entry)
+            publish(context: adopted, readOnly: false)
+            grantCurrentConfigurationToLiveAdapter()
+            advanceRouteActivationIfReady()
+            return GaryxComposerReadyPayload(
+                text: envelopeText,
+                attachments: preparation.attachments,
+                clientIntentID: preparation.clientIntentID,
+                delivery: committed.delivery
+            )
+        }
+
+        durableContext = authoritativeContext
+        sendCommitInFlightSessionID = nil
+        publish(context: authoritativeContext, readOnly: false)
+        grantCurrentConfigurationToLiveAdapter()
         advanceRouteActivationIfReady()
         return GaryxComposerReadyPayload(
             text: envelopeText,
@@ -2259,10 +2343,17 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     func recoverUndispatchedDelivery(
         _ delivery: GaryxComposerDeliveryHandle
     ) async throws {
-        if let updated = try await persistence.recoverUndispatchedDelivery(delivery),
-           durableContext?.entry.id == updated.entry.id {
-            durableContext = updated
-            publish(context: updated, readOnly: snapshot.isReadOnly)
+        let barrier = try await beginAutomaticRecoveryBarrier()
+        do {
+            if let updated = try await persistence.recoverUndispatchedDelivery(delivery),
+               durableContext?.entry.id == updated.entry.id {
+                finishAutomaticRecoveryBarrier(barrier, with: updated)
+            } else {
+                endAutomaticRecoveryBarrier(barrier)
+            }
+        } catch {
+            endAutomaticRecoveryBarrier(barrier)
+            throw error
         }
     }
 
@@ -2312,13 +2403,19 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 revision: context.entry.lifecycle.revision
             )
         )
-        let result = try await persistence.restoreAmbiguousDelivery(handle)
-        guard durableContext?.entry.id == result.context.entry.id else {
+        let barrier = try await beginAutomaticRecoveryBarrier()
+        do {
+            let result = try await persistence.restoreAmbiguousDelivery(handle)
+            guard durableContext?.entry.id == result.context.entry.id else {
+                endAutomaticRecoveryBarrier(barrier)
+                return result.envelope
+            }
+            finishAutomaticRecoveryBarrier(barrier, with: result.context)
             return result.envelope
+        } catch {
+            endAutomaticRecoveryBarrier(barrier)
+            throw error
         }
-        durableContext = result.context
-        publish(context: result.context, readOnly: snapshot.isReadOnly)
-        return result.envelope
     }
 
     func resendAmbiguousDelivery(
@@ -2364,13 +2461,80 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     func restoreAmbiguousCreate(
         _ key: GaryxCreateDeliveryKey
     ) async throws -> GaryxDeliveryEnvelope {
-        let result = try await persistence.restoreAmbiguousCreate(key)
-        guard durableContext?.entry.id == result.context.entry.id else {
+        let barrier = try await beginAutomaticRecoveryBarrier()
+        do {
+            let result = try await persistence.restoreAmbiguousCreate(key)
+            guard durableContext?.entry.id == result.context.entry.id else {
+                endAutomaticRecoveryBarrier(barrier)
+                return result.envelope
+            }
+            finishAutomaticRecoveryBarrier(barrier, with: result.context)
             return result.envelope
+        } catch {
+            endAutomaticRecoveryBarrier(barrier)
+            throw error
         }
-        durableContext = result.context
-        publish(context: result.context, readOnly: snapshot.isReadOnly)
-        return result.envelope
+    }
+
+    private typealias AutomaticRecoveryBarrier = (
+        entryID: GaryxComposerPayloadEntryID,
+        wasReadOnly: Bool
+    )
+
+    private func beginAutomaticRecoveryBarrier() async throws -> AutomaticRecoveryBarrier {
+        guard let context = durableContext,
+              let state = inputState else {
+            throw GaryxComposerPayloadRuntimeError.unavailable
+        }
+        let barrier = (entryID: context.entry.id, wasReadOnly: snapshot.isReadOnly)
+        snapshot.isReadOnly = true
+        grantCurrentConfigurationToLiveAdapter()
+        do {
+            let flushed = try await persistence.persistText(
+                context: context,
+                sessionID: state.session.sessionID,
+                sequence: state.lastAppliedSequence,
+                generation: state.currentGeneration,
+                text: state.currentText
+            )
+            guard durableContext?.entry.id == barrier.entryID else {
+                throw GaryxComposerPayloadRuntimeError.staleActivation
+            }
+            durableContext = flushed
+            return barrier
+        } catch {
+            endAutomaticRecoveryBarrier(barrier)
+            throw error
+        }
+    }
+
+    private func finishAutomaticRecoveryBarrier(
+        _ barrier: AutomaticRecoveryBarrier,
+        with updated: GaryxComposerDurableContext
+    ) {
+        guard durableContext?.entry.id == barrier.entryID else { return }
+        snapshot.isReadOnly = barrier.wasReadOnly
+        publishRecoveredContext(updated)
+        grantCurrentConfigurationToLiveAdapter()
+    }
+
+    private func endAutomaticRecoveryBarrier(_ barrier: AutomaticRecoveryBarrier) {
+        guard durableContext?.entry.id == barrier.entryID else { return }
+        snapshot.isReadOnly = barrier.wasReadOnly
+        grantCurrentConfigurationToLiveAdapter()
+    }
+
+    private func publishRecoveredContext(_ updated: GaryxComposerDurableContext) {
+        let adoptedIntoHost = durableContext?.entry.currentGeneration
+            != updated.entry.currentGeneration
+        durableContext = updated
+        if adoptedIntoHost {
+            installInputState(for: updated.entry)
+        }
+        publish(context: updated, readOnly: snapshot.isReadOnly)
+        if adoptedIntoHost {
+            grantCurrentConfigurationToLiveAdapter()
+        }
     }
 
     func rebuildAmbiguousCreate(
@@ -2400,28 +2564,6 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 $0.createIntentID == newIntentID && $0.phase == .createPending
             }
         )
-    }
-
-    func resolveRecoveredDraft(
-        conflictSetID: GaryxPayloadConflictSetID,
-        recoveredEntryID: GaryxComposerPayloadEntryID,
-        useRecovered: Bool
-    ) async throws {
-        guard let context = durableContext else {
-            throw GaryxComposerPayloadRuntimeError.unavailable
-        }
-        let updated = try await persistence.resolveRecoveredDraft(
-            conflictSetID: conflictSetID,
-            recoveredEntryID: recoveredEntryID,
-            host: context,
-            useRecovered: useRecovered
-        )
-        guard durableContext?.entry.id == updated.entry.id else { return }
-        durableContext = updated
-        installInputState(for: updated.entry)
-        publish(context: updated, readOnly: snapshot.isReadOnly)
-        replaceLiveText(updated.entry.currentText)
-        grantCurrentConfigurationToLiveAdapter()
     }
 
     func acknowledgeFeedback(_ feedbackID: GaryxFeedbackID) async throws {

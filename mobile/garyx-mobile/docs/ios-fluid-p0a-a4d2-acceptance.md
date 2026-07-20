@@ -42,11 +42,18 @@ code or endpoint contract changes are part of this slice.
 - A bare message killed after `commitSend` but before the attempt marker is not
   left as a hidden `notDispatched` record and is never silently sent. Relaunch,
   or a live attempt-marker storage failure, atomically restores the immutable
-  envelope through `PayloadConflictSet`, terminalizes the delivery as
+  envelope to composer ownership, terminalizes the delivery as
   `abandoned/restoredToDraft`, removes its host reference, and releases both
-  delivery quotas. Multi-stage create ownership remains on its explicit create
-  ambiguity path. Legacy A4d-1 envelopes lacking attachment snapshots recover
-  their text and publish a durable warning to reattach the missing files.
+  delivery quotas. Placement is automatic: a host with only whitespace and no
+  attachments or in-flight operation adopts the envelope in the same
+  transaction; a meaningful host stays byte-for-byte intact while the envelope
+  remains a separately rooted durable payload. Deferred payloads are adopted in
+  recovery-generation order after the newer draft is committed to the durable
+  delivery pipeline, or on a later activation/relaunch once its host is blank.
+  No recovery-choice notice or action is projected. Multi-stage create
+  ownership remains on its explicit create ambiguity path. Legacy A4d-1
+  envelopes lacking attachment snapshots recover their text and publish a
+  durable warning to reattach the missing files.
 - The gateway paths and request bodies remain compatible: start-chat still
   carries the existing message, attachments, workspace, and metadata fields,
   including `client_intent_id`. Existing low-level sends without a durable
@@ -60,10 +67,11 @@ code or endpoint contract changes are part of this slice.
   exact gateway scope plus correlation ID and can acknowledge an ambiguous
   record without depending on the active composer Entry.
 - An unresolved record is rendered inline as **Send status unknown**. The two
-  explicit actions are atomic durability transactions: restore the envelope as
-  a separate `GaryxPayloadConflictSet` candidate, or resend a clearly labelled
-  duplicate-risk copy with a fresh client intent ID. Late evidence can still
-  claim the original correlation without undoing either user disposition.
+  explicit actions are atomic durability transactions: restore the envelope to
+  the automatic composer-placement path above, or resend a clearly labelled
+  duplicate-risk copy with a fresh client intent ID. Restore never opens a
+  second draft-choice interaction. Late evidence can still claim the original
+  correlation without undoing either user disposition.
 - Conversation creation persists `createPending`, `threadCreated`, optional
   `bindingCompleted`, and `chatStartAttempted` separately. Lost create,
   binding, or chat responses become ambiguous at the exact durable stage. A
@@ -153,8 +161,8 @@ user exit rather than remaining hidden in `notDispatched` or
 The production notice stack is exercised through an isolated app-hosted
 fixture using the same view and action types. Five XCUITests cover:
 
-- unknown-send restore through a conflict without overwriting the current
-  draft;
+- unknown-send restore through automatic placement without overwriting the
+  current draft;
 - duplicate-risk resend warning and fresh-intent action;
 - durable feedback acknowledgement, upload retry, and upload removal;
 - lost-create restore and duplicate-risk conversation rebuild; and

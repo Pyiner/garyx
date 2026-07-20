@@ -367,7 +367,6 @@ final class GaryxFluidA3ReviewRegressionTests: XCTestCase {
         )
         XCTAssertEqual(store.entry(source.id, scope: scope)?.destination, .thread("thread"))
         XCTAssertEqual(conflicts[conflictID]?.candidates.map(\.entryID), expectedCandidates)
-        XCTAssertTrue(conflicts[conflictID]?.pendingDecision == true)
     }
 
     func testRevokedOriginPromotionCannotMigrateIntoDeadPartition() {

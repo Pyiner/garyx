@@ -739,6 +739,221 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         try await coordinator.acknowledgeDelivery(payload.delivery)
     }
 
+    func testDeferredUndispatchedRecoverySurfacesAfterCurrentDraftSend() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let scope = GaryxGatewayScope(identity: "deferred-recovery-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("deferred-recovery")
+        await coordinator.activate(scope: scope, key: key)
+        let host = GaryxComposerOrderedTextView(
+            occurrenceID: .init(rawValue: "deferred-recovery-host"),
+            composerKey: key
+        )
+        host.onOrderedText = coordinator.acceptText
+        coordinator.register(host, isCanonicalTop: true)
+
+        var revision = coordinator.snapshot.revision
+        host.replaceLiveText("recovered but not dispatched")
+        try await waitUntil {
+            coordinator.currentText == "recovered but not dispatched"
+                && coordinator.snapshot.revision >= revision + 2
+        }
+        let undispatched = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-recovery-undispatched"
+        )
+        XCTAssertEqual(host.text, "")
+
+        revision = coordinator.snapshot.revision
+        host.replaceLiveText("current latest intent")
+        try await waitUntil {
+            coordinator.currentText == "current latest intent"
+                && coordinator.snapshot.revision >= revision + 2
+        }
+        try await coordinator.recoverUndispatchedDelivery(undispatched.delivery)
+
+        XCTAssertEqual(coordinator.currentText, "current latest intent")
+        XCTAssertEqual(host.text, "current latest intent")
+        XCTAssertTrue(coordinator.durableNotices.isEmpty)
+
+        let current = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-recovery-current"
+        )
+        XCTAssertEqual(current.text, "current latest intent")
+        XCTAssertEqual(coordinator.currentText, "recovered but not dispatched")
+        XCTAssertEqual(coordinator.inputConfiguration()?.initialText, "recovered but not dispatched")
+        XCTAssertEqual(host.text, "recovered but not dispatched")
+
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        let snapshot = try await durability.load()
+        XCTAssertTrue(snapshot.conflicts.isEmpty)
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(current.delivery.entryID, scope: scope)?.currentText,
+            "recovered but not dispatched"
+        )
+        XCTAssertEqual(snapshot.deliveries[undispatched.delivery.deliveryID]?.phase, .abandoned)
+
+        try await coordinator.markTransportAttempted(current.delivery)
+        try await coordinator.acknowledgeDelivery(current.delivery)
+    }
+
+    func testDeferredRecoveriesStayFIFOWhenHostClearsBeforeNextRecovery() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let scope = GaryxGatewayScope(identity: "deferred-fifo-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("deferred-fifo")
+        await coordinator.activate(scope: scope, key: key)
+
+        try await persistText("first recovered payload", in: coordinator)
+        let first = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-fifo-first"
+        )
+        try await persistText("second recovered payload", in: coordinator)
+        let second = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-fifo-second"
+        )
+        try await persistText("current latest intent", in: coordinator)
+        try await coordinator.recoverUndispatchedDelivery(first.delivery)
+        XCTAssertEqual(coordinator.currentText, "current latest intent")
+
+        try await persistText("", in: coordinator)
+        try await coordinator.recoverUndispatchedDelivery(second.delivery)
+        XCTAssertEqual(coordinator.currentText, "first recovered payload")
+        XCTAssertTrue(coordinator.durableNotices.isEmpty)
+
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        var snapshot = try await durability.load()
+        XCTAssertEqual(snapshot.conflicts.count, 1)
+
+        let promotedFirst = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-fifo-promoted-first"
+        )
+        XCTAssertEqual(promotedFirst.text, "first recovered payload")
+        XCTAssertEqual(coordinator.currentText, "second recovered payload")
+        snapshot = try await durability.load()
+        XCTAssertTrue(snapshot.conflicts.isEmpty)
+    }
+
+    func testBufferedInputWinsOverDeferredRecoveryDuringSendCommit() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = ComposerAsyncGate(suspensionsToSkip: 1)
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory,
+            testingHooks: .init(beforeCommitSendReturns: { await gate.suspend() })
+        )
+        let scope = GaryxGatewayScope(identity: "deferred-send-race-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("deferred-send-race")
+        await coordinator.activate(scope: scope, key: key)
+
+        try await persistText("older recovered payload", in: coordinator)
+        let undispatched = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-send-race-undispatched"
+        )
+        try await persistText("current payload being sent", in: coordinator)
+        try await coordinator.recoverUndispatchedDelivery(undispatched.delivery)
+
+        let send = Task {
+            try await coordinator.takeReadyPayload(
+                clientIntentID: "deferred-send-race-current"
+            )
+        }
+        await gate.waitUntilSuspended()
+        let configuration = try XCTUnwrap(coordinator.inputConfiguration())
+        coordinator.acceptText(
+            "typed while current payload commits",
+            identity: .init(
+                composerKey: configuration.composerKey,
+                sessionID: configuration.sessionID,
+                inputSessionEpoch: configuration.epoch,
+                payloadGeneration: configuration.payloadGeneration,
+                reservationID: configuration.reservationID,
+                inputSequence: configuration.nextInputSequence
+            )
+        )
+        await gate.resume()
+
+        let current = try await send.value
+        XCTAssertEqual(current.text, "current payload being sent")
+        XCTAssertEqual(coordinator.currentText, "typed while current payload commits")
+        XCTAssertTrue(coordinator.durableNotices.isEmpty)
+
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        var snapshot = try await durability.load()
+        XCTAssertEqual(snapshot.conflicts.count, 1)
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(current.delivery.entryID, scope: scope)?.currentText,
+            "typed while current payload commits"
+        )
+
+        let followup = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-send-race-followup"
+        )
+        XCTAssertEqual(followup.text, "typed while current payload commits")
+        XCTAssertEqual(coordinator.currentText, "older recovered payload")
+        snapshot = try await durability.load()
+        XCTAssertTrue(snapshot.conflicts.isEmpty)
+    }
+
+    func testClearedHostKeepsDeferredRecoveryRootedUntilReactivation() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let scope = GaryxGatewayScope(identity: "deferred-reactivation-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("deferred-reactivation")
+        await coordinator.activate(scope: scope, key: key)
+
+        try await persistText("recovered after revisit", in: coordinator)
+        let undispatched = try await coordinator.takeReadyPayload(
+            clientIntentID: "deferred-reactivation-undispatched"
+        )
+        try await persistText("newer draft cleared by user", in: coordinator)
+        try await coordinator.recoverUndispatchedDelivery(undispatched.delivery)
+        try await persistText("", in: coordinator)
+
+        try await coordinator.discard(key: key)
+        XCTAssertEqual(coordinator.activeKey, key)
+        XCTAssertEqual(coordinator.currentText, "")
+
+        await coordinator.activate(scope: scope, key: key)
+        XCTAssertEqual(coordinator.currentText, "recovered after revisit")
+        XCTAssertEqual(
+            coordinator.inputConfiguration()?.initialText,
+            "recovered after revisit"
+        )
+
+        let databaseURL = directory
+            .appendingPathComponent("Garyx", isDirectory: true)
+            .appendingPathComponent("ComposerPayload", isDirectory: true)
+            .appendingPathComponent("composer.sqlite", isDirectory: false)
+        let durability = try GaryxSQLiteComposerDurabilityStore(databaseURL: databaseURL)
+        let snapshot = try await durability.load()
+        XCTAssertTrue(snapshot.conflicts.isEmpty)
+        XCTAssertEqual(
+            snapshot.payloadStore.entry(undispatched.delivery.entryID, scope: scope)?.currentText,
+            "recovered after revisit"
+        )
+    }
+
     func testProductionSendBarrierRetainsAttachmentSnapshotsForAmbiguousExit() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1023,6 +1238,12 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
 
         let recoveredPhase = try await coordinator.deliveryPhase(for: payload.delivery)
         XCTAssertEqual(recoveredPhase, .abandoned)
+        XCTAssertEqual(coordinator.currentText, "recover before dispatch")
+        XCTAssertEqual(
+            coordinator.inputConfiguration()?.initialText,
+            "recover before dispatch"
+        )
+        XCTAssertTrue(coordinator.durableNotices.isEmpty)
         let databaseURL = directory
             .appendingPathComponent("Garyx", isDirectory: true)
             .appendingPathComponent("ComposerPayload", isDirectory: true)
@@ -1035,15 +1256,17 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
                 hostEntryID: payload.delivery.entryID,
                 hasInteractionOwner: true
             ).map(\.kind),
-            [.payloadConflict]
+            []
         )
         let recoveredEntryID = GaryxComposerPayloadEntryID(
             rawValue: "undispatched-recovery-\(payload.delivery.deliveryID.rawValue)"
         )
+        XCTAssertNil(snapshot.payloadStore.entry(recoveredEntryID, scope: scope))
         XCTAssertEqual(
-            snapshot.payloadStore.entry(recoveredEntryID, scope: scope)?.currentText,
+            snapshot.payloadStore.entry(payload.delivery.entryID, scope: scope)?.currentText,
             "recover before dispatch"
         )
+        XCTAssertTrue(snapshot.conflicts.isEmpty)
         XCTAssertEqual(
             snapshot.payloadStore.entry(payload.delivery.entryID, scope: scope)?
                 .deliveryReferences.count,
@@ -1282,7 +1505,7 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
                 inputSessionEpoch: configuration.epoch,
                 payloadGeneration: configuration.payloadGeneration,
                 reservationID: configuration.reservationID,
-                inputSequence: 1
+                inputSequence: configuration.nextInputSequence
             )
         )
         for _ in 0..<100 where coordinator.snapshot.revision < revision + 2 {
@@ -1328,10 +1551,21 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
 }
 
 private actor ComposerAsyncGate {
+    private var suspensionsToSkip: Int
+    private var didCompleteSuspension = false
     private var isSuspended = false
     private var continuation: CheckedContinuation<Void, Never>?
 
+    init(suspensionsToSkip: Int = 0) {
+        self.suspensionsToSkip = suspensionsToSkip
+    }
+
     func suspend() async {
+        guard !didCompleteSuspension else { return }
+        if suspensionsToSkip > 0 {
+            suspensionsToSkip -= 1
+            return
+        }
         isSuspended = true
         await withCheckedContinuation { continuation in
             self.continuation = continuation
@@ -1347,6 +1581,8 @@ private actor ComposerAsyncGate {
     func resume() {
         continuation?.resume()
         continuation = nil
+        isSuspended = false
+        didCompleteSuspension = true
     }
 }
 

@@ -821,7 +821,7 @@ final class GaryxComposerDurabilityCrashHarnessTests: XCTestCase {
         XCTAssertEqual(summary.hostDeliveryReferenceCount, 0, context)
         XCTAssertEqual(summary.nonTerminalDeliveryGlobal, 0, context)
         XCTAssertEqual(summary.nonTerminalDeliveryForScope, 0, context)
-        XCTAssertEqual(summary.durableNoticeKinds, ["payloadConflict"], context)
+        XCTAssertTrue(summary.durableNoticeKinds.isEmpty, context)
     }
 
     private func assertSyntheticRevocation(_ summary: HarnessSummary, context: String) {

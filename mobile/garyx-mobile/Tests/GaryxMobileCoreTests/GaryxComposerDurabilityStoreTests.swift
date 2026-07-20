@@ -1392,7 +1392,7 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         XCTAssertEqual(restoredEntry.currentText, "U")
     }
 
-    func testAmbiguousRestoreAndConflictMembershipCommitAtomically() async throws {
+    func testAmbiguousRestoreAutomaticPlacementCommitsAtomically() async throws {
         let ledger = makeLedger(outcome: .committed)
         var original = GaryxDeliveryRecord(
             id: deliveryID,
@@ -1404,39 +1404,46 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         )
         XCTAssertTrue(original.markTransportAttempted())
         XCTAssertTrue(original.markAmbiguous())
-        var recovered = original
-        var conflict = GaryxPayloadConflictSet(
-            id: GaryxPayloadConflictSetID(rawValue: "delivery-conflict"),
-            scope: scope
+        var host = GaryxComposerPayloadEntry(
+            id: entryID,
+            scope: scope,
+            destination: .draft("D"),
+            lifecycleToken: .init(entryID: entryID, nonce: "delivery-host"),
+            currentGeneration: 11,
+            text: "newer current draft"
         )
-        let candidate = GaryxPayloadConflictCandidate(
-            entryID: entryID,
-            label: "Recovered draft"
-        )
-        guard case .restored = GaryxDeliveryDraftRecoveryReducer.restore(
-            record: &recovered,
-            conflictSet: &conflict,
-            candidate: candidate,
-            membershipDurabilityAvailable: true
-        ) else {
-            return XCTFail("expected recovery plan")
-        }
+        host.addDeliveryReference(deliveryID)
+        var payloadStore = GaryxComposerPayloadStore()
+        XCTAssertTrue(payloadStore.insert(host))
 
         let initial = GaryxComposerDurabilitySnapshot(
+            payloadStore: payloadStore,
             ledgers: [ledger.key: ledger],
-            deliveries: [original.id: original]
+            deliveries: [original.id: original],
+            generationHighWatermark: 32
         )
-        let mutations: [GaryxComposerDurabilityMutation] = [
-            .upsertConflict(conflict),
-            .upsertDelivery(recovered),
-        ]
+        let recoveredEntryID = GaryxComposerPayloadEntryID(rawValue: "recovered-entry")
+        let conflictSetID = GaryxPayloadConflictSetID(rawValue: "delivery-conflict")
+        let plan = try XCTUnwrap(
+            GaryxDeliveryDraftRecoveryPlanner.plan(
+                snapshot: initial,
+                deliveryID: deliveryID,
+                recoveredEntryID: recoveredEntryID,
+                recoveredLifecycleNonce: "recovered-token",
+                recoveredGeneration: 12,
+                conflictSetID: conflictSetID
+            )
+        )
+        XCTAssertEqual(
+            plan.placement,
+            .deferred(entryID: recoveredEntryID, conflictSetID: conflictSetID)
+        )
+        let mutations = plan.transaction.mutations
         for index in mutations.indices {
             let fake = GaryxFakeComposerDurabilityStore(initial: initial)
             await fake.injectFailure(atMutationIndex: index)
             do {
-                _ = try await fake.commit(
-                    .init(expectedRevision: 0, label: "restore ambiguous", mutations: mutations)
-                )
+                _ = try await fake.commit(plan.transaction)
                 XCTFail("expected failpoint")
             } catch {}
             let unchanged = try await fake.load()
@@ -1444,11 +1451,17 @@ final class GaryxComposerDurabilityStoreTests: XCTestCase {
         }
 
         let fake = GaryxFakeComposerDurabilityStore(initial: initial)
-        let committed = try await fake.commit(
-            .init(expectedRevision: 0, label: "restore ambiguous", mutations: mutations)
-        )
+        let committed = try await fake.commit(plan.transaction)
         XCTAssertEqual(committed.deliveries[original.id]?.phase, .abandoned)
-        XCTAssertEqual(committed.conflicts[conflict.id]?.candidates, [candidate])
+        XCTAssertEqual(
+            committed.payloadStore.entry(entryID, scope: scope)?.currentText,
+            "newer current draft"
+        )
+        XCTAssertEqual(
+            committed.payloadStore.entry(recoveredEntryID, scope: scope)?.currentText,
+            "message"
+        )
+        XCTAssertEqual(committed.conflicts[conflictSetID]?.candidates.count, 2)
     }
 
     func testDeliveryUpsertRejectsAcknowledgementEvidenceRegression() async throws {

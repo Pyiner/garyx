@@ -4,16 +4,25 @@ import Foundation
 
 public struct GaryxDeliveryDraftRecoveryPlan: Equatable, Sendable {
     public let envelope: GaryxDeliveryEnvelope
-    public let recoveredEntryID: GaryxComposerPayloadEntryID
-    public let conflictSetID: GaryxPayloadConflictSetID
+    public let placement: GaryxRecoveredDraftPlacement
     public let unrestoredAttachmentIDs: [GaryxAttachmentID]
     public let transaction: GaryxComposerDurabilityTransaction
 }
 
+public enum GaryxRecoveredDraftPlacement: Equatable, Sendable {
+    case adoptedIntoHost
+    case deferred(
+        entryID: GaryxComposerPayloadEntryID,
+        conflictSetID: GaryxPayloadConflictSetID
+    )
+}
+
 public enum GaryxDeliveryDraftRecoveryPlanner {
-    /// Restores an ambiguous envelope as a separate conflict candidate. It
-    /// never writes into the active follow-up Entry; that requires a later,
-    /// explicit conflict-resolution transaction.
+    /// Restores an envelope without interrupting a newer draft. An empty host
+    /// with no older deferred recovery adopts the payload in this transaction.
+    /// A meaningful host, or one already waiting for an earlier recovery,
+    /// remains byte for byte unchanged while the new recovered payload is
+    /// durably deferred for automatic FIFO adoption.
     public static func plan(
         snapshot: GaryxComposerDurabilitySnapshot,
         deliveryID: GaryxDeliveryRecordID,
@@ -49,69 +58,31 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
             return nil
         }
 
-        var conflict = snapshot.conflicts[conflictSetID]
-            ?? GaryxPayloadConflictSet(id: conflictSetID, scope: record.scope)
-        guard conflict.scope == record.scope,
-              conflict.admitCandidate(
-                GaryxPayloadConflictCandidate(
-                    entryID: hostEntry.id,
-                    label: "Current draft"
-                ),
-                membershipDurabilityAvailable: true
-              ) else {
-            return nil
-        }
-        let recoveredCandidate = GaryxPayloadConflictCandidate(
-            entryID: recoveredEntryID,
-            label: "Recovered send"
-        )
         guard case .restored(let envelope) = GaryxDeliveryDraftRecoveryReducer.restore(
             record: &record,
-            conflictSet: &conflict,
-            candidate: recoveredCandidate,
-            membershipDurabilityAvailable: true,
             allowingUndispatched: allowingUndispatched
         ) else {
             return nil
         }
 
-        var recoveredEntry = GaryxComposerPayloadEntry(
-            id: recoveredEntryID,
-            scope: record.scope,
-            destination: .draft("delivery-recovery-\(recoveredEntryID.rawValue)"),
-            lifecycleToken: GaryxPayloadLifecycleToken(
-                entryID: recoveredEntryID,
-                nonce: recoveredLifecycleNonce
-            ),
-            currentGeneration: recoveredGeneration,
-            text: envelope.text
-        )
-        for attachment in envelope.attachments {
-            recoveredEntry.addAttachment(
-                GaryxComposerAttachment(
-                    id: attachment.id,
-                    stagedAssetID: attachment.stagedAssetID,
-                    generation: recoveredGeneration,
-                    byteCount: attachment.byteCount,
-                    kind: attachment.kind,
-                    name: attachment.name,
-                    mediaType: attachment.mediaType,
-                    uploadedPath: attachment.uploadedPath,
-                    previewDataURL: attachment.previewDataURL
-                )
+        let restoredAttachments = envelope.attachments.map { attachment in
+            GaryxComposerAttachment(
+                id: attachment.id,
+                stagedAssetID: attachment.stagedAssetID,
+                generation: recoveredGeneration,
+                byteCount: attachment.byteCount,
+                kind: attachment.kind,
+                name: attachment.name,
+                mediaType: attachment.mediaType,
+                uploadedPath: attachment.uploadedPath,
+                previewDataURL: attachment.previewDataURL
             )
         }
         hostEntry.removeDeliveryReference(deliveryID)
-        var mutations: [GaryxComposerDurabilityMutation] = [
-            .claimGeneration(recoveredGeneration),
-            .upsertEntry(hostEntry),
-            .upsertEntry(recoveredEntry),
-            .upsertConflict(conflict),
-            .upsertDelivery(record),
-        ]
+        var feedback: GaryxOperationFeedback?
         if !unrestoredAttachmentIDs.isEmpty,
            let feedbackID = incompleteAttachmentFeedbackID {
-            let feedback = GaryxOperationFeedback(
+            feedback = GaryxOperationFeedback(
                 id: feedbackID,
                 scope: record.scope,
                 entryID: hostEntry.id,
@@ -119,17 +90,75 @@ public enum GaryxDeliveryDraftRecoveryPlanner {
                 kind: .deliveryAttachmentRecoveryIncomplete
             )
             hostEntry.addFeedbackReference(feedbackID)
-            mutations[1] = .upsertEntry(hostEntry)
+        }
+
+        let placement: GaryxRecoveredDraftPlacement
+        var mutations: [GaryxComposerDurabilityMutation] = [
+            .claimGeneration(recoveredGeneration),
+        ]
+        let hasEarlierDeferredRecovery = GaryxDeferredDraftAdoptionPlanner.candidate(
+            snapshot: snapshot,
+            hostEntryID: hostEntry.id
+        ) != nil
+        if hostEntry.hasMeaningfulCurrentPayload || hasEarlierDeferredRecovery {
+            var conflict = snapshot.conflicts[conflictSetID]
+                ?? GaryxPayloadConflictSet(id: conflictSetID, scope: record.scope)
+            guard conflict.scope == record.scope,
+                  conflict.admitCandidate(
+                    .init(entryID: hostEntry.id, label: "Current draft"),
+                    membershipDurabilityAvailable: true
+                  ),
+                  conflict.admitCandidate(
+                    .init(entryID: recoveredEntryID, label: "Recovered send"),
+                    membershipDurabilityAvailable: true
+                  ) else {
+                return nil
+            }
+            var recoveredEntry = GaryxComposerPayloadEntry(
+                id: recoveredEntryID,
+                scope: record.scope,
+                destination: .draft("delivery-recovery-\(recoveredEntryID.rawValue)"),
+                lifecycleToken: GaryxPayloadLifecycleToken(
+                    entryID: recoveredEntryID,
+                    nonce: recoveredLifecycleNonce
+                ),
+                currentGeneration: recoveredGeneration,
+                text: envelope.text
+            )
+            for attachment in restoredAttachments {
+                recoveredEntry.addAttachment(attachment)
+            }
+            placement = .deferred(entryID: recoveredEntryID, conflictSetID: conflictSetID)
+            mutations.append(contentsOf: [
+                .upsertEntry(hostEntry),
+                .upsertEntry(recoveredEntry),
+                .upsertConflict(conflict),
+                .upsertDelivery(record),
+            ])
+        } else {
+            guard hostEntry.replaceCurrentPayload(
+                text: envelope.text,
+                attachments: restoredAttachments,
+                generation: recoveredGeneration
+            ) else {
+                return nil
+            }
+            placement = .adoptedIntoHost
+            mutations.append(contentsOf: [
+                .upsertEntry(hostEntry),
+                .upsertDelivery(record),
+            ])
+        }
+        if let feedback {
             mutations.append(.upsertFeedback(feedback))
         }
         return GaryxDeliveryDraftRecoveryPlan(
             envelope: envelope,
-            recoveredEntryID: recoveredEntryID,
-            conflictSetID: conflictSetID,
+            placement: placement,
             unrestoredAttachmentIDs: unrestoredAttachmentIDs,
             transaction: GaryxComposerDurabilityTransaction(
                 expectedRevision: snapshot.revision,
-                label: "restore delivery through payload conflict",
+                label: "restore delivery with automatic payload placement",
                 mutations: mutations
             )
         )
@@ -169,7 +198,7 @@ public enum GaryxUndispatchedDeliveryRecoveryPlanner {
 
     /// Automatic recovery identities are derived from the durable delivery so
     /// a crash before or after the recovery transaction can retry the same
-    /// logical exit without creating duplicate conflict candidates or chips.
+    /// logical exit without creating duplicate deferred payloads or feedback.
     public static func automaticPlan(
         snapshot: GaryxComposerDurabilitySnapshot,
         deliveryID: GaryxDeliveryRecordID,
@@ -261,15 +290,15 @@ public enum GaryxDeliveryDuplicateResendPlanner {
 public struct GaryxCreateDraftRecoveryPlan: Equatable, Sendable {
     public let envelope: GaryxDeliveryEnvelope
     public let deliveryID: GaryxDeliveryRecordID
-    public let recoveredEntryID: GaryxComposerPayloadEntryID
-    public let conflictSetID: GaryxPayloadConflictSetID
+    public let placement: GaryxRecoveredDraftPlacement
     public let transaction: GaryxComposerDurabilityTransaction
 }
 
 public enum GaryxCreateDraftRecoveryPlanner {
     /// The create response and its message envelope settle together. A
     /// not-dispatched message is safe to restore, while an attempted chat-start
-    /// uses the same conflict-preserving exit as an ambiguous delivery.
+    /// uses the same non-overwriting automatic placement as an ambiguous
+    /// delivery.
     public static func plan(
         snapshot: GaryxComposerDurabilitySnapshot,
         key: GaryxCreateDeliveryKey,
@@ -308,11 +337,10 @@ public enum GaryxCreateDraftRecoveryPlanner {
         return GaryxCreateDraftRecoveryPlan(
             envelope: deliveryPlan.envelope,
             deliveryID: delivery.id,
-            recoveredEntryID: recoveredEntryID,
-            conflictSetID: conflictSetID,
+            placement: deliveryPlan.placement,
             transaction: .init(
                 expectedRevision: snapshot.revision,
-                label: "restore ambiguous create and message through payload conflict",
+                label: "restore ambiguous create with automatic payload placement",
                 mutations: deliveryPlan.transaction.mutations + [.upsertCreateDelivery(create)]
             )
         )
@@ -390,57 +418,93 @@ public enum GaryxCreateDuplicateRebuildPlanner {
     }
 }
 
-public struct GaryxRecoveredDraftResolutionPlan: Equatable, Sendable {
-    public let transaction: GaryxComposerDurabilityTransaction
-}
+public struct GaryxDeferredDraftAdoptionCandidate: Equatable, Sendable {
+    public let conflictSetID: GaryxPayloadConflictSetID
+    public let hostEntryID: GaryxComposerPayloadEntryID
+    public let recoveredEntryID: GaryxComposerPayloadEntryID
 
-public enum GaryxRecoveredDraftResolutionPlanner {
-    public static func keepCurrentDraft(
-        snapshot: GaryxComposerDurabilitySnapshot,
+    public init(
         conflictSetID: GaryxPayloadConflictSetID,
         hostEntryID: GaryxComposerPayloadEntryID,
         recoveredEntryID: GaryxComposerPayloadEntryID
-    ) -> GaryxRecoveredDraftResolutionPlan? {
-        guard let conflict = snapshot.conflicts[conflictSetID],
-              conflict.pendingDecision,
-              conflict.candidates.contains(where: { $0.entryID == hostEntryID }),
-              conflict.candidates.contains(where: { $0.entryID == recoveredEntryID }),
-              let recovered = snapshot.payloadStore.entry(
-                recoveredEntryID,
-                scope: conflict.scope
-              ),
-              recovered.isReclaimable == false else {
-            return nil
-        }
-        return GaryxRecoveredDraftResolutionPlan(
-            transaction: .init(
-                expectedRevision: snapshot.revision,
-                label: "keep current draft over recovered delivery",
-                mutations: [
-                    .removeEntry(scope: conflict.scope, entryID: recoveredEntryID),
-                    .removeConflict(conflictSetID),
-                ]
+    ) {
+        self.conflictSetID = conflictSetID
+        self.hostEntryID = hostEntryID
+        self.recoveredEntryID = recoveredEntryID
+    }
+}
+
+public struct GaryxDeferredDraftAdoptionPlan: Equatable, Sendable {
+    public let transaction: GaryxComposerDurabilityTransaction
+}
+
+public enum GaryxDeferredDraftAdoptionPlanner {
+    /// Finds the earliest deferred recovered payload whose host is truly empty.
+    /// A meaningful host is never modified; its deferred entries remain rooted
+    /// by the durable candidate set until a later send or relaunch can adopt
+    /// them safely.
+    public static func candidate(
+        snapshot: GaryxComposerDurabilitySnapshot,
+        hostEntryID: GaryxComposerPayloadEntryID? = nil
+    ) -> GaryxDeferredDraftAdoptionCandidate? {
+        snapshot.conflicts.values.compactMap { conflict -> (
+            candidate: GaryxDeferredDraftAdoptionCandidate,
+            generation: UInt64
+        )? in
+            guard conflict.candidates.count == 2,
+                  let host = conflict.candidates.first(where: { $0.label == "Current draft" }),
+                  let recovered = conflict.candidates.first(where: { $0.label == "Recovered send" }),
+                  hostEntryID == nil || host.entryID == hostEntryID,
+                  let hostEntry = snapshot.payloadStore.entry(host.entryID, scope: conflict.scope),
+                  !hostEntry.hasMeaningfulCurrentPayload,
+                  let recoveredEntry = snapshot.payloadStore.entry(
+                      recovered.entryID,
+                      scope: conflict.scope
+                  ) else {
+                return nil
+            }
+            return (
+                GaryxDeferredDraftAdoptionCandidate(
+                    conflictSetID: conflict.id,
+                    hostEntryID: host.entryID,
+                    recoveredEntryID: recovered.entryID
+                ),
+                recoveredEntry.currentGeneration
             )
-        )
+        }
+        .sorted {
+            if $0.generation != $1.generation {
+                return $0.generation < $1.generation
+            }
+            return $0.candidate.conflictSetID.rawValue
+                < $1.candidate.conflictSetID.rawValue
+        }
+        .first?.candidate
     }
 
-    public static func useRecoveredDraft(
+    public static func plan(
         snapshot: GaryxComposerDurabilitySnapshot,
-        conflictSetID: GaryxPayloadConflictSetID,
-        hostEntryID: GaryxComposerPayloadEntryID,
-        recoveredEntryID: GaryxComposerPayloadEntryID,
+        candidate: GaryxDeferredDraftAdoptionCandidate,
         replacementGeneration: UInt64
-    ) -> GaryxRecoveredDraftResolutionPlan? {
+    ) -> GaryxDeferredDraftAdoptionPlan? {
         guard replacementGeneration > snapshot.generationClaimFloor,
               replacementGeneration <= snapshot.generationHighWatermark,
               !snapshot.claimedGenerations.contains(replacementGeneration),
-              let conflict = snapshot.conflicts[conflictSetID],
-              conflict.pendingDecision,
-              conflict.candidates.contains(where: { $0.entryID == hostEntryID }),
-              conflict.candidates.contains(where: { $0.entryID == recoveredEntryID }),
-              var host = snapshot.payloadStore.entry(hostEntryID, scope: conflict.scope),
+              let conflict = snapshot.conflicts[candidate.conflictSetID],
+              conflict.candidates.count == 2,
+              conflict.candidates.contains(where: {
+                  $0.entryID == candidate.hostEntryID && $0.label == "Current draft"
+              }),
+              conflict.candidates.contains(where: {
+                  $0.entryID == candidate.recoveredEntryID && $0.label == "Recovered send"
+              }),
+              var host = snapshot.payloadStore.entry(
+                candidate.hostEntryID,
+                scope: conflict.scope
+              ),
+              !host.hasMeaningfulCurrentPayload,
               let recovered = snapshot.payloadStore.entry(
-                recoveredEntryID,
+                candidate.recoveredEntryID,
                 scope: conflict.scope
               ),
               host.replaceCurrentPayload(
@@ -450,15 +514,15 @@ public enum GaryxRecoveredDraftResolutionPlanner {
               ) else {
             return nil
         }
-        return GaryxRecoveredDraftResolutionPlan(
+        return GaryxDeferredDraftAdoptionPlan(
             transaction: .init(
                 expectedRevision: snapshot.revision,
-                label: "replace current draft with recovered delivery",
+                label: "adopt deferred recovered payload into empty composer",
                 mutations: [
                     .claimGeneration(replacementGeneration),
                     .upsertEntry(host),
-                    .removeEntry(scope: conflict.scope, entryID: recoveredEntryID),
-                    .removeConflict(conflictSetID),
+                    .removeEntry(scope: conflict.scope, entryID: candidate.recoveredEntryID),
+                    .removeConflict(candidate.conflictSetID),
                 ]
             )
         )
@@ -576,7 +640,6 @@ public enum GaryxGatewayScopeSettlementPlanner {
 public enum GaryxComposerDurableNoticeKind: String, Codable, Sendable {
     case ambiguousDelivery
     case ambiguousCreate
-    case payloadConflict
     case feedback
 }
 
@@ -585,8 +648,6 @@ public enum GaryxComposerDurableNoticeAction: Equatable, Codable, Sendable {
     case resendDeliveryCopy(GaryxDeliveryRecordID)
     case restoreCreate(GaryxCreateDeliveryKey)
     case rebuildCreateCopy(GaryxCreateDeliveryKey)
-    case useRecoveredDraft(GaryxPayloadConflictSetID, GaryxComposerPayloadEntryID)
-    case keepCurrentDraft(GaryxPayloadConflictSetID, GaryxComposerPayloadEntryID)
     case acknowledgeFeedback(GaryxFeedbackID)
     case retryUpload(GaryxFeedbackID)
     case removeUpload(GaryxFeedbackID)
@@ -680,29 +741,6 @@ public enum GaryxComposerDurableNoticeProjector {
                     actions: [
                         .restoreCreate(create.key),
                         .rebuildCreateCopy(create.key),
-                    ]
-                )
-            )
-        }
-        for conflict in snapshot.conflicts.values
-            .filter({
-                $0.scope == entry.scope
-                    && $0.pendingDecision
-                    && $0.candidates.contains(where: { $0.entryID == hostEntryID })
-            })
-            .sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
-            guard let recovered = conflict.candidates.first(where: { $0.entryID != hostEntryID }) else {
-                continue
-            }
-            notices.append(
-                GaryxComposerDurableNotice(
-                    id: "conflict:\(conflict.id.rawValue)",
-                    kind: .payloadConflict,
-                    title: "Recovered message is ready",
-                    detail: "Choose which draft should remain in the composer.",
-                    actions: [
-                        .useRecoveredDraft(conflict.id, recovered.entryID),
-                        .keepCurrentDraft(conflict.id, recovered.entryID),
                     ]
                 )
             )

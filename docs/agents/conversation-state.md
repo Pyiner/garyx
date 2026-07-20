@@ -113,7 +113,7 @@ death, logout, or a lost transport response.
 | `cancelledByDiscard` | An unattempted send was cancelled by payload/scope discard. |
 | `evidence` | An attempted send lost its payload owner, but bounded correlation evidence remains. |
 | `terminalEvidence` | An acknowledged send was reduced to its bounded evidence tombstone. |
-| `abandoned` | The user restored the ambiguous envelope through a payload conflict set. |
+| `abandoned` | The envelope was restored to composer ownership without another network attempt. |
 | `supersededByDuplicate` | The user explicitly created a duplicate-risk copy with a new client intent ID. |
 
 The state carries two independent axes whose raw values are also canonical:
@@ -129,12 +129,18 @@ without undoing the user's disposition. Scope revocation settles every record
 by its own state and preserves only bounded evidence for attempted sends.
 
 `notDispatched` means transport provably did not run; it does not authorize a
-silent network retry. On iOS relaunch, a bare message in that state is restored
-through `PayloadConflictSet` and terminalized as
-`abandoned`/`restoredToDraft`, which preserves the message and releases live
-delivery quota. The same settlement runs when the live attempt-marker commit
-fails. A record owned by an unfinished multi-stage create is excluded because
-the create correlation must retain its explicit, honest ambiguity exit.
+silent network retry. On iOS relaunch, a bare message in that state is
+terminalized as `abandoned`/`restoredToDraft`, which releases live delivery
+quota and atomically returns its immutable envelope to composer ownership. A
+blank composer adopts it immediately. A composer with text, attachments, or an
+in-flight attachment operation remains unchanged; the recovered envelope stays
+as a separate durable deferred payload and is adopted after that newer draft is
+committed to the durable delivery pipeline, or on a later activation/relaunch
+once the host is blank.
+This placement never projects a recovery-choice notice or action. The same
+settlement runs when the live attempt-marker commit fails. A record owned by an
+unfinished multi-stage create is excluded because the create correlation must
+retain its explicit, honest ambiguity exit.
 
 Multi-stage conversation creation uses the companion canonical vocabularies
 `durableCreateDeliveryPhase` and `durableCreateUserDisposition` from

@@ -67,17 +67,10 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
         switch action {
         case .restoreDelivery:
             notices.removeAll { $0.id == Self.ambiguousNoticeID }
-            notices.insert(Self.conflictNotice, at: 0)
-            status = "restore:conflict"
+            status = "restore:automatic"
         case .resendDeliveryCopy:
             notices.removeAll { $0.id == Self.ambiguousNoticeID }
             status = "resend:new-client-intent"
-        case .useRecoveredDraft:
-            notices.removeAll { $0.id == Self.conflictNoticeID }
-            status = "conflict:recovered"
-        case .keepCurrentDraft:
-            notices.removeAll { $0.id == Self.conflictNoticeID }
-            status = "conflict:current"
         case .acknowledgeFeedback(let id):
             notices.removeAll { $0.id == "feedback:\(id.rawValue)" }
             status = "feedback:acknowledged"
@@ -89,8 +82,7 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
             status = "upload:removed"
         case .restoreCreate:
             notices.removeAll { $0.id == Self.ambiguousCreateNoticeID }
-            notices.insert(Self.conflictNotice, at: 0)
-            status = "create:restore:conflict"
+            status = "create:restore:automatic"
         case .rebuildCreateCopy:
             notices.removeAll { $0.id == Self.ambiguousCreateNoticeID }
             status = "create:rebuild:new-client-intent"
@@ -99,7 +91,6 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
 
     private static let ambiguousNoticeID = "delivery:fixture-send"
     private static let ambiguousCreateNoticeID = "create:fixture-create"
-    private static let conflictNoticeID = "conflict:fixture-conflict"
     private static let backpressureFeedbackID = GaryxFeedbackID(
         rawValue: "fixture-backpressure"
     )
@@ -138,23 +129,6 @@ private struct GaryxComposerDurableNoticeDebugFixtureView: View {
             actions: [.retryUpload(uploadFeedbackID), .removeUpload(uploadFeedbackID)]
         ),
     ]
-
-    private static let conflictNotice = GaryxComposerDurableNotice(
-        id: conflictNoticeID,
-        kind: .payloadConflict,
-        title: "Recovered message is ready",
-        detail: "Choose which draft should remain in the composer.",
-        actions: [
-            .useRecoveredDraft(
-                .init(rawValue: "fixture-conflict"),
-                .init(rawValue: "fixture-recovered-entry")
-            ),
-            .keepCurrentDraft(
-                .init(rawValue: "fixture-conflict"),
-                .init(rawValue: "fixture-recovered-entry")
-            ),
-        ]
-    )
 
     private static let ambiguousCreateNotice = GaryxComposerDurableNotice(
         id: ambiguousCreateNoticeID,

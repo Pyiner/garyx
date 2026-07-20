@@ -357,7 +357,7 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
     }
 
     @discardableResult
-    fileprivate mutating func restoreToDraftAfterConflictAdmission(
+    fileprivate mutating func restoreToDraft(
         allowingUndispatched: Bool
     ) -> GaryxDeliveryEnvelope? {
         guard (phase == .ambiguous
@@ -518,19 +518,14 @@ public struct GaryxDeliveryRecord: Equatable, Codable, Sendable {
 public enum GaryxDeliveryDraftRecoveryDisposition: Equatable, Sendable {
     case restored(GaryxDeliveryEnvelope)
     case rejectedNotAmbiguous
-    case rejectedConflictScope
-    case rejectedConflictDurability
 }
 
 public enum GaryxDeliveryDraftRecoveryReducer {
-    /// Atomic value reducer for the ambiguous "restore to draft" exit. The
-    /// original record is not terminalized unless durable conflict membership
-    /// can be admitted in the same transaction.
+    /// Value reducer for the ambiguous "restore to draft" exit. The planner
+    /// that owns the durability transaction decides whether the envelope can
+    /// replace an empty host immediately or must remain as a deferred payload.
     public static func restore(
         record: inout GaryxDeliveryRecord,
-        conflictSet: inout GaryxPayloadConflictSet,
-        candidate: GaryxPayloadConflictCandidate,
-        membershipDurabilityAvailable: Bool,
         allowingUndispatched: Bool = false
     ) -> GaryxDeliveryDraftRecoveryDisposition {
         guard (record.phase == .ambiguous
@@ -538,22 +533,13 @@ public enum GaryxDeliveryDraftRecoveryReducer {
               record.userDisposition == .none else {
             return .rejectedNotAmbiguous
         }
-        guard conflictSet.scope == record.scope else { return .rejectedConflictScope }
         var nextRecord = record
-        var nextConflictSet = conflictSet
-        guard nextConflictSet.admitCandidate(
-            candidate,
-            membershipDurabilityAvailable: membershipDurabilityAvailable
-        ) else {
-            return .rejectedConflictDurability
-        }
-        guard let envelope = nextRecord.restoreToDraftAfterConflictAdmission(
+        guard let envelope = nextRecord.restoreToDraft(
             allowingUndispatched: allowingUndispatched
         ) else {
             return .rejectedNotAmbiguous
         }
         record = nextRecord
-        conflictSet = nextConflictSet
         return .restored(envelope)
     }
 }

@@ -207,6 +207,16 @@ public struct GaryxComposerPayloadEntry: Equatable, Codable, Sendable {
 
     public var currentText: String { textByGeneration[currentGeneration] ?? "" }
 
+    /// A payload is safe to replace automatically only when no visible text,
+    /// attachment, or in-flight attachment producer represents the user's
+    /// current intent. Whitespace-only text follows composer send semantics
+    /// and is considered blank.
+    public var hasMeaningfulCurrentPayload: Bool {
+        !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !attachments.isEmpty
+            || !operationKeys.isEmpty
+    }
+
     public var isReclaimable: Bool {
         textByGeneration.values.allSatisfy(\.isEmpty)
             && attachments.isEmpty
@@ -1461,7 +1471,6 @@ public struct GaryxPayloadConflictSet: Equatable, Codable, Sendable {
     public let id: GaryxPayloadConflictSetID
     public let scope: GaryxGatewayScope
     public private(set) var candidates: [GaryxPayloadConflictCandidate]
-    public private(set) var pendingDecision: Bool
 
     public init(
         id: GaryxPayloadConflictSetID,
@@ -1471,7 +1480,6 @@ public struct GaryxPayloadConflictSet: Equatable, Codable, Sendable {
         self.id = id
         self.scope = scope
         self.candidates = candidates
-        pendingDecision = !candidates.isEmpty
     }
 
     @discardableResult
@@ -1482,14 +1490,9 @@ public struct GaryxPayloadConflictSet: Equatable, Codable, Sendable {
         guard membershipDurabilityAvailable else { return false }
         guard !candidates.contains(where: { $0.entryID == candidate.entryID }) else { return true }
         candidates.append(candidate)
-        pendingDecision = true
         return true
     }
 
-    public mutating func resolve(entryID: GaryxComposerPayloadEntryID) {
-        candidates.removeAll(where: { $0.entryID == entryID })
-        pendingDecision = !candidates.isEmpty
-    }
 }
 
 public enum GaryxPayloadPromotionDisposition: Equatable, Sendable {

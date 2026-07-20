@@ -149,7 +149,6 @@ struct GaryxComposerDurableNoticeStack: View {
     private func iconName(for kind: GaryxComposerDurableNoticeKind) -> String {
         switch kind {
         case .ambiguousDelivery, .ambiguousCreate: "questionmark.circle.fill"
-        case .payloadConflict: "arrow.triangle.branch"
         case .feedback: "exclamationmark.circle.fill"
         }
     }
@@ -157,7 +156,6 @@ struct GaryxComposerDurableNoticeStack: View {
     private func tint(for kind: GaryxComposerDurableNoticeKind) -> Color {
         switch kind {
         case .ambiguousDelivery, .ambiguousCreate: .orange
-        case .payloadConflict: .blue
         case .feedback: .yellow
         }
     }
@@ -167,8 +165,6 @@ struct GaryxComposerDurableNoticeStack: View {
         case .restoreDelivery, .restoreCreate: "Restore draft"
         case .resendDeliveryCopy: "Resend copy"
         case .rebuildCreateCopy: "Rebuild copy"
-        case .useRecoveredDraft: "Use recovered"
-        case .keepCurrentDraft: "Keep current"
         case .acknowledgeFeedback: "Got it"
         case .retryUpload: "Retry upload"
         case .removeUpload: "Remove"
@@ -182,8 +178,6 @@ struct GaryxComposerDurableNoticeStack: View {
         case .restoreDelivery, .restoreCreate: "Restore uncertain send as draft"
         case .resendDeliveryCopy: "Resend a duplicate-risk copy"
         case .rebuildCreateCopy: "Rebuild a duplicate-risk conversation copy"
-        case .useRecoveredDraft: "Use recovered message draft"
-        case .keepCurrentDraft: "Keep current message draft"
         case .acknowledgeFeedback: "Dismiss this durable notice"
         case .retryUpload: "Retry the failed attachment upload"
         case .removeUpload: "Remove the failed attachment"
@@ -195,13 +189,9 @@ struct GaryxComposerDurableNoticeStack: View {
     ) -> String {
         switch action {
         case .restoreDelivery, .restoreCreate:
-            "Keeps the current draft and offers the recovered message separately."
+            "Restores the message automatically without replacing a nonempty current draft."
         case .resendDeliveryCopy, .rebuildCreateCopy:
             "Shows a warning before sending with a new intent ID because a duplicate is possible."
-        case .useRecoveredDraft:
-            "Replaces the current composer draft with the recovered message."
-        case .keepCurrentDraft:
-            "Discards the recovered candidate and leaves the current draft unchanged."
         case .acknowledgeFeedback:
             "Acknowledges this notice in durable storage."
         case .retryUpload:
@@ -231,10 +221,6 @@ struct GaryxComposerDurableNoticeStack: View {
         case .resendDeliveryCopy(let id): "resend-delivery-\(id.rawValue)"
         case .restoreCreate(let key): "restore-create-\(key.createIntentID)"
         case .rebuildCreateCopy(let key): "rebuild-create-\(key.createIntentID)"
-        case .useRecoveredDraft(let conflict, let entry):
-            "use-recovered-\(conflict.rawValue)-\(entry.rawValue)"
-        case .keepCurrentDraft(let conflict, let entry):
-            "keep-current-\(conflict.rawValue)-\(entry.rawValue)"
         case .acknowledgeFeedback(let id): "ack-feedback-\(id.rawValue)"
         case .retryUpload(let id): "retry-upload-\(id.rawValue)"
         case .removeUpload(let id): "remove-upload-\(id.rawValue)"

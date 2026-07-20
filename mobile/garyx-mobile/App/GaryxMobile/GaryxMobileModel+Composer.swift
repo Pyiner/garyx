@@ -248,18 +248,6 @@ extension GaryxMobileModel {
                 let rebuilt = try await composerPayloadCoordinator.rebuildAmbiguousCreate(key)
                 removeOptimisticDelivery(clientIntentID: key.createIntentID)
                 try await dispatchDurablePayload(rebuilt.payload)
-            case .useRecoveredDraft(let conflictSetID, let recoveredEntryID):
-                try await composerPayloadCoordinator.resolveRecoveredDraft(
-                    conflictSetID: conflictSetID,
-                    recoveredEntryID: recoveredEntryID,
-                    useRecovered: true
-                )
-            case .keepCurrentDraft(let conflictSetID, let recoveredEntryID):
-                try await composerPayloadCoordinator.resolveRecoveredDraft(
-                    conflictSetID: conflictSetID,
-                    recoveredEntryID: recoveredEntryID,
-                    useRecovered: false
-                )
             case .acknowledgeFeedback(let feedbackID):
                 try await composerPayloadCoordinator.acknowledgeFeedback(feedbackID)
             case .retryUpload(let feedbackID):
@@ -729,8 +717,8 @@ extension GaryxMobileModel {
                 case .notDispatched where createDeliveryKey == nil:
                     // The before-dispatch durability gate failed, so transport
                     // provably did not run. Reclaim the outbox quota and
-                    // recover the envelope through PayloadConflictSet before
-                    // returning the request failure to the caller.
+                    // return the envelope to automatic composer placement
+                    // before returning the request failure to the caller.
                     try await composerPayloadCoordinator.recoverUndispatchedDelivery(delivery)
                 case .notDispatched:
                     if let createDeliveryKey {

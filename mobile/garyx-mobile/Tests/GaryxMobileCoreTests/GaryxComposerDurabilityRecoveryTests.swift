@@ -78,7 +78,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
                 hostEntryID: entryID,
                 hasInteractionOwner: true
             ).map(\.kind),
-            [.payloadConflict]
+            []
         )
         let idempotentReport = try await failedRecovery.recover()
         XCTAssertEqual(idempotentReport.undispatchedDeliverySettlements, 0)
@@ -116,7 +116,14 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             let preKillStore = try GaryxSQLiteComposerDurabilityStore(
                 databaseURL: fixture.databaseURL
             )
-            send = try makeCommitSend(followupText: "")
+            _ = try await preKillStore.commit(
+                .init(
+                    expectedRevision: 0,
+                    label: "seed realistic payload generation watermark",
+                    mutations: [.setGenerationHighWatermark(32)]
+                )
+            )
+            send = try makeCommitSend(expectedRevision: 1, followupText: "")
             let committed = try await preKillStore.commitSend(send)
             let currentDraft = try XCTUnwrap(
                 committed.payloadStore.entry(entryID, scope: scope)
@@ -139,10 +146,6 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
         let recoveredEntryID = GaryxComposerPayloadEntryID(
             rawValue: "undispatched-recovery-\(send.delivery.id.rawValue)"
         )
-        let conflictSetID = GaryxPayloadConflictSetID(
-            rawValue: "undispatched-recovery-\(send.delivery.id.rawValue)"
-        )
-        let conflict = recovered.conflicts[conflictSetID]
         let notices = GaryxComposerDurableNoticeProjector.project(
             snapshot: recovered,
             hostEntryID: entryID,
@@ -158,11 +161,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             recovered.payloadStore.entry(recoveredEntryID, scope: scope),
             "silent adoption should not leave a second candidate entry"
         )
-        XCTAssertFalse(
-            conflict?.pendingDecision ?? false,
-            "an empty current draft must not require a payload-conflict decision"
-        )
-        XCTAssertNil(conflict, "silent adoption should settle the conflict domain")
+        XCTAssertTrue(recovered.conflicts.isEmpty)
         XCTAssertTrue(
             notices.isEmpty,
             "an empty composer must not show 'Recovered message is ready'; actual titles: \(notices.map(\.title))"
@@ -1893,6 +1892,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
     }
 
     private func makeCommitSend(
+        expectedRevision: UInt64 = 0,
         followupText: String = "next",
         includeProducerDrained: Bool = false
     ) throws -> GaryxComposerCommitSend {
@@ -1963,7 +1963,7 @@ final class GaryxComposerDurabilityRecoveryTests: XCTestCase {
             )
         }
         return try GaryxComposerCommitSend(
-            expectedRevision: 0,
+            expectedRevision: expectedRevision,
             ledger: ledger,
             sealedPayloadEntry: entry,
             barrier: barrier,
