@@ -156,7 +156,7 @@ impl CronJob {
                     // panic here would crash the create request and, via
                     // `advance`, the whole scheduler task. Legitimate intervals
                     // are bounded well below this by `MAX_INTERVAL_SECS`.
-                    tracing::warn!(target: "garyx_gateway::cron", 
+                    tracing::warn!(target: "garyx_gateway::cron",
                         interval_secs = *interval_secs,
                         "interval schedule overflows the representable timeline; parking next_run far in the future"
                     );
@@ -177,7 +177,7 @@ impl CronJob {
                                 return next;
                             }
                         } else {
-                            tracing::warn!(target: "garyx_gateway::cron", 
+                            tracing::warn!(target: "garyx_gateway::cron",
                                 timezone = tz_name,
                                 "invalid cron timezone, using machine local timezone"
                             );

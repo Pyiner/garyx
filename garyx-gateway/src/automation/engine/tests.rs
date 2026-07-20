@@ -3222,3 +3222,59 @@ async fn engine_tracing_keeps_the_stable_cron_target() {
         "engine events drifted to module-path targets: {drifted:?}"
     );
 }
+
+
+/// Source-level completion of the tracing-target contract: the capturing
+/// subscriber test above proves the stable target at runtime for the paths it
+/// drives, but cannot reach all engine callsites. This guard scans every
+/// engine source file and requires each `tracing::<level>!(` invocation to
+/// open with the explicit stable target, so no callsite — current or future —
+/// can silently fall back to a module-path-derived target.
+#[test]
+fn every_engine_tracing_event_pins_the_stable_cron_target() {
+    let engine_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/automation/engine");
+    const LEVELS: [&str; 5] = ["trace", "debug", "info", "warn", "error"];
+    const STABLE: &str = "target: \"garyx_gateway::cron\"";
+
+    let mut scanned_invocations = 0usize;
+    let mut violations = Vec::new();
+    for entry in std::fs::read_dir(&engine_dir).expect("read engine dir") {
+        let path = entry.expect("engine dir entry").path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        if !name.ends_with(".rs") || name == "tests.rs" {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read engine source");
+        for level in LEVELS {
+            let needle = format!("tracing::{level}!(");
+            let mut search = source.as_str();
+            let mut consumed = 0usize;
+            while let Some(pos) = search.find(&needle) {
+                scanned_invocations += 1;
+                let after = &search[pos + needle.len()..];
+                if !after.trim_start().starts_with(STABLE) {
+                    let line = source[..consumed + pos].matches('\n').count() + 1;
+                    violations.push(format!("{name}:{line} tracing::{level}!"));
+                }
+                consumed += pos + needle.len();
+                search = &search[pos + needle.len()..];
+            }
+        }
+    }
+
+    // Sensitivity control: the scanner must actually see the engine's
+    // events — a refactor that breaks the scan pattern must fail loudly
+    // instead of green-lighting an empty result set.
+    assert!(
+        scanned_invocations >= 30,
+        "the tracing guard scanned only {scanned_invocations} invocations; \
+         the scan pattern no longer matches the engine sources"
+    );
+    assert!(
+        violations.is_empty(),
+        "engine tracing events without the stable garyx_gateway::cron target: {violations:?}"
+    );
+}
