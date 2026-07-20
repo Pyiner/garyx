@@ -205,7 +205,17 @@ test("workspace roots stay snake_case while file listings stay camelCase", async
       if (path === "/api/workspaces") {
         return jsonResponse({
           workspace_state_initialized: true,
-          workspaces: [{ name: "Test workspace", path: "/Users/test/project" }],
+          gateway_home: "/Users/test",
+          workspaces: [
+            {
+              name: "Test workspace",
+              path: "/Users/test/project",
+              pinned: false,
+              thread_count: 3,
+              last_activity_at: "2026-07-20T00:00:00Z",
+              git_repo: true,
+            },
+          ],
         });
       }
       return jsonResponse({
@@ -225,8 +235,14 @@ test("workspace roots stay snake_case while file listings stay camelCase", async
       });
     },
     async () => {
-      const roots = await fetchWorkspaces(settings);
-      assert.equal(roots[0].path, "/Users/test/project");
+      const catalog = await fetchWorkspaces(settings);
+      assert.equal(catalog.gatewayHome, "/Users/test");
+      assert.equal(catalog.workspaces[0].path, "/Users/test/project");
+      assert.equal(catalog.workspaces[0].name, "Test workspace");
+      assert.equal(catalog.workspaces[0].pinned, false);
+      assert.equal(catalog.workspaces[0].threadCount, 3);
+      assert.equal(catalog.workspaces[0].lastActivityAt, "2026-07-20T00:00:00Z");
+      assert.equal(catalog.workspaces[0].gitRepo, true);
       const files = await listWorkspaceFiles(settings, {
         workspacePath: "/Users/test/project",
         directoryPath: "src",

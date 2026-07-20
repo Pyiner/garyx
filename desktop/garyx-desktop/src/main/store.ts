@@ -23,6 +23,7 @@ import {
   type DesktopSettings,
   type DesktopState,
   type DesktopWorkspace,
+  type DesktopWorkspaceCatalog,
   type DesktopChannelEndpoint,
   type DesktopSessionProviderHint,
 } from '@shared/contracts';
@@ -34,6 +35,8 @@ import {
   createRemoteThread,
   addRemoteWorkspace,
   deleteRemoteWorkspace,
+  pinRemoteWorkspace,
+  renameRemoteWorkspace,
   deleteRemoteAutomation,
   deleteRemoteThread,
   fetchAutomations,
@@ -113,46 +116,6 @@ function sortAutomations(automations: DesktopAutomationSummary[]): DesktopAutoma
     }
 
     return left.label.localeCompare(right.label);
-  });
-}
-
-function sortWorkspaces(
-  workspaces: DesktopWorkspace[],
-  threads: DesktopThreadSummary[],
-): DesktopWorkspace[] {
-  const latestByWorkspace = new Map<string, number>();
-
-  for (const thread of threads) {
-    const pathKey = normalizeWorkspacePathKey(thread.workspacePath || '');
-    if (!pathKey) {
-      continue;
-    }
-    const current = latestByWorkspace.get(pathKey) ?? Number.NEGATIVE_INFINITY;
-    latestByWorkspace.set(
-      pathKey,
-      Math.max(current, Date.parse(thread.updatedAt) || Number.NEGATIVE_INFINITY),
-    );
-  }
-
-  return [...workspaces].sort((left, right) => {
-    const leftPathKey = normalizeWorkspacePathKey(left.path || '');
-    const rightPathKey = normalizeWorkspacePathKey(right.path || '');
-    const rightLatest =
-      latestByWorkspace.get(rightPathKey) ??
-      (Date.parse(right.updatedAt) || Number.NEGATIVE_INFINITY);
-    const leftLatest =
-      latestByWorkspace.get(leftPathKey) ??
-      (Date.parse(left.updatedAt) || Number.NEGATIVE_INFINITY);
-
-    if (rightLatest !== leftLatest) {
-      return rightLatest - leftLatest;
-    }
-
-    if (left.kind !== right.kind) {
-      return left.kind === 'local' ? -1 : 1;
-    }
-
-    return left.name.localeCompare(right.name);
   });
 }
 
@@ -449,7 +412,7 @@ function workspaceNameFromPath(path: string | null | undefined): string {
 function normalizeWorkspace(value?: Partial<DesktopWorkspace>): DesktopWorkspace {
   const now = new Date().toISOString();
   const path = value?.path?.trim() || null;
-  const name = workspaceNameFromPath(path);
+  const name = value?.name?.trim() || workspaceNameFromPath(path);
   return {
     name,
     path,
@@ -458,6 +421,10 @@ function normalizeWorkspace(value?: Partial<DesktopWorkspace>): DesktopWorkspace
     updatedAt: value?.updatedAt || value?.createdAt || now,
     available: value?.available ?? Boolean(path),
     managed: value?.managed ?? false,
+    pinned: value?.pinned ?? false,
+    threadCount: value?.threadCount ?? 0,
+    lastActivityAt: value?.lastActivityAt ?? null,
+    gitRepo: value?.gitRepo ?? false,
   };
 }
 
@@ -529,16 +496,16 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
       normalizedWorkspace,
     );
   }
-  const workspaces = sortWorkspaces(
-    Array.from(normalizedWorkspacesByPath.values()),
-    threads,
-  );
+  const workspaces = Array.from(normalizedWorkspacesByPath.values());
 
   return {
     settings,
     gatewayProfiles,
     entitiesGatewayUrl: normalizedGatewayUrl,
     workspaces,
+    gatewayHome: entityScopeMatches
+      ? (typeof value?.gatewayHome === 'string' ? value.gatewayHome : null)
+      : null,
     selectedWorkspacePath: entityScopeMatches ? (value?.selectedWorkspacePath ?? null) : null,
     pinnedThreadIds: entityScopeMatches ? normalizePinnedThreadIds(value?.pinnedThreadIds) : [],
     pinsRevision: entityScopeMatches ? normalizePinsRevision(value?.pinsRevision) : 0,
@@ -631,7 +598,6 @@ function resolveWorkspaceAvailability(workspace: DesktopWorkspace): DesktopWorks
 
   return {
     ...workspace,
-    name: workspaceNameFromPath(workspace.path),
     available: true,
   };
 }
@@ -642,7 +608,9 @@ function withSortedEntities(
 ): DesktopState {
   const threads = sortThreads(state.threads);
   const automations = sortAutomations(state.automations);
-  const workspaces = sortWorkspaces(state.workspaces, threads);
+  // The gateway pre-sorts workspaces in the shared total order (pinned,
+  // activity, name, path); render it verbatim — no client re-sort.
+  const workspaces = state.workspaces;
   const preserveMissingSelectedWorkspace =
     options?.preserveMissingSelectedWorkspace &&
     Boolean(state.selectedWorkspacePath) &&
@@ -1022,7 +990,11 @@ async function mergeRemoteDesktopState(
       fetchRemoteSlice(
         'workspaces',
         'workspaces',
-        lastGoodSlice(localState, (state) => state.workspaces) ?? [],
+        {
+          workspaces: lastGoodSlice(localState, (state) => state.workspaces) ?? [],
+          gatewayHome: lastGoodSlice(localState, (state) => state.gatewayHome) ?? null,
+          workspaceStateInitialized: true,
+        },
         () => fetchWorkspaces(localState.settings),
       ),
       fetchRemoteSlice(
@@ -1060,7 +1032,7 @@ async function mergeRemoteDesktopState(
   const remoteThreads = threadsResult.value;
   const remotePinsPage = pinsResult.value;
   const remoteEndpoints = endpointsResult.value;
-  const remoteWorkspaces = workspacesResult.value;
+  const remoteWorkspaceCatalog = workspacesResult.value;
   const remoteConfiguredBots = configuredBotsResult.value;
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
@@ -1077,7 +1049,8 @@ async function mergeRemoteDesktopState(
     pinsRequestStamp,
   );
 
-  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaceCatalog.workspaces);
+  const gatewayHome = remoteWorkspaceCatalog.gatewayHome;
 
   let threads = remoteThreads.map((thread) => ({
     ...thread,
@@ -1139,6 +1112,7 @@ async function mergeRemoteDesktopState(
   const next = withSortedEntities({
     ...localState,
     workspaces,
+    gatewayHome: gatewayHome ?? localState.gatewayHome,
     threads,
     pinnedThreadIds,
     pinsRevision: pinOrder.state.highestObservedRevision,
@@ -1490,49 +1464,78 @@ export async function markDesktopAutomationSeen(
   return rememberHydratedDesktopState(next);
 }
 
-export async function addDesktopWorkspace(path: string): Promise<{
+export async function addDesktopWorkspace(path: string, name?: string | null): Promise<{
   state: DesktopState;
   workspace: DesktopWorkspace;
 }> {
   const current = await getDesktopState();
   const canonicalPath = canonicalizeWorkspacePath(path);
-  const remoteWorkspaces = await addRemoteWorkspace(current.settings, {
+  const catalog = await addRemoteWorkspace(current.settings, {
     path: canonicalPath,
-    name: workspaceNameFromPath(canonicalPath),
+    name: name?.trim() || workspaceNameFromPath(canonicalPath),
   });
-  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspaces = remoteWorkspacesWithAvailability(catalog.workspaces);
   const workspace =
     workspaces.find((entry) => normalizeWorkspacePathKey(entry.path || '') === normalizeWorkspacePathKey(canonicalPath))
-    || {
-      name: workspaceNameFromPath(canonicalPath),
+    || normalizeWorkspace({
+      name: name?.trim() || workspaceNameFromPath(canonicalPath),
       path: canonicalPath,
-      kind: 'local' as const,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
       available: true,
-    };
+    });
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,
     workspaces: [],
+    gatewayHome: catalog.gatewayHome ?? local.gatewayHome,
     selectedWorkspacePath: workspace.path,
   }, { preserveMissingSelectedWorkspace: true }));
   const next = withSortedEntities({
     ...current,
     workspaces,
+    gatewayHome: catalog.gatewayHome ?? current.gatewayHome,
     selectedWorkspacePath: workspace.path,
   }, { preserveMissingSelectedWorkspace: true });
   return { state: next, workspace };
+}
+
+async function applyWorkspaceCatalogMutation(
+  mutate: (settings: DesktopSettings) => Promise<DesktopWorkspaceCatalog>,
+): Promise<DesktopState> {
+  const current = await getDesktopState();
+  const catalog = await mutate(current.settings);
+  const workspaces = remoteWorkspacesWithAvailability(catalog.workspaces);
+  const next = withSortedEntities({
+    ...current,
+    workspaces,
+    gatewayHome: catalog.gatewayHome ?? current.gatewayHome,
+  }, { preserveMissingSelectedWorkspace: true });
+  return rememberHydratedDesktopState(next);
+}
+
+export async function pinDesktopWorkspace(input: {
+  workspacePath: string;
+  pinned: boolean;
+}): Promise<DesktopState> {
+  return applyWorkspaceCatalogMutation((settings) =>
+    pinRemoteWorkspace(settings, { path: input.workspacePath, pinned: input.pinned }));
+}
+
+export async function renameDesktopWorkspace(input: {
+  workspacePath: string;
+  name: string;
+}): Promise<DesktopState> {
+  return applyWorkspaceCatalogMutation((settings) =>
+    renameRemoteWorkspace(settings, { path: input.workspacePath, name: input.name }));
 }
 
 export async function removeDesktopWorkspace(workspacePath: string): Promise<DesktopState> {
   const current = await getDesktopState();
   const workspace = requireWorkspace(current, workspacePath);
   const workspaceKey = normalizeWorkspacePathKey(workspace.path || workspacePath);
-  const remoteWorkspaces = await deleteRemoteWorkspace(current.settings, {
+  const catalog = await deleteRemoteWorkspace(current.settings, {
     path: workspace.path || workspacePath,
   });
-  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspaces = remoteWorkspacesWithAvailability(catalog.workspaces);
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,

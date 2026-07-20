@@ -77,7 +77,9 @@ import type {
   RevealWorkspaceFileInput,
   ReadSkillFileInput,
   RenameThreadInput,
+  PinWorkspaceInput,
   RemoveWorkspaceInput,
+  RenameWorkspaceInput,
   RunAutomationNowInput,
   SaveImageInput,
   SaveSkillFileInput,
@@ -227,7 +229,9 @@ import {
   selectDesktopAutomation,
   selectDesktopWorkspace,
   updateDesktopAutomation,
+  pinDesktopWorkspace,
   removeDesktopWorkspace,
+  renameDesktopWorkspace,
   resumeDesktopPinnedOrderSync,
   setDesktopBotBinding,
   setDesktopThreadPinned,
@@ -721,8 +725,8 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     "garyx:add-workspace-by-path",
-    async (_event, input: { path: string }) => {
-      const result = await addDesktopWorkspace(input.path);
+    async (_event, input: { path: string; name?: string | null }) => {
+      const result = await addDesktopWorkspace(input.path, input.name);
       return {
         ...result,
         cancelled: false,
@@ -734,6 +738,20 @@ function registerIpcHandlers(): void {
     "garyx:remove-workspace",
     async (_event, input: RemoveWorkspaceInput) => {
       return removeDesktopWorkspace(input.workspacePath);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:pin-workspace",
+    async (_event, input: PinWorkspaceInput) => {
+      return pinDesktopWorkspace(input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:rename-workspace",
+    async (_event, input: RenameWorkspaceInput) => {
+      return renameDesktopWorkspace(input);
     },
   );
 

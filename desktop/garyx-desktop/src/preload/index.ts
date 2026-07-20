@@ -111,6 +111,10 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:add-workspace-by-path", input),
   removeWorkspace: (input) =>
     ipcRenderer.invoke("garyx:remove-workspace", input),
+  pinWorkspace: (input) =>
+    ipcRenderer.invoke("garyx:pin-workspace", input),
+  renameWorkspace: (input) =>
+    ipcRenderer.invoke("garyx:rename-workspace", input),
   selectAutomation: (input) =>
     ipcRenderer.invoke("garyx:select-automation", input),
   markAutomationSeen: (input) =>

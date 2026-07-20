@@ -19,6 +19,9 @@ export interface DesktopState {
    *  newly selected gateway's view. */
   entitiesGatewayUrl?: string | null;
   workspaces: DesktopWorkspace[];
+  /** Gateway machine home directory for `~` path abbreviation; never the
+   *  local HOME. Null until the first workspace hydration. */
+  gatewayHome: string | null;
   selectedWorkspacePath: string | null;
   pinnedThreadIds: string[];
   /** Highest accepted revision of the gateway's atomic thread-pins page. */

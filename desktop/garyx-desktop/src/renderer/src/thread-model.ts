@@ -201,6 +201,10 @@ export function workspaceSuggestionFromPath(
     updatedAt: timestamps?.updatedAt?.trim() || createdAt,
     available: true,
     managed: true,
+    pinned: false,
+    threadCount: 0,
+    lastActivityAt: null,
+    gitRepo: false,
   };
 }
 

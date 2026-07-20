@@ -1,7 +1,11 @@
+import {
+  parseDirectoryListingPayload,
+  parseWorkspaceCatalogPayload,
+} from "../../shared/workspace-payload.ts";
 import type {
   DesktopLocalDirectoryListing,
   DesktopSettings,
-  DesktopWorkspace,
+  DesktopWorkspaceCatalog,
   DesktopWorkspaceFileEntry,
   DesktopWorkspaceFileListing,
   DesktopWorkspaceFilePreview,
@@ -215,56 +219,22 @@ type WorkspacePayload = {
   path?: string | null;
 };
 
-function mapWorkspace(value: unknown, index: number): DesktopWorkspace {
-  const context = `workspace list.workspaces[${index}]`;
-  const record = requireContractRecord(value, context);
-  const path = requireContractNonEmptyString(
-    requireContractField(record, "path", context),
-    `${context}.path`,
-  );
-  const name = requireContractNonEmptyString(
-    requireContractField(record, "name", context),
-    `${context}.name`,
-  );
-  const now = new Date().toISOString();
-  return {
-    name,
-    path,
-    kind: "local",
-    createdAt: now,
-    updatedAt: now,
-    available: true,
-  };
-}
-
-function mapWorkspaces(payload: unknown): DesktopWorkspace[] {
-  const record = requireContractRecord(payload, "workspace list");
-  requireContractBoolean(
-    requireContractField(record, "workspace_state_initialized", "workspace list"),
-    "workspace list.workspace_state_initialized",
-  );
-  return requireContractArray(
-    requireContractField(record, "workspaces", "workspace list"),
-    "workspace list.workspaces",
-  ).map(mapWorkspace);
-}
-
 export async function fetchWorkspaces(
   settings: DesktopSettings,
-): Promise<DesktopWorkspace[]> {
+): Promise<DesktopWorkspaceCatalog> {
   const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
     settings,
     "/api/workspaces",
     "readRetryable",
     { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
   );
-  return mapWorkspaces(payload);
+  return parseWorkspaceCatalogPayload(payload);
 }
 
 export async function addRemoteWorkspace(
   settings: DesktopSettings,
   input: { path: string; name?: string | null },
-): Promise<DesktopWorkspace[]> {
+): Promise<DesktopWorkspaceCatalog> {
   const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
     settings,
     "/api/workspaces",
@@ -278,13 +248,47 @@ export async function addRemoteWorkspace(
       }),
     },
   );
-  return mapWorkspaces(payload);
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function pinRemoteWorkspace(
+  settings: DesktopSettings,
+  input: { path: string; pinned: boolean },
+): Promise<DesktopWorkspaceCatalog> {
+  const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
+    settings,
+    "/api/workspaces/pin",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({ path: input.path, pinned: input.pinned }),
+    },
+  );
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function renameRemoteWorkspace(
+  settings: DesktopSettings,
+  input: { path: string; name: string },
+): Promise<DesktopWorkspaceCatalog> {
+  const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
+    settings,
+    "/api/workspaces/rename",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({ path: input.path, name: input.name }),
+    },
+  );
+  return parseWorkspaceCatalogPayload(payload);
 }
 
 export async function deleteRemoteWorkspace(
   settings: DesktopSettings,
   input: { path: string },
-): Promise<DesktopWorkspace[]> {
+): Promise<DesktopWorkspaceCatalog> {
   const query = new URLSearchParams({
     path: input.path,
   });
@@ -297,7 +301,7 @@ export async function deleteRemoteWorkspace(
       signal: AbortSignal.timeout(8000),
     },
   );
-  return mapWorkspaces(payload);
+  return parseWorkspaceCatalogPayload(payload);
 }
 
 export async function getWorkspaceGitStatus(
@@ -361,41 +365,7 @@ export async function listWorkspaceDirectories(
       signal: AbortSignal.timeout(8000),
     },
   );
-  const record = requireContractRecord(payload, "workspace directory listing");
-  const parentPath = requireContractField(
-    record,
-    "parentPath",
-    "workspace directory listing",
-  );
-  return {
-    path: requireContractString(
-      requireContractField(record, "path", "workspace directory listing"),
-      "workspace directory listing.path",
-    ),
-    parentPath: parentPath === null
-      ? null
-      : requireContractString(
-          parentPath,
-          "workspace directory listing.parentPath",
-        ),
-    entries: requireContractArray(
-      requireContractField(record, "entries", "workspace directory listing"),
-      "workspace directory listing.entries",
-    ).map((entry, index) => {
-      const path = `workspace directory listing.entries[${index}]`;
-      const entryRecord = requireContractRecord(entry, path);
-      return {
-        name: requireContractNonEmptyString(
-          requireContractField(entryRecord, "name", path),
-          `${path}.name`,
-        ),
-        path: requireContractNonEmptyString(
-          requireContractField(entryRecord, "path", path),
-          `${path}.path`,
-        ),
-      };
-    }),
-  };
+  return parseDirectoryListingPayload(payload);
 }
 
 export async function listWorkspaceFiles(

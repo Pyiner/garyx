@@ -15,6 +15,8 @@ const stateMethodNames = [
   'deleteGatewayProfile',
   'selectWorkspace',
   'removeWorkspace',
+  'pinWorkspace',
+  'renameWorkspace',
   'selectAutomation',
   'markAutomationSeen',
   'deleteAutomation',

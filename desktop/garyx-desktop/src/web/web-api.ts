@@ -92,6 +92,15 @@ function trimTrailingSlashes(value: string): string {
   return value.trim().replace(/\/+$/, '');
 }
 
+import {
+  parseDirectoryListingPayload,
+  parseWorkspaceCatalogPayload,
+} from '../shared/workspace-payload.ts';
+import type {
+  DesktopLocalDirectoryListing,
+  DesktopWorkspaceCatalog,
+} from '../shared/contracts/workspace.ts';
+
 export function resolveGatewayBase(): string {
   const url = new URL(window.location.href);
   return trimTrailingSlashes(url.searchParams.get('gateway') || window.location.origin);
@@ -120,6 +129,69 @@ async function requestJson<T>(
     throw new Error(`${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<T>;
+}
+
+export async function fetchWorkspaceCatalog(): Promise<DesktopWorkspaceCatalog> {
+  const payload = await requestJson<unknown>('/api/workspaces', 'readRetryable');
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function addWorkspace(input: {
+  path: string;
+  name?: string | null;
+}): Promise<DesktopWorkspaceCatalog> {
+  const payload = await requestJson<unknown>('/api/workspaces', 'mutationSingleAttempt', {
+    method: 'POST',
+    body: JSON.stringify({ path: input.path, name: input.name || undefined }),
+  });
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function pinWorkspace(input: {
+  path: string;
+  pinned: boolean;
+}): Promise<DesktopWorkspaceCatalog> {
+  const payload = await requestJson<unknown>('/api/workspaces/pin', 'mutationSingleAttempt', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function renameWorkspace(input: {
+  path: string;
+  name: string;
+}): Promise<DesktopWorkspaceCatalog> {
+  const payload = await requestJson<unknown>('/api/workspaces/rename', 'mutationSingleAttempt', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function removeWorkspace(input: { path: string }): Promise<DesktopWorkspaceCatalog> {
+  const query = new URLSearchParams({ path: input.path });
+  const payload = await requestJson<unknown>(
+    `/api/workspaces?${query.toString()}`,
+    'mutationSingleAttempt',
+    { method: 'DELETE' },
+  );
+  return parseWorkspaceCatalogPayload(payload);
+}
+
+export async function listWorkspaceDirectories(input?: {
+  path?: string | null;
+}): Promise<DesktopLocalDirectoryListing> {
+  const query = new URLSearchParams();
+  if (input?.path?.trim()) {
+    query.set('path', input.path.trim());
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const payload = await requestJson<unknown>(
+    `/api/workspaces/directories${suffix}`,
+    'readRetryable',
+  );
+  return parseDirectoryListingPayload(payload);
 }
 
 export async function fetchChannelEndpoints(): Promise<DesktopChannelEndpoint[]> {

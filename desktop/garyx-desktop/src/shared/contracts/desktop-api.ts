@@ -163,7 +163,9 @@ import type {
   DesktopWorkspaceGitStatus,
   ListWorkspaceFilesInput,
   PreviewWorkspaceFileInput,
+  PinWorkspaceInput,
   RemoveWorkspaceInput,
+  RenameWorkspaceInput,
   RevealWorkspaceFileInput,
   SelectWorkspaceInput,
   UploadWorkspaceFilesInput,
@@ -260,6 +262,8 @@ export interface GaryxDesktopApi {
     input: AddWorkspaceByPathInput,
   ) => Promise<WorkspaceMutationResult>;
   removeWorkspace: (input: RemoveWorkspaceInput) => Promise<DesktopState>;
+  pinWorkspace: (input: PinWorkspaceInput) => Promise<DesktopState>;
+  renameWorkspace: (input: RenameWorkspaceInput) => Promise<DesktopState>;
   selectAutomation: (input: SelectAutomationInput) => Promise<DesktopState>;
   markAutomationSeen: (input: MarkAutomationSeenInput) => Promise<DesktopState>;
   createAutomation: (

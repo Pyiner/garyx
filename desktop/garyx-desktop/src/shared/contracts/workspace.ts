@@ -1,7 +1,10 @@
 export type DesktopWorkspaceKind = "local";
 
 // Directory summary used by the desktop UI. The path string is the identity;
-// thread/automation source of truth remains `workspace_dir`.
+// thread/automation source of truth remains `workspace_dir`. The gateway is
+// the single source of truth for `name`, `pinned`, aggregates, and list
+// order — clients render the server list verbatim and never re-sort or
+// rewrite names locally.
 export interface DesktopWorkspace {
   name: string;
   path: string | null;
@@ -10,17 +13,48 @@ export interface DesktopWorkspace {
   updatedAt: string;
   available: boolean;
   managed?: boolean;
+  pinned: boolean;
+  threadCount: number;
+  lastActivityAt: string | null;
+  gitRepo: boolean;
+}
+
+// `gatewayHome` is the gateway machine's home directory; clients use it for
+// `~` path abbreviation and must never substitute the local HOME.
+export interface DesktopWorkspaceCatalog {
+  workspaces: DesktopWorkspace[];
+  gatewayHome: string | null;
+  workspaceStateInitialized: boolean;
 }
 
 export interface DesktopLocalDirectoryEntry {
   name: string;
   path: string;
+  gitRepo: boolean;
 }
 
 export interface DesktopLocalDirectoryListing {
   path: string;
   parentPath: string | null;
   entries: DesktopLocalDirectoryEntry[];
+}
+
+// Typed directory-listing failure codes from the gateway. The browser
+// renders these inline and stays on its current directory.
+export type DesktopDirectoryListingErrorCode =
+  | "invalid_path"
+  | "not_found"
+  | "not_a_directory"
+  | "permission_denied";
+
+export interface PinWorkspaceInput {
+  workspacePath: string;
+  pinned: boolean;
+}
+
+export interface RenameWorkspaceInput {
+  workspacePath: string;
+  name: string;
 }
 
 export interface DesktopWorkspaceFileEntry {
@@ -110,4 +144,5 @@ export interface RemoveWorkspaceInput {
 
 export interface AddWorkspaceByPathInput {
   path: string;
+  name?: string | null;
 }
