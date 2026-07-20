@@ -209,6 +209,20 @@ public struct GaryxConversationScrollState: Equatable {
         case tailUpdate
         case manual
         case repair
+
+        public var retryHorizon: TailScrollRetryHorizon {
+            switch self {
+            case .tailUpdate:
+                .tailGrowth
+            case .openingThread, .manual, .repair:
+                .settling
+            }
+        }
+    }
+
+    public enum TailScrollRetryHorizon: Equatable {
+        case tailGrowth
+        case settling
     }
 
     public struct TailScrollRequest: Equatable {
@@ -600,5 +614,56 @@ public struct GaryxConversationScrollState: Equatable {
             return false
         }
         return previousFirstIndex > 0
+    }
+}
+
+/// Invalidates superseded tail-scroll retry chains.
+///
+/// The view owns the actual delayed work; this Core policy only issues tokens
+/// and decides whether a queued attempt still belongs to the current chain.
+public struct GaryxConversationTailScrollScheduler: Equatable {
+    public struct Token: Equatable {
+        fileprivate let retryHorizon: GaryxConversationScrollState.TailScrollRetryHorizon
+        fileprivate let generation: Int
+    }
+
+    private var tailGrowthGeneration = 0
+    private var settlingGeneration = 0
+
+    public init() {}
+
+    public mutating func schedule(
+        reason: GaryxConversationScrollState.TailScrollReason
+    ) -> Token {
+        switch reason.retryHorizon {
+        case .tailGrowth:
+            // Coalesce ordinary streaming/tail-growth chains with each other,
+            // but never let their short retry window truncate a still-live
+            // opening/manual/repair chain whose late attempts are needed for
+            // heavy transcript layout settling.
+            tailGrowthGeneration &+= 1
+            return Token(
+                retryHorizon: .tailGrowth,
+                generation: tailGrowthGeneration
+            )
+        case .settling:
+            // A fresh long-horizon chain covers every earlier attempt. Cancel
+            // both lanes so stale short retries cannot outlive the new owner.
+            settlingGeneration &+= 1
+            tailGrowthGeneration &+= 1
+            return Token(
+                retryHorizon: .settling,
+                generation: settlingGeneration
+            )
+        }
+    }
+
+    public func isCurrent(_ token: Token) -> Bool {
+        switch token.retryHorizon {
+        case .tailGrowth:
+            token.generation == tailGrowthGeneration
+        case .settling:
+            token.generation == settlingGeneration
+        }
     }
 }

@@ -41,6 +41,12 @@ private final class GaryxConversationScrollStateBox {
     var state = GaryxConversationScrollState()
 }
 
+/// Plain holder for retry-chain arbitration. Scheduling a scroll must not
+/// invalidate the conversation body just to advance an internal token.
+private final class GaryxConversationTailScrollSchedulerBox {
+    var state = GaryxConversationTailScrollScheduler()
+}
+
 /// Live route to the UIScrollView hosting the conversation transcript.
 ///
 /// Deliberately NOT a cached weak scroll-view reference: SwiftUI can replace
@@ -170,7 +176,7 @@ struct GaryxConversationView: View {
     @State private var showsScrollToBottomButton = false
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
-    @State private var tailScrollRequestGeneration = 0
+    @State private var tailScrollSchedulerBox = GaryxConversationTailScrollSchedulerBox()
     @State private var readingAnchorRestoreGeneration = 0
     @State private var tailThinkingPresentationState = GaryxTailThinkingPresentationState()
     @State private var showsDebouncedTailThinking = false
@@ -833,8 +839,7 @@ struct GaryxConversationView: View {
         _ proxy: ScrollViewProxy,
         request: GaryxConversationScrollState.TailScrollRequest
     ) {
-        tailScrollRequestGeneration += 1
-        let generation = tailScrollRequestGeneration
+        let token = tailScrollSchedulerBox.state.schedule(reason: request.reason)
         let identity = conversationScrollIdentity
         // Long transcripts re-layout while scrolling, so a single scrollTo
         // can land short; the later attempts converge on the true bottom.
@@ -843,7 +848,7 @@ struct GaryxConversationView: View {
         for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 DispatchQueue.main.async {
-                    guard generation == tailScrollRequestGeneration,
+                    guard tailScrollSchedulerBox.state.isCurrent(token),
                           identity == conversationScrollIdentity,
                           scrollStateBox.state.shouldRunTailScrollAttempt(index: index, reason: request.reason) else {
                         return
@@ -863,13 +868,13 @@ struct GaryxConversationView: View {
     private func tailScrollRetryDelays(
         for reason: GaryxConversationScrollState.TailScrollReason
     ) -> [DispatchTimeInterval] {
-        switch reason {
-        case .tailUpdate:
+        switch reason.retryHorizon {
+        case .tailGrowth:
             // Ordinary tail growth during send/streaming should stay pinned,
             // but long retry chains make the transcript visibly wobble while
             // the composer and bottom spacer are also settling.
             return [.milliseconds(0), .milliseconds(40), .milliseconds(140)]
-        case .openingThread, .manual, .repair:
+        case .settling:
             return [
                 .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
                 .milliseconds(320), .milliseconds(650), .milliseconds(1_000),

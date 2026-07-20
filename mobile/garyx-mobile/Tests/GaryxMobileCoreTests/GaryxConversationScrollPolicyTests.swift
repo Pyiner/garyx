@@ -324,6 +324,60 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
     }
 
+    func testCrossScopeMessageTailUpdateCannotCancelOpeningRetryChain() throws {
+        var state = GaryxConversationScrollState()
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let opening = scheduler.schedule(reason: state.threadOpened().reason)
+        let switchUpdate = state.messagesChanged(
+            previousIds: ["history:5"],
+            currentIds: ["history:5"],
+            previousScopeIdentity: "thread:a",
+            currentScopeIdentity: "thread:b",
+            hasTailContent: true
+        )
+
+        XCTAssertEqual(switchUpdate?.reason, .tailUpdate)
+        let switchToken = scheduler.schedule(reason: try XCTUnwrap(switchUpdate).reason)
+
+        XCTAssertTrue(
+            scheduler.isCurrent(opening),
+            "A switch callback must not truncate the opening chain's late settling retries."
+        )
+        XCTAssertTrue(scheduler.isCurrent(switchToken))
+    }
+
+    func testCachedThinkingTailUpdateCannotCancelOpeningRetryChain() throws {
+        var state = GaryxConversationScrollState()
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let opening = scheduler.schedule(reason: state.threadOpened().reason)
+        let thinkingReveal = try XCTUnwrap(state.thinkingIndicatorShown())
+
+        XCTAssertEqual(thinkingReveal.reason, .tailUpdate)
+        let thinkingToken = scheduler.schedule(reason: thinkingReveal.reason)
+
+        XCTAssertTrue(
+            scheduler.isCurrent(opening),
+            "A cached thinking reveal must not truncate the opening chain's late settling retries."
+        )
+        XCTAssertTrue(scheduler.isCurrent(thinkingToken))
+    }
+
+    func testTailScrollSchedulerCoalescesWithinHorizonAndLongChainSupersedesAll() {
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let opening = scheduler.schedule(reason: .openingThread)
+        let firstTailUpdate = scheduler.schedule(reason: .tailUpdate)
+        let latestTailUpdate = scheduler.schedule(reason: .tailUpdate)
+
+        XCTAssertTrue(scheduler.isCurrent(opening))
+        XCTAssertFalse(scheduler.isCurrent(firstTailUpdate))
+        XCTAssertTrue(scheduler.isCurrent(latestTailUpdate))
+
+        let repair = scheduler.schedule(reason: .repair)
+        XCTAssertFalse(scheduler.isCurrent(opening))
+        XCTAssertFalse(scheduler.isCurrent(latestTailUpdate))
+        XCTAssertTrue(scheduler.isCurrent(repair))
+    }
+
     func testPersistentTailGapRepairsOnlyOnRisingEdge() {
         var state = GaryxConversationScrollState()
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
