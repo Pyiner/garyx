@@ -84,7 +84,6 @@ ownership and decision flow are fixed by this design.
 pub struct AntigravityClientConfig {
     pub cli_bin: String,
     pub brain_root: PathBuf,
-    pub env: HashMap<String, String>,
     pub transcript_poll_interval: Duration, // current default: 250 ms
     pub discovery_timeout: Duration,        // current default: 30 s
     pub shutdown_grace: Duration,           // current default: 2 s
@@ -98,6 +97,7 @@ pub struct AntigravityRunRequest {
     pub conversation_id: Option<String>,
     pub workspace_dir: PathBuf,
     pub log_path: PathBuf,
+    pub env: HashMap<String, String>,
     pub print_timeout: Duration,
     pub approval_callback: ApprovalCallback,
 }
@@ -182,6 +182,14 @@ private CLI error strings when deciding whether to evict and retry a session.
 Raw process output remains diagnostic context in SDK error messages, matching
 today's behavior.
 
+`env` is intentionally request-scoped. Before every run, the bridge computes
+the complete environment overlay from static provider config, that run's
+runtime-context identity, and `desktop_antigravity_env`; the SDK applies the
+map verbatim with `Command::envs`. The client config has no static environment
+map and therefore cannot accidentally retain one thread's `GARYX_*` identity
+for another run. The map is opaque protocol input to the SDK: none of its keys
+have SDK-specific meaning.
+
 ## Approval Boundary
 
 Antigravity CLI 1.1.4 exposes launch modes (`--mode accept-edits`, `--mode
@@ -207,9 +215,12 @@ auto-approval mistake.
 
 ## Run Flow And Behavioral Equivalence
 
-1. Bridge resolves Garyx config, model, environment, paths, prompt, timeout,
-   session candidate, and approval callback, then creates a pure SDK request.
-2. SDK asks the approval callback before spawn and encodes only that decision.
+1. Bridge resolves Garyx config, model, paths, prompt, timeout, session
+   candidate, and approval callback. It also computes the complete per-run
+   environment overlay, including runtime-context identity, then creates a pure
+   SDK request.
+2. SDK asks the approval callback before spawn, encodes only that decision, and
+   applies the request's environment map verbatim to the child command.
 3. SDK records the existing transcript baseline for a resumed conversation.
    Fresh runs retain the current global fresh-discovery serialization.
 4. SDK spawns `agy -p`, discovers a fresh conversation from the run log first
@@ -238,11 +249,25 @@ while preserving the current disk location.
 
 - Spawn, discovery, transcript, wait, timeout, callback rejection/failure, and
   process-exit errors are SDK errors or typed run failures.
-- A non-zero exit with no visible protocol event remains a hard SDK error. A
-  non-zero exit after visible output remains a returned unsuccessful outcome,
-  allowing the bridge to preserve partial messages.
+- For exit classification, **visible output** means at least one emitted
+  `AssistantDelta`, `ToolUse`, or `ToolResult`. `SessionBound`, a reasoning-only
+  planner row, and a bare `Error` event do not count. This is exactly the
+  current `!session_messages.is_empty() || !response.trim().is_empty()` test.
+- A non-zero exit with no visible output remains a hard SDK process-exit error
+  containing the exit status and captured stdout/stderr. This remains true for
+  a run that emitted only a bare `Error` event. A non-zero exit after visible
+  output returns an unsuccessful outcome so the bridge can preserve partial
+  messages.
 - Transcript `ERROR_MESSAGE` rows produce a typed error event/failure and keep
-  the current pending-tool error-result pairing.
+  the current pending-tool error-result pairing. The last transcript error
+  wins among multiple `ERROR_MESSAGE` rows, matching the current mapper.
+- `success` is true only when the process exits successfully and no transcript
+  error was observed. On a successful process exit plus a transcript error,
+  the SDK returns an unsuccessful outcome with that transcript error. On a
+  non-zero exit after visible output, the last transcript error wins when one
+  exists; otherwise the process-exit diagnostic is the failure. On a non-zero
+  exit without visible output, the hard process-exit error wins even when a
+  bare transcript error was observed.
 - The SDK owns every child handle. `abort(run_id)` kills and waits; `shutdown()`
   aborts all registered runs. Normal process exit is waited naturally.
 - Bridge removes its run/thread bookkeeping in a finally-style guard around
@@ -255,18 +280,30 @@ SDK tests move or strengthen the current protocol guards:
 - command arguments for every approval decision, including proof that bypass
   appears only when the callback returns it;
 - denial/callback failure prevents process spawn;
+- a fake child observes the request-scoped environment, while two sequential
+  requests with different synthetic identity values prove there is no
+  client-level environment retention;
 - compact/full transcript overlay and malformed-line tolerance;
 - event order, step deduplication, reasoning association, tool pairing, and
   invalid-conversation classification;
 - run-log discovery, multiple `.db` candidates with prompt matching, and
   resumed baseline behavior;
-- fake-CLI tailing end to end, normal reaping, timeout/abort, and shutdown.
+- fake-CLI tailing end to end, normal reaping, timeout/abort, and shutdown;
+- the complete exit/error matrix: clean exit without transcript error succeeds;
+  clean exit with `ERROR_MESSAGE` returns an unsuccessful outcome; non-zero
+  exit after assistant/tool output returns a partial unsuccessful outcome
+  (with transcript error winning when present); and non-zero exit with only a
+  bare `ERROR_MESSAGE` returns a hard process-exit error with process
+  diagnostics.
 
 Bridge tests cover only Garyx mapping and orchestration:
 
 - SDK events map to the same `StreamEvent`/`ProviderMessage` sequence and final
   `ProviderRunResult`;
 - the bridge supplies the explicit bypass callback;
+- the bridge request environment preserves provider-config values, applies
+  per-run `GARYX_*` runtime identity over them, and applies the run's desktop
+  overlay with the current precedence;
 - stale-session failure evicts and retries once;
 - clear/shutdown delegate process cancellation to the SDK.
 
