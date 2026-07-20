@@ -3223,19 +3223,17 @@ async fn engine_tracing_keeps_the_stable_cron_target() {
     );
 }
 
-
 /// Source-level completion of the tracing-target contract: the capturing
-/// subscriber test above proves the stable target at runtime for the paths it
-/// drives, but cannot reach all engine callsites. This guard scans every
-/// engine source file and requires each `tracing::<level>!(` invocation to
-/// open with the explicit stable target, so no callsite — current or future —
-/// can silently fall back to a module-path-derived target.
+/// subscriber test above proves the stable target at runtime for the paths
+/// it drives, but cannot reach all engine callsites. This guard scans every
+/// engine source file and requires each `tracing::<level>!` invocation —
+/// with any whitespace between the macro bang, the paren, and the first
+/// argument — to open with the explicit stable target, so no callsite,
+/// current or future, can silently fall back to a module-path-derived
+/// target.
 #[test]
 fn every_engine_tracing_event_pins_the_stable_cron_target() {
-    let engine_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/automation/engine");
-    const LEVELS: [&str; 5] = ["trace", "debug", "info", "warn", "error"];
-    const STABLE: &str = "target: \"garyx_gateway::cron\"";
+    let engine_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/automation/engine");
 
     let mut scanned_invocations = 0usize;
     let mut violations = Vec::new();
@@ -3248,21 +3246,9 @@ fn every_engine_tracing_event_pins_the_stable_cron_target() {
             continue;
         }
         let source = std::fs::read_to_string(&path).expect("read engine source");
-        for level in LEVELS {
-            let needle = format!("tracing::{level}!(");
-            let mut search = source.as_str();
-            let mut consumed = 0usize;
-            while let Some(pos) = search.find(&needle) {
-                scanned_invocations += 1;
-                let after = &search[pos + needle.len()..];
-                if !after.trim_start().starts_with(STABLE) {
-                    let line = source[..consumed + pos].matches('\n').count() + 1;
-                    violations.push(format!("{name}:{line} tracing::{level}!"));
-                }
-                consumed += pos + needle.len();
-                search = &search[pos + needle.len()..];
-            }
-        }
+        let (scanned, mut file_violations) = scan_tracing_target_violations(&source, &name);
+        scanned_invocations += scanned;
+        violations.append(&mut file_violations);
     }
 
     // Sensitivity control: the scanner must actually see the engine's
@@ -3277,4 +3263,74 @@ fn every_engine_tracing_event_pins_the_stable_cron_target() {
         violations.is_empty(),
         "engine tracing events without the stable garyx_gateway::cron target: {violations:?}"
     );
+}
+
+/// Whitespace-tolerant scan for `tracing::<level>!` invocations that do not
+/// open with the stable explicit target. Returns (scanned, violations).
+fn scan_tracing_target_violations(source: &str, name: &str) -> (usize, Vec<String>) {
+    const LEVELS: [&str; 5] = ["trace", "debug", "info", "warn", "error"];
+    const STABLE: &str = "target: \"garyx_gateway::cron\"";
+
+    let mut scanned = 0usize;
+    let mut violations = Vec::new();
+    for level in LEVELS {
+        let needle = format!("tracing::{level}!");
+        let mut cursor = 0usize;
+        while let Some(pos) = source[cursor..].find(&needle) {
+            let invocation_at = cursor + pos;
+            let after_bang = &source[invocation_at + needle.len()..];
+            cursor = invocation_at + needle.len();
+            // Any whitespace may separate the bang from the delimiter; a
+            // non-paren token here means this was a longer identifier match
+            // (no such macro exists today) — treat it as a violation too
+            // rather than silently skipping it.
+            let after_open = after_bang.trim_start();
+            scanned += 1;
+            let compliant = after_open
+                .strip_prefix(['(', '[', '{'])
+                .map(str::trim_start)
+                .is_some_and(|args| args.starts_with(STABLE));
+            if !compliant {
+                let line = source[..invocation_at].matches('\n').count() + 1;
+                violations.push(format!("{name}:{line} tracing::{level}!"));
+            }
+        }
+    }
+    (scanned, violations)
+}
+
+/// Meta-regression for the guard itself (R3 review): legal whitespace
+/// variants between the macro bang, the delimiter, and the argument list
+/// must still be recognized — and flagged when the stable target is
+/// missing.
+#[test]
+fn tracing_target_scanner_rejects_whitespace_bypass_variants() {
+    let flagged = [
+        "tracing::warn! (\"drifting target\");",
+        "tracing::warn!(\n        \"drifting target\");",
+        "tracing::info!  (job_id = %id, \"drifting\");",
+        "tracing::error![\"drifting\"];",
+    ];
+    for source in flagged {
+        let (scanned, violations) = scan_tracing_target_violations(source, "probe.rs");
+        assert_eq!(scanned, 1, "scanner missed the invocation in: {source}");
+        assert_eq!(
+            violations.len(),
+            1,
+            "scanner failed to flag the drifting invocation in: {source}"
+        );
+    }
+
+    let compliant = [
+        "tracing::warn!(target: \"garyx_gateway::cron\", \"stable\");",
+        "tracing::warn! (\n    target: \"garyx_gateway::cron\",\n    \"stable\");",
+    ];
+    for source in compliant {
+        let (scanned, violations) = scan_tracing_target_violations(source, "probe.rs");
+        assert_eq!(scanned, 1, "scanner missed the invocation in: {source}");
+        assert!(
+            violations.is_empty(),
+            "scanner wrongly flagged a compliant invocation in: {source}"
+        );
+    }
 }
