@@ -92,8 +92,10 @@ test('workspace sidebar groups use only user-saved workspace rows', () => {
         },
       }),
       // An implicit thread (server root null) belongs to no workspace even
-      // though its runtime path exists.
-      makeThread('thread-implicit', '/Users/test/data/thread-workspaces/thread--implicit', {
+      // when its runtime path equals an explicit root's path — a
+      // runtime-path fallback would wrongly group it (and this line kills
+      // that mutation).
+      makeThread('thread-implicit', manualWithThread.path, {
         rootWorkspacePath: null,
         workspaceOrigin: 'implicit',
       }),

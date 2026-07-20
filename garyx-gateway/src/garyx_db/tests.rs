@@ -5674,6 +5674,41 @@ fn membership_projection_handles_unusual_thread_ids_and_cutover_backfills() {
 }
 
 #[test]
+fn membership_columns_upgrade_from_the_generated_column_revision() {
+    let db = GaryxDbService::memory().expect("db opens");
+    {
+        let conn = db.conn().expect("writer");
+        // Reshape thread_meta to the immediate-parent revision: a VIRTUAL
+        // generated root_workspace_path with a dependent index (the exact
+        // shape that made a plain DROP COLUMN fail on upgrade).
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_thread_meta_root_workspace;
+             ALTER TABLE thread_meta DROP COLUMN workspace_origin;
+             ALTER TABLE thread_meta DROP COLUMN root_workspace_path;
+             ALTER TABLE thread_meta ADD COLUMN root_workspace_path TEXT
+                 GENERATED ALWAYS AS (workspace_dir) VIRTUAL;
+             CREATE INDEX idx_thread_meta_root_workspace
+                 ON thread_meta(root_workspace_path, sort_updated_at_us DESC)
+                 WHERE root_workspace_path IS NOT NULL;",
+        )
+        .expect("previous-revision shape");
+        crate::garyx_db::schema::ensure_thread_meta_membership_columns(&conn)
+            .expect("upgrade drops the generated column and its index");
+        crate::garyx_db::schema::ensure_thread_meta_indexes(&conn)
+            .expect("plain-column index recreates");
+    }
+    // The upgraded shape is writable end to end.
+    db.replace_thread_meta_projection(workspace_membership_meta_draft(
+        "thread::aaaaaaaa-0000-0000-0000-000000000000",
+        Some("/workspace/upgraded"),
+        None,
+        1,
+        false,
+    ))
+    .expect("projection writes after upgrade");
+}
+
+#[test]
 fn workspace_list_stats_aggregate_membership_in_total_order() {
     let db = GaryxDbService::memory().expect("db opens");
     for (name, path) in [

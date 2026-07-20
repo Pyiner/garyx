@@ -1651,6 +1651,7 @@ export async function createDesktopThread(input?: {
   const created = await createRemoteThread(current.settings, {
     title: requestedTitle,
     workspacePath,
+    noWorkspace: noWorkspace || undefined,
     workspaceMode: providerBoundSource ? "local" : input?.workspaceMode,
     agentId: input?.agentId,
     model: input?.model,

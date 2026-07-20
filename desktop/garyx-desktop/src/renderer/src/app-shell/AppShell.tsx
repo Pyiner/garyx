@@ -55,6 +55,7 @@ import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 import { WorkspaceRenameDialog } from "../components/WorkspaceRenameDialog";
 import { workspaceGitStatusCache } from "../workspace-git-status-cache";
+import { WorkspaceEpochContext } from "../components/workspace-data-adapter";
 // Side-effect import: wires cross-store capsule cache invalidation (a `/serve`
 // 404 in either the HTML or thumbnail store tombstones the other for that id).
 import "./capsule-cache";
@@ -2804,9 +2805,12 @@ export function AppShell() {
   // still exactly once: the effect only fires while the selection is
   // unresolved, and a resolved draft never re-enters it.
   useEffect(() => {
+    // Any visible draft composer resolves here — the explicit new-thread
+    // draft AND the thread-home empty state (its composer is a draft too).
+    const draftComposerVisible =
+      contentView === "thread" && !selectedThreadId;
     if (
-      !newThreadDraftActive ||
-      selectedThreadId ||
+      !draftComposerVisible ||
       pendingWorkspaceSelection !== null ||
       !desktopState ||
       desktopState.workspaces.length === 0
@@ -2821,8 +2825,8 @@ export function AppShell() {
       workspacePath: routeWorkspaceFromDraftSelection(resolved),
     });
   }, [
+    contentView,
     desktopState,
-    newThreadDraftActive,
     pendingWorkspaceSelection,
     selectedThreadId,
   ]);
@@ -3624,6 +3628,9 @@ export function AppShell() {
       setDesktopState(result.state);
       return result.workspace || null;
     } catch (workspaceError) {
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return null;
+      }
       setError(
         workspaceError instanceof Error
           ? workspaceError.message
@@ -3662,6 +3669,7 @@ export function AppShell() {
   async function handleRemoveWorkspace(workspacePath: string) {
     setError(null);
     setWorkspaceMutation("remove");
+    const epoch = workspaceEpochRef.current;
     const workspaceKey = workspacePath.trim().toLowerCase();
     const previousState = desktopState;
     const removedWorkspace = previousState?.workspaces.find((workspace) => {
@@ -3683,6 +3691,9 @@ export function AppShell() {
       const nextState = await requestDesktopState(() =>
         window.garyxDesktop.removeWorkspace({ workspacePath }),
       );
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return;
+      }
       setDesktopState(nextState);
       if (selectedThreadId) {
         const selectedThreadStillExists = nextState.threads.some(
@@ -3697,6 +3708,9 @@ export function AppShell() {
         }
       }
     } catch (removeError) {
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return;
+      }
       if (previousState && removedWorkspace) {
         setDesktopState((current) => {
           if (!current) {
@@ -3756,6 +3770,9 @@ export function AppShell() {
       }
       setDesktopState(nextState);
     } catch (pinError) {
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return;
+      }
       setError(
         pinError instanceof Error ? pinError.message : "Failed to pin workspace",
       );
@@ -3786,6 +3803,9 @@ export function AppShell() {
       setDesktopState(nextState);
       setWorkspaceRenameTarget(null);
     } catch (renameError) {
+      if (!isCurrentWorkspaceEpoch(epoch)) {
+        return;
+      }
       setError(
         renameError instanceof Error
           ? renameError.message
@@ -4448,10 +4468,12 @@ export function AppShell() {
   // survived those flips; the root must too.
   const appShellChrome = (content: ReactNode) => (
     <GatewayMirrorContext.Provider value={gatewayMirror}>
-      <I18nProvider languagePreference={settingsDraft.languagePreference}>
-        {content}
-        <MemoryDialogRoot ref={memoryDialogRef} />
-      </I18nProvider>
+      <WorkspaceEpochContext.Provider value={workspaceEpoch}>
+        <I18nProvider languagePreference={settingsDraft.languagePreference}>
+          {content}
+          <MemoryDialogRoot ref={memoryDialogRef} />
+        </I18nProvider>
+      </WorkspaceEpochContext.Provider>
     </GatewayMirrorContext.Provider>
   );
 

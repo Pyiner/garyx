@@ -657,11 +657,21 @@ export function SideChatPanel({
     );
   }
   if (!sideChatThreadId) {
+    const inheritedWorkspacePath =
+      activeThread?.rootWorkspacePath ?? activeThread?.workspacePath ?? null;
     return (
       <div className="side-tool-empty">
         {sideChatCreating
           ? t("Starting…")
           : sideChatError || t("Start a focused side thread.")}
+        {inheritedWorkspacePath ? (
+          <span
+            className="side-chat-inherited-workspace"
+            title={inheritedWorkspacePath}
+          >
+            {inheritedWorkspacePath}
+          </span>
+        ) : null}
       </div>
     );
   }
@@ -683,9 +693,6 @@ export function SideChatPanel({
         sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
       }
       availableWorkspaceCount={availableWorkspaceCount}
-      forkSourceWorkspacePath={
-        activeThread?.rootWorkspacePath ?? activeThread?.workspacePath ?? null
-      }
       draftWorkspaceSelection={null}
       draftWorkspaceMode="local"
       draftWorkspaces={[]}

@@ -1157,3 +1157,11 @@ button.new-thread-mode-trigger[data-state="open"] {
   --app-dialog-card-width: min(520px, var(--app-dialog-available-width));
   border-radius: 25px;
 }
+
+/* Add-workspace CTA matches the captured reference button (32px tall,
+ * 12.5px radius, 14px label). */
+.workspace-add-dialog [data-slot="dialog-footer"] button {
+  height: 32px;
+  border-radius: 12.5px;
+  font-size: 14px;
+}

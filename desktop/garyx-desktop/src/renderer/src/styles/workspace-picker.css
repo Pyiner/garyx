@@ -17,8 +17,8 @@
 .workspace-picker-search {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 10px;
+  gap: var(--menu-item-gap);
+  padding: var(--menu-item-padding-y) var(--menu-item-padding-x);
   border-bottom: 1px solid var(--menu-separator-color);
   color: var(--color-token-description-foreground);
 }
@@ -105,4 +105,3 @@
   border-top: 1px solid var(--menu-separator-color);
   padding-top: 3px;
 }
-

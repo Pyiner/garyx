@@ -253,6 +253,8 @@ impl MessageRouter {
         let workspace_mode =
             default_workspace_mode_for_channel_account(&self.config, channel, account_id);
         let options = ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some(display_label.clone()),
             workspace_dir: default_workspace_for_channel_account(&self.config, channel, account_id),
             workspace_mode,

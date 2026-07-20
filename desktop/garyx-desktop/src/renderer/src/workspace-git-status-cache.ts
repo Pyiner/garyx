@@ -12,6 +12,7 @@ export class WorkspaceGitStatusCache {
   private readonly maxEntries: number;
   private readonly ttlMs: number;
   private entries = new Map<string, WorkspaceGitStatusCacheEntry>();
+  private generation = 0;
 
   constructor(options: { maxEntries?: number; ttlMs?: number } = {}) {
     this.maxEntries =
@@ -19,9 +20,16 @@ export class WorkspaceGitStatusCache {
     this.ttlMs = options.ttlMs ?? WORKSPACE_GIT_STATUS_CACHE_TTL_MS;
   }
 
-  /** Gateway switch: cached statuses belong to the previous machine. */
+  /** Gateway switch: cached statuses belong to the previous machine, and a
+   *  late in-flight load from before the switch must not repopulate the
+   *  cache — `set` drops writes whose generation predates the clear. */
   clear(): void {
     this.entries.clear();
+    this.generation += 1;
+  }
+
+  currentGeneration(): number {
+    return this.generation;
   }
 
   get(workspacePath: string, now = Date.now()): DesktopWorkspaceGitStatus | null {
@@ -43,9 +51,10 @@ export class WorkspaceGitStatusCache {
     workspacePath: string,
     status: DesktopWorkspaceGitStatus,
     now = Date.now(),
+    generation = this.generation,
   ): void {
     const key = workspacePath.trim();
-    if (!key) {
+    if (!key || generation !== this.generation) {
       return;
     }
     this.entries.delete(key);
@@ -83,8 +92,9 @@ export async function loadWorkspaceGitStatusCached(options: {
   if (cached) {
     return cached;
   }
+  const generation = options.cache.currentGeneration();
   const status = await options.load();
-  options.cache.set(options.workspacePath, status, options.now);
+  options.cache.set(options.workspacePath, status, options.now, generation);
   return status;
 }
 

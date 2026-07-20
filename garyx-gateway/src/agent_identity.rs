@@ -137,12 +137,13 @@ async fn canonical_thread_options(
     canonical_options.agent_id = Some(resolved.bound_agent_id().to_owned());
     canonical_options.provider_type = Some(resolved.provider_type());
     merge_agent_runtime_snapshot_metadata(&mut canonical_options.metadata, &resolved);
-    if canonical_options
-        .workspace_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none()
+    if !canonical_options.no_workspace
+        && canonical_options
+            .workspace_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
     {
         canonical_options.workspace_dir = default_workspace_dir_from_agent_reference(&resolved);
     }
@@ -237,6 +238,31 @@ mod tests {
             .await
             .expect("custom agent");
         store
+    }
+
+    #[tokio::test]
+    async fn explicit_no_workspace_is_never_replaced_by_the_agent_default() {
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let custom_agents = custom_agent_store_with_default_workspace().await;
+        let (_, data, _) = create_thread_for_agent_reference(
+            thread_store,
+            Arc::new(MultiProviderBridge::new()),
+            custom_agents,
+            ThreadEnsureOptions {
+                agent_id: Some("reviewer".to_owned()),
+                no_workspace: true,
+                ..ThreadEnsureOptions::default()
+            },
+            AgentBindingIntent::Fresh,
+        )
+        .await
+        .expect("thread created");
+        assert_eq!(
+            workspace_dir_from_value(&data),
+            None,
+            "an explicit No-workspace create must stay workspace-less so the \
+             runtime provisions the private managed workspace",
+        );
     }
 
     #[tokio::test]

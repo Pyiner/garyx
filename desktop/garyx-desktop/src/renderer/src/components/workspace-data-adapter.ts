@@ -55,3 +55,14 @@ export const WorkspaceDataAdapterContext =
 export function useWorkspaceDataAdapter(): WorkspaceDataAdapter {
   return useContext(WorkspaceDataAdapterContext);
 }
+
+/**
+ * Gateway connection epoch for workspace surfaces. A change means a new
+ * workspace universe: open pickers/browsers close their transient state and
+ * drop cached catalogs (consumers reset in an effect keyed on this value).
+ */
+export const WorkspaceEpochContext = createContext<string>("");
+
+export function useWorkspaceEpoch(): string {
+  return useContext(WorkspaceEpochContext);
+}

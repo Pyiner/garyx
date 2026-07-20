@@ -481,9 +481,6 @@ type ThreadPageProps = {
   onDraftWorkspaceSelectionChange: (selection: DraftWorkspaceSelection) => void;
   onDraftWorkspaceModeChange: (workspaceMode: DesktopWorkspaceMode) => void;
   onDraftAddWorkspace: () => void;
-  /** Side-chat only: the fork source's workspace, shown read-only while
-   *  the side thread has not been created yet (a fork inherits it). */
-  forkSourceWorkspacePath?: string | null;
   activeThreadBot: DesktopBotConsoleSummary | null;
   activeThreadBotId: string | null;
   botBindingDisabled: boolean;
@@ -603,7 +600,6 @@ export function ThreadPage({
   onDraftWorkspaceSelectionChange,
   onDraftWorkspaceModeChange,
   onDraftAddWorkspace,
-  forkSourceWorkspacePath = null,
   composerResetKey,
   activeThreadBot,
   activeThreadBotId,
@@ -804,17 +800,6 @@ export function ThreadPage({
   // Side chats fork their workspace from the source thread; a fork has
   // nothing to choose, so the draft chip never renders for them and the
   // sent-thread branches below show the inherited workspace read-only.
-  const forkSourceLabel = (() => {
-    const path = forkSourceWorkspacePath?.trim() || "";
-    if (!path || selectedThreadId || surfaceVariant !== "side-chat") {
-      return null;
-    }
-    const home = gatewayHome?.replace(/\/+$/, "");
-    if (home && (path === home || path.startsWith(`${home}/`))) {
-      return `~${path.slice(home.length)}`;
-    }
-    return path;
-  })();
   const composerContext = !selectedThreadId && surfaceVariant !== "side-chat" ? (
     <WorkspaceComposerChip
       addWorkspaceBusy={workspaceAddBusy}
@@ -846,19 +831,6 @@ export function ThreadPage({
       <span className="thread-composer-status-pill thread-composer-status-none">
         <CodexChipNoProjectIcon size={14} />
         <span>{t("No workspace")}</span>
-      </span>
-    </div>
-  ) : forkSourceLabel ? (
-    <div
-      aria-label={t("Workspace")}
-      className="thread-composer-status"
-    >
-      <span
-        className="thread-composer-status-pill thread-composer-status-workspace"
-        title={forkSourceWorkspacePath || undefined}
-      >
-        <CodexChipProjectIcon size={14} />
-        <span>{forkSourceLabel}</span>
       </span>
     </div>
   ) : sentWorkspaceLabel ? (

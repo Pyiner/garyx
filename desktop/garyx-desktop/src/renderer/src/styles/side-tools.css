@@ -700,3 +700,15 @@
   background: var(--color-token-bg-primary);
   color: var(--color-token-text-primary);
 }
+
+/* Side-chat pre-creation frame: the inherited (fork source) workspace is
+ * visible read-only from the first frame. */
+.side-chat-inherited-workspace {
+  display: block;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+}

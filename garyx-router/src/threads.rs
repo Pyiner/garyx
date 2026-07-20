@@ -107,6 +107,15 @@ pub struct KnownChannelEndpoint {
 pub struct ThreadEnsureOptions {
     pub label: Option<String>,
     pub workspace_dir: Option<String>,
+    /// Explicit No-workspace creation: the runtime provisions the private
+    /// Garyx-managed thread workspace, and nothing (agent defaults included)
+    /// may substitute a directory.
+    pub no_workspace: bool,
+    /// Server-owned provenance stamped into the initial record when the
+    /// creation already carries a workspace ("explicit", or inherited from a
+    /// fork source). Threads that get their workspace later are stamped by
+    /// the workspace-landing update instead.
+    pub workspace_origin: Option<String>,
     pub workspace_mode: WorkspaceMode,
     pub worktree_base_dir: Option<PathBuf>,
     pub agent_id: Option<String>,
@@ -380,6 +389,16 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
 
     if let Some(workspace_dir) = normalize_workspace_dir(options.workspace_dir.as_deref()) {
         obj.insert("workspace_dir".to_owned(), Value::String(workspace_dir));
+        let origin = options
+            .workspace_origin
+            .as_deref()
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .unwrap_or("explicit");
+        obj.insert(
+            "workspace_origin".to_owned(),
+            Value::String(origin.to_owned()),
+        );
     } else if obj.get("workspace_dir").is_none() {
         obj.insert("workspace_dir".to_owned(), Value::Null);
     }

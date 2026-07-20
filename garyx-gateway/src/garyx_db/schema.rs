@@ -689,6 +689,10 @@ pub(super) fn ensure_thread_meta_membership_columns(conn: &Connection) -> GaryxD
     }
     drop(stmt);
     if root_is_generated {
+        // The previous revision indexed the generated column; SQLite refuses
+        // to drop a column an index depends on. The plain-column index is
+        // recreated by ensure_thread_meta_indexes right after.
+        conn.execute("DROP INDEX IF EXISTS idx_thread_meta_root_workspace", [])?;
         conn.execute("ALTER TABLE thread_meta DROP COLUMN root_workspace_path", [])?;
         has_root = false;
     }

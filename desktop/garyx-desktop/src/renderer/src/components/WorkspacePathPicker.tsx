@@ -18,7 +18,7 @@ import { Separator } from '@/components/ui/separator';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { decodeDirectoryListingError } from '@shared/workspace-payload';
-import { useWorkspaceDataAdapter } from './workspace-data-adapter';
+import { useWorkspaceDataAdapter, useWorkspaceEpoch } from './workspace-data-adapter';
 import { WorkspacePickerContent } from './WorkspacePickerContent';
 
 export type WorkspacePathPickerProps = {
@@ -546,10 +546,19 @@ export function WorkspacePathPicker({
   ].filter(Boolean).join(' ') || undefined;
 
   const adapter = useWorkspaceDataAdapter();
+  const workspaceEpoch = useWorkspaceEpoch();
   const [fetchedCatalog, setFetchedCatalog] = useState<{
     workspaces: DesktopWorkspace[];
     gatewayHome: string | null;
   } | null>(null);
+
+  // Gateway switch: close transient surfaces and drop the previous
+  // gateway's catalog.
+  useEffect(() => {
+    setPickerOpen(false);
+    setAddOpen(false);
+    setFetchedCatalog(null);
+  }, [workspaceEpoch]);
 
   useEffect(() => {
     if (!pickerOpen || workspaces.length > 0 || fetchedCatalog) {

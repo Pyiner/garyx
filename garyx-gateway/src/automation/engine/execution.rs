@@ -343,6 +343,8 @@ impl CronService {
             provider_type: None,
             sdk_session_id: None,
             thread_kind: None,
+            no_workspace: false,
+            workspace_origin: None,
             origin_channel: None,
             origin_account_id: None,
             origin_from_id: None,

@@ -542,6 +542,8 @@ async fn thread_stream_replay_tail_cap_overflow_degrades_to_window() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Replay cap".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -627,6 +629,8 @@ async fn resume_over_budget_degrades_to_window_by_default() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Windowed resume".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -725,6 +729,8 @@ async fn resume_within_budget_keeps_verbatim_replay() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Windowed small".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -1137,6 +1143,8 @@ async fn thread_stream_handler_keeps_initial_floor_for_live_frames() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Initial floor live".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -2361,6 +2369,8 @@ async fn thread_stream_handler_negotiates_delta_live_frames() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Delta negotiation".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -3137,6 +3147,8 @@ async fn thread_logs_route_returns_full_and_delta_chunks() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Logs".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -3196,6 +3208,8 @@ async fn thread_logs_route_alias_returns_full_chunk() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Logs".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -3243,6 +3257,8 @@ async fn create_thread_seeds_sdk_session_id() {
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Resume Claude".to_owned()),
             workspace_dir: Some(workspace_dir),
             workspace_mode: Default::default(),
@@ -3285,6 +3301,8 @@ async fn create_thread_forks_provider_session_without_importing_visible_history(
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Main thread".to_owned()),
             workspace_dir: Some(workspace_dir.clone()),
             workspace_mode: Default::default(),
@@ -3385,6 +3403,8 @@ async fn create_thread_rejects_fork_source_without_provider_session_id() {
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Main thread".to_owned()),
             workspace_dir: Some(workspace_dir),
             workspace_mode: Default::default(),
@@ -6764,6 +6784,8 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Recovered Session".to_owned()),
             workspace_dir: Some(workspace_dir),
             workspace_mode: Default::default(),
@@ -7182,6 +7204,8 @@ async fn workspaces_route_seeds_from_config_only_when_workspace_table_is_empty()
     create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Inferred only".to_owned()),
             workspace_dir: Some("/workspace/inferred-only".to_owned()),
             workspace_mode: Default::default(),
@@ -7575,6 +7599,8 @@ async fn delete_thread_removes_thread_log_file() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Delete".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -8589,6 +8615,8 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Delete Active".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),
@@ -8798,6 +8826,8 @@ async fn delete_thread_retains_local_state_and_pending_job_when_provider_clear_f
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
         ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
             label: Some("Delete Local State".to_owned()),
             workspace_dir: None,
             workspace_mode: Default::default(),

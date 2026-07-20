@@ -194,6 +194,43 @@ async fn list_known_channel_endpoints_prefers_latest_thread_binding_when_duplica
     );
 }
 
+#[test]
+fn initial_record_stamps_workspace_provenance() {
+    // Explicit creation defaults to "explicit"…
+    let mut value = Value::Object(Map::new());
+    upsert_thread_fields(
+        &mut value,
+        "thread::stamp",
+        &ThreadEnsureOptions {
+            workspace_dir: Some("/tmp/workspace-a".to_owned()),
+            ..ThreadEnsureOptions::default()
+        },
+    );
+    assert_eq!(value["workspace_origin"], "explicit");
+
+    // …and an inherited origin (fork of an implicit source) wins.
+    let mut forked = Value::Object(Map::new());
+    upsert_thread_fields(
+        &mut forked,
+        "thread::stamp-fork",
+        &ThreadEnsureOptions {
+            workspace_dir: Some("/tmp/thread-workspaces/thread--source".to_owned()),
+            workspace_origin: Some("implicit".to_owned()),
+            ..ThreadEnsureOptions::default()
+        },
+    );
+    assert_eq!(forked["workspace_origin"], "implicit");
+
+    // A creation without a workspace stamps nothing; the landing update does.
+    let mut pending = Value::Object(Map::new());
+    upsert_thread_fields(
+        &mut pending,
+        "thread::stamp-later",
+        &ThreadEnsureOptions::default(),
+    );
+    assert!(pending.get("workspace_origin").is_none());
+}
+
 #[tokio::test]
 async fn update_thread_record_preserves_workspace_when_not_provided() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());

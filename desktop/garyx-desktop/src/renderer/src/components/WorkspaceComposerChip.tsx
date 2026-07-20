@@ -12,6 +12,7 @@ import {
   CodexChipProjectIcon,
 } from './codex-icons';
 import { WorkspacePickerContent } from './WorkspacePickerContent';
+import { useWorkspaceEpoch } from './workspace-data-adapter';
 import {
   Popover,
   PopoverContent,
@@ -74,6 +75,12 @@ export function WorkspaceComposerChip({
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [gitStatusRepoPath, setGitStatusRepoPath] = useState<string | null>(null);
+  const workspaceEpoch = useWorkspaceEpoch();
+
+  // Gateway switch: the picker must not stay open over a new universe.
+  useEffect(() => {
+    setOpen(false);
+  }, [workspaceEpoch]);
 
   const selectedPath = selection?.kind === 'path' ? selection.path : null;
   const selectedWorkspace = useMemo(

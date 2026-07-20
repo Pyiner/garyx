@@ -447,6 +447,7 @@ pub(crate) async fn create_implicit_and_dispatch(
     let label = crate::chat_application::prompt_derived_thread_label(&request.message)
         .unwrap_or_else(|| plan.label.clone());
     let thread = CreateThreadBody {
+        no_workspace: false,
         idempotency_scope: None,
         create_intent_id: None,
         label: Some(label),
@@ -887,6 +888,8 @@ async fn prepare_atomic_thread_record(
         metadata.insert(SDK_SESSION_FORK_METADATA_KEY.to_owned(), Value::Bool(true));
     }
     let mut options = ThreadEnsureOptions {
+            no_workspace: false,
+            workspace_origin: None,
         label: body.label.clone(),
         workspace_dir: recovered_session
             .as_ref()

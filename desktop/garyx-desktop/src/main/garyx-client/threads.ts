@@ -1429,6 +1429,7 @@ export async function createRemoteThread(
   input?: {
     title?: string;
     workspacePath?: string | null;
+    noWorkspace?: boolean;
     workspaceMode?: "local" | "worktree";
     agentId?: string | null;
     model?: string | null;
@@ -1453,6 +1454,7 @@ export async function createRemoteThread(
       body: JSON.stringify({
         label: input?.title || undefined,
         workspaceDir: input?.workspacePath || undefined,
+        noWorkspace: input?.noWorkspace || undefined,
         workspaceMode: input?.workspaceMode || undefined,
         agentId: input?.agentId || undefined,
         model: input?.model || undefined,
