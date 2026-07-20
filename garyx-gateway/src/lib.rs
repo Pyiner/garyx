@@ -47,7 +47,7 @@ mod runtime_diagnostics;
 pub mod server;
 pub mod skills;
 mod sqlite_thread_store;
-pub use sqlite_thread_store::assemble_sqlite_thread_store;
+pub use sqlite_thread_store::{SqliteThreadStoreHandle, assemble_sqlite_thread_store};
 mod task_notifications;
 mod task_projection;
 pub use task_projection::seed_task_counter_from_legacy;

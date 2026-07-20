@@ -25,7 +25,7 @@ use garyx_models::local_paths::{
     default_session_data_dir, message_ledger_dir_for_data_dir, thread_transcripts_dir_for_data_dir,
 };
 use garyx_router::{
-    MessageLedgerStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
+    MessageLedgerStore, ThreadHistoryRepository, ThreadTranscriptStore,
 };
 
 use crate::commands::VERSION;
@@ -161,7 +161,7 @@ mod phases {
         garyx_db: Arc<garyx_gateway::garyx_db::GaryxDbService>,
         message_ledger: Arc<MessageLedgerStore>,
         bridge: Arc<MultiProviderBridge>,
-        thread_store: Arc<dyn ThreadStore>,
+        sqlite_thread_store: garyx_gateway::SqliteThreadStoreHandle,
         thread_history: Arc<ThreadHistoryRepository>,
     }
 
@@ -225,11 +225,12 @@ mod phases {
         // One-shot migration of the retired file-based task counter into the
         // SQLite allocator row (no-op once the row exists).
         garyx_gateway::seed_task_counter_from_legacy(&garyx_db, Path::new(&session_data_dir));
-        let thread_store: Arc<dyn ThreadStore> = garyx_gateway::assemble_sqlite_thread_store(
+        let sqlite_thread_store = garyx_gateway::assemble_sqlite_thread_store(
             garyx_db.clone(),
             transcript_store.clone(),
             &bridge,
         )?;
+        let thread_store = sqlite_thread_store.thread_store();
         garyx_gateway::run_legacy_boot_import(
             &garyx_db,
             &thread_store,
@@ -246,7 +247,7 @@ mod phases {
             garyx_db,
             message_ledger,
             bridge,
-            thread_store,
+            sqlite_thread_store,
             thread_history,
         })
     }
@@ -264,7 +265,7 @@ mod phases {
             garyx_db,
             message_ledger,
             bridge,
-            thread_store,
+            sqlite_thread_store,
             thread_history,
         } = imported;
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
@@ -297,7 +298,7 @@ mod phases {
         let builder =
             AppStateBuilder::new(config.clone()).with_persistent_local_stores(garyx_db.clone());
         let state = builder
-            .with_thread_store(thread_store.clone())
+            .with_sqlite_thread_store(sqlite_thread_store)
             .with_thread_history(thread_history.clone())
             .with_message_ledger(message_ledger)
             .with_bridge(bridge.clone())
@@ -801,9 +802,49 @@ pub(crate) async fn run(
 mod tests {
     use super::{RuntimeAssembler, RuntimeAssembly};
     use super::{TeardownStack, register_shutdown_teardowns};
+    use axum::response::IntoResponse;
     use garyx_channels::ChannelPluginManager;
     use garyx_gateway::CronService;
     use std::sync::Arc;
+
+    /// Regression guard for production assembly erasing the concrete SQLite
+    /// store handle before `AppStateBuilder` wires durable chat admission.
+    /// When that happens, every existing bound-thread dispatch fails with
+    /// "durable dispatch requires the SQLite thread store" even though the
+    /// runtime is in fact backed by SQLite.
+    #[tokio::test]
+    async fn assembled_runtime_retains_durable_chat_store_capabilities() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let mut config = garyx_models::config::GaryxConfig::default();
+        config.sessions.data_dir = Some(temp.path().join("data").to_string_lossy().into_owned());
+
+        let RuntimeAssembly {
+            state,
+            bridge: _bridge,
+            cron_service: _cron_service,
+        } = RuntimeAssembler::new(temp.path().join("garyx.json"), config)
+            .with_channels_disabled(true)
+            .assemble()
+            .await
+            .expect("assembly");
+
+        let response = garyx_gateway::chat::chat_health(axum::extract::State(state))
+            .await
+            .into_response();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("health body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("health json");
+
+        assert_eq!(
+            body["deliveryCapabilities"]["dispatchAdmission"], 1,
+            "the production SQLite runtime must advertise durable dispatch admission"
+        );
+        assert_eq!(
+            body["deliveryCapabilities"]["atomicCreateDispatch"], 1,
+            "the production SQLite runtime must retain its atomic store handle"
+        );
+    }
 
     /// Shared-switch contract (Phase-7 review round 2): the production
     /// HostDeps constructor must hand every subprocess handler the

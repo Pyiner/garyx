@@ -60,6 +60,28 @@ pub(crate) struct SqliteThreadStore {
     run_coordinator: Arc<ThreadRunCoordinator>,
 }
 
+/// Typed witness for the runtime's SQLite thread store.
+///
+/// The public thread-store view intentionally remains the backend-agnostic
+/// [`ThreadStore`] trait object. Keeping this handle alongside that view lets
+/// the composition root prove that durable admission and thread-record writes
+/// share this exact SQLite instance instead of trying to recover the concrete
+/// backend after trait-object coercion.
+#[derive(Clone)]
+pub struct SqliteThreadStoreHandle {
+    store: Arc<SqliteThreadStore>,
+}
+
+impl SqliteThreadStoreHandle {
+    pub fn thread_store(&self) -> Arc<dyn ThreadStore> {
+        self.store.clone()
+    }
+
+    pub(crate) fn concrete_store(&self) -> Arc<SqliteThreadStore> {
+        self.store.clone()
+    }
+}
+
 pub(crate) struct AtomicCreateDispatchLedger {
     pub key: DispatchAdmissionKey,
     pub request_fingerprint: String,
@@ -623,12 +645,14 @@ pub fn assemble_sqlite_thread_store(
     garyx_db: Arc<GaryxDbService>,
     transcript_store: Arc<ThreadTranscriptStore>,
     bridge: &Arc<garyx_bridge::MultiProviderBridge>,
-) -> GaryxDbResult<Arc<dyn ThreadStore>> {
+) -> GaryxDbResult<SqliteThreadStoreHandle> {
     let probe: Arc<dyn ActiveRunProbe> = Arc::new(
         crate::recent_thread_projection::BridgeActiveRunProbe::new(Arc::downgrade(bridge)),
     );
     let sqlite_store = SqliteThreadStore::new(garyx_db, transcript_store, probe);
-    Ok(Arc::new(sqlite_store))
+    Ok(SqliteThreadStoreHandle {
+        store: Arc::new(sqlite_store),
+    })
 }
 
 /// Contract suite run against every read/write ThreadStore implementation

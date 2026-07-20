@@ -37,8 +37,14 @@ use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
-use crate::sqlite_thread_store::SqliteThreadStore;
+use crate::sqlite_thread_store::{SqliteThreadStore, SqliteThreadStoreHandle};
 use crate::thread_lifecycle::LifecycleService;
+
+enum ThreadStoreBinding {
+    Automatic,
+    Custom(Arc<dyn ThreadStore>),
+    Sqlite(SqliteThreadStoreHandle),
+}
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
 /// empty in-memory instance **only** if loading fails — but shout about the
@@ -72,7 +78,7 @@ fn load_store_or_warn<T>(
 /// Builder that owns gateway dependency injection and emits a fully wired [`AppState`].
 pub struct AppStateBuilder {
     config: GaryxConfig,
-    thread_store: Option<Arc<dyn ThreadStore>>,
+    thread_store: ThreadStoreBinding,
     thread_history: Arc<ThreadHistoryRepository>,
     message_ledger: Arc<MessageLedgerStore>,
     bridge: Arc<MultiProviderBridge>,
@@ -145,7 +151,7 @@ impl AppStateBuilder {
             });
         Self {
             config,
-            thread_store: None,
+            thread_store: ThreadStoreBinding::Automatic,
             thread_history,
             message_ledger: Arc::new(MessageLedgerStore::memory()),
             bridge: Arc::new(MultiProviderBridge::new()),
@@ -212,7 +218,24 @@ impl AppStateBuilder {
             thread_store.clone(),
             self.thread_history.transcript_store(),
         ));
-        self.thread_store = Some(thread_store);
+        self.thread_store = ThreadStoreBinding::Custom(thread_store);
+        self
+    }
+
+    /// Install the typed SQLite store assembled by the production runtime.
+    /// The handle preserves the concrete capability needed for atomic durable
+    /// dispatch while exposing the same instance through the generic router
+    /// and history interfaces.
+    pub fn with_sqlite_thread_store(
+        mut self,
+        sqlite_thread_store: SqliteThreadStoreHandle,
+    ) -> Self {
+        let thread_store = sqlite_thread_store.thread_store();
+        self.thread_history = Arc::new(ThreadHistoryRepository::new(
+            thread_store,
+            self.thread_history.transcript_store(),
+        ));
+        self.thread_store = ThreadStoreBinding::Sqlite(sqlite_thread_store);
         self
     }
 
@@ -342,9 +365,13 @@ impl AppStateBuilder {
         let (thread_store, sqlite_thread_store): (
             Arc<dyn ThreadStore>,
             Option<Arc<SqliteThreadStore>>,
-        ) = match self.thread_store.clone() {
-            Some(store) => (store, None),
-            None => {
+        ) = match &self.thread_store {
+            ThreadStoreBinding::Custom(store) => (store.clone(), None),
+            ThreadStoreBinding::Sqlite(handle) => {
+                let store = handle.concrete_store();
+                (store.clone(), Some(store))
+            }
+            ThreadStoreBinding::Automatic => {
                 let store = Arc::new(SqliteThreadStore::new(
                     self.garyx_db.clone(),
                     self.thread_history.transcript_store(),

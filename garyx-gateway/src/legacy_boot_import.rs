@@ -2849,7 +2849,8 @@ mod tests {
         let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
         let target =
             crate::assemble_sqlite_thread_store(Arc::clone(&db), Arc::clone(&transcripts), &bridge)
-                .expect("pure sqlite constructor");
+                .expect("pure sqlite constructor")
+                .thread_store();
         let key = "thread::legacy-task-order";
         let source = Arc::new(TestLegacyArchiveReader::default());
         source.seed(
