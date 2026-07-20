@@ -2283,6 +2283,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_intent_query_recovers_reserved_claim_without_enumeration() {
+        let state = state(Arc::new(AtomicUsize::new(0))).await;
+        let router = router(state.clone());
+        let key = CreateIntentKey {
+            scope_identity: "query-recovery-test".to_owned(),
+            scope_epoch: 7,
+            create_intent_id: "reserved-before-response".to_owned(),
+        };
+        let query_key = key.clone();
+        state
+            .ops
+            .garyx_db
+            .run_blocking(move |db| {
+                db.reserve_create_intent(NewCreateIntent {
+                    key: &query_key,
+                    thread_id: "thread::query-recovery-fixed",
+                    request_fingerprint: "query-recovery-fingerprint",
+                    command_kind: CreateCommandKind::CreateOnly,
+                    dispatch_client_intent_id: None,
+                })
+            })
+            .await
+            .unwrap();
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/threads/by-create-intent?scopeIdentity=query-recovery-test&scopeEpoch=7&createIntentId=reserved-before-response")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["threadId"], "thread::query-recovery-fixed");
+        assert_eq!(body["state"], "reserved");
+        assert_eq!(body["threadLifecycle"], "not_committed");
+        assert!(body["thread"].is_null());
+
+        let missing = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/threads/by-create-intent?scopeIdentity=query-recovery-test&scopeEpoch=7&createIntentId=missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn requester_killed_after_commit_replay_cannot_create_a_ghost_duplicate() {
         let calls = Arc::new(AtomicUsize::new(0));
         let state = state(calls.clone()).await;
