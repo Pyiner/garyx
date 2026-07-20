@@ -8,7 +8,6 @@ pub mod command_catalog;
 pub mod config;
 pub mod config_loader;
 pub mod custom_agent;
-pub mod execution;
 pub mod local_paths;
 pub mod message_lifecycle;
 pub mod message_preview;
@@ -18,8 +17,6 @@ pub mod quota;
 pub mod routing;
 pub mod task;
 pub mod thread_logs;
-pub mod thread_record;
-pub mod threading;
 pub mod tool_field_projection;
 pub mod transcript_kind;
 pub mod transcript_render_state;
@@ -55,9 +52,6 @@ pub use config_loader::{
 pub use custom_agent::{
     CustomAgentProfile, builtin_provider_agent_profiles, is_builtin_provider_agent_id,
 };
-pub use execution::{
-    ElevatedLevel, ExecAsk, ExecHost, ExecSecurity, ReasoningLevel, ResponseUsage,
-};
 pub use message_lifecycle::{
     BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord, MessageLifecycleStatus,
     MessageTerminalReason,
@@ -83,13 +77,6 @@ pub use task::{
 pub use thread_logs::{
     CANONICAL_THREAD_PREFIX, NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogLevel,
     ThreadLogSink, is_canonical_thread_id, resolve_thread_log_thread_id,
-};
-pub use thread_record::{
-    ProviderRuntimeState, THREAD_HISTORY_SOURCE_TRANSCRIPT_V1, ThreadHistoryState,
-    ThreadQueueState, ThreadRecord, ThreadRecordView, ThreadRoutingState, ThreadUsageState,
-};
-pub use threading::{
-    GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadOrigin, ThreadTokenUsage,
 };
 pub use tool_field_projection::{
     RenderToolDiffPair, RenderToolDiffRecipe, RenderToolDiffSegment, RenderToolDiffSource,

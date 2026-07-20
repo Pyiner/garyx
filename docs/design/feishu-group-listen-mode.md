@@ -322,8 +322,13 @@ Field rules:
 
 ### 6.2 Canonical thread state
 
-Add a typed, serde-defaulted `PassiveContextState` to `ThreadRecord`; do not
-hide correctness cursors in arbitrary metadata:
+Keep `PassiveContextState` as a standalone typed, serde-defaulted struct and
+persist it as one dedicated top-level field of the canonical thread-record
+body. The record crosses the `ThreadStore` boundary as raw
+`serde_json::Value`; the implementation serializes/deserializes this one
+field at that boundary and must not resurrect the retired repo-wide typed
+`ThreadRecord` carrier for it. Do not hide correctness cursors in arbitrary
+metadata:
 
 ```json
 {
@@ -618,7 +623,7 @@ it early.
 
 | Carrier | Advantages | Costs / contract risks | Decision |
 | --- | --- | --- | --- |
-| Append-only internal transcript checkpoint stream, with the latest pointer in `ThreadRecord` | Keeps conversation-derived content in transcript truth; sequence/cutoff is auditable; survives restart; naturally participates in run persistence; old checkpoints explain evolution. | Needs an internal-run visibility rule and a point read by seq; the physical file contains superseded checkpoints rather than rewriting one row. | **Recommended.** It is one logical evolving summary stream and preserves ledger immutability. |
+| Append-only internal transcript checkpoint stream, with the latest pointer in the canonical thread record | Keeps conversation-derived content in transcript truth; sequence/cutoff is auditable; survives restart; naturally participates in run persistence; old checkpoints explain evolution. | Needs an internal-run visibility rule and a point read by seq; the physical file contains superseded checkpoints rather than rewriting one row. | **Recommended.** It is one logical evolving summary stream and preserves ledger immutability. |
 | One mutable sidecar file per thread | Closest literal interpretation of “one file that changes”; cheap latest read. | Creates a second content truth and new deletion/archive/backup/privacy/path/locking contracts; no native transcript seq or SSE causality; workspace movement is ambiguous. | Reject for Phase 1. |
 | Inline summary text in the thread-record body | Cursor and body could update in one SQLite write; easy point read. | Violates the contract that conversation content lives in transcript JSONL, bloats record writes/projections, and makes render/audit history opaque. | Reject. Keep only the typed pointer/state in the record. |
 
