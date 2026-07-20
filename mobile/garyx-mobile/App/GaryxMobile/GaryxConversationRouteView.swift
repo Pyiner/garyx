@@ -189,13 +189,6 @@ struct GaryxConversationOpeningMetadata: Equatable {
     let usesTranscriptSnapshot: Bool
     let localRows: [GaryxMobileTurnRow]
 
-    static let newThread = GaryxConversationOpeningMetadata(
-        title: "New Thread",
-        agentTarget: nil,
-        transcriptPresentation: .localMessages,
-        usesTranscriptSnapshot: false,
-        localRows: []
-    )
     static let prewarmLoading = GaryxConversationOpeningMetadata(
         title: "Conversation",
         agentTarget: nil,
@@ -267,49 +260,80 @@ final class GaryxConversationRouteMetadataCache {
         }
     }
 
-    func metadata(for destination: GaryxRouteDestination) -> GaryxConversationOpeningMetadata {
-        switch destination {
-        case .conversation(let threadID):
-            return metadataByThreadID[threadID]
-                ?? GaryxConversationOpeningMetadata(
-                    title: "Thread",
-                    agentTarget: nil,
-                    transcriptPresentation: .loading,
-                    usesTranscriptSnapshot: false,
-                    localRows: []
-                )
-        case .conversationDraft:
-            return .newThread
-        default:
-            return GaryxConversationOpeningMetadata(
+    func metadata(forThreadID threadID: String) -> GaryxConversationOpeningMetadata {
+        metadataByThreadID[threadID]
+            ?? GaryxConversationOpeningMetadata(
                 title: "Thread",
                 agentTarget: nil,
                 transcriptPresentation: .loading,
                 usesTranscriptSnapshot: false,
                 localRows: []
             )
-        }
     }
 }
 
-/// Conversation destination whose first frame is already the complete thread
-/// page. Before terminal it presents real page chrome and transcript-local
-/// loading only. The heavier live graph mounts behind that page after terminal
-/// and takes over after delivered frames prove it stable.
+/// Selects the presentation pipeline once for one route occurrence. A local
+/// draft mounts the final production graph directly; only an existing gateway
+/// thread owns the staged opening/materialization driver. Keeping the plan in
+/// occurrence state also keeps an in-place draft promotion on the direct path.
 struct GaryxConversationRouteView: View {
-    @Environment(\.garyxRouteLifecycleRegistry) private var lifecycleRegistry
-    @StateObject private var presentationDriver = GaryxConversationRoutePresentationDriver()
+    @State private var presentationPlan: GaryxConversationRoutePresentationPlan
 
     let destination: GaryxRouteDestination
     let occurrenceID: GaryxRouteInstanceID
 
-    private var openingMetadata: GaryxConversationOpeningMetadata {
-        GaryxConversationRouteMetadataCache.shared.metadata(for: destination)
+    init(destination: GaryxRouteDestination, occurrenceID: GaryxRouteInstanceID) {
+        guard let presentationPlan = GaryxConversationRoutePresentationPolicy.plan(
+            for: destination
+        ) else {
+            preconditionFailure("conversation route requires a conversation destination")
+        }
+        self.destination = destination
+        self.occurrenceID = occurrenceID
+        _presentationPlan = State(initialValue: presentationPlan)
     }
 
-    private var openingSnapshotThreadID: String? {
-        guard case .conversation(let threadID) = destination else { return nil }
-        return threadID
+    @ViewBuilder
+    var body: some View {
+        switch (presentationPlan, destination) {
+        case (.directLocal, .conversation),
+             (.directLocal, .conversationDraft),
+             (.stagedGatewayThread, .conversationDraft):
+            // The last combination is an invariant fallback: even if an
+            // occurrence were ever rewritten back to a draft, a draft must
+            // never enter the gateway-thread opening pipeline.
+            GaryxConversationView(destination: destination)
+                .onAppear {
+                    GaryxRoutePushPerformanceProbe.shared?.conversationSurfaceMounted()
+                }
+        case (.stagedGatewayThread, .conversation(let threadID)):
+            GaryxStagedConversationRouteView(
+                threadID: threadID,
+                occurrenceID: occurrenceID
+            )
+        case (_, .panel), (_, .settingsDetail), (_, .workspaceDrilldown):
+            EmptyView()
+        }
+    }
+}
+
+/// Existing gateway conversation whose first frame is already the complete
+/// thread page. Before terminal it presents real page chrome and
+/// transcript-local loading only. The heavier live graph mounts behind that
+/// page after terminal and takes over after delivered frames prove it stable.
+private struct GaryxStagedConversationRouteView: View {
+    @Environment(\.garyxRouteLifecycleRegistry) private var lifecycleRegistry
+    @StateObject private var presentationDriver = GaryxConversationRoutePresentationDriver()
+
+    let threadID: String
+    let occurrenceID: GaryxRouteInstanceID
+
+    private var destination: GaryxRouteDestination {
+        .conversation(threadID: threadID)
+    }
+
+    private var openingMetadata: GaryxConversationOpeningMetadata {
+        GaryxConversationRouteMetadataCache.shared.metadata(forThreadID: threadID)
     }
 
     var body: some View {
@@ -328,7 +352,7 @@ struct GaryxConversationRouteView: View {
 
             GaryxConversationOpeningPageView(
                 metadata: openingMetadata,
-                snapshotThreadID: openingSnapshotThreadID
+                snapshotThreadID: threadID
             )
                 // Keep the prepared live tree in the compositor while this
                 // visually opaque page is on top. An alpha of exactly one lets

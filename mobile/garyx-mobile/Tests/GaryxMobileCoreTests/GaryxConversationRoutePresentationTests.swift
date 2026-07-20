@@ -54,7 +54,7 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertEqual(state.apply(lifecycle: .active), .none)
     }
 
-    func testLocalDraftReproductionTraversesLoadingOpeningPageDespiteImmediateReadiness() {
+    func testLocalDraftReproductionBypassesGatewayThreadOpeningStateMachine() {
         XCTAssertFalse(
             GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
                 threadId: nil,
@@ -65,35 +65,31 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
             "a local draft has no selected thread history to await"
         )
 
-        var state = GaryxConversationRoutePresentationState()
-        state.apply(lifecycle: .active)
+        let plan = GaryxConversationRoutePresentationPolicy.plan(
+            for: .conversationDraft(draftID: "draft-local")
+        )
 
-        // This is the production draft sequence: the shared route driver waits
-        // for a delivered frame, enters `.loading`, and only then asks the
-        // route stack to prepare content. The route stack immediately reports
-        // a non-thread destination ready, because a local draft has no history
-        // request to perform.
-        XCTAssertEqual(state.presentedFrame(interval: nil), .openingPage)
-        XCTAssertEqual(state.messagePhase, .loading)
-        state.messageContentDidBecomeReady()
-        XCTAssertEqual(state.messagePhase, .ready)
-        XCTAssertTrue(state.showsOpeningPage)
+        XCTAssertEqual(plan, .directLocal)
+        XCTAssertTrue(plan?.mountsFinalChromeOnFirstFrame == true)
+        XCTAssertFalse(plan?.usesOpeningMaterializationStateMachine == true)
+    }
 
-        // The registry resets its frame clock when readiness arrives. Even
-        // though the draft is already ready, the generic conversation handoff
-        // keeps the opening page on top through the terminal opening gate and
-        // a complete materialization stability proof.
-        XCTAssertEqual(state.presentedFrame(interval: nil), .materializingConversation)
-        var materializationFrames = 0
-        while state.renderPhase != .live, materializationFrames < 20 {
-            materializationFrames += 1
-            state.presentedFrame(interval: 1.0 / 120.0)
-        }
+    func testExistingThreadRetainsStagedOpeningAndMaterializationStateMachine() {
+        let plan = GaryxConversationRoutePresentationPolicy.plan(
+            for: .conversation(threadID: "thread-existing")
+        )
 
-        XCTAssertEqual(materializationFrames, 13)
-        XCTAssertEqual(2 + materializationFrames, 15)
-        XCTAssertEqual(state.renderPhase, .live)
-        XCTAssertFalse(state.showsOpeningPage)
+        XCTAssertEqual(plan, .stagedGatewayThread)
+        XCTAssertFalse(plan?.mountsFinalChromeOnFirstFrame == true)
+        XCTAssertTrue(plan?.usesOpeningMaterializationStateMachine == true)
+        XCTAssertEqual(
+            GaryxConversationRoutePresentationState.defaultTerminalOpeningFrameCount,
+            2
+        )
+        XCTAssertEqual(
+            GaryxConversationRoutePresentationState.defaultMaterializationFrameCount,
+            12
+        )
     }
 
     func testTerminalFramesMaterializeThenRevealTheLivePage() {

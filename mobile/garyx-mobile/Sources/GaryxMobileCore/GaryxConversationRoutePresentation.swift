@@ -27,6 +27,41 @@ public enum GaryxConversationRoutePresentationAction: Equatable, Sendable {
     case beginMessagePreparation
 }
 
+/// Chooses the presentation pipeline once for a conversation route occurrence.
+///
+/// A draft is a complete local surface, so it mounts the final conversation
+/// graph immediately and never creates the gateway-thread opening state
+/// machine. Existing threads retain their staged opening page, prewarm handoff,
+/// and delivered-frame stability gates. The app keeps this plan stable when a
+/// draft is promoted in place so promotion cannot introduce a loading cover.
+public enum GaryxConversationRoutePresentationPlan: Equatable, Sendable {
+    case directLocal
+    case stagedGatewayThread
+
+    public var mountsFinalChromeOnFirstFrame: Bool {
+        self == .directLocal
+    }
+
+    public var usesOpeningMaterializationStateMachine: Bool {
+        self == .stagedGatewayThread
+    }
+}
+
+public enum GaryxConversationRoutePresentationPolicy {
+    public static func plan(
+        for destination: GaryxRouteDestination
+    ) -> GaryxConversationRoutePresentationPlan? {
+        switch destination {
+        case .conversation:
+            .stagedGatewayThread
+        case .conversationDraft:
+            .directLocal
+        case .panel, .settingsDetail, .workspaceDrilldown:
+            nil
+        }
+    }
+}
+
 /// Selects only the transcript treatment for the first destination frame.
 /// Existing local messages are content, even while the gateway refresh is in
 /// flight; a message skeleton is valid only when there is nothing local to
@@ -45,7 +80,7 @@ public enum GaryxConversationOpeningTranscriptPolicy {
     }
 }
 
-/// Core-owned lifecycle and delivered-frame policy for a conversation route.
+/// Core-owned lifecycle and delivered-frame policy for a staged gateway thread.
 ///
 /// The route page is visible from mount. Once terminal, the first delivered
 /// opening-page frame closes the moving transition before message preparation
@@ -53,7 +88,8 @@ public enum GaryxConversationOpeningTranscriptPolicy {
 /// the expensive live SwiftUI mount. A short run of consecutive on-budget
 /// frames then proves that mount is composited before the opening page is
 /// removed. Already live predecessor hosts remain live while inactive so back
-/// navigation never reconstructs them.
+/// navigation never reconstructs them. Local drafts are excluded by
+/// `GaryxConversationRoutePresentationPolicy` and never instantiate this state.
 public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public static let defaultTerminalOpeningFrameCount = 2
     public static let defaultMaterializationFrameCount = 12
