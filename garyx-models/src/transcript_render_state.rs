@@ -194,6 +194,17 @@ pub struct RenderMessageRef {
     pub id: String,
     pub seq: u64,
     pub role: String,
+    /// Server-owned semantic presentation for committed message bodies.
+    /// Ordinary messages omit this field; clients must not infer a special
+    /// surface by reparsing the referenced body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<RenderMessagePresentation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderMessagePresentation {
+    TaskNotification,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1614,7 +1625,21 @@ fn message_ref(seq: u64, role: &str, message: &Map<String, Value>) -> RenderMess
         id,
         seq,
         role: role.to_owned(),
+        presentation: render_message_presentation(message),
     }
+}
+
+fn render_message_presentation(message: &Map<String, Value>) -> Option<RenderMessagePresentation> {
+    let metadata = message.get("metadata").and_then(Value::as_object)?;
+    let is_review_notification = metadata
+        .get("task_notification")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && metadata
+            .get("task_notification_event")
+            .and_then(Value::as_str)
+            .is_some_and(|event| event == "ready_for_review");
+    is_review_notification.then_some(RenderMessagePresentation::TaskNotification)
 }
 
 fn origin_id_of(message: &Map<String, Value>) -> Option<String> {
@@ -2585,6 +2610,66 @@ mod tests {
         assert_eq!(user.id, "origin:00000000-0000-0000-0000-000000000001");
         assert_eq!(user.seq, 2);
         assert_eq!(row_ref_ids(&snapshot), vec![user.id.clone()]);
+    }
+
+    #[test]
+    fn task_notification_metadata_owns_message_presentation() {
+        let notification = "<garyx_task_notification>Review ready</garyx_task_notification>";
+        let records = vec![
+            message_record(
+                1,
+                json!({
+                    "role": "user",
+                    "content": notification,
+                    "metadata": {
+                        "task_notification": true,
+                        "task_notification_event": "ready_for_review"
+                    }
+                }),
+            ),
+            message_record(
+                2,
+                json!({
+                    "role": "user",
+                    "content": notification,
+                    "metadata": { "task_notification": true }
+                }),
+            ),
+            message_record(
+                3,
+                json!({
+                    "role": "user",
+                    "content": notification
+                }),
+            ),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let first = expect_user_turn(&snapshot.rows[0]);
+        assert_eq!(
+            first.user.as_ref().and_then(|message| message.presentation),
+            Some(RenderMessagePresentation::TaskNotification)
+        );
+        let second = expect_user_turn(&snapshot.rows[1]);
+        assert_eq!(
+            second
+                .user
+                .as_ref()
+                .and_then(|message| message.presentation),
+            None,
+            "a generic task-notification flag is not a Garyx review-card identity"
+        );
+        let third = expect_user_turn(&snapshot.rows[2]);
+        assert_eq!(
+            third.user.as_ref().and_then(|message| message.presentation),
+            None,
+            "an XML-looking body is not a client or reducer classification source"
+        );
+
+        let wire = serde_json::to_value(&snapshot).expect("serialize render snapshot");
+        assert_eq!(wire["rows"][0]["user"]["presentation"], "task_notification");
+        assert!(wire["rows"][1]["user"].get("presentation").is_none());
+        assert!(wire["rows"][2]["user"].get("presentation").is_none());
     }
 
     #[test]

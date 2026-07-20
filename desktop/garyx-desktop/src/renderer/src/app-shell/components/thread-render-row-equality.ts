@@ -152,7 +152,8 @@ function renderBlockEqual(
     return (
       right.kind === "message" &&
       left.entry.key === right.entry.key &&
-      left.entry.message === right.entry.message
+      left.entry.message === right.entry.message &&
+      left.entry.presentation === right.entry.presentation
     );
   }
   if (right.kind !== "tool_group") {

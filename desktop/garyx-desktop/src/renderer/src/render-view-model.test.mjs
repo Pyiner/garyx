@@ -259,6 +259,43 @@ test('render_state ref seq resolves the body keyed by that same seq', () => {
   assert.equal(buildThreadViewRows(renderState, wrongKeyed).length, 0);
 });
 
+test('server message presentation survives body resolution without text inference', () => {
+  const renderState = {
+    based_on_seq: 1,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: 'user_turn:seq:1',
+        user: {
+          id: 'seq:1',
+          seq: 1,
+          role: 'user',
+          presentation: 'task_notification',
+        },
+        activity: [],
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    filtered_placeholders: [],
+  };
+  const message = {
+    id: 'seq:1',
+    seq: 1,
+    role: 'user',
+    text: '<garyx_task_notification>ready</garyx_task_notification>',
+  };
+
+  const rows = buildThreadViewRows(renderState, new Map([[1, message]]));
+
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].userBlock.entry.presentation, 'task_notification');
+  assert.equal(rows[0].userBlock.entry.message, message);
+});
+
 test('server-visible assistant text is not inferred to be a loading placeholder', () => {
   const assistant = {
     id: 'assistant:legacy-loading-copy',

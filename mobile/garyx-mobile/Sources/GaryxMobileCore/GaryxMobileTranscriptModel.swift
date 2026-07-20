@@ -18,6 +18,10 @@ struct GaryxMobileMessage: Identifiable, Equatable {
     var clientIntentId: String? = nil
     var pendingInputId: String? = nil
     var toolTraceGroup: GaryxMobileToolTraceGroup? = nil
+    /// Server-owned semantic surface from the committed render-state ref.
+    /// `nil` is an ordinary role-based message; views must not infer this
+    /// identity by reparsing the body.
+    var renderPresentation: GaryxRenderMessagePresentation? = nil
     /// Birth provenance per the conversation state contract
     /// (docs/agents/conversation-state.md): `optimistic` for local sends,
     /// `remote_partial` for streamed/pending content, `remote_final` for
@@ -60,10 +64,11 @@ enum GaryxMobileMessagePresentation: Equatable {
     case text(String)
     case thinkingLabel(text: String)
     case historySkeleton
+    case taskNotification(text: String, notification: GaryxTaskNotification?)
 
     var text: String {
         switch self {
-        case .text(let text), .thinkingLabel(let text):
+        case .text(let text), .thinkingLabel(let text), .taskNotification(let text, _):
             text
         case .historySkeleton:
             ""
@@ -72,6 +77,13 @@ enum GaryxMobileMessagePresentation: Equatable {
 
     static func make(for message: GaryxMobileMessage) -> GaryxMobileMessagePresentation {
         let trimmedText = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if message.renderPresentation == .taskNotification {
+            return .taskNotification(
+                text: message.text,
+                notification: GaryxTaskNotificationPresentation.parse(message.text)
+            )
+        }
 
         if message.isStreaming, trimmedText.isEmpty {
             guard message.attachments.isEmpty else { return .text("") }

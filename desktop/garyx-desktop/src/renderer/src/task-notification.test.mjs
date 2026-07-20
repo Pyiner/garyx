@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { parseTaskNotificationText } from './task-notification.ts';
 
@@ -65,4 +66,26 @@ garyx task update #TASK-7 --status done --note "approved by reviewer"
 
 test('ignores ordinary XML snippets', () => {
   assert.equal(parseTaskNotificationText('<review>done</review>'), null);
+});
+
+test('task notification uses the full desktop reading width', () => {
+  const turnCss = readFileSync(
+    new URL('./styles/turn-summary.css', import.meta.url),
+    'utf8',
+  );
+  const messageCss = readFileSync(
+    new URL('./styles/messages.css', import.meta.url),
+    'utf8',
+  );
+  const surfaceRule = turnCss.match(
+    /\.message-bubble\.task-notification-message\s*\{([^}]*)\}/,
+  )?.[1];
+  const cardRule = messageCss.match(/\.task-notification-card\s*\{([^}]*)\}/)?.[1];
+
+  assert.ok(surfaceRule, 'task-notification surface rule must exist');
+  assert.match(surfaceRule, /width:\s*min\(100%,\s*736px\)/);
+  assert.match(surfaceRule, /max-width:\s*100%/);
+  assert.doesNotMatch(surfaceRule, /77%/);
+  assert.ok(cardRule, 'task-notification card rule must exist');
+  assert.match(cardRule, /width:\s*100%/);
 });

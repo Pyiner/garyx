@@ -30,7 +30,8 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             </garyx_task_notification>
             """,
             timestamp: "00:00",
-            isStreaming: false
+            isStreaming: false,
+            renderPresentation: .taskNotification
         )
         XCTAssertNotNil(GaryxTaskNotificationPresentation.parse(message.text))
         let renderer = ImageRenderer(

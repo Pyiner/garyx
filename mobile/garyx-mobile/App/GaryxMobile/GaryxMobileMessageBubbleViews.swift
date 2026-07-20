@@ -32,6 +32,44 @@ struct GaryxMessageBubble: View {
 
     @ViewBuilder
     private var messageRow: some View {
+        switch messagePresentation {
+        case let .taskNotification(_, notification):
+            taskNotificationRow(notification)
+        default:
+            roleMessageRow
+        }
+    }
+
+    @ViewBuilder
+    private func taskNotificationRow(_ notification: GaryxTaskNotification?) -> some View {
+        VStack(alignment: .leading, spacing: messageSpacing) {
+            if !message.attachments.isEmpty {
+                GaryxMessageAttachmentStack(attachments: message.attachments, isUser: false)
+                    .garyxMessageCopyContext(text: messageCopyText)
+            }
+            if let notification {
+                GaryxTaskNotificationCard(notification: notification)
+                    .garyxMessageInteraction(text: taskNotificationCopyText(notification))
+            } else if message.isStreaming,
+                      displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                GaryxUserMessageLoadingBubble()
+            } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                GaryxMarkdownText(
+                    text: displayText,
+                    foreground: .primary,
+                    allowsRelativeFileLinks: true,
+                    allowsTextSelection: false,
+                    onFileLinkTap: openMessageFileLink,
+                    onImageFilePreview: messageImageFilePreview
+                )
+                .garyxMessageInteraction(text: displayText)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var roleMessageRow: some View {
         switch message.role {
         case .user:
             HStack(alignment: .bottom) {
@@ -42,10 +80,7 @@ struct GaryxMessageBubble: View {
                             .garyxMessageCopyContext(text: messageCopyText, edge: .trailing)
                     }
 
-                    if let notification = taskNotification {
-                        GaryxTaskNotificationCard(notification: notification)
-                            .garyxMessageInteraction(text: taskNotificationCopyText(notification), edge: .trailing)
-                    } else if let restart = restartNotice {
+                    if let restart = restartNotice {
                         GaryxRestartNoticeCard(notice: restart)
                             .garyxMessageInteraction(text: restart.message, edge: .trailing)
                     } else if messagePresentation == .historySkeleton {
@@ -89,9 +124,6 @@ struct GaryxMessageBubble: View {
                     if case .thinkingLabel(let text) = messagePresentation {
                         GaryxThinkingLabel(text: text)
                     }
-                } else if let notification = taskNotification {
-                    GaryxTaskNotificationCard(notification: notification)
-                        .garyxMessageInteraction(text: taskNotificationCopyText(notification))
                 } else if let restart = restartNotice {
                     GaryxRestartNoticeCard(notice: restart)
                         .garyxMessageInteraction(text: restart.message)
@@ -147,11 +179,6 @@ struct GaryxMessageBubble: View {
 
     private var displayText: String {
         messagePresentation.text
-    }
-
-    private var taskNotification: GaryxTaskNotification? {
-        guard !message.isStreaming else { return nil }
-        return GaryxTaskNotificationPresentation.parse(displayText)
     }
 
     private var restartNotice: GaryxRestartNotice? {

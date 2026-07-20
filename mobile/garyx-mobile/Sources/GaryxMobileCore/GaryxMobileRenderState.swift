@@ -1085,15 +1085,41 @@ public enum GaryxRenderToolEntryStatus: String, Codable, Equatable, Sendable {
     case failed
 }
 
+public struct GaryxRenderMessagePresentation: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let taskNotification = Self(rawValue: "task_notification")
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 public struct GaryxRenderMessageRef: Codable, Equatable, Sendable {
     public var id: String
     public var seq: Int
     public var role: String
+    public var presentation: GaryxRenderMessagePresentation?
 
-    public init(id: String, seq: Int, role: String) {
+    public init(
+        id: String,
+        seq: Int,
+        role: String,
+        presentation: GaryxRenderMessagePresentation? = nil
+    ) {
         self.id = id
         self.seq = seq
         self.role = role
+        self.presentation = presentation
     }
 }
 
@@ -1237,10 +1263,15 @@ private struct MessageLookup {
     }
 
     func mobileMessage(for ref: GaryxRenderMessageRef) -> GaryxMobileMessage? {
-        mobileByHistoryIndex[ref.seq - 1]
+        guard var message = mobileByHistoryIndex[ref.seq - 1]
             ?? mobileById[ref.id]
             ?? transcriptMobileByHistoryIndex[ref.seq - 1]
             ?? transcriptMobileById[ref.id]
+        else {
+            return nil
+        }
+        message.renderPresentation = ref.presentation
+        return message
     }
 
     func transcriptMessage(for ref: GaryxRenderMessageRef?) -> GaryxTranscriptMessage? {
@@ -1336,6 +1367,7 @@ private extension GaryxMobileMessage {
             text: "",
             timestamp: nil,
             isStreaming: true,
+            renderPresentation: ref.presentation,
             localState: .remotePartial,
             historyIndex: historyIndex
         )
@@ -1355,6 +1387,7 @@ private extension GaryxMobileMessage {
             text: "",
             timestamp: nil,
             isStreaming: true,
+            renderPresentation: ref.presentation,
             localState: .remotePartial,
             historyIndex: historyIndex
         )

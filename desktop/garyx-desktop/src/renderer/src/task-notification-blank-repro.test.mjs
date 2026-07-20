@@ -6,7 +6,6 @@ import test from "node:test";
 import * as esbuild from "esbuild";
 
 import { buildThreadViewRows } from "./render-view-model.ts";
-import { parseTaskNotificationText } from "./task-notification.ts";
 
 // Redacted deterministic projection of the captured seq-227 evidence. The
 // original committed text is 8,339 characters. History must preserve that
@@ -66,7 +65,12 @@ const capturedRenderState = {
       id: "user_turn:seq:227",
       kind: "user_turn",
       started_at: null,
-      user: { id: "seq:227", role: "user", seq: 227 },
+      user: {
+        id: "seq:227",
+        role: "user",
+        seq: 227,
+        presentation: "task_notification",
+      },
     },
   ],
   tailActivity: "none",
@@ -122,19 +126,17 @@ async function assertCapturedNotificationRenders(message) {
   );
   const userTurn = rows.find((row) => row.kind === "user_turn");
   assert.ok(userTurn, "captured user_turn row should resolve from the body cache");
-  assert.ok(
-    parseTaskNotificationText(userTurn.userBlock.entry.message.text),
-    "the complete text selects the task-notification presentation",
-  );
-  assert.ok(
-    parseTaskNotificationText(userTurn.userBlock.entry.message.content),
-    "the complete history content selects the task-notification presentation",
+  assert.equal(
+    userTurn.userBlock.entry.presentation,
+    "task_notification",
+    "the server render ref selects the task-notification presentation",
   );
 
   const renderer = await buildRichMessageRenderer();
   const html = renderer.render({
     altPrefix: message.role,
     content: message.content,
+    presentation: userTurn.userBlock.entry.presentation,
     text: message.text,
   });
 
@@ -147,6 +149,17 @@ async function assertCapturedNotificationRenders(message) {
     visibleText(html),
     /Review conclusion: FAIL/,
     "the captured notification body should remain visible",
+  );
+
+  const unclassified = renderer.render({
+    altPrefix: message.role,
+    content: message.content,
+    text: message.text,
+  });
+  assert.doesNotMatch(
+    unclassified,
+    /class="task-notification-card"/,
+    "message text alone must not select the task-notification presentation",
   );
 }
 

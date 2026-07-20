@@ -932,7 +932,7 @@ button.message-image-frame:focus-visible {
 .task-notification-card {
   display: grid;
   gap: 11px;
-  width: min(100%, 680px);
+  width: 100%;
   box-sizing: border-box;
   padding: 12px 12px 13px;
   border: 1px solid color-mix(in oklab, var(--color-token-border) 84%, #ffffff);

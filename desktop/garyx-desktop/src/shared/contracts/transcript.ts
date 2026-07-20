@@ -85,10 +85,13 @@ export type RenderTailActivity =
 
 export type RenderProgressLocus = "none" | "tail" | "tool_group";
 
+export type RenderMessagePresentation = "task_notification";
+
 export interface RenderMessageRef {
   id: string;
   seq: number;
   role: string;
+  presentation?: RenderMessagePresentation;
 }
 
 export type RenderToolEntryStatus = "running" | "completed" | "failed";

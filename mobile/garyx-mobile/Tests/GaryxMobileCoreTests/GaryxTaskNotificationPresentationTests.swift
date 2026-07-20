@@ -53,6 +53,31 @@ final class GaryxTaskNotificationPresentationTests: XCTestCase {
         XCTAssertNil(GaryxTaskNotificationPresentation.parse("<review>done</review>"))
     }
 
+    func testMessagePresentationUsesServerIdentityInsteadOfInferringFromText() {
+        let text = """
+        <garyx_task_notification task_id="#TASK-42">
+        Task #TASK-42 is ready for review: Presentation truth
+
+        Ready.
+        </garyx_task_notification>
+        """
+        let ordinary = GaryxMobileMessage(
+            id: "ordinary-user",
+            role: .user,
+            text: text,
+            timestamp: nil,
+            isStreaming: false
+        )
+        XCTAssertEqual(GaryxMobileMessagePresentation.make(for: ordinary), .text(text))
+
+        var classified = ordinary
+        classified.renderPresentation = .taskNotification
+        guard case let .taskNotification(_, notification) = GaryxMobileMessagePresentation.make(for: classified) else {
+            return XCTFail("server presentation must finalize the task-notification identity before role layout")
+        }
+        XCTAssertEqual(notification?.taskId, "#TASK-42")
+    }
+
     func testStatusLabelFormatsKnownAndUnknownStates() {
         XCTAssertEqual(GaryxTaskNotificationPresentation.statusLabel(for: "in_review"), "In review")
         XCTAssertEqual(GaryxTaskNotificationPresentation.statusLabel(for: "needs-changes"), "Needs Changes")

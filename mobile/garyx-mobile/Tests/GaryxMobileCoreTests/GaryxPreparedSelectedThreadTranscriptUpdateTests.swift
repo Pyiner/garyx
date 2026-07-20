@@ -154,6 +154,10 @@ final class GaryxPreparedSelectedThreadTranscriptUpdateTests: XCTestCase {
         withStatus.statusText = "Retry available"
         XCTAssertNotEqual(base, GaryxMessageListSignature.make(for: [withStatus]))
 
+        var withTaskPresentation = mobileMessage("user-1", role: .user, text: "hello")
+        withTaskPresentation.renderPresentation = .taskNotification
+        XCTAssertNotEqual(base, GaryxMessageListSignature.make(for: [withTaskPresentation]))
+
         var withAttachment = mobileMessage("user-1", role: .user, text: "hello")
         withAttachment.attachments = [
             GaryxMobileMessageAttachment(

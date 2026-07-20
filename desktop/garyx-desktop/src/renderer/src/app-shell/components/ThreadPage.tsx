@@ -62,7 +62,6 @@ import {
   splitRichMessageContentIntoBubbleParts,
   type MessageImagePreviewLoader,
 } from "../../message-rich-content";
-import { parseTaskNotificationText } from "../../task-notification";
 import { parseRestartNoticeText } from "../../restart-notice";
 import type { ThreadAvatarCatalog } from "../../thread-avatar";
 import {
@@ -158,11 +157,9 @@ function renderUserMessageBubbleParts({
     const cardPartClass =
       part.kind !== "text"
         ? ""
-        : parseTaskNotificationText(part.text) !== null
-          ? "task-notification-message "
-          : parseRestartNoticeText(part.text) !== null
-            ? "restart-notice-message "
-            : "";
+        : parseRestartNoticeText(part.text) !== null
+          ? "restart-notice-message "
+          : "";
     if (cardPartClass) {
       return (
         <article
@@ -280,7 +277,7 @@ const TranscriptRenderRow = memo(function TranscriptRenderRow({
     const cardMessageClass =
       entry.message.pending || loopContinuation
         ? null
-        : parseTaskNotificationText(displayText) !== null
+        : entry.presentation === "task_notification"
           ? "task-notification-message"
           : parseRestartNoticeText(displayText) !== null
             ? "restart-notice-message"
@@ -296,6 +293,7 @@ const TranscriptRenderRow = memo(function TranscriptRenderRow({
             content={entry.message.content}
             loadImagePreview={actions.loadImagePreview}
             onLocalFileLinkClick={actions.onLocalFileLinkClick}
+            presentation={entry.presentation}
             text={displayText}
           />
         </article>

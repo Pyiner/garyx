@@ -700,7 +700,6 @@
 
 .message-bubble.task-notification-message,
 .message-bubble.restart-notice-message {
-  align-self: flex-end;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -709,8 +708,9 @@
 }
 
 .message-bubble.task-notification-message {
-  width: min(77%, 680px);
-  max-width: 77%;
+  align-self: flex-start;
+  width: min(100%, 736px);
+  max-width: 100%;
 }
 
 .message-bubble.task-notification-message > .message-rich-content {
@@ -725,6 +725,7 @@
 /* Restart notice is short — size the card to its content, not a fixed wide
    bubble (otherwise the right side is empty). */
 .message-bubble.restart-notice-message {
+  align-self: flex-end;
   width: fit-content;
   max-width: min(77%, 680px);
 }

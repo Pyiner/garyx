@@ -30,6 +30,7 @@ import {
 } from "./message-rich-text";
 import { useI18n, type Translate } from "./i18n";
 import { useToastActions } from "./toast-provider";
+import type { RenderMessagePresentation } from "@shared/contracts";
 import {
   parseTaskNotificationText,
   type ParsedTaskNotification,
@@ -560,6 +561,7 @@ export const RichMessageContent = memo(function RichMessageContent({
   layout = "default",
   loadImagePreview,
   onLocalFileLinkClick,
+  presentation,
 }: {
   text: string;
   content?: unknown;
@@ -567,6 +569,7 @@ export const RichMessageContent = memo(function RichMessageContent({
   layout?: RichMessageLayout;
   loadImagePreview?: MessageImagePreviewLoader;
   onLocalFileLinkClick?: LocalFileLinkHandler;
+  presentation?: RenderMessagePresentation;
 }) {
   const segments = useMemo(
     () => collectTranscriptSegments(content, altPrefix),
@@ -612,22 +615,27 @@ export const RichMessageContent = memo(function RichMessageContent({
           : fallbackJsonSegment(content),
     [content, segments, text],
   );
+  const taskNotification = useMemo(
+    () =>
+      presentation === "task_notification"
+        ? parseTaskNotificationText(text)
+        : null,
+    [presentation, text],
+  );
 
   if (!renderableSegments.length) {
     return null;
   }
+  if (taskNotification) {
+    return (
+      <div className="message-rich-content">
+        <TaskNotificationCard notification={taskNotification} />
+      </div>
+    );
+  }
 
   const renderSegment = (segment: TranscriptSegment): ReactNode => {
     if (segment.kind === "text") {
-      const taskNotification = parseTaskNotificationText(segment.text);
-      if (taskNotification) {
-        return (
-          <TaskNotificationCard
-            key={segment.key}
-            notification={taskNotification}
-          />
-        );
-      }
       const restartNotice = parseRestartNoticeText(segment.text);
       if (restartNotice) {
         return <RestartNoticeCard key={segment.key} notice={restartNotice} />;

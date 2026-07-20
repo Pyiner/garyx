@@ -136,7 +136,12 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
               {
                 "kind": "user_turn",
                 "id": "user_turn:seq:3",
-                "user": { "id": "seq:3", "seq": 3, "role": "user" },
+                "user": {
+                  "id": "seq:3",
+                  "seq": 3,
+                  "role": "user",
+                  "presentation": "task_notification"
+                },
                 "activity": [
                   {
                     "kind": "assistant_reply",
@@ -171,6 +176,10 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(snapshot.window, GaryxRenderWindow(floorSeq: 3, hasMoreAbove: true))
 
         let messages = GaryxMobileTranscriptMapper.mobileMessages(from: committed)
+        XCTAssertNil(
+            messages.first(where: { $0.historyIndex == 2 })?.renderPresentation,
+            "body mapping alone must not infer presentation from XML"
+        )
         let rows = GaryxMobileRenderStateMapper.rows(
             snapshot: snapshot,
             messages: messages,
@@ -180,6 +189,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         let row = try XCTUnwrap(rows.only)
         XCTAssertEqual(row.id, "user_turn:seq:3")
         XCTAssertTrue(row.userBlock?.message.text.contains("Test review") == true)
+        XCTAssertEqual(row.userBlock?.message.renderPresentation, .taskNotification)
         guard case let .flat(reply) = try XCTUnwrap(row.activityRows.only) else {
             return XCTFail("the task notification should have one ordinary assistant reply")
         }

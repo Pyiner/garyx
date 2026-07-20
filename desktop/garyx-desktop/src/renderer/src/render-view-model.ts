@@ -28,6 +28,7 @@ export type RenderTranscriptEntry =
       kind: 'message';
       key: string;
       message: TranscriptMessage;
+      presentation?: RenderMessageRef['presentation'];
     }
   | {
       kind: 'tool';
@@ -119,11 +120,14 @@ function lookup(
   return messages.get(ref.seq) ?? null;
 }
 
-function messageBlock(message: TranscriptMessage): RenderTranscriptBlock {
+function messageBlock(
+  message: TranscriptMessage,
+  presentation?: RenderMessageRef['presentation'],
+): RenderTranscriptBlock {
   return {
     kind: 'message',
     key: message.id,
-    entry: { kind: 'message', key: message.id, message },
+    entry: { kind: 'message', key: message.id, message, presentation },
   };
 }
 
@@ -238,7 +242,7 @@ function stepBlocks(
     if (item.kind === 'assistant_message') {
       const message = lookup(messages, item.message);
       if (message) {
-        blocks.push(messageBlock(message));
+        blocks.push(messageBlock(message, item.message.presentation));
       }
       continue;
     }
@@ -258,7 +262,9 @@ function stepToTurnRow(
 ): TurnRow | null {
   const steps = stepBlocks(step, messages);
   const finalMessage = lookup(messages, step.final_message);
-  const finalBlock = finalMessage ? messageBlock(finalMessage) : null;
+  const finalBlock = finalMessage
+    ? messageBlock(finalMessage, step.final_message?.presentation)
+    : null;
   if (!steps.length && !finalBlock) {
     return null;
   }
@@ -282,7 +288,7 @@ function activityToRow(
     if (!message) {
       return null;
     }
-    const block = messageBlock(message);
+    const block = messageBlock(message, activity.message.presentation);
     return { kind: 'flat', key: block.key, block };
   }
   if (activity.kind === 'step') {
@@ -317,7 +323,7 @@ export function buildThreadViewRows(
       rows.push({
         kind: 'user_turn',
         key: `user-turn:${user.id}`,
-        userBlock: messageBlock(user),
+        userBlock: messageBlock(user, row.user?.presentation),
         activityRows,
         capsuleCards,
       });
