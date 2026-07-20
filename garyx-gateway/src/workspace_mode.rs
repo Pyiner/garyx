@@ -14,6 +14,14 @@ pub(crate) fn worktree_base_dir_for_config(config: &GaryxConfig) -> PathBuf {
         .join("worktrees")
 }
 
+pub(crate) fn worktree_base_dir_for_data_dir(data_dir: &std::path::Path) -> PathBuf {
+    data_dir
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_dir.to_path_buf())
+        .join("worktrees")
+}
+
 pub(crate) fn implicit_thread_workspace_dir_for_config(
     config: &GaryxConfig,
     thread_id: &str,
@@ -25,6 +33,18 @@ pub(crate) fn implicit_thread_workspace_dir_for_config(
         .map(PathBuf::from)
         .and_then(|path| path.parent().map(PathBuf::from))
         .unwrap_or_else(gary_home_dir)
+        .join("thread-workspaces")
+        .join(safe_thread_workspace_segment(thread_id))
+}
+
+pub(crate) fn implicit_thread_workspace_dir_for_data_dir(
+    data_dir: &std::path::Path,
+    thread_id: &str,
+) -> PathBuf {
+    data_dir
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_dir.to_path_buf())
         .join("thread-workspaces")
         .join(safe_thread_workspace_segment(thread_id))
 }

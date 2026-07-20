@@ -541,9 +541,28 @@ pub fn remove_binding(value: &mut Value, endpoint_key_to_remove: &str) -> bool {
 
 pub async fn create_thread_record(
     store: &Arc<dyn ThreadStore>,
-    mut options: ThreadEnsureOptions,
+    options: ThreadEnsureOptions,
 ) -> Result<(String, Value), String> {
     let thread_id = new_thread_key();
+    let value = prepare_thread_record(&thread_id, options).await?;
+    store
+        .set(&thread_id, value.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((thread_id, value))
+}
+
+/// Build the canonical initial record for a caller-reserved thread ID without
+/// publishing it to the store. Managed worktree preparation may materialize
+/// its deterministic directory; the caller owns cleanup until it commits the
+/// returned body.
+pub async fn prepare_thread_record(
+    thread_id: &str,
+    mut options: ThreadEnsureOptions,
+) -> Result<Value, String> {
+    if !is_thread_key(thread_id) {
+        return Err("thread_id must be a canonical thread key".to_owned());
+    }
     let worktree = if options.workspace_mode.is_worktree() {
         let workspace_dir = options.workspace_dir.clone().ok_or_else(|| {
             "workspace_mode=worktree requires workspace_dir to be a git repository root".to_owned()
@@ -567,11 +586,7 @@ pub async fn create_thread_record(
     {
         obj.insert("worktree".to_owned(), worktree);
     }
-    store
-        .set(&thread_id, value.clone())
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok((thread_id, value))
+    Ok(value)
 }
 
 pub async fn update_thread_record(

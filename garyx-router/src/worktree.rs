@@ -106,12 +106,8 @@ pub async fn prepare_thread_worktree(
     let source_workspace_dir = status.workspace_dir.clone();
     let source_repo_root_path = PathBuf::from(&source_repo_root);
     let base_commit = git_output(&source_repo_root_path, &["rev-parse", "HEAD"]).await?;
-    let repo_hash = short_hash(&source_repo_root);
-    let safe_thread_id = safe_path_segment(thread_id);
-    let root = worktree_base_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| gary_home_dir().join("worktrees"));
-    let worktree_dir = root.join(repo_hash).join(safe_thread_id);
+    let worktree_dir =
+        planned_thread_worktree_path_from_root(thread_id, &source_repo_root, worktree_base_dir);
     if let Some(parent) = worktree_dir.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -149,6 +145,42 @@ pub async fn prepare_thread_worktree(
             "created_at": Utc::now().to_rfc3339(),
         }),
     })
+}
+
+/// Resolve the deterministic managed path before materializing a worktree.
+/// Atomic create callers persist this path and its owner marker first.
+pub async fn planned_thread_worktree_path(
+    thread_id: &str,
+    workspace_dir: &str,
+    worktree_base_dir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let status = workspace_git_status(workspace_dir).await?;
+    if !status.is_git_repo {
+        return Err(
+            "workspace_mode=worktree requires workspace_dir to be a git repository root".to_owned(),
+        );
+    }
+    let source_repo_root = status.repo_root.ok_or_else(|| {
+        "workspace_mode=worktree requires workspace_dir to be a git repository root".to_owned()
+    })?;
+    Ok(planned_thread_worktree_path_from_root(
+        thread_id,
+        &source_repo_root,
+        worktree_base_dir,
+    ))
+}
+
+fn planned_thread_worktree_path_from_root(
+    thread_id: &str,
+    source_repo_root: &str,
+    worktree_base_dir: Option<&Path>,
+) -> PathBuf {
+    let repo_hash = short_hash(source_repo_root);
+    let safe_thread_id = safe_path_segment(thread_id);
+    let root = worktree_base_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| gary_home_dir().join("worktrees"));
+    root.join(repo_hash).join(safe_thread_id)
 }
 
 async fn next_available_branch(repo: &Path, thread_id: &str) -> Result<String, String> {

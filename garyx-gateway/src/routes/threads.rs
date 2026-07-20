@@ -127,7 +127,7 @@ pub(super) fn parse_recent_threads_params(
     Ok((filter, limit, before_activity_seq))
 }
 
-pub(super) fn parse_sdk_session_provider_hint(
+pub(crate) fn parse_sdk_session_provider_hint(
     value: Option<&str>,
 ) -> Result<Option<ProviderType>, String> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -143,7 +143,7 @@ pub(super) fn parse_sdk_session_provider_hint(
         })
 }
 
-pub(super) fn provider_hint_label(value: &ProviderType) -> &'static str {
+pub(crate) fn provider_hint_label(value: &ProviderType) -> &'static str {
     match value {
         ProviderType::ClaudeCode => "Claude",
         ProviderType::CodexAppServer => "Codex",
@@ -152,7 +152,7 @@ pub(super) fn provider_hint_label(value: &ProviderType) -> &'static str {
     }
 }
 
-pub(super) fn is_resume_provider(value: &ProviderType) -> bool {
+pub(crate) fn is_resume_provider(value: &ProviderType) -> bool {
     // Traex is intentionally excluded: garyx does not support disk-based session
     // recovery / fork-from-session for TRAE CLI (its sessions live under
     // ~/.trae and are not wired into the provider session locator).
@@ -162,7 +162,7 @@ pub(super) fn is_resume_provider(value: &ProviderType) -> bool {
     )
 }
 
-pub(super) fn provider_type_from_thread_value(thread_data: &Value) -> Option<ProviderType> {
+pub(crate) fn provider_type_from_thread_value(thread_data: &Value) -> Option<ProviderType> {
     thread_data
         .get("provider_type")
         .cloned()
@@ -177,7 +177,7 @@ pub(super) fn non_empty_json_string(value: Option<&Value>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(super) fn fork_source_sdk_session_id(
+pub(crate) fn fork_source_sdk_session_id(
     thread_data: &Value,
     provider_type: &ProviderType,
 ) -> Option<String> {
@@ -211,6 +211,40 @@ pub(super) async fn seed_imported_thread_history(
         return Ok(());
     }
     let observed = thread_data.clone();
+    materialize_imported_thread_history(state, thread_id, thread_data, messages).await?;
+    let patch = ThreadRecordPatch::from_diff(
+        &observed,
+        thread_data,
+        &[
+            "last_user_preview",
+            "last_assistant_preview",
+            "message_count",
+            "history",
+            "updated_at",
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    state
+        .threads
+        .thread_store
+        .patch(thread_id, patch)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Materialize an imported provider transcript and derive its initial record
+/// fields without publishing the record. Atomic create reserves the transcript
+/// path before calling this helper and commits the returned draft later.
+pub(crate) async fn materialize_imported_thread_history(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    thread_data: &mut Value,
+    messages: &[Value],
+) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
 
     let append_result = state
         .threads
@@ -300,30 +334,16 @@ pub(super) async fn seed_imported_thread_history(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
-    let patch = ThreadRecordPatch::from_diff(
-        &observed,
-        thread_data,
-        &[
-            "last_user_preview",
-            "last_assistant_preview",
-            "message_count",
-            "history",
-            "updated_at",
-        ],
-    )
-    .map_err(|error| error.to_string())?;
-    state
-        .threads
-        .thread_store
-        .patch(thread_id, patch)
-        .await
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateThreadBody {
+    #[serde(default)]
+    pub idempotency_scope: Option<crate::application::chat::contracts::IdempotencyScope>,
+    #[serde(default)]
+    pub create_intent_id: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default)]
@@ -811,6 +831,20 @@ pub async fn create_thread(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateThreadBody>,
 ) -> impl IntoResponse {
+    match (&body.idempotency_scope, &body.create_intent_id) {
+        (None, None) => create_thread_legacy(state, body).await.into_response(),
+        (Some(_), Some(_)) => crate::create_dispatch::create_only_thread(state, body).await,
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "idempotencyScope and createIntentId must be supplied together"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_thread_legacy(state: Arc<AppState>, body: CreateThreadBody) -> impl IntoResponse {
     let requested_session_id = body
         .sdk_session_id
         .as_deref()

@@ -370,6 +370,44 @@ impl ThreadRunCoordinator {
         Ok(self.install_reservation(thread_id, entry, prior, OwnedStateKind::Deciding))
     }
 
+    /// Fence a caller-reserved thread ID before its initial truth record is
+    /// published. The reservation can be atomically transferred to the first
+    /// request lease after the database create commit.
+    pub async fn reserve_creation(
+        self: &Arc<Self>,
+        store: &dyn ThreadStore,
+        thread_id: &str,
+    ) -> Result<LifecycleReservation, CoordinationError> {
+        if !is_thread_key(thread_id) {
+            return Err(CoordinationError::Store(format!(
+                "invalid canonical thread id: {thread_id}"
+            )));
+        }
+        self.ensure_calibrated(store, thread_id)
+            .await
+            .map_err(CoordinationError::from_admission)?;
+        if store
+            .get(thread_id)
+            .await
+            .map_err(|error| CoordinationError::Store(error.to_string()))?
+            .is_some()
+        {
+            return Err(CoordinationError::Unavailable);
+        }
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let entry = entries
+            .get_mut(thread_id)
+            .ok_or(CoordinationError::Unavailable)?;
+        let prior = entry.state.stable().ok_or(CoordinationError::Unavailable)?;
+        if prior != StableState::Live || !entry.leases.is_empty() {
+            return Err(CoordinationError::Unavailable);
+        }
+        Ok(self.install_reservation(thread_id, entry, prior, OwnedStateKind::Deciding))
+    }
+
     pub async fn reserve_delete(
         self: &Arc<Self>,
         store: &dyn ThreadStore,
@@ -691,6 +729,43 @@ impl LifecycleReservation {
             self.settled = true;
         }
     }
+
+    fn transfer_to_request_lease(mut self) -> Result<ThreadRunLease, RunAdmissionError> {
+        let mut entries = self
+            .coordinator
+            .entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let lease_id = self.coordinator.nonce();
+        let valid = Arc::new(AtomicBool::new(true));
+        let Some(entry) = entries.get_mut(&self.token.thread_id) else {
+            return Err(RunAdmissionError::Stale(self.token.thread_id.clone()));
+        };
+        if !self.token.matches(entry) || self.prior != StableState::Live {
+            return Err(RunAdmissionError::Stale(self.token.thread_id.clone()));
+        }
+        entry.pending_tokens.remove(&self.token.owner_token);
+        entry.epoch = self.coordinator.nonce();
+        entry.state = ThreadCoordinationState::Live;
+        entry.leases.insert(
+            lease_id,
+            LeaseEntry {
+                valid: valid.clone(),
+                active: false,
+            },
+        );
+        self.commit_witness.mark_committed(None);
+        self.settled = true;
+        drop(entries);
+        self.coordinator.changed.notify_waiters();
+        Ok(ThreadRunLease {
+            coordinator: Arc::clone(&self.coordinator),
+            thread_id: self.token.thread_id.clone(),
+            lease_id,
+            valid,
+            released: false,
+        })
+    }
 }
 
 impl Drop for LifecycleReservation {
@@ -806,6 +881,35 @@ impl AdmittedRun {
         if !exists {
             return Err(RunAdmissionError::NotFound(request.thread_id));
         }
+        lease.ensure_valid()?;
+        Ok(Self {
+            inner: AdmittedRunInner::ThreadBound { request, lease },
+        })
+    }
+
+    /// Seal the first run for a newly committed thread by transferring the
+    /// pre-commit creation reservation directly into a request lease. No
+    /// lifecycle or competing request can interleave between those states.
+    pub async fn thread_bound_from_creation(
+        store: Arc<dyn ThreadStore>,
+        request: AgentRunRequest,
+        reservation: LifecycleReservation,
+    ) -> Result<Self, RunAdmissionError> {
+        if !is_thread_key(&request.thread_id) {
+            return Err(RunAdmissionError::InvalidThreadId(request.thread_id));
+        }
+        if reservation.thread_id() != request.thread_id {
+            return Err(RunAdmissionError::Stale(request.thread_id));
+        }
+        let exists = store
+            .get(&request.thread_id)
+            .await
+            .map_err(|error| RunAdmissionError::Store(error.to_string()))?
+            .is_some();
+        if !exists {
+            return Err(RunAdmissionError::NotFound(request.thread_id));
+        }
+        let lease = reservation.transfer_to_request_lease()?;
         lease.ensure_valid()?;
         Ok(Self {
             inner: AdmittedRunInner::ThreadBound { request, lease },

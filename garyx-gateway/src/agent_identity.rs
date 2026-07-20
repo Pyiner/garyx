@@ -8,7 +8,7 @@ use garyx_models::{
 };
 use garyx_router::{
     ThreadCreationError, ThreadCreator, ThreadEnsureOptions, ThreadStore, create_thread_record,
-    workspace_dir_from_value,
+    prepare_thread_record, workspace_dir_from_value,
 };
 use serde_json::Value;
 
@@ -97,6 +97,30 @@ pub(crate) async fn create_thread_for_agent_reference(
     options: ThreadEnsureOptions,
     intent: AgentBindingIntent,
 ) -> Result<(String, Value, AgentReference), ThreadCreationError> {
+    let (canonical_options, resolved) =
+        canonical_thread_options(custom_agents.as_ref(), options, intent).await?;
+    let (thread_id, data) = create_thread_record(&thread_store, canonical_options)
+        .await
+        .map_err(|error| {
+            if error.starts_with("workspace_mode=worktree") {
+                ThreadCreationError::Other(error)
+            } else {
+                ThreadCreationError::Storage(error)
+            }
+        })?;
+    if let Some(workspace_dir) = workspace_dir_from_value(&data) {
+        bridge
+            .set_thread_workspace_binding(&thread_id, Some(workspace_dir))
+            .await;
+    }
+    Ok((thread_id, data, resolved))
+}
+
+async fn canonical_thread_options(
+    custom_agents: &CustomAgentStore,
+    options: ThreadEnsureOptions,
+    intent: AgentBindingIntent,
+) -> Result<(ThreadEnsureOptions, AgentReference), ThreadCreationError> {
     let snapshot = custom_agents.snapshot().await;
     let binding = match intent {
         AgentBindingIntent::Fresh | AgentBindingIntent::Fork => {
@@ -123,7 +147,18 @@ pub(crate) async fn create_thread_for_agent_reference(
         canonical_options.workspace_dir = default_workspace_dir_from_agent_reference(&resolved);
     }
 
-    let (thread_id, data) = create_thread_record(&thread_store, canonical_options)
+    Ok((canonical_options, resolved))
+}
+
+pub(crate) async fn prepare_thread_for_agent_reference(
+    thread_id: &str,
+    custom_agents: &CustomAgentStore,
+    options: ThreadEnsureOptions,
+    intent: AgentBindingIntent,
+) -> Result<(Value, AgentReference), ThreadCreationError> {
+    let (canonical_options, resolved) =
+        canonical_thread_options(custom_agents, options, intent).await?;
+    let data = prepare_thread_record(thread_id, canonical_options)
         .await
         .map_err(|error| {
             if error.starts_with("workspace_mode=worktree") {
@@ -132,12 +167,7 @@ pub(crate) async fn create_thread_for_agent_reference(
                 ThreadCreationError::Storage(error)
             }
         })?;
-    if let Some(workspace_dir) = workspace_dir_from_value(&data) {
-        bridge
-            .set_thread_workspace_binding(&thread_id, Some(workspace_dir))
-            .await;
-    }
-    Ok((thread_id, data, resolved))
+    Ok((data, resolved))
 }
 
 pub(crate) struct GatewayThreadCreator {
