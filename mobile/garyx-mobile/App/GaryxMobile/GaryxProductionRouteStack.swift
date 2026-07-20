@@ -36,6 +36,7 @@ final class GaryxProductionRouteStore: ObservableObject {
     private var intentCoordinator = GaryxNavigationIntentCoordinator()
     private var pendingPlans: [GaryxNavigationIntentID: PendingRoutePlan] = [:]
     private var activePlan: PendingRoutePlan?
+    private var preparedConversationEntry: GaryxRouteEntry?
     var presentationBarrierActivated: @MainActor () -> Void = {}
     private var navigationScopes: @MainActor () -> GaryxGatewayScopeRegistry = {
         GaryxGatewayScopeRegistry(
@@ -68,7 +69,26 @@ final class GaryxProductionRouteStore: ObservableObject {
         if self.container === container {
             presentationCoordinator.detach(container: container)
             self.container = nil
+            preparedConversationEntry = nil
         }
+    }
+
+    /// Mounts the exact conversation destination during a stationary touch so
+    /// its SwiftUI graph and render layers are ready before the tap releases
+    /// the navigation transaction. Preparation never changes canonical path.
+    @discardableResult
+    func prepareConversation(_ destination: GaryxRouteDestination) -> GaryxRouteEntry? {
+        guard case .conversation = destination else { return nil }
+        if preparedConversationEntry?.destination == destination {
+            return preparedConversationEntry
+        }
+        let entry = GaryxRouteEntry(
+            id: GaryxRouteInstanceID(rawValue: UUID().uuidString.lowercased()),
+            destination: destination
+        )
+        preparedConversationEntry = entry
+        _ = container?.prepareInactiveHost(entry)
+        return entry
     }
 
     func beginNavigationPreparation(
@@ -120,7 +140,12 @@ final class GaryxProductionRouteStore: ObservableObject {
                 break
             }
             entries = destinations.map { destination in
-                GaryxRouteEntry(
+                if preparedConversationEntry?.destination == destination,
+                   let preparedConversationEntry {
+                    self.preparedConversationEntry = nil
+                    return preparedConversationEntry
+                }
+                return GaryxRouteEntry(
                     id: GaryxRouteInstanceID(rawValue: UUID().uuidString.lowercased()),
                     destination: destination
                 )
@@ -373,6 +398,14 @@ final class GaryxProductionRouteStore: ObservableObject {
         if !accepted {
             activePlan = nil
             assertionFailure("terminal navigation plan was rejected by the route renderer")
+        } else if let destination = plan.entries.last?.destination,
+                  case .conversation = destination {
+            // A prepared host appeared before the probe started. Re-report
+            // its exact opening treatment while the accepted transaction is
+            // still synchronous and before the first animated frame.
+            GaryxConversationRouteMetadataCache.shared
+                .metadata(for: destination)
+                .markPushPresentation()
         }
     }
 

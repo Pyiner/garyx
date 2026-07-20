@@ -39,6 +39,23 @@ struct GaryxThreadRuntimeCompactRow: View {
     }
 
     var body: some View {
+        GaryxThreadRuntimeCompactContentRow(
+            title: title,
+            target: model.selectedThreadAgentTarget,
+            maxWidth: maxWidth
+        )
+    }
+}
+
+/// Model-free content shared by the live title control and the first route
+/// frame. Sharing the row keeps avatar, typography, and capsule geometry
+/// identical while the destination is still isolated from model updates.
+struct GaryxThreadRuntimeCompactContentRow: View {
+    let title: String
+    let target: GaryxMobileAgentTarget?
+    var maxWidth: CGFloat? = 282
+
+    var body: some View {
         HStack(spacing: 8) {
             avatar(diameter: 22)
 
@@ -59,7 +76,7 @@ struct GaryxThreadRuntimeCompactRow: View {
 
     @ViewBuilder
     private func avatar(diameter: CGFloat) -> some View {
-        if let target = model.selectedThreadAgentTarget {
+        if let target {
             GaryxAgentAvatarView(
                 agentId: target.id,
                 avatarDataUrl: target.avatarDataUrl,

@@ -28,6 +28,7 @@ struct GaryxThreadListRowInput: Equatable {
 struct GaryxThreadListRowButton: View, Equatable {
     let input: GaryxThreadListRowInput
     let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
+    var onPrepareOpen: ((GaryxThreadSummary) -> Void)? = nil
     let onSetPinned: (String, Bool) -> Void
     let onSetFavorite: (String, Bool) -> Void
     let onArchive: (GaryxThreadSummary, GaryxThreadArchiveStrategy) -> Void
@@ -88,6 +89,7 @@ struct GaryxThreadListRowButton: View, Equatable {
             .garyxThreadActionMenu(
                 dismissToken: input.menuDismissToken,
                 movementSuppressesMenu: input.menuMovementSuppression,
+                preparePrimaryAction: prepareOpen,
                 primaryAction: {
                     DispatchQueue.main.async {
                         guard !suppressNextPrimaryTap else {
@@ -185,7 +187,13 @@ struct GaryxThreadListRowButton: View, Equatable {
 
     private func open() {
         guard input.capabilities.canOpen, actionsEnabled else { return }
+        prepareOpen()
         onOpenThread(input.thread, input.openSource)
+    }
+
+    private func prepareOpen() {
+        guard input.capabilities.canOpen, actionsEnabled else { return }
+        onPrepareOpen?(input.thread)
     }
 
     private func consumeNestedTapAndUnpin() {

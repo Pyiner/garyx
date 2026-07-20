@@ -66,6 +66,99 @@ private struct GaryxCapturedCameraImage: @unchecked Sendable {
     let image: UIImage
 }
 
+/// Non-interactive first-frame counterpart of an empty thread composer. It
+/// deliberately shares the production composer's geometry, glass recipe, and
+/// controls so route preparation never substitutes a visually different card.
+struct GaryxConversationOpeningComposerChrome: View {
+    var body: some View {
+        GaryxAdaptiveGlassContainer(spacing: GaryxComposerLayout.composerSpacing) {
+            VStack(spacing: 0) {
+                Text("Ask Garyx anything...")
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(Color(.placeholderText))
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: GaryxComposerLayout.inputMinHeight,
+                        alignment: .topLeading
+                    )
+                    .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
+                    .padding(.top, GaryxComposerLayout.inputTopPadding + 2)
+                    .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
+
+                HStack(spacing: GaryxComposerLayout.bottomBarSpacing) {
+                    GaryxCircleBadge(
+                        systemName: "plus",
+                        foreground: .primary,
+                        background: GaryxComposerLayout.actionButtonFill,
+                        diameter: GaryxComposerLayout.actionButtonSide,
+                        iconSize: 20,
+                        iconWeight: .regular
+                    )
+                    .frame(width: 44, height: 44)
+
+                    Spacer(minLength: 0)
+
+                    GaryxCircleBadge(
+                        systemName: "arrow.up",
+                        foreground: Color(.systemGray2),
+                        background: Color(.systemGray5)
+                    )
+                    .frame(width: 44, height: 44)
+                }
+                .padding(.horizontal, GaryxComposerLayout.bottomBarHorizontalPadding)
+                .padding(.top, GaryxComposerLayout.bottomBarTopPadding)
+                .padding(.bottom, GaryxComposerLayout.bottomBarBottomPadding)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                GaryxComposerLayout.composerMaterialTint,
+                in: RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
+                    style: .continuous
+                )
+            )
+            .background(
+                GaryxComposerLayout.composerOcclusionFill,
+                in: RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
+                    style: .continuous
+                )
+            )
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: false,
+                in: RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
+                    style: .continuous
+                )
+                .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
+                .blendMode(.plusLighter)
+            }
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
+                    style: .continuous
+                )
+                .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.clear)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Message composer")
+        .accessibilityValue("Ask Garyx anything...")
+    }
+}
+
 
 struct GaryxComposer: View {
     @Environment(\.isEnabled) private var isEnabled

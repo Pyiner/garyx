@@ -47,6 +47,9 @@ struct GaryxRootView: View {
                     onOpenThread: { thread, source in
                         Task { await model.openThread(thread, source: source) }
                     },
+                    onPrepareThread: { thread in
+                        model.prepareConversationRoute(for: thread)
+                    },
                     onTogglePinnedThread: { threadId in
                         model.togglePinnedThread(threadId)
                     },
@@ -98,6 +101,11 @@ struct GaryxRootView: View {
                     )
                 )
                 .equatable()
+
+                // Keep this last in the ZStack so its non-zero-opacity render
+                // tree is composited instead of culled. It removes itself
+                // after stable delivered frames and never accepts input.
+                GaryxConversationRenderPrewarmer()
             } else {
                 GaryxGatewaySetupView()
             }
@@ -519,6 +527,7 @@ struct GaryxShellView: View, Equatable {
     let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
+    let onPrepareThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
@@ -667,6 +676,7 @@ struct GaryxShellView: View, Equatable {
                 onSelectRecentFilter: onSelectRecentFilter,
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
+                onPrepareThread: onPrepareThread,
                 onTogglePinnedThread: onTogglePinnedThread,
                 onToggleFavoriteThread: onToggleFavoriteThread,
                 onUnpinThread: onUnpinThread,

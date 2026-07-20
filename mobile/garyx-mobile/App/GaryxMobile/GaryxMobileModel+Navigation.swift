@@ -797,7 +797,12 @@ extension GaryxMobileModel {
                 isStreaming: false
             )
         ]
-        if ProcessInfo.processInfo.environment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] == "long" {
+        let routePushFixture = ProcessInfo.processInfo.environment[
+            "GARYX_MOBILE_ROUTE_PUSH_FIXTURE"
+        ]
+        if routePushFixture == "empty" {
+            messages = []
+        } else if routePushFixture == "long" {
             messages = (0..<24).flatMap { turn in
                 [
                     GaryxMobileMessage(
@@ -826,26 +831,38 @@ extension GaryxMobileModel {
         if let selectedThread {
             messagesByThread[selectedThread.id] = messages
             messageSignaturesByThread[selectedThread.id] = GaryxMessageListSignature.make(for: messages)
-            renderSnapshotsByThread[selectedThread.id] = GaryxRenderSnapshot(
-                basedOnSeq: 2,
-                rows: [
-                    .userTurn(GaryxRenderUserTurnRow(
-                        id: "debug-turn-1",
-                        user: GaryxRenderMessageRef(id: "debug-user-1", seq: 1, role: "user"),
-                        activity: [
-                            .assistantReply(GaryxRenderAssistantReplyRow(
-                                id: "debug-assistant-row-1",
-                                message: GaryxRenderMessageRef(
-                                    id: "debug-assistant-1",
-                                    seq: 2,
-                                    role: "assistant"
-                                )
-                            )),
-                        ]
-                    )),
-                ]
-            )
-            threadHistoryLoadedIds.insert(selectedThread.id)
+            if routePushFixture == "empty" {
+                renderSnapshotsByThread[selectedThread.id] = GaryxRenderSnapshot(
+                    basedOnSeq: 0,
+                    rows: []
+                )
+                threadHistoryLoadedIds.remove(selectedThread.id)
+            } else {
+                renderSnapshotsByThread[selectedThread.id] = GaryxRenderSnapshot(
+                    basedOnSeq: 2,
+                    rows: [
+                        .userTurn(GaryxRenderUserTurnRow(
+                            id: "debug-turn-1",
+                            user: GaryxRenderMessageRef(
+                                id: "debug-user-1",
+                                seq: 1,
+                                role: "user"
+                            ),
+                            activity: [
+                                .assistantReply(GaryxRenderAssistantReplyRow(
+                                    id: "debug-assistant-row-1",
+                                    message: GaryxRenderMessageRef(
+                                        id: "debug-assistant-1",
+                                        seq: 2,
+                                        role: "assistant"
+                                    )
+                                )),
+                            ]
+                        )),
+                    ]
+                )
+                threadHistoryLoadedIds.insert(selectedThread.id)
+            }
             resetSelectedTurnRowsWindow()
             lockSelectedTurnRowsWindowFloorIfNeeded()
         }

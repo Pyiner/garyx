@@ -290,6 +290,7 @@ extension View {
     func garyxThreadActionMenu(
         dismissToken: Int = 0,
         movementSuppressesMenu: Bool = false,
+        preparePrimaryAction: @escaping () -> Void = {},
         primaryAction: @escaping () -> Void,
         items: @escaping () -> [GaryxThreadActionMenuItem]
     ) -> some View {
@@ -297,6 +298,7 @@ extension View {
             GaryxThreadActionMenuModifier(
                 dismissToken: dismissToken,
                 movementSuppressesMenu: movementSuppressesMenu,
+                preparePrimaryAction: preparePrimaryAction,
                 primaryAction: primaryAction,
                 itemsProvider: items
             )
@@ -311,6 +313,7 @@ extension View {
 private struct GaryxThreadActionMenuModifier: ViewModifier {
     let dismissToken: Int
     let movementSuppressesMenu: Bool
+    let preparePrimaryAction: () -> Void
     let primaryAction: () -> Void
     let itemsProvider: () -> [GaryxThreadActionMenuItem]
 
@@ -363,12 +366,15 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
                     GaryxStationaryThreadMenuGesture(onRecognized: presentMenu)
                 )
                 .simultaneousGesture(TapGesture().onEnded(primaryAction))
+                .gesture(primaryPreparationGesture)
         } else {
             // Keep this gesture simultaneous with the List's pan recognizer so
             // scrolling still wins after movement. Inside the row, however,
             // long press and tap are exclusive: once the menu gesture succeeds,
             // releasing the same touch can never also open the thread.
-            content.simultaneousGesture(primaryInteractionGesture)
+            content
+                .simultaneousGesture(primaryInteractionGesture)
+                .gesture(primaryPreparationGesture)
         }
     }
 
@@ -393,6 +399,18 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
                     primaryAction()
                 }
             }
+    }
+
+    /// Observe a short stationary hold before a normal tap releases. UIKit's
+    /// simultaneous recognizer is intentional here: SwiftUI's LongPressGesture
+    /// can make the List pan wait for this 45 ms preparation gesture to fail.
+    /// The action only prepares an inactive route host; navigation remains
+    /// owned by the existing tap/long-press arbitration above.
+    private var primaryPreparationGesture: GaryxStationaryThreadPreparationGesture {
+        GaryxStationaryThreadPreparationGesture {
+            guard isEnabled else { return }
+            preparePrimaryAction()
+        }
     }
 
     private var focusedSourceBackground: some View {
@@ -443,6 +461,59 @@ private struct GaryxStationaryThreadMenuGesture: UIGestureRecognizerRepresentabl
         recognizer.minimumPressDuration = 0.36
         recognizer.allowableMovement = 16
         recognizer.cancelsTouchesInView = false
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(
+        _ recognizer: UILongPressGestureRecognizer,
+        context: Context
+    ) {
+        context.coordinator.onRecognized = onRecognized
+    }
+
+    func handleUIGestureRecognizerAction(
+        _ recognizer: UILongPressGestureRecognizer,
+        context: Context
+    ) {
+        guard recognizer.state == .began else { return }
+        context.coordinator.onRecognized()
+    }
+}
+
+/// A passive, simultaneous touch observer for route preparation. In
+/// particular, `cancelsTouchesInView = false` and the delegate's simultaneous
+/// answer keep a recognized hold from stealing the native List pan when a
+/// finger begins moving after the preparation threshold.
+private struct GaryxStationaryThreadPreparationGesture: UIGestureRecognizerRepresentable {
+    var onRecognized: () -> Void
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onRecognized: () -> Void
+
+        init(onRecognized: @escaping () -> Void) {
+            self.onRecognized = onRecognized
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+    }
+
+    func makeCoordinator(converter _: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator(onRecognized: onRecognized)
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let recognizer = UILongPressGestureRecognizer()
+        recognizer.minimumPressDuration = 0.045
+        recognizer.allowableMovement = 8
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
         recognizer.delegate = context.coordinator
         return recognizer
     }

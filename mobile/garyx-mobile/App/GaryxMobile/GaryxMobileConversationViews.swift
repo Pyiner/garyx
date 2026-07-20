@@ -187,7 +187,6 @@ struct GaryxConversationView: View {
     /// `Expanded` back first, then unmounts on completion.
     @State private var runtimePanelPresented = false
     @State private var runtimePanelExpanded = false
-
     init(destination: GaryxRouteDestination) {
         liveStore = GaryxConversationLiveStore(destination: destination)
     }
@@ -278,6 +277,7 @@ struct GaryxConversationView: View {
                 .onAppear {
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
+                    scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
                 }
                 .onChange(of: liveStore.routeIdentity) { _, _ in
                     setRuntimePanelVisible(false)
@@ -298,6 +298,7 @@ struct GaryxConversationView: View {
                             hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
                         )
                     }
+                    scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
                 }
                 .onChange(of: renderRowScrollObservation) { oldValue, newValue in
                     let restore = scrollStateBox.state.renderRowsChanged(
@@ -318,6 +319,7 @@ struct GaryxConversationView: View {
                         )
                     }
                     rowGeometryBox.retain(only: Set(newValue.value))
+                    scheduleTranscriptSnapshot(rowIDs: newValue.value)
                 }
                 .onChange(of: liveStore.isThinking(in: model)) { _, _ in
                     syncTailThinkingPresentation(proxy: proxy)
@@ -476,6 +478,9 @@ struct GaryxConversationView: View {
                    ) {
                     GaryxThreadHistoryLoadingView()
                         .padding(.top, 12)
+                        .onAppear {
+                            GaryxRoutePushPerformanceProbe.shared?.markConversationMessageLoading()
+                        }
                 } else if turnRows.isEmpty {
                     if liveStore.isThinking(in: model) {
                         if showsDebouncedTailThinking {
@@ -651,6 +656,28 @@ struct GaryxConversationView: View {
         GaryxConversationScrollObservation(
             scopeIdentity: liveStore.routeIdentity,
             value: routeTurnRows.map(\.id)
+        )
+    }
+
+    private func scheduleTranscriptSnapshot(rowIDs: [String]) {
+        guard let threadID = liveStore.threadID, !rowIDs.isEmpty else { return }
+        let messages = liveStore.messages(in: model)
+        let tail = messages.last
+        let revision = [
+            String(rowIDs.count),
+            rowIDs.first ?? "",
+            rowIDs.last ?? "",
+            String(messages.count),
+            tail?.id ?? "",
+            String(tail?.text.utf8.count ?? 0),
+            String(tail?.isStreaming == true),
+        ].joined(separator: ":")
+        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+            threadID: threadID,
+            revision: revision,
+            scrollView: { [hostScrollViewBox] in
+                hostScrollViewBox.currentScrollView()
+            }
         )
     }
 

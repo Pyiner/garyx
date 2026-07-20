@@ -9,6 +9,25 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testPreparedConversationOccurrenceIsConsumedExactlyOnceByOpen() throws {
+        let store = GaryxProductionRouteStore()
+        let destination = GaryxRouteDestination.conversation(
+            threadID: "thread-prepared"
+        )
+
+        let prepared = try XCTUnwrap(store.prepareConversation(destination))
+        XCTAssertTrue(store.path.isEmpty)
+        XCTAssertEqual(store.prepareConversation(destination)?.id, prepared.id)
+
+        let opened = store.open(destination, source: .replace, animated: false)
+        XCTAssertEqual(opened.id, prepared.id)
+        XCTAssertEqual(store.path, [prepared])
+
+        let next = store.open(destination, source: .current, animated: false)
+        XCTAssertNotEqual(next.id, prepared.id)
+        XCTAssertEqual(store.path.map(\.id), [prepared.id, next.id])
+    }
+
     func testProductionPreparationPreservesAllSixTypedOutcomes() {
         let cases: [(
             GaryxPrepareOutcome<[GaryxRouteDestination]>,

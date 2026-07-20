@@ -5,6 +5,42 @@ import XCTest
 
 @MainActor
 final class GaryxRouteStackContainerTests: XCTestCase {
+    func testInactiveConversationPreparationDoesNotMutatePathAndPushReusesHost() throws {
+        let harness = Harness(path: [])
+        let prepared = entry(
+            1,
+            destination: .conversation(threadID: "thread-prepared")
+        )
+
+        XCTAssertTrue(harness.container.prepareInactiveHost(prepared))
+        harness.pumpUI()
+
+        XCTAssertTrue(harness.container.path.isEmpty)
+        XCTAssertEqual(harness.hostBuildProbe.buildCount(for: prepared.id), 1)
+        let preparedWrapper = try XCTUnwrap(
+            harness.wrapper(identity: .entry(prepared.id))
+        )
+        XCTAssertFalse(preparedWrapper.isHidden)
+        XCTAssertFalse(preparedWrapper.isUserInteractionEnabled)
+        XCTAssertTrue(preparedWrapper.accessibilityElementsHidden)
+        XCTAssertEqual(preparedWrapper.alpha, 0.01, accuracy: 0.001)
+
+        XCTAssertTrue(harness.container.push(prepared, animated: false))
+        harness.pumpUI()
+
+        XCTAssertEqual(harness.container.path, [prepared])
+        XCTAssertEqual(
+            harness.hostBuildProbe.buildCount(for: prepared.id),
+            1,
+            "the admitted push must reuse the touch-prepared host"
+        )
+        XCTAssertFalse(preparedWrapper.isHidden)
+        XCTAssertTrue(preparedWrapper.isUserInteractionEnabled)
+        XCTAssertFalse(preparedWrapper.accessibilityElementsHidden)
+        XCTAssertEqual(preparedWrapper.alpha, 1, accuracy: 0.001)
+        XCTAssertFalse(harness.container.hasTerminalResidue)
+    }
+
     func testRendererInfrastructureDoesNotOwnPageBackground() throws {
         let harness = Harness(path: [entry(1)])
         let wrapper = try XCTUnwrap(harness.visibleWrapper())

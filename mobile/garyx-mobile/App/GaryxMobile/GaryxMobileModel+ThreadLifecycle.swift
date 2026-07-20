@@ -116,10 +116,10 @@ extension GaryxMobileModel {
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
             source: source
         )
-        // History, persisted-window restore, and stream activation are started
-        // by `conversationRouteContentPreparationBegan` after the Core route
-        // policy has delivered terminal placeholder frames. This keeps every
-        // response mapping and subscription callback out of the push window.
+        // The real conversation page is already visible during the push.
+        // History, persisted-window restore, and stream activation start once
+        // that route becomes active, so only its message region can be loading
+        // and response mapping stays out of the moving transition.
         if productionRouteStore.isAttached {
             await waitForConversationContentActivation(entry.id)
         } else {
@@ -147,6 +147,7 @@ extension GaryxMobileModel {
             invalidatePendingThreadOpen()
         }
         cacheThreadSummaries([thread])
+        cacheConversationOpeningMetadata(for: thread)
         let entry = productionRouteStore.open(
             .conversation(threadID: thread.id),
             source: source
@@ -156,6 +157,33 @@ extension GaryxMobileModel {
             applySelectedThreadRouteProjection(thread)
         }
         return entry
+    }
+
+    /// Starts route-only preparation during a stationary row press. It does
+    /// not select the thread, start history, or mutate canonical navigation.
+    func prepareConversationRoute(for thread: GaryxThreadSummary) {
+        cacheConversationOpeningMetadata(for: thread)
+        productionRouteStore.prepareConversation(
+            .conversation(threadID: thread.id)
+        )
+    }
+
+    private func cacheConversationOpeningMetadata(for thread: GaryxThreadSummary) {
+        // Capture visible chrome before the UIKit destination host mounts.
+        // The moving conversation page can then render its real title without
+        // subscribing to the large observable model during the push.
+        let openingLocalRows = GaryxConversationLiveStore(
+            destination: .conversation(threadID: thread.id)
+        ).turnRows(in: self, isCanonicalTop: false)
+        GaryxConversationRouteMetadataCache.shared.store(
+            thread,
+            agentTarget: GaryxMobileAgentTargetMapper.selectedThreadTarget(
+                thread: thread,
+                selectedAgentTargetId: newThreadAgentTargetId(),
+                targets: agentTargets
+            ),
+            localRows: openingLocalRows
+        )
     }
 
     /// Selection is a compatibility projection of the canonical route top.
@@ -215,10 +243,9 @@ extension GaryxMobileModel {
         }
     }
 
-    /// Starts conversation runtime work only after the route's Core-owned
-    /// staged presentation reaches `.preparingLiveContent`. At this point the
-    /// navigation settle is terminal and an opaque UIKit snapshot masks first
-    /// transcript mapping and render-pipeline materialization.
+    /// Starts conversation runtime work when the route becomes active. The
+    /// conversation chrome is already on screen; only its message region waits
+    /// for this asynchronous transcript preparation.
     func conversationRouteContentPreparationBegan(
         _ entry: GaryxRouteEntry,
         contentDidBecomeReady: @escaping @MainActor () -> Void
@@ -250,11 +277,8 @@ extension GaryxMobileModel {
             self.ensureSelectedThreadStreamForVisibleConversation()
 
             // Bound the open to the newest committed window. Mapping remains
-            // off-main; applying its result is now safely behind the snapshot.
-            // Even with a renderable cache, keep the cover until this initial
-            // refresh is applied. Revealing the cache first lets the refresh's
-            // deferred AttributeGraph preference pass hitch a later visible
-            // frame.
+            // off-main; the page-local message loading state is replaced when
+            // this initial refresh applies.
             await self.loadSelectedThreadHistory()
             guard !Task.isCancelled,
                   self.selectedThread?.id == threadID,

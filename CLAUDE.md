@@ -120,6 +120,13 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   frame; do not add a fixed delay without a real matching transition.
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
+- Mobile conversation pushes must present complete, production-identical
+  thread chrome from the first destination frame; route-level plain or
+  full-page loading covers are forbidden. Keep existing local transcript rows
+  visible during refresh, use the shared message-region loading view only when
+  there are zero local renderable rows, and preserve the shared header loading
+  spinner. Prewarm the exact shared components and retain both moving-transition
+  and post-reveal hitch gates.
 - Message, transcript, and tool-row display is server-render-state first:
   `garyx-models` derives `render_state` from the committed event ledger and the
   gateway sends it in per-thread `thread_render_frame` SSE. Desktop and mobile

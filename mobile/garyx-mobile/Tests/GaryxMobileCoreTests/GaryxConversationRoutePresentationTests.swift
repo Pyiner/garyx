@@ -2,107 +2,220 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxConversationRoutePresentationTests: XCTestCase {
-    func testLiveContentNeverMountsInsideTransitionLifecycle() {
-        var state = GaryxConversationRoutePresentationState()
-
-        XCTAssertEqual(state.renderPhase, .transitionPlaceholder)
-        XCTAssertFalse(state.mountsLiveContent)
-        XCTAssertFalse(state.needsPresentedFrameClock)
-
-        state.apply(lifecycle: .appeared)
-        for _ in 0..<8 {
-            state.presentedFrame(interval: 1.0 / 120.0)
-        }
-
-        XCTAssertEqual(state.renderPhase, .transitionPlaceholder)
-        XCTAssertFalse(state.mountsLiveContent)
-        XCTAssertFalse(state.needsPresentedFrameClock)
+    func testOpeningTranscriptUsesLocalMessagesWhileRefreshRuns() {
+        XCTAssertEqual(
+            GaryxConversationOpeningTranscriptPolicy.presentation(localRenderableRowCount: 3),
+            .localMessages
+        )
+        XCTAssertEqual(
+            GaryxConversationOpeningTranscriptPolicy.presentation(localRenderableRowCount: 0),
+            .loading
+        )
+        XCTAssertEqual(
+            GaryxConversationOpeningTranscriptPolicy.presentation(
+                localRenderableRowCount: 0,
+                hasRenderedSnapshot: true
+            ),
+            .localMessages
+        )
     }
 
-    func testTerminalFramesStagePreparationThenReveal() {
+    func testConversationPageIsTheOnlyFullScreenSurfaceFromMount() {
         var state = GaryxConversationRoutePresentationState()
+
+        XCTAssertTrue(state.presentsConversationPage)
+        XCTAssertFalse(state.showsFullScreenPlaceholder)
+        XCTAssertEqual(state.renderPhase, .openingPage)
+        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertEqual(state.messagePhase, .waitingForActivation)
+
+        state.apply(lifecycle: .appeared)
+
+        XCTAssertTrue(state.presentsConversationPage)
+        XCTAssertFalse(state.showsFullScreenPlaceholder)
+        XCTAssertTrue(state.showsOpeningPage)
+        XCTAssertEqual(state.messagePhase, .waitingForActivation)
+    }
+
+    func testActiveRouteWaitsForFirstDeliveredFrameBeforeMessagePreparation() {
+        var state = GaryxConversationRoutePresentationState()
+
+        XCTAssertEqual(state.apply(lifecycle: .appeared), .none)
+        XCTAssertFalse(state.needsPresentedFrameClock)
+        XCTAssertEqual(state.apply(lifecycle: .active), .none)
+        XCTAssertEqual(state.messagePhase, .waitingForActivation)
+        XCTAssertEqual(state.renderPhase, .openingPage)
+        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertTrue(state.needsPresentedFrameClock)
+
+        XCTAssertEqual(state.presentedFrame(interval: nil), .openingPage)
+        XCTAssertEqual(state.messagePhase, .loading)
+        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertEqual(state.apply(lifecycle: .active), .none)
+    }
+
+    func testTerminalFramesMaterializeThenRevealTheLivePage() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 2,
+            materializationFrameCount: 3
+        )
         state.apply(lifecycle: .appeared)
         state.apply(lifecycle: .active)
 
-        XCTAssertTrue(state.needsPresentedFrameClock)
-        XCTAssertEqual(state.presentedFrame(interval: nil), .transitionPlaceholder)
-        XCTAssertFalse(state.mountsLiveContent)
-
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .preparingLiveContent)
-        XCTAssertTrue(state.mountsLiveContent)
-        XCTAssertTrue(state.showsPlaceholder)
+        XCTAssertEqual(state.presentedFrame(interval: nil), .openingPage)
+        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertTrue(state.mountsLiveConversation)
+        XCTAssertTrue(state.showsOpeningPage)
         XCTAssertFalse(state.needsPresentedFrameClock)
 
-        state.contentDidBecomeReady()
+        state.messageContentDidBecomeReady()
         XCTAssertTrue(state.needsPresentedFrameClock)
-        XCTAssertEqual(state.presentedFrame(interval: nil), .preparingLiveContent)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .preparingLiveContent)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .preparingLiveContent)
+
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
-        XCTAssertTrue(state.hasPresentedLiveContent)
-        XCTAssertFalse(state.showsPlaceholder)
+        XCTAssertTrue(state.hasPresentedLiveConversation)
+        XCTAssertFalse(state.showsOpeningPage)
         XCTAssertFalse(state.needsPresentedFrameClock)
+        XCTAssertEqual(state.messagePhase, .ready)
     }
 
-    func testInterruptedPreparationRestartsFromPlaceholder() {
+    func testLiveImplementationHandoffWaitsForMessageReadiness() {
         var state = GaryxConversationRoutePresentationState(
-            terminalPlaceholderFrameCount: 1,
-            livePreparationFrameCount: 2
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 1
         )
-        state.apply(lifecycle: .appeared)
         state.apply(lifecycle: .active)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 60.0), .preparingLiveContent)
-        state.contentDidBecomeReady()
 
-        state.apply(lifecycle: .inactive)
-        XCTAssertEqual(state.renderPhase, .transitionPlaceholder)
-        XCTAssertFalse(state.mountsLiveContent)
+        XCTAssertEqual(state.messagePhase, .waitingForActivation)
+        XCTAssertEqual(state.renderPhase, .openingPage)
+        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .materializingConversation)
+        XCTAssertEqual(state.messagePhase, .loading)
+        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .materializingConversation)
+        XCTAssertTrue(state.showsOpeningPage)
 
-        state.apply(lifecycle: .active)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 60.0), .preparingLiveContent)
-        XCTAssertFalse(state.needsPresentedFrameClock)
-        state.contentDidBecomeReady()
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 60.0), .preparingLiveContent)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 60.0), .live)
+        state.messageContentDidBecomeReady()
+        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
     }
 
-    func testPreparedPredecessorKeepsLiveSurfaceWhileInactive() {
+    func testMissedMaterializationFrameRestartsStabilityProof() {
         var state = GaryxConversationRoutePresentationState(
-            terminalPlaceholderFrameCount: 1,
-            livePreparationFrameCount: 1
+            terminalOpeningFrameCount: 2,
+            materializationFrameCount: 2
         )
-        state.apply(lifecycle: .appeared)
-        state.apply(lifecycle: .active)
-        state.presentedFrame(interval: 1.0 / 120.0)
-        state.contentDidBecomeReady()
-        state.presentedFrame(interval: 1.0 / 120.0)
-        XCTAssertEqual(state.renderPhase, .live)
-
-        state.apply(lifecycle: .inactive)
-        XCTAssertEqual(state.renderPhase, .live)
-        XCTAssertTrue(state.mountsLiveContent)
-        XCTAssertFalse(state.showsPlaceholder)
-
-        state.apply(lifecycle: .active)
-        XCTAssertEqual(state.renderPhase, .live)
-        XCTAssertFalse(state.needsPresentedFrameClock)
-    }
-
-    func testMissedPreparationFrameRestartsStabilityBudget() {
-        var state = GaryxConversationRoutePresentationState(
-            terminalPlaceholderFrameCount: 2,
-            livePreparationFrameCount: 2
-        )
-        state.apply(lifecycle: .appeared)
         state.apply(lifecycle: .active)
         state.presentedFrame(interval: nil)
         state.presentedFrame(interval: 1.0 / 120.0)
-        state.contentDidBecomeReady()
+        state.messageContentDidBecomeReady()
 
-        XCTAssertEqual(state.presentedFrame(interval: nil), .preparingLiveContent)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .preparingLiveContent)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 60.0), .preparingLiveContent)
-        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .preparingLiveContent)
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 30.0),
+            .materializingConversation
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
     }
+
+    func testMaterializationReestablishesReferenceAfterContentClockReset() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 2,
+            materializationFrameCount: 2
+        )
+        state.apply(lifecycle: .active)
+
+        // The first delivered frame starts content preparation. Content
+        // readiness resets the registry clock, so the next delivered frame
+        // may also carry no interval while entering materialization.
+        state.presentedFrame(interval: nil)
+        state.messageContentDidBecomeReady()
+        XCTAssertEqual(state.presentedFrame(interval: nil), .materializingConversation)
+
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
+    }
+
+    func testInterruptedMaterializationRestartsForReactivatedOccurrence() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 2
+        )
+        state.apply(lifecycle: .active)
+        state.presentedFrame(interval: 1.0 / 60.0)
+        state.messageContentDidBecomeReady()
+
+        XCTAssertEqual(state.apply(lifecycle: .inactive), .none)
+        XCTAssertEqual(state.renderPhase, .openingPage)
+        XCTAssertEqual(state.messagePhase, .waitingForActivation)
+        XCTAssertEqual(state.apply(lifecycle: .active), .none)
+        XCTAssertEqual(state.messagePhase, .waitingForActivation)
+        state.presentedFrame(interval: 1.0 / 120.0)
+        XCTAssertEqual(state.messagePhase, .loading)
+    }
+
+    func testLivePredecessorRetainsItsPreparedConversation() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 1
+        )
+        state.apply(lifecycle: .active)
+        state.presentedFrame(interval: 1.0 / 120.0)
+        state.messageContentDidBecomeReady()
+        state.presentedFrame(interval: 1.0 / 120.0)
+
+        state.apply(lifecycle: .inactive)
+
+        XCTAssertEqual(state.messagePhase, .ready)
+        XCTAssertEqual(state.renderPhase, .live)
+        XCTAssertTrue(state.mountsLiveConversation)
+        XCTAssertFalse(state.showsOpeningPage)
+        XCTAssertEqual(state.apply(lifecycle: .active), .none)
+    }
+
+    func testRenderPrewarmRequiresConsecutiveStableFrames() {
+        var state = GaryxConversationRenderPrewarmState(requiredStableFrameCount: 2)
+        state.begin()
+
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0, frameBudget: 1.0 / 120.0),
+            .materializing
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 30.0, frameBudget: 1.0 / 120.0),
+            .materializing
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0, frameBudget: 1.0 / 120.0),
+            .materializing
+        )
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0, frameBudget: 1.0 / 120.0),
+            .ready
+        )
+        XCTAssertFalse(state.rendersWarmupSurface)
+    }
+
 }

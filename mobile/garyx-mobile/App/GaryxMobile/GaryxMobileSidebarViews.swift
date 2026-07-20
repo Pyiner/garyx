@@ -16,6 +16,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
+    let onPrepareThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
@@ -68,6 +69,7 @@ struct GaryxRootNavigationView: View, Equatable {
             onSelectRecentFilter: onSelectRecentFilter,
             onStartNewChat: onStartNewChat,
             onOpenThread: onOpenThread,
+            onPrepareThread: onPrepareThread,
             onTogglePinnedThread: onTogglePinnedThread,
             onToggleFavoriteThread: onToggleFavoriteThread,
             onUnpinThread: onUnpinThread,
@@ -88,7 +90,7 @@ private struct GaryxRootRouteContentView: View {
     var body: some View {
         switch entry.destination {
         case .conversation, .conversationDraft:
-            GaryxStagedConversationRouteView(
+            GaryxConversationRouteView(
                 destination: entry.destination,
                 occurrenceID: entry.id
             )
@@ -179,6 +181,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
+    let onPrepareThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
@@ -315,6 +318,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                             openSource: .replace
                         ),
                         onOpenThread: onOpenThread,
+                        onPrepareOpen: onPrepareThread,
                         onSetPinned: { threadId, desired in
                             if desired {
                                 onTogglePinnedThread(threadId)

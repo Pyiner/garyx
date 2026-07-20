@@ -375,6 +375,34 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     // MARK: Public fake-route operations
 
+    /// Builds an occurrence without admitting it to canonical path. The host
+    /// remains behind the opaque active route, but participates in layout and
+    /// composition so a subsequent push can reuse it without first-frame
+    /// AttributeGraph or Metal work.
+    @discardableResult
+    func prepareInactiveHost(_ entry: GaryxRouteEntry) -> Bool {
+        loadViewIfNeeded()
+        guard transition == nil,
+              canonicalState.path.isEmpty,
+              !canonicalState.path.contains(where: { $0.id == entry.id })
+        else { return false }
+
+        let record = ensureMounted(.entry(entry))
+        record.wrapper.frame = view.bounds
+        record.wrapper.isHidden = false
+        record.wrapper.isUserInteractionEnabled = false
+        record.wrapper.accessibilityElementsHidden = true
+        record.wrapper.alpha = 0.01
+        view.sendSubviewToBack(record.wrapper)
+        if let active = activeHostRecord() {
+            view.bringSubviewToFront(active.wrapper)
+        }
+        record.controller.view.setNeedsLayout()
+        record.wrapper.setNeedsLayout()
+        view.layoutIfNeeded()
+        return true
+    }
+
     @discardableResult
     func push(_ entry: GaryxRouteEntry, animated: Bool = true) -> Bool {
         push([entry], animated: animated)

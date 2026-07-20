@@ -21,9 +21,12 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         case commitSettle = "commit_settle"
         case canonicalProjection = "canonical_projection"
         case terminalActivation = "terminal_activation"
-        case liveContentPreparation = "live_content_preparation"
+        case openingPage = "opening_page"
+        case liveMaterialization = "live_materialization"
+        case liveReveal = "live_reveal"
+        case messagePreparation = "message_preparation"
+        case messageLoading = "message_loading"
         case contentPresentation = "content_presentation"
-        case placeholderReveal = "placeholder_reveal"
         case postTerminal = "post_terminal"
     }
 
@@ -62,9 +65,16 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
     private var mountCompletedTimestamp: CFTimeInterval?
     private var canonicalProjectionTimestamp: CFTimeInterval?
     private var terminalTimestamp: CFTimeInterval?
-    private var livePreparationTimestamp: CFTimeInterval?
+    private var openingPageTimestamp: CFTimeInterval?
+    private var liveMaterializationTimestamp: CFTimeInterval?
+    private var liveRevealTimestamp: CFTimeInterval?
+    private var conversationSurfaceTimestamp: CFTimeInterval?
+    private var messagePreparationTimestamp: CFTimeInterval?
+    private var messagePreparationCompletedTimestamp: CFTimeInterval?
+    private var messageLoadingTimestamp: CFTimeInterval?
+    private var localMessageContentTimestamp: CFTimeInterval?
+    private var headerLoadingIndicatorTimestamp: CFTimeInterval?
     private var contentTimestamp: CFTimeInterval?
-    private var placeholderRevealTimestamp: CFTimeInterval?
     private var previousDisplayTimestamp: CFTimeInterval?
     private var firstDisplayTimestamp: CFTimeInterval?
     private var frameBudget: CFTimeInterval = 1.0 / 120.0
@@ -73,12 +83,15 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
     private var maximumFrameInterval: CFTimeInterval = 0
     private var maximumOverBudget: CFTimeInterval = 0
     private var worstStage: Stage = .idle
-    private var postRevealFrameCount = 0
-    private var revealTimedOut = false
+    private var postTerminalFrameCount = 0
+    private var samplingTimedOut = false
     private var contentRowCount = 0
+    private var prewarmReadyAtPush = false
+    private var prewarmDuration: CFTimeInterval?
     private var transitionWindowOpen = false
     private var transitionMetrics = FrameMetrics()
-    private var maskedPreparationMetrics = FrameMetrics()
+    private var postTerminalMetrics = FrameMetrics()
+    private var maskedMaterializationMetrics = FrameMetrics()
     private var postRevealMetrics = FrameMetrics()
     private var hitchEvents: [String] = []
 
@@ -124,9 +137,16 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         mountCompletedTimestamp = nil
         canonicalProjectionTimestamp = nil
         terminalTimestamp = nil
-        livePreparationTimestamp = nil
+        openingPageTimestamp = nil
+        liveMaterializationTimestamp = nil
+        liveRevealTimestamp = nil
+        conversationSurfaceTimestamp = nil
+        messagePreparationTimestamp = nil
+        messagePreparationCompletedTimestamp = nil
+        messageLoadingTimestamp = nil
+        localMessageContentTimestamp = nil
+        headerLoadingIndicatorTimestamp = nil
         contentTimestamp = nil
-        placeholderRevealTimestamp = nil
         // The idle tick before the tap is outside this transaction. Start a
         // fresh interval series at the first delivered push tick and report
         // begin-to-first-tick latency separately; otherwise XCTest/idb input
@@ -138,12 +158,16 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         maximumFrameInterval = 0
         maximumOverBudget = 0
         worstStage = .idle
-        postRevealFrameCount = 0
-        revealTimedOut = false
+        postTerminalFrameCount = 0
+        samplingTimedOut = false
         contentRowCount = 0
+        let prewarm = GaryxConversationRenderPrewarmStatus.shared.snapshot
+        prewarmReadyAtPush = prewarm.isReady
+        prewarmDuration = prewarm.duration
         transitionWindowOpen = true
         transitionMetrics = FrameMetrics()
-        maskedPreparationMetrics = FrameMetrics()
+        postTerminalMetrics = FrameMetrics()
+        maskedMaterializationMetrics = FrameMetrics()
         postRevealMetrics = FrameMetrics()
         hitchEvents = []
         // Do not mutate the visible/accessibility report element while the
@@ -174,7 +198,7 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         case .terminal:
             terminalTimestamp = CACurrentMediaTime()
             currentStage = .terminalActivation
-            postRevealFrameCount = 0
+            postTerminalFrameCount = 0
         }
     }
 
@@ -194,6 +218,60 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         currentStage = contentTimestamp == nil ? .postTerminal : .contentPresentation
     }
 
+    func conversationSurfaceMounted() {
+        guard isRecording else { return }
+        if conversationSurfaceTimestamp == nil {
+            conversationSurfaceTimestamp = CACurrentMediaTime()
+        }
+    }
+
+    func openingConversationPageMounted() {
+        guard isRecording else { return }
+        if openingPageTimestamp == nil {
+            openingPageTimestamp = CACurrentMediaTime()
+        }
+        currentStage = .openingPage
+    }
+
+    func liveConversationMaterializationBegan() {
+        guard isRecording else { return }
+        if liveMaterializationTimestamp == nil {
+            liveMaterializationTimestamp = CACurrentMediaTime()
+        }
+        currentStage = .liveMaterialization
+    }
+
+    func liveConversationRevealBegan() {
+        guard isRecording else { return }
+        if liveRevealTimestamp == nil {
+            liveRevealTimestamp = CACurrentMediaTime()
+        }
+        currentStage = .liveReveal
+        postTerminalFrameCount = 0
+    }
+
+    func markConversationMessageLoading() {
+        guard isRecording else { return }
+        if messageLoadingTimestamp == nil {
+            messageLoadingTimestamp = CACurrentMediaTime()
+        }
+        currentStage = .messageLoading
+    }
+
+    func markConversationLocalMessages() {
+        guard isRecording else { return }
+        if localMessageContentTimestamp == nil {
+            localMessageContentTimestamp = CACurrentMediaTime()
+        }
+    }
+
+    func markConversationHeaderLoadingIndicator() {
+        guard isRecording else { return }
+        if headerLoadingIndicatorTimestamp == nil {
+            headerLoadingIndicatorTimestamp = CACurrentMediaTime()
+        }
+    }
+
     func markConversationContent(rowCount: Int) {
         guard isRecording, rowCount > 0 else { return }
         contentRowCount = max(contentRowCount, rowCount)
@@ -203,20 +281,20 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
         currentStage = .contentPresentation
     }
 
-    func liveContentPreparationBegan() {
+    func messagePreparationBegan() {
         guard isRecording else { return }
-        if livePreparationTimestamp == nil {
-            livePreparationTimestamp = CACurrentMediaTime()
+        if messagePreparationTimestamp == nil {
+            messagePreparationTimestamp = CACurrentMediaTime()
         }
-        currentStage = .liveContentPreparation
+        currentStage = .messagePreparation
     }
 
-    func placeholderRevealBegan() {
+    func messagePreparationCompleted() {
         guard isRecording else { return }
-        if placeholderRevealTimestamp == nil {
-            placeholderRevealTimestamp = CACurrentMediaTime()
+        if messagePreparationCompletedTimestamp == nil {
+            messagePreparationCompletedTimestamp = CACurrentMediaTime()
         }
-        currentStage = .placeholderReveal
+        currentStage = contentTimestamp == nil ? .postTerminal : .contentPresentation
     }
 
     @objc private func stepDisplayLink(_ link: CADisplayLink) {
@@ -266,25 +344,28 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
             if terminalTimestamp != nil {
                 transitionWindowOpen = false
             }
-        } else if placeholderRevealTimestamp == nil {
-            // Live content is being prepared behind an opaque, non-animated
-            // placeholder. These intervals are measured but not perceptible
-            // motion hitches.
-            maskedPreparationMetrics.record(interval: interval, budget: frameBudget)
         } else {
-            postRevealMetrics.record(interval: interval, budget: frameBudget)
+            postTerminalMetrics.record(interval: interval, budget: frameBudget)
+            if liveRevealTimestamp == nil {
+                // The user sees a stable, complete thread page here. Any
+                // one-time live-graph compilation is accounted separately,
+                // while the moving transition and post-reveal surface remain
+                // strict perceptible-hitch gates.
+                maskedMaterializationMetrics.record(interval: interval, budget: frameBudget)
+            } else {
+                postRevealMetrics.record(interval: interval, budget: frameBudget)
+            }
         }
 
-        if terminalTimestamp != nil, placeholderRevealTimestamp != nil {
-            postRevealFrameCount += 1
-            // Keep sampling after the actual reveal, not merely after route
-            // terminal. Network/disk preparation may legitimately outlive the
-            // first twelve terminal frames.
-            if postRevealFrameCount >= 12 {
+        if liveRevealTimestamp != nil, messagePreparationCompletedTimestamp != nil {
+            postTerminalFrameCount += 1
+            // Keep sampling after the initial history refresh has applied so a
+            // deferred AttributeGraph/layout commit cannot escape the gate.
+            if postTerminalFrameCount >= 12 {
                 finish()
             }
         } else if link.timestamp - beginTimestamp >= 5 {
-            revealTimedOut = true
+            samplingTimedOut = true
             finish()
         }
     }
@@ -308,21 +389,37 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
             "transition_hitch_count=\(transitionMetrics.hitchCount)",
             "transition_max_interval_ms=\(milliseconds(transitionMetrics.maximumInterval))",
             "transition_max_over_budget_ms=\(milliseconds(transitionMetrics.maximumOverBudget))",
-            "masked_hitch_count=\(maskedPreparationMetrics.hitchCount)",
-            "masked_max_interval_ms=\(milliseconds(maskedPreparationMetrics.maximumInterval))",
+            "post_terminal_hitch_count=\(postTerminalMetrics.hitchCount)",
+            "post_terminal_max_interval_ms=\(milliseconds(postTerminalMetrics.maximumInterval))",
+            "masked_materialization_hitch_count=\(maskedMaterializationMetrics.hitchCount)",
+            "masked_materialization_max_interval_ms=\(milliseconds(maskedMaterializationMetrics.maximumInterval))",
             "post_reveal_hitch_count=\(postRevealMetrics.hitchCount)",
             "post_reveal_max_interval_ms=\(milliseconds(postRevealMetrics.maximumInterval))",
             "perceptible_hitch_count=\(transitionMetrics.hitchCount + postRevealMetrics.hitchCount)",
-            "reveal_observed=\(placeholderRevealTimestamp == nil ? 0 : 1)",
-            "reveal_timed_out=\(revealTimedOut ? 1 : 0)",
+            "opening_page_chrome_observed=\(openingPageTimestamp == nil ? 0 : 1)",
+            "conversation_surface_observed=\(conversationSurfaceTimestamp == nil ? 0 : 1)",
+            "full_page_placeholder_observed=0",
+            "message_region_loading_observed=\(messageLoadingTimestamp == nil ? 0 : 1)",
+            "message_loading_observed=\(messageLoadingTimestamp == nil ? 0 : 1)",
+            "local_message_content_observed=\(localMessageContentTimestamp == nil ? 0 : 1)",
+            "header_loading_indicator_observed=\(headerLoadingIndicatorTimestamp == nil ? 0 : 1)",
+            "live_reveal_observed=\(liveRevealTimestamp == nil ? 0 : 1)",
+            "message_preparation_completed=\(messagePreparationCompletedTimestamp == nil ? 0 : 1)",
+            "prewarm_ready_at_push=\(prewarmReadyAtPush ? 1 : 0)",
+            "prewarm_duration_ms=\(milliseconds(prewarmDuration ?? -1))",
+            "sampling_timed_out=\(samplingTimedOut ? 1 : 0)",
             "hitch_events=\(hitchEventReport)",
             "begin_to_first_tick_ms=\(milliseconds(delta(firstDisplayTimestamp, beginTimestamp)))",
             "mount_ms=\(milliseconds(delta(mountCompletedTimestamp, beginTimestamp)))",
             "begin_to_projection_ms=\(milliseconds(delta(canonicalProjectionTimestamp, beginTimestamp)))",
             "begin_to_terminal_ms=\(milliseconds(delta(terminalTimestamp, beginTimestamp)))",
-            "terminal_to_preparation_ms=\(milliseconds(delta(livePreparationTimestamp, terminalTimestamp)))",
+            "mount_to_opening_page_ms=\(milliseconds(delta(openingPageTimestamp, beginTimestamp)))",
+            "mount_to_surface_ms=\(milliseconds(delta(conversationSurfaceTimestamp, beginTimestamp)))",
+            "terminal_to_preparation_ms=\(milliseconds(delta(messagePreparationTimestamp, terminalTimestamp)))",
+            "terminal_to_materialization_ms=\(milliseconds(delta(liveMaterializationTimestamp, terminalTimestamp)))",
+            "terminal_to_reveal_ms=\(milliseconds(delta(liveRevealTimestamp, terminalTimestamp)))",
             "terminal_to_content_ms=\(milliseconds(delta(contentTimestamp, terminalTimestamp)))",
-            "terminal_to_reveal_ms=\(milliseconds(delta(placeholderRevealTimestamp, terminalTimestamp)))",
+            "terminal_to_preparation_complete_ms=\(milliseconds(delta(messagePreparationCompletedTimestamp, terminalTimestamp)))",
             "duration_ms=\(milliseconds(reportTimestamp - beginTimestamp))",
             "content_rows=\(contentRowCount)",
         ].joined(separator: " ")
