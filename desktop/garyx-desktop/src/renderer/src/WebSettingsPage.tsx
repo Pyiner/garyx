@@ -11,6 +11,7 @@ import {
 } from './ui';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { WorkspacePathPicker } from '@/components/WorkspacePathPicker';
 import {
   Select,
   SelectContent,
@@ -404,11 +405,10 @@ export function WebSettingsPage({
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">workspace_dir</span>
-                          <Input
-                            onChange={(event) => {
-                              onPatchTelegramAccount(accountId, { workspaceDir: event.target.value });
+                          <WorkspacePathPicker
+                            onChange={(next) => {
+                              onPatchTelegramAccount(accountId, { workspaceDir: next });
                             }}
-                            type="text"
                             value={String(account.workspace_dir || '')}
                           />
                         </label>
@@ -627,11 +627,10 @@ export function WebSettingsPage({
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">workspace_dir</span>
-                          <Input
-                            onChange={(event) => {
-                              onPatchFeishuAccount(accountId, { workspaceDir: event.target.value });
+                          <WorkspacePathPicker
+                            onChange={(next) => {
+                              onPatchFeishuAccount(accountId, { workspaceDir: next });
                             }}
-                            type="text"
                             value={String(account.workspace_dir || '')}
                           />
                         </label>

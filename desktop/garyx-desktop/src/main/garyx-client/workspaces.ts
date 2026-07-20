@@ -1,4 +1,5 @@
 import {
+  encodeDirectoryListingError,
   parseDirectoryListingPayload,
   parseWorkspaceCatalogPayload,
 } from "../../shared/workspace-payload.ts";
@@ -18,6 +19,7 @@ import type {
 } from "@shared/contracts";
 import {
   GatewayContractError,
+  GatewayRequestError,
   REMOTE_STATE_FETCH_TIMEOUT_MS,
   requestJson,
   requireContractArray,
@@ -353,18 +355,39 @@ export async function listWorkspaceDirectories(
     query.set("path", input.path.trim());
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  const payload = await requestJson<{
-    path?: string;
-    parentPath?: string | null;
-    entries?: Array<{ name?: string | null; path?: string | null }> | null;
-  }>(
-    settings,
-    `/api/workspaces/directories${suffix}`,
-    "readRetryable",
-    {
-      signal: AbortSignal.timeout(8000),
-    },
-  );
+  let payload: unknown;
+  try {
+    payload = await requestJson<unknown>(
+      settings,
+      `/api/workspaces/directories${suffix}`,
+      "readRetryable",
+      {
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+  } catch (error) {
+    // Typed 400s carry {error, code}; re-encode the code so it survives the
+    // IPC boundary and the browser can render it inline without moving.
+    if (error instanceof GatewayRequestError && error.status === 400) {
+      const body = typeof error.body === "string" ? error.body : "";
+      try {
+        const parsed = JSON.parse(body) as { error?: string; code?: string };
+        if (parsed?.code) {
+          throw new Error(
+            encodeDirectoryListingError(
+              parsed.code,
+              parsed.error || error.message,
+            ),
+          );
+        }
+      } catch (encoded) {
+        if (encoded instanceof Error && encoded.message.includes("garyx-directory-listing-error:")) {
+          throw encoded;
+        }
+      }
+    }
+    throw error;
+  }
   return parseDirectoryListingPayload(payload);
 }
 

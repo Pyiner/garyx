@@ -2798,6 +2798,26 @@ export function AppShell() {
     }
   }, [pendingWorkspaceSelection, selectedThreadId]);
 
+  // Gateway switch = a new workspace universe (single-gateway scoping,
+  // design §4.4). Close every transient workspace surface so nothing keeps
+  // rendering rows or issuing requests against the previous gateway; late
+  // responses from the old epoch are rejected by the DesktopState ingress
+  // and per-request cancellation.
+  const workspaceEpoch = desktopState?.entitiesGatewayUrl || "";
+  const workspaceEpochRef = useRef(workspaceEpoch);
+  useEffect(() => {
+    if (workspaceEpochRef.current === workspaceEpoch) {
+      return;
+    }
+    workspaceEpochRef.current = workspaceEpoch;
+    setWorkspaceMenuOpenPath(null);
+    setWorkspaceRenameTarget(null);
+    setAddWorkspaceDialog((current) => {
+      current?.resolve?.(null);
+      return null;
+    });
+  }, [workspaceEpoch]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -3547,12 +3567,15 @@ export function AppShell() {
     });
   }
 
-  async function addWorkspacePathFromPicker(path: string): Promise<DesktopWorkspace | null> {
+  async function addWorkspacePathFromPicker(
+    path: string,
+    name?: string | null,
+  ): Promise<DesktopWorkspace | null> {
     setError(null);
     setWorkspaceMutation("add");
     try {
       const result = await requestDesktopStateResult(
-        () => window.garyxDesktop.addWorkspaceByPath({ path }),
+        () => window.garyxDesktop.addWorkspaceByPath({ path, name }),
         (response) => response.state,
       );
       setDesktopState(result.state);
@@ -3569,12 +3592,12 @@ export function AppShell() {
     }
   }
 
-  async function confirmAddWorkspace(path: string) {
+  async function confirmAddWorkspace(path: string, name: string | null) {
     const request = addWorkspaceDialog;
     if (!request) {
       return;
     }
-    const workspace = await addWorkspacePathFromPicker(path);
+    const workspace = await addWorkspacePathFromPicker(path, name);
     if (workspace) {
       if (request.source === "new-thread") {
         setNewThreadDraftActive(true);

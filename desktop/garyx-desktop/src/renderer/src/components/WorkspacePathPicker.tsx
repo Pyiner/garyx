@@ -17,7 +17,8 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { requestDesktopStateResult } from '@/pinned-order-ingress';
+import { decodeDirectoryListingError } from '@shared/workspace-payload';
+import { useWorkspaceDataAdapter } from './workspace-data-adapter';
 
 export type WorkspacePathPickerProps = {
   value: string;
@@ -43,7 +44,7 @@ export type WorkspacePathPickerDialogProps = {
   workspaces?: DesktopWorkspace[];
   saving?: boolean;
   onCancel: () => void;
-  onConfirm: (path: string) => Promise<void> | void;
+  onConfirm: (path: string, name: string | null) => Promise<void> | void;
 };
 
 function normalizeWorkspacePath(path: string): string {
@@ -102,41 +103,79 @@ type LocalDirectoryBrowserProps = {
   onSelect: (path: string) => void;
 };
 
+function breadcrumbSegments(path: string): Array<{ label: string; path: string }> {
+  const normalized = normalizeWorkspacePath(path);
+  if (!normalized || !normalized.startsWith('/')) {
+    return [];
+  }
+  const parts = normalized.split('/').filter(Boolean);
+  const segments: Array<{ label: string; path: string }> = [
+    { label: '/', path: '/' },
+  ];
+  let acc = '';
+  for (const part of parts) {
+    acc += `/${part}`;
+    segments.push({ label: part, path: acc });
+  }
+  return segments;
+}
+
+/** Remote directory browser v2: an editable breadcrumb path bar (segment
+ * jumps; typing/pasting an absolute path navigates on Enter), a local
+ * filter, git badges per entry, and typed navigation errors rendered
+ * inline while the browser stays on its current directory. */
 function LocalDirectoryBrowser({
   selectedPath,
   disabled = false,
   onSelect,
 }: LocalDirectoryBrowserProps) {
   const { t } = useI18n();
-  const [currentPath, setCurrentPath] = useState(selectedPath);
-  const [parentPath, setParentPath] = useState<string | null>(null);
-  const [entries, setEntries] = useState<DesktopLocalDirectoryEntry[]>([]);
+  const adapter = useWorkspaceDataAdapter();
+  // The last successfully loaded listing is the anchor: failed navigations
+  // never move the browser away from it.
+  const [requestedPath, setRequestedPath] = useState<string | null>(
+    selectedPath || null,
+  );
+  const [listing, setListing] = useState<{
+    path: string;
+    parentPath: string | null;
+    entries: DesktopLocalDirectoryEntry[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [pathEditing, setPathEditing] = useState(false);
+  const [pathDraft, setPathDraft] = useState('');
+  const [filter, setFilter] = useState('');
+
+  const currentPath = listing?.path || '';
   const normalizedSelected = normalizeWorkspacePath(selectedPath);
   const normalizedCurrent = normalizeWorkspacePath(currentPath);
   const isCurrentSelected = Boolean(normalizedCurrent && normalizedCurrent === normalizedSelected);
 
   useEffect(() => {
-    setCurrentPath(selectedPath);
+    setRequestedPath(selectedPath || null);
   }, [selectedPath]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError(null);
-    window.garyxDesktop
-      .listWorkspaceDirectories({ path: currentPath || null })
-      .then((listing) => {
+    adapter
+      .listDirectories({ path: requestedPath })
+      .then((nextListing) => {
         if (cancelled) return;
-        setCurrentPath(listing.path);
-        setParentPath(listing.parentPath);
-        setEntries(listing.entries);
+        setListing(nextListing);
+        setNavigationError(null);
+        setFilter('');
       })
       .catch((nextError) => {
         if (cancelled) return;
-        setError(nextError instanceof Error ? nextError.message : t('Unable to load folders.'));
-        setEntries([]);
+        const message =
+          nextError instanceof Error ? nextError.message : String(nextError);
+        const typed = decodeDirectoryListingError(message);
+        // Inline error; the last good listing stays put.
+        setNavigationError(
+          typed ? typed.message : message || t('Unable to load folders.'),
+        );
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -144,16 +183,38 @@ function LocalDirectoryBrowser({
     return () => {
       cancelled = true;
     };
-  }, [currentPath, t]);
+  }, [adapter, requestedPath, t]);
+
+  const navigate = (path: string | null) => {
+    setNavigationError(null);
+    setPathEditing(false);
+    setRequestedPath(path);
+  };
+
+  const submitPathDraft = () => {
+    const trimmed = pathDraft.trim();
+    if (!trimmed) {
+      setPathEditing(false);
+      return;
+    }
+    navigate(trimmed);
+  };
+
+  const normalizedFilter = filter.trim().toLowerCase();
+  const visibleEntries = normalizedFilter && listing
+    ? listing.entries.filter((entry) =>
+        entry.name.toLowerCase().includes(normalizedFilter),
+      )
+    : listing?.entries || [];
 
   return (
     <div className="overflow-hidden rounded-xl border border-border/70 bg-background text-foreground">
       <div className="flex items-center gap-2 px-3 py-2.5">
         <Button
           aria-label={t('Back')}
-          disabled={!parentPath || disabled || loading}
+          disabled={!listing?.parentPath || disabled || loading}
           onClick={() => {
-            if (parentPath) setCurrentPath(parentPath);
+            if (listing?.parentPath) navigate(listing.parentPath);
           }}
           size="icon-sm"
           type="button"
@@ -162,12 +223,64 @@ function LocalDirectoryBrowser({
           <ArrowLeft />
         </Button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">
-            {workspaceLeafName(currentPath) || currentPath || t('Folders')}
-          </div>
-          <div className="truncate text-xs text-muted-foreground">
-            {currentPath || t('Choose a folder')}
-          </div>
+          {pathEditing ? (
+            <Input
+              aria-label={t('Folder path')}
+              autoFocus
+              className="h-8 font-mono text-xs"
+              onBlur={() => setPathEditing(false)}
+              onChange={(event) => setPathDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  submitPathDraft();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setPathEditing(false);
+                }
+              }}
+              placeholder={t('Type an absolute folder path')}
+              value={pathDraft}
+            />
+          ) : (
+            <button
+              aria-label={t('Edit folder path')}
+              className="workspace-breadcrumb"
+              disabled={disabled || loading}
+              onClick={() => {
+                setPathDraft(currentPath);
+                setPathEditing(true);
+              }}
+              type="button"
+            >
+              {breadcrumbSegments(currentPath).map((segment, index, all) => (
+                <span
+                  className="workspace-breadcrumb-segment-wrap"
+                  key={segment.path}
+                >
+                  <span
+                    className="workspace-breadcrumb-segment"
+                    onClick={(event) => {
+                      if (index === all.length - 1) {
+                        return;
+                      }
+                      event.stopPropagation();
+                      navigate(segment.path);
+                    }}
+                    role="link"
+                  >
+                    {segment.label}
+                  </span>
+                  {index > 0 && index < all.length - 1 ? (
+                    <span className="workspace-breadcrumb-separator">/</span>
+                  ) : null}
+                </span>
+              ))}
+              {!currentPath ? (
+                <span className="text-muted-foreground">{t('Choose a folder')}</span>
+              ) : null}
+            </button>
+          )}
         </div>
         {currentPath ? (
           <Button
@@ -182,19 +295,31 @@ function LocalDirectoryBrowser({
           </Button>
         ) : null}
       </div>
+      {navigationError ? (
+        <div className="workspace-browser-error" role="alert">
+          {navigationError}
+        </div>
+      ) : null}
+      <Separator />
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <SearchIcon aria-hidden className="size-3.5 text-muted-foreground" />
+        <Input
+          aria-label={t('Filter folders')}
+          className="h-7 border-0 px-0 shadow-none focus-visible:ring-0"
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder={t('Filter folders')}
+          value={filter}
+        />
+      </div>
       <Separator />
       <div className="max-h-80 overflow-auto p-1">
-        {loading ? (
+        {loading && !listing ? (
           <div className="px-3 py-8 text-center text-sm text-muted-foreground">
             {t('Loading folders...')}
           </div>
-        ) : error ? (
-          <div className="px-3 py-8 text-center text-sm text-destructive">
-            {error}
-          </div>
-        ) : entries.length ? (
+        ) : visibleEntries.length ? (
           <div className="flex flex-col gap-0.5">
-            {entries.map((entry) => (
+            {visibleEntries.map((entry) => (
               <button
                 className={cn(
                   'flex min-h-9 w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors',
@@ -202,18 +327,21 @@ function LocalDirectoryBrowser({
                 )}
                 disabled={disabled}
                 key={entry.path}
-                onClick={() => setCurrentPath(entry.path)}
+                onClick={() => navigate(entry.path)}
                 type="button"
               >
                 <Folder aria-hidden className="size-4 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                {entry.gitRepo ? (
+                  <span className="workspace-entry-git-badge">git</span>
+                ) : null}
                 <ChevronRight aria-hidden className="size-4 text-muted-foreground/70" />
               </button>
             ))}
           </div>
         ) : (
           <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-            {t('No folders here.')}
+            {normalizedFilter ? t('No matches') : t('No folders here.')}
           </div>
         )}
       </div>
@@ -226,15 +354,23 @@ type WorkspaceAddDialogProps = {
   initialPath: string;
   saving?: boolean;
   onOpenChange: (open: boolean) => void;
-  onAdd: (path: string) => Promise<void>;
+  onAdd: (path: string, name: string | null) => Promise<void>;
 };
 
 function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, onAdd }: WorkspaceAddDialogProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(initialPath);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
+  const defaultName = workspaceLeafName(draft);
+  const effectiveName = nameTouched ? nameDraft : defaultName;
 
   useEffect(() => {
-    if (open) setDraft(initialPath);
+    if (open) {
+      setDraft(initialPath);
+      setNameDraft('');
+      setNameTouched(false);
+    }
   }, [initialPath, open]);
 
   return (
@@ -249,6 +385,23 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
           onSelect={setDraft}
           selectedPath={draft}
         />
+        {isAbsoluteWorkspacePath(draft) ? (
+          <Field className="gap-1.5">
+            <label className="text-xs text-muted-foreground" htmlFor="workspace-add-name">
+              {t('Workspace name')}
+            </label>
+            <Input
+              disabled={saving}
+              id="workspace-add-name"
+              onChange={(event) => {
+                setNameDraft(event.target.value);
+                setNameTouched(true);
+              }}
+              placeholder={defaultName}
+              value={effectiveName}
+            />
+          </Field>
+        ) : null}
         <DialogFooter>
           <Button disabled={saving} onClick={() => onOpenChange(false)} type="button" variant="outline">
             {t('Cancel')}
@@ -257,7 +410,10 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
             <Button
               disabled={saving}
               onClick={() => {
-                void onAdd(normalizeWorkspacePath(draft));
+                void onAdd(
+                  normalizeWorkspacePath(draft),
+                  effectiveName.trim() || null,
+                );
               }}
               type="button"
             >
@@ -481,15 +637,14 @@ export function WorkspacePathPicker({
     !allowEmpty && !trimmed ? hintId : null,
   ].filter(Boolean).join(' ') || undefined;
 
-  async function addWorkspace(path: string) {
+  const adapter = useWorkspaceDataAdapter();
+
+  async function addWorkspace(path: string, name?: string | null) {
     setSavingAdd(true);
     try {
       const added = onAddWorkspace
         ? await onAddWorkspace(path)
-        : await requestDesktopStateResult(
-            () => window.garyxDesktop.addWorkspaceByPath({ path }),
-            (result) => result.state,
-          ).then((result) => result.workspace || null);
+        : await adapter.addWorkspace(path, name);
       if (!added?.path) {
         return;
       }
@@ -562,11 +717,19 @@ export function WorkspacePathPickerDialog({
 }: WorkspacePathPickerDialogProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(initialPath);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
   const trimmed = draft.trim();
   const canSave = Boolean(trimmed && isAbsoluteWorkspacePath(trimmed));
+  const defaultName = workspaceLeafName(trimmed);
+  const effectiveName = nameTouched ? nameDraft : defaultName;
 
   useEffect(() => {
-    if (open) setDraft(initialPath);
+    if (open) {
+      setDraft(initialPath);
+      setNameDraft('');
+      setNameTouched(false);
+    }
   }, [initialPath, open]);
 
   return (
@@ -586,6 +749,23 @@ export function WorkspacePathPickerDialog({
           onSelect={setDraft}
           selectedPath={draft}
         />
+        {canSave ? (
+          <Field className="gap-1.5">
+            <label className="text-xs text-muted-foreground" htmlFor="workspace-picker-dialog-name">
+              {t('Workspace name')}
+            </label>
+            <Input
+              disabled={saving}
+              id="workspace-picker-dialog-name"
+              onChange={(event) => {
+                setNameDraft(event.target.value);
+                setNameTouched(true);
+              }}
+              placeholder={defaultName}
+              value={effectiveName}
+            />
+          </Field>
+        ) : null}
         <DialogFooter>
           <Button disabled={saving} onClick={onCancel} type="button" variant="outline">
             {t('Cancel')}
@@ -594,7 +774,10 @@ export function WorkspacePathPickerDialog({
             <Button
               disabled={saving}
               onClick={() => {
-                void onConfirm(normalizeWorkspacePath(trimmed));
+                void onConfirm(
+                  normalizeWorkspacePath(trimmed),
+                  effectiveName.trim() || null,
+                );
               }}
               type="button"
             >

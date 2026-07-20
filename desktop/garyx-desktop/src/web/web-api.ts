@@ -93,6 +93,7 @@ function trimTrailingSlashes(value: string): string {
 }
 
 import {
+  encodeDirectoryListingError,
   parseDirectoryListingPayload,
   parseWorkspaceCatalogPayload,
 } from '../shared/workspace-payload.ts';
@@ -187,11 +188,26 @@ export async function listWorkspaceDirectories(input?: {
     query.set('path', input.path.trim());
   }
   const suffix = query.toString() ? `?${query.toString()}` : '';
-  const payload = await requestJson<unknown>(
-    `/api/workspaces/directories${suffix}`,
-    'readRetryable',
+  // Raw fetch instead of requestJson: typed 400s carry {error, code} and the
+  // browser must keep the code to render the failure inline in place.
+  const response = await fetch(
+    `${resolveGatewayBase()}/api/workspaces/directories${suffix}`,
   );
-  return parseDirectoryListingPayload(payload);
+  if (!response.ok) {
+    let body: { error?: string; code?: string } | null = null;
+    try {
+      body = (await response.json()) as { error?: string; code?: string };
+    } catch {
+      body = null;
+    }
+    if (response.status === 400 && body?.code) {
+      throw new Error(
+        encodeDirectoryListingError(body.code, body.error || response.statusText),
+      );
+    }
+    throw new Error(body?.error || `${response.status} ${response.statusText}`);
+  }
+  return parseDirectoryListingPayload(await response.json());
 }
 
 export async function fetchChannelEndpoints(): Promise<DesktopChannelEndpoint[]> {

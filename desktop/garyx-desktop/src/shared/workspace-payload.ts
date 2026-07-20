@@ -1,4 +1,5 @@
 import type {
+  DesktopDirectoryListingErrorCode,
   DesktopLocalDirectoryEntry,
   DesktopLocalDirectoryListing,
   DesktopWorkspace,
@@ -118,5 +119,49 @@ export function parseDirectoryListingPayload(
       "workspace directory listing.parentPath",
     ),
     entries: entriesValue.map(parseDirectoryEntryPayload),
+  };
+}
+
+/**
+ * Typed directory-listing errors must cross the Electron IPC boundary,
+ * which flattens rejections to a message string. Encode/decode keeps the
+ * gateway's typed 400 code attached so the browser can render the error
+ * inline and stay on its current directory.
+ */
+const DIRECTORY_LISTING_ERROR_PREFIX = "garyx-directory-listing-error:";
+
+const DIRECTORY_LISTING_ERROR_CODES = new Set([
+  "invalid_path",
+  "not_found",
+  "not_a_directory",
+  "permission_denied",
+]);
+
+export function encodeDirectoryListingError(
+  code: string,
+  message: string,
+): string {
+  return `${DIRECTORY_LISTING_ERROR_PREFIX}${code}:${message}`;
+}
+
+export function decodeDirectoryListingError(
+  message: string | null | undefined,
+): { code: DesktopDirectoryListingErrorCode; message: string } | null {
+  if (!message || !message.includes(DIRECTORY_LISTING_ERROR_PREFIX)) {
+    return null;
+  }
+  const start = message.indexOf(DIRECTORY_LISTING_ERROR_PREFIX);
+  const encoded = message.slice(start + DIRECTORY_LISTING_ERROR_PREFIX.length);
+  const separator = encoded.indexOf(":");
+  if (separator <= 0) {
+    return null;
+  }
+  const code = encoded.slice(0, separator);
+  if (!DIRECTORY_LISTING_ERROR_CODES.has(code)) {
+    return null;
+  }
+  return {
+    code: code as DesktopDirectoryListingErrorCode,
+    message: encoded.slice(separator + 1),
   };
 }

@@ -3,6 +3,7 @@ import { WebCronPage } from '@renderer/WebCronPage';
 import { ThreadsListPage } from '@renderer/ThreadsListPage';
 import { WebLogsPage } from '@renderer/WebLogsPage';
 import { WebSettingsPage } from '@renderer/WebSettingsPage';
+import { WorkspaceDataAdapterContext, type WorkspaceDataAdapter } from '@renderer/components/workspace-data-adapter';
 import { WebStatusPage } from '@renderer/WebStatusPage';
 import { useBotConsoleState } from './use-bot-console-state';
 import { useThreadsListState } from './use-threads-list-state';
@@ -11,6 +12,22 @@ import { useWebLogsState } from './use-web-logs-state';
 import { useWebSettingsState } from './use-web-settings-state';
 import { useWebStatusState } from './use-web-status-state';
 import { buildWebRouteHref, resolveWebRoute, type WebRoute } from './web-route';
+import {
+  addWorkspace as webAddWorkspace,
+  listWorkspaceDirectories as webListWorkspaceDirectories,
+} from './web-api';
+
+const webWorkspaceDataAdapter: WorkspaceDataAdapter = {
+  listDirectories(input) {
+    return webListWorkspaceDirectories(input);
+  },
+  async addWorkspace(path, name) {
+    const catalog = await webAddWorkspace({ path, name });
+    return (
+      catalog.workspaces.find((workspace) => workspace.path === path) || null
+    );
+  },
+};
 
 export function WebBotConsoleApp() {
   const route = resolveWebRoute();
@@ -127,6 +144,7 @@ function WebSettingsView({ route }: { route: Extract<WebRoute, { view: 'settings
   const settingsState = useWebSettingsState(route);
 
   return (
+    <WorkspaceDataAdapterContext.Provider value={webWorkspaceDataAdapter}>
     <WebSettingsPage
       focusedBotId={route.botId}
       focusedBotSummary={settingsState.focusedBotSummary}
@@ -153,6 +171,7 @@ function WebSettingsView({ route }: { route: Extract<WebRoute, { view: 'settings
       saving={settingsState.saving}
       status={settingsState.status}
     />
+    </WorkspaceDataAdapterContext.Provider>
   );
 }
 
