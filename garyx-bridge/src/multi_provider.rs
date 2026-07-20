@@ -24,6 +24,16 @@ mod topology;
 
 use state::{Inner, default_max_concurrent_runs};
 
+/// Cancellation-safe lifecycle notification for a provider run.
+///
+/// The terminal event is emitted from a synchronous drop guard owned by the
+/// spawned run task, so aborting or unwinding that task cannot skip it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunLifecycleEvent {
+    Started { thread_id: String, run_id: String },
+    Terminal { thread_id: String, run_id: String },
+}
+
 #[cfg(test)]
 pub(crate) struct ProviderPersistenceProbe {
     pub ledger_messages: Vec<serde_json::Value>,
@@ -263,6 +273,11 @@ impl MultiProviderBridge {
             .await
             .as_ref()
             .map(broadcast::Sender::subscribe)
+    }
+
+    /// Subscribe to cancellation-safe provider-run lifecycle events.
+    pub fn subscribe_run_lifecycle(&self) -> broadcast::Receiver<RunLifecycleEvent> {
+        self.inner.run_lifecycle_tx.subscribe()
     }
 
     pub fn set_thread_log_sink(&self, sink: Arc<dyn ThreadLogSink>) {

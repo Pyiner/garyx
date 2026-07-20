@@ -1669,6 +1669,7 @@ async fn extract_feishu_image_attachments(
                 ));
                 if let Some(path) = persist_feishu_inbound_bytes(&name, &bytes).await {
                     attachments.push(PromptAttachment {
+                        attachment_id: None,
                         kind: PromptAttachmentKind::Image,
                         path,
                         name,

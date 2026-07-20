@@ -509,6 +509,11 @@ impl GaryxDbService {
         self.migrate_canonical_exclusion_strip_v3()?;
         self.migrate_thread_meta_schema_v2()?;
         self.migrate_endpoint_holder_dedup_v1()?;
+        self.migrate_dispatch_admission_ledger_v1()?;
+        self.recover_stale_dispatch_admissions()?;
+        self.migrate_thread_create_intent_claim_v1()?;
+        self.recover_stale_create_intents()?;
+        self.migrate_prompt_attachment_lifecycle_v1()?;
         Ok(())
     }
 

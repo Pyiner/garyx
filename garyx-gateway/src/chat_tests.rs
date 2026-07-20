@@ -16,8 +16,8 @@ use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
 use garyx_router::{
-    AdmittedRun, AgentDispatcher, ChannelBinding, EndpointBindingMutator, ThreadCreationError,
-    ThreadCreator, ThreadEnsureOptions, ThreadStore,
+    AdmittedRun, AgentDispatcher, ChannelBinding, EndpointBindingMutator, InMemoryThreadStore,
+    ThreadCreationError, ThreadCreator, ThreadEnsureOptions, ThreadStore,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -567,7 +567,7 @@ async fn test_chat_start_http_returns_accepted() {
         )
         .await
         .unwrap();
-    let router = test_router(state);
+    let router = test_router(state.clone());
 
     let req = Request::builder()
         .method("POST")
@@ -594,6 +594,189 @@ async fn test_chat_start_http_returns_accepted() {
     assert_eq!(json["threadId"], "thread::chat-start-http");
     let run_id = json["runId"].as_str().expect("run id");
     assert!(!run_id.is_empty());
+}
+
+#[tokio::test]
+async fn test_chat_start_same_durable_intent_dispatches_provider_exactly_once() {
+    let (state, _bridge, calls, _observed) = recording_state(Some("claude"), &[]).await;
+    let thread_id = "thread::durable-dispatch-count-one";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "claude",
+                "provider_type": "claude_code"
+            }),
+        )
+        .await
+        .unwrap();
+    let router = test_router(state.clone());
+    let payload = json!({
+        "threadId": thread_id,
+        "message": "deliver once",
+        "clientIntentId": "intent-provider-count-one",
+        "idempotencyScope": {
+            "identity": "integration-test-client",
+            "epoch": 1
+        },
+        "waitForResponse": false
+    });
+
+    let send = |router: Router| {
+        let body = payload.clone();
+        async move {
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/chat/start")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let payload = serde_json::from_slice::<Value>(&bytes).unwrap();
+            assert_eq!(status, StatusCode::OK, "{payload}");
+            payload
+        }
+    };
+
+    let first = send(router.clone()).await;
+    let second = send(router).await;
+    assert_eq!(first["runId"], second["runId"]);
+    assert_eq!(first["effectiveRunId"], second["effectiveRunId"]);
+    assert_eq!(first["pendingInputId"], second["pendingInputId"]);
+    assert_eq!(first["idempotencyReplay"], false);
+    assert_eq!(second["idempotencyReplay"], true);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider should receive the admitted run");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "replaying the same durable request must not dispatch the provider twice"
+    );
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .unwrap()
+        .expect("durably admitted thread");
+    assert_eq!(stored["label"], "deliver once");
+    assert!(
+        stored["workspace_dir"]
+            .as_str()
+            .is_some_and(|path| Path::new(path).is_dir())
+    );
+    assert!(
+        garyx_router::bindings_from_value(&stored)
+            .iter()
+            .any(|binding| binding.endpoint_key() == "api::main::api-user")
+    );
+    let admission = state
+        .ops
+        .garyx_db
+        .run_blocking(|db| {
+            db.dispatch_admission(&crate::garyx_db::DispatchAdmissionKey {
+                scope_identity: "integration-test-client".to_owned(),
+                scope_epoch: 1,
+                thread_id: thread_id.to_owned(),
+                kind: crate::garyx_db::DispatchAdmissionKind::ChatStart,
+                client_intent_id: "intent-provider-count-one".to_owned(),
+            })
+        })
+        .await
+        .unwrap()
+        .expect("durable admission");
+    assert_eq!(
+        admission.state,
+        crate::garyx_db::DispatchAdmissionState::Accepted
+    );
+}
+
+#[tokio::test]
+async fn test_threadless_durable_chat_atomically_claims_one_thread_and_dispatches_once() {
+    let (state, _bridge, calls, _observed) = recording_state(Some("claude"), &[]).await;
+    let router = test_router(state.clone());
+    let payload = json!({
+        "message": "create once and deliver once",
+        "clientIntentId": "threadless-intent-provider-count-one",
+        "idempotencyScope": {
+            "identity": "threadless-integration-test-client",
+            "epoch": 1
+        },
+        "accountId": "main",
+        "fromId": "api-user",
+        "waitForResponse": false
+    });
+
+    let send = |router: Router| {
+        let body = payload.clone();
+        async move {
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/chat/start")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let payload = serde_json::from_slice::<Value>(&bytes).unwrap();
+            assert_eq!(status, StatusCode::OK, "{payload}");
+            payload
+        }
+    };
+
+    let first = send(router.clone()).await;
+    let second = send(router).await;
+    assert_eq!(first["threadId"], second["threadId"]);
+    assert_eq!(first["runId"], second["runId"]);
+    assert_eq!(first["idempotencyReplay"], false);
+    assert_eq!(second["idempotencyReplay"], true);
+    let thread_id = first["threadId"].as_str().expect("thread id");
+    let keys = state
+        .threads
+        .thread_store
+        .list_keys(Some("thread::"))
+        .await
+        .unwrap();
+    assert_eq!(keys, vec![thread_id.to_owned()]);
+    let owner = state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.get_thread_channel_endpoint("api::main::api-user"))
+        .await
+        .unwrap()
+        .expect("atomic endpoint owner");
+    assert_eq!(owner.thread_id.as_deref(), Some(thread_id));
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider should receive the admitted run");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1069,7 +1252,7 @@ async fn test_chat_start_assigns_private_workspace_to_thread_without_workspace()
 #[tokio::test]
 async fn test_chat_health() {
     let state = test_state_with_provider().await;
-    let router = test_router(state);
+    let router = test_router(state.clone());
 
     let req = Request::builder()
         .uri("/api/chat/health")
@@ -1086,6 +1269,14 @@ async fn test_chat_health() {
     assert_eq!(json["status"], "ok");
     assert_eq!(json["channel"], "api");
     assert_eq!(json["bridge_ready"], true);
+    assert_eq!(json["deliveryCapabilities"]["dispatchAdmission"], 1);
+    assert_eq!(json["deliveryCapabilities"]["atomicCreateDispatch"], 1);
+    assert_eq!(json["deliveryCapabilities"]["createIntentClaim"], 1);
+    assert_eq!(json["deliveryCapabilities"]["promptAttachmentLifecycle"], 1);
+    assert_eq!(
+        json["deliveryCapabilities"]["explicitScopeRequiredForRecovery"],
+        true
+    );
 }
 
 #[tokio::test]
@@ -1104,6 +1295,27 @@ async fn test_chat_health_no_bridge() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["bridge_ready"], false);
+}
+
+#[tokio::test]
+async fn chat_health_omits_delivery_capabilities_for_unrelated_custom_store() {
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_thread_store(Arc::new(InMemoryThreadStore::new()))
+        .build();
+    let response = test_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/chat/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.get("deliveryCapabilities").is_none());
 }
 
 #[tokio::test]

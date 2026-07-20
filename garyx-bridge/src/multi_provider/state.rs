@@ -8,6 +8,7 @@ use garyx_router::{ThreadHistoryRepository, ThreadStore};
 use tokio::sync::{Mutex, RwLock, Semaphore, broadcast, mpsc};
 use tokio::task::JoinHandle;
 
+use super::RunLifecycleEvent;
 use super::persistence::ThreadPersistenceCommand;
 use crate::provider_trait::ProviderRuntime;
 
@@ -44,6 +45,8 @@ pub(super) struct Inner {
     pub(super) thread_history: Arc<RwLock<Option<Arc<ThreadHistoryRepository>>>>,
     /// Optional broadcast channel for SSE events.
     pub(super) event_tx: Arc<RwLock<Option<broadcast::Sender<String>>>>,
+    /// Always-present cancellation-safe provider-run lifecycle channel.
+    pub(super) run_lifecycle_tx: broadcast::Sender<RunLifecycleEvent>,
     /// Optional thread log sink for per-thread lifecycle logs.
     pub(super) thread_logs: Arc<StdRwLock<Option<Arc<dyn ThreadLogSink>>>>,
     /// Global admission control for run fan-out.
@@ -54,6 +57,7 @@ pub(super) struct Inner {
 impl Inner {
     pub(super) fn new(max_concurrent_runs: usize) -> Self {
         let limit = max_concurrent_runs.max(1);
+        let (run_lifecycle_tx, _) = broadcast::channel(256);
         Self {
             topology: Arc::new(RwLock::new(BridgeTopologyState::default())),
             thread_affinity: Arc::new(RwLock::new(HashMap::new())),
@@ -67,6 +71,7 @@ impl Inner {
             thread_store: Arc::new(RwLock::new(None)),
             thread_history: Arc::new(RwLock::new(None)),
             event_tx: Arc::new(RwLock::new(None)),
+            run_lifecycle_tx,
             thread_logs: Arc::new(StdRwLock::new(None)),
             run_limiter: Arc::new(Semaphore::new(limit)),
             max_concurrent_runs: limit,

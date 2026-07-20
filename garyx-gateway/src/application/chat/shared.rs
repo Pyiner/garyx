@@ -17,7 +17,12 @@ pub(crate) fn stream_input_response(
         thread_status,
         client_intent_id,
         pending_input_id,
+        effective_run_id: None,
         thread_id,
+        delivery_state: None,
+        idempotency_replay: None,
+        error: None,
+        message: None,
     }
 }
 

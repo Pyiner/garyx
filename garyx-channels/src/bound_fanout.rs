@@ -265,7 +265,7 @@ mod tests {
 
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::AgentRunRequest;
-    use garyx_router::{InMemoryThreadStore, MessageRouter, ThreadStore};
+    use garyx_router::{AtomicRecordMerge, InMemoryThreadStore, MessageRouter, ThreadStore};
     use serde_json::json;
 
     #[derive(Default)]
@@ -314,9 +314,9 @@ mod tests {
             response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
         ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
             self.store
-                .set(
-                    run.thread_id(),
-                    json!({
+                .update_many_atomic(vec![AtomicRecordMerge {
+                    thread_id: run.thread_id().to_owned(),
+                    fields: json!({
                         "channel_bindings": [
                             {
                                 "channel": "telegram",
@@ -344,7 +344,8 @@ mod tests {
                             }
                         ]
                     }),
-                )
+                    create_if_missing: false,
+                }])
                 .await
                 .unwrap();
             if let Some(callback) = response_callback {

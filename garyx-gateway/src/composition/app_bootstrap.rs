@@ -5,7 +5,7 @@ use garyx_channels::{
     SwappableDispatcher,
 };
 use garyx_models::config::GaryxConfig;
-use garyx_models::local_paths::default_custom_agents_state_path;
+use garyx_models::local_paths::{default_custom_agents_state_path, default_session_data_dir};
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogSink};
 use garyx_router::{
     InMemoryThreadStore, MessageLedgerStore, MessageRouter, ThreadCreator, ThreadHistoryRepository,
@@ -21,6 +21,7 @@ use tracing::warn;
 use crate::agent_identity::GatewayThreadCreator;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
 use crate::composition::runtime_config_projection::RuntimeConfigProjection;
+use crate::conversation_admission::ConversationAdmissionService;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
@@ -29,12 +30,14 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::meetings::MeetingService;
+use crate::prompt_attachment_lifecycle::PromptAttachmentLifecycle;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::sqlite_thread_store::SqliteThreadStore;
 use crate::thread_lifecycle::LifecycleService;
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
@@ -85,6 +88,7 @@ pub struct AppStateBuilder {
     custom_agents: Arc<CustomAgentStore>,
     garyx_db: Arc<GaryxDbService>,
     meetings_dir: PathBuf,
+    session_data_dir: PathBuf,
     /// Optional override for the active-run probe. Production leaves this `None`
     /// and `build` wires a bridge-backed probe; tests inject a fake to control
     /// which runs count as live.
@@ -128,6 +132,17 @@ impl AppStateBuilder {
             SkillsService::default_user_dir(),
             SkillsService::default_project_dir(),
         ));
+        let session_data_dir = config
+            .sessions
+            .data_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join(format!("garyx-gateway-test-data-{}", uuid::Uuid::new_v4()))
+            });
         Self {
             config,
             thread_store: None,
@@ -147,6 +162,7 @@ impl AppStateBuilder {
             garyx_db: garyx_db_default,
             meetings_dir: std::env::temp_dir()
                 .join(format!("garyx-meetings-test-{}", uuid::Uuid::new_v4())),
+            session_data_dir,
             active_run_probe: None,
             provider_runtime_ready: true,
         }
@@ -179,6 +195,15 @@ impl AppStateBuilder {
         // the builder initialize (or purge) the default data directory first.
         self.garyx_db = garyx_db;
         self.meetings_dir = garyx_models::local_paths::default_meetings_dir();
+        self.session_data_dir = self
+            .config
+            .sessions
+            .data_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(default_session_data_dir);
         self
     }
 
@@ -314,13 +339,20 @@ impl AppStateBuilder {
         // so there is nothing left for a wrapper to do. The file archive is
         // no longer a primary backend; the former projecting wrapper and
         // its startup reconciliation are retired with it.
-        let thread_store: Arc<dyn ThreadStore> = self.thread_store.clone().unwrap_or_else(|| {
-            Arc::new(crate::sqlite_thread_store::SqliteThreadStore::new(
-                self.garyx_db.clone(),
-                self.thread_history.transcript_store(),
-                active_run_probe,
-            ))
-        });
+        let (thread_store, sqlite_thread_store): (
+            Arc<dyn ThreadStore>,
+            Option<Arc<SqliteThreadStore>>,
+        ) = match self.thread_store.clone() {
+            Some(store) => (store, None),
+            None => {
+                let store = Arc::new(SqliteThreadStore::new(
+                    self.garyx_db.clone(),
+                    self.thread_history.transcript_store(),
+                    active_run_probe,
+                ));
+                (store.clone(), Some(store))
+            }
+        };
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),
             self.thread_history.transcript_store(),
@@ -330,9 +362,10 @@ impl AppStateBuilder {
         router.set_recent_thread_page_reader(Arc::new(SqlRecentThreadPageReader::new(
             self.garyx_db.clone(),
         )));
-        let endpoint_binding_mutator = Arc::new(SqlEndpointBindingMutator::new(
+        let endpoint_binding_mutator = Arc::new(SqlEndpointBindingMutator::new_with_sqlite_store(
             thread_store.clone(),
             self.garyx_db.clone(),
+            sqlite_thread_store.clone(),
         ));
         router.set_endpoint_binding_mutator(endpoint_binding_mutator.clone());
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(
@@ -408,6 +441,9 @@ impl AppStateBuilder {
         let live_config = Arc::new(LiveConfigCell::new(self.config.clone()));
         let events = EventStreamHub::new(self.event_tx);
         let lifecycle = LifecycleService::new(self.garyx_db.clone());
+        let conversation_admission = ConversationAdmissionService::new(self.garyx_db.clone());
+        let prompt_attachments =
+            PromptAttachmentLifecycle::new(self.garyx_db.clone(), self.session_data_dir.clone());
         let state = Arc::new(AppState {
             runtime: RuntimeState {
                 start_time,
@@ -419,6 +455,7 @@ impl AppStateBuilder {
             },
             threads: ThreadState {
                 thread_store,
+                sqlite_thread_store,
                 history: thread_history,
                 message_ledger: self.message_ledger,
                 router,
@@ -435,6 +472,8 @@ impl AppStateBuilder {
                 skills: self.skills,
                 custom_agents: self.custom_agents,
                 garyx_db: self.garyx_db,
+                conversation_admission,
+                prompt_attachments,
                 meetings,
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
@@ -464,6 +503,11 @@ impl AppStateBuilder {
             cron_service.set_garyx_db(state.ops.garyx_db.clone());
         }
         lifecycle.attach_state(Arc::downgrade(&state));
+        state
+            .ops
+            .prompt_attachments
+            .spawn_worker(&state.integration.bridge);
+        crate::create_resources::spawn_create_resource_cleanup_worker(&state);
 
         state
     }

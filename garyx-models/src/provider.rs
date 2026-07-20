@@ -699,6 +699,8 @@ pub enum PromptAttachmentKind {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PromptAttachment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_id: Option<String>,
     pub kind: PromptAttachmentKind,
     pub path: String,
     #[serde(default)]
@@ -839,6 +841,7 @@ pub fn file_attachments_from_paths(paths: &[String]) -> Vec<PromptAttachment> {
                 return None;
             }
             Some(PromptAttachment {
+                attachment_id: None,
                 kind: PromptAttachmentKind::File,
                 path: trimmed.to_owned(),
                 name: Path::new(trimmed)
@@ -931,6 +934,7 @@ pub fn stage_image_payloads_for_prompt(
             let path = root.join(format!("{}-{}", Uuid::new_v4(), name));
             std::fs::write(&path, bytes).ok()?;
             Some(PromptAttachment {
+                attachment_id: None,
                 kind: PromptAttachmentKind::Image,
                 path: path.to_string_lossy().into_owned(),
                 name,
@@ -968,6 +972,7 @@ pub fn stage_file_payloads_for_prompt(
             let path = root.join(format!("{}-{}", Uuid::new_v4(), name));
             std::fs::write(&path, bytes).ok()?;
             Some(PromptAttachment {
+                attachment_id: None,
                 kind: PromptAttachmentKind::File,
                 path: path.to_string_lossy().into_owned(),
                 name,

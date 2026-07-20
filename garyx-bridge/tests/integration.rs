@@ -44,6 +44,7 @@ fn telegram_logo_attachment_metadata() -> HashMap<String, serde_json::Value> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../garyx-gateway/assets/channel-icons/telegram.png");
     let attachment = PromptAttachment {
+        attachment_id: None,
         kind: PromptAttachmentKind::Image,
         path: path.to_string_lossy().into_owned(),
         name: "telegram.png".to_owned(),
@@ -72,6 +73,7 @@ fn temp_text_attachment_metadata() -> (
     )
     .expect("write temp attachment");
     let attachment = PromptAttachment {
+        attachment_id: None,
         kind: PromptAttachmentKind::File,
         path: path.to_string_lossy().into_owned(),
         name: file_name,

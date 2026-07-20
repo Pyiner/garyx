@@ -24,7 +24,7 @@ use garyx_router::{
     mark_thread_task_in_review_if_in_progress,
 };
 use serde_json::{Map, Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedMutexGuard, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -32,7 +32,6 @@ use crate::provider_common::{metadata_bool, metadata_string};
 use crate::provider_trait::{BridgeError, ProviderRuntime, ProviderRuntimeSelection};
 use crate::run_graph::{RunGraphState, execute_agent_run};
 
-use super::MultiProviderBridge;
 use super::persistence::{
     PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord, StreamingRunSnapshot,
     TerminalRunControl, ThreadPersistenceCommand, capsule_attached_control_record,
@@ -40,6 +39,7 @@ use super::persistence::{
     save_thread_messages_with_terminal_control,
 };
 use super::state::{self, ActiveThreadPersistence};
+use super::{MultiProviderBridge, RunLifecycleEvent};
 
 mod persistence_worker;
 mod session_resolve;
@@ -202,6 +202,115 @@ pub struct QueuedStreamingInput {
     pub run_id: String,
 }
 
+enum DispatchExecutionMode {
+    Legacy,
+    Durable {
+        planned_active_run_id: Option<String>,
+        pending_input_id: String,
+    },
+}
+
+struct RunLifecycleTerminalGuard {
+    tx: tokio::sync::broadcast::Sender<RunLifecycleEvent>,
+    thread_id: String,
+    run_id: String,
+}
+
+impl RunLifecycleTerminalGuard {
+    fn started(
+        tx: tokio::sync::broadcast::Sender<RunLifecycleEvent>,
+        thread_id: String,
+        run_id: String,
+    ) -> Self {
+        let _ = tx.send(RunLifecycleEvent::Started {
+            thread_id: thread_id.clone(),
+            run_id: run_id.clone(),
+        });
+        Self {
+            tx,
+            thread_id,
+            run_id,
+        }
+    }
+}
+
+impl Drop for RunLifecycleTerminalGuard {
+    fn drop(&mut self) {
+        let _ = self.tx.send(RunLifecycleEvent::Terminal {
+            thread_id: self.thread_id.clone(),
+            run_id: self.run_id.clone(),
+        });
+    }
+}
+
+/// Side-effect-free, per-thread-serialized provider handoff plan.
+///
+/// The owned dispatch guard keeps another same-thread dispatch from changing
+/// the plan between the durable database admission commit and execution.
+/// Provider completion may still race a queued plan; that becomes an
+/// ambiguous one-shot result instead of falling back to a fresh run.
+pub struct DurableDispatchPlan {
+    request: AgentRunRequest,
+    run_lease: Option<ThreadRunLease>,
+    thread_dispatch_guard: OwnedMutexGuard<()>,
+    planned_active_run_id: Option<String>,
+    pending_input_id: String,
+}
+
+/// Side-effect-free direct stream-input plan held under the same per-thread
+/// dispatch guard as chat-start planning.
+pub struct DurableStreamInputPlan {
+    thread_id: String,
+    message: String,
+    images: Option<Vec<ImagePayload>>,
+    files: Option<Vec<FilePayload>>,
+    attachments: Option<Vec<PromptAttachment>>,
+    client_intent_id: Option<String>,
+    thread_dispatch_guard: OwnedMutexGuard<()>,
+    planned_active_run_id: Option<String>,
+    pending_input_id: String,
+}
+
+impl DurableStreamInputPlan {
+    pub fn effective_run_id(&self) -> Option<&str> {
+        self.planned_active_run_id.as_deref()
+    }
+
+    pub fn pending_input_id(&self) -> Option<&str> {
+        self.planned_active_run_id
+            .as_ref()
+            .map(|_| self.pending_input_id.as_str())
+    }
+}
+
+impl DurableDispatchPlan {
+    pub fn requested_run_id(&self) -> &str {
+        &self.request.run_id
+    }
+
+    pub fn effective_run_id(&self) -> &str {
+        self.planned_active_run_id
+            .as_deref()
+            .unwrap_or(&self.request.run_id)
+    }
+
+    pub fn pending_input_id(&self) -> Option<&str> {
+        self.planned_active_run_id
+            .as_ref()
+            .map(|_| self.pending_input_id.as_str())
+    }
+
+    pub fn outcome(&self) -> AgentDispatchOutcome {
+        match &self.planned_active_run_id {
+            Some(effective_run_id) => AgentDispatchOutcome::QueuedToActiveRun {
+                effective_run_id: effective_run_id.clone(),
+                pending_input_id: self.pending_input_id.clone(),
+            },
+            None => AgentDispatchOutcome::Started,
+        }
+    }
+}
+
 async fn active_run_id_for_thread(inner: &super::state::Inner, thread_id: &str) -> Option<String> {
     inner
         .run_index
@@ -211,6 +320,22 @@ async fn active_run_id_for_thread(inner: &super::state::Inner, thread_id: &str) 
         .iter()
         .find(|(_, candidate_thread_id)| candidate_thread_id.as_str() == thread_id)
         .map(|(run_id, _)| run_id.clone())
+}
+
+async fn planned_active_run_id_for_thread(
+    inner: &super::state::Inner,
+    thread_id: &str,
+) -> Option<String> {
+    if let Some(run_id) = inner
+        .active_thread_persistence
+        .lock()
+        .await
+        .get(thread_id)
+        .map(|handle| handle.run_id.clone())
+    {
+        return Some(run_id);
+    }
+    active_run_id_for_thread(inner, thread_id).await
 }
 
 async fn has_active_streaming_run_for_thread(inner: &super::state::Inner, thread_id: &str) -> bool {
@@ -755,12 +880,171 @@ impl MultiProviderBridge {
         Ok((provider_key, provider, requested_provider))
     }
 
+    async fn acquire_thread_dispatch_guard(&self, thread_id: &str) -> OwnedMutexGuard<()> {
+        let guard = {
+            let mut guards = self.inner.thread_dispatch_guards.lock().await;
+            guards
+                .entry(thread_id.to_owned())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        guard.lock_owned().await
+    }
+
+    /// Plan a correlated dispatch without crossing the provider side-effect
+    /// boundary. The returned value owns the bridge's same-thread ordering
+    /// guard until it is executed or dropped.
+    pub async fn prepare_durable_dispatch(
+        &self,
+        run: garyx_router::AdmittedRun,
+        pending_input_id: String,
+    ) -> Result<DurableDispatchPlan, String> {
+        let (request, run_lease) = run.into_dispatch_parts();
+        if let Some(lease) = run_lease.as_ref() {
+            lease.ensure_valid().map_err(|error| error.to_string())?;
+        }
+        let thread_dispatch_guard = self.acquire_thread_dispatch_guard(&request.thread_id).await;
+        let planned_active_run_id =
+            planned_active_run_id_for_thread(&self.inner, &request.thread_id).await;
+        Ok(DurableDispatchPlan {
+            request,
+            run_lease,
+            thread_dispatch_guard,
+            planned_active_run_id,
+            pending_input_id,
+        })
+    }
+
+    /// Cross the provider handoff boundary exactly once for a previously
+    /// prepared durable plan.
+    pub async fn execute_durable_dispatch(
+        &self,
+        plan: DurableDispatchPlan,
+        response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    ) -> Result<AgentDispatchOutcome, String> {
+        let DurableDispatchPlan {
+            request,
+            run_lease,
+            thread_dispatch_guard,
+            planned_active_run_id,
+            pending_input_id,
+        } = plan;
+        self.start_admitted_run_with_guard(
+            request,
+            run_lease,
+            response_callback,
+            thread_dispatch_guard,
+            DispatchExecutionMode::Durable {
+                planned_active_run_id,
+                pending_input_id,
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    /// Plan direct follow-up input without staging a pending record or calling
+    /// the provider. A missing active run is a stable, side-effect-free plan.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_durable_stream_input(
+        &self,
+        thread_id: String,
+        message: String,
+        images: Option<Vec<ImagePayload>>,
+        files: Option<Vec<FilePayload>>,
+        attachments: Option<Vec<PromptAttachment>>,
+        client_intent_id: Option<String>,
+        pending_input_id: String,
+    ) -> DurableStreamInputPlan {
+        let thread_dispatch_guard = self.acquire_thread_dispatch_guard(&thread_id).await;
+        let planned_active_run_id = planned_active_run_id_for_thread(&self.inner, &thread_id).await;
+        DurableStreamInputPlan {
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            client_intent_id,
+            thread_dispatch_guard,
+            planned_active_run_id,
+            pending_input_id,
+        }
+    }
+
+    /// Execute a direct stream-input plan exactly once. Any untyped provider
+    /// failure after planning an active run is ambiguous and never retried.
+    pub async fn execute_durable_stream_input(
+        &self,
+        plan: DurableStreamInputPlan,
+    ) -> Result<Option<QueuedStreamingInput>, String> {
+        let DurableStreamInputPlan {
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            client_intent_id,
+            thread_dispatch_guard,
+            planned_active_run_id,
+            pending_input_id,
+        } = plan;
+        let Some(expected_run_id) = planned_active_run_id else {
+            drop(thread_dispatch_guard);
+            return Ok(None);
+        };
+        let queued = self
+            .add_streaming_input_with_metadata_exact(
+                &thread_id,
+                &message,
+                images,
+                files,
+                attachments,
+                client_intent_id,
+                HashMap::new(),
+                pending_input_id.clone(),
+            )
+            .await;
+        drop(thread_dispatch_guard);
+        match queued {
+            Some(queued)
+                if queued.run_id == expected_run_id
+                    && queued.pending_input_id == pending_input_id =>
+            {
+                Ok(Some(queued))
+            }
+            Some(queued) => Err(format!(
+                "durable stream-input handoff changed plan: expected run {expected_run_id} / pending {pending_input_id}, got run {} / pending {}",
+                queued.run_id, queued.pending_input_id
+            )),
+            None => Err("durable stream-input provider handoff outcome is ambiguous".to_owned()),
+        }
+    }
+
     /// Start an agent run and forward optional image payloads to providers.
     pub(crate) async fn start_admitted_run(
         &self,
         request: AgentRunRequest,
+        run_lease: Option<ThreadRunLease>,
+        response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    ) -> Result<AgentDispatchOutcome, BridgeError> {
+        let thread_dispatch_guard = self.acquire_thread_dispatch_guard(&request.thread_id).await;
+        self.start_admitted_run_with_guard(
+            request,
+            run_lease,
+            response_callback,
+            thread_dispatch_guard,
+            DispatchExecutionMode::Legacy,
+        )
+        .await
+    }
+
+    async fn start_admitted_run_with_guard(
+        &self,
+        request: AgentRunRequest,
         mut run_lease: Option<ThreadRunLease>,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+        thread_dispatch_guard: OwnedMutexGuard<()>,
+        dispatch_mode: DispatchExecutionMode,
     ) -> Result<AgentDispatchOutcome, BridgeError> {
         if let Some(lease) = run_lease.as_ref() {
             lease
@@ -778,14 +1062,6 @@ impl MultiProviderBridge {
             workspace_dir,
             requested_provider,
         } = request;
-        let thread_dispatch_guard = {
-            let mut guards = self.inner.thread_dispatch_guards.lock().await;
-            guards
-                .entry(thread_id.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let thread_dispatch_guard = thread_dispatch_guard.lock().await;
         let thread_log_id = resolve_thread_log_thread_id(&thread_id, &metadata);
         let thread_logs = self.thread_log_sink();
         let effective_workspace_dir =
@@ -829,18 +1105,52 @@ impl MultiProviderBridge {
                 .ensure_valid()
                 .map_err(|error| BridgeError::SessionError(error.to_string()))?;
         }
-        if let Some(queued) = self
-            .add_streaming_input_with_metadata(
-                &thread_id,
-                &message,
-                images.clone(),
-                None,
-                queued_attachments,
-                metadata_string(&metadata, "client_intent_id"),
-                dispatch_attribution_metadata(&metadata, &run_id),
-            )
-            .await
-        {
+        let queued = match &dispatch_mode {
+            DispatchExecutionMode::Legacy => {
+                self.add_streaming_input_with_metadata(
+                    &thread_id,
+                    &message,
+                    images.clone(),
+                    None,
+                    queued_attachments.clone(),
+                    metadata_string(&metadata, "client_intent_id"),
+                    dispatch_attribution_metadata(&metadata, &run_id),
+                )
+                .await
+            }
+            DispatchExecutionMode::Durable {
+                planned_active_run_id: Some(_),
+                pending_input_id,
+            } => {
+                self.add_streaming_input_with_metadata_exact(
+                    &thread_id,
+                    &message,
+                    images.clone(),
+                    None,
+                    queued_attachments.clone(),
+                    metadata_string(&metadata, "client_intent_id"),
+                    dispatch_attribution_metadata(&metadata, &run_id),
+                    pending_input_id.clone(),
+                )
+                .await
+            }
+            DispatchExecutionMode::Durable {
+                planned_active_run_id: None,
+                ..
+            } => None,
+        };
+        if let Some(queued) = queued {
+            if let DispatchExecutionMode::Durable {
+                planned_active_run_id: Some(expected_run_id),
+                ..
+            } = &dispatch_mode
+                && queued.run_id != *expected_run_id
+            {
+                return Err(BridgeError::SessionError(format!(
+                    "durable queued handoff changed active run from {expected_run_id} to {}",
+                    queued.run_id
+                )));
+            }
             if let Some(lease) = run_lease.as_ref() {
                 lease
                     .ensure_valid()
@@ -867,7 +1177,20 @@ impl MultiProviderBridge {
                 pending_input_id: queued.pending_input_id,
             });
         }
-        if has_active_streaming_run_for_thread(&self.inner, &thread_id).await {
+        if matches!(
+            &dispatch_mode,
+            DispatchExecutionMode::Durable {
+                planned_active_run_id: Some(_),
+                ..
+            }
+        ) {
+            return Err(BridgeError::SessionError(
+                "durable queued provider handoff outcome is ambiguous".to_owned(),
+            ));
+        }
+        if matches!(&dispatch_mode, DispatchExecutionMode::Legacy)
+            && has_active_streaming_run_for_thread(&self.inner, &thread_id).await
+        {
             let mut interrupted = provider.interrupt_streaming_session(&thread_id).await;
             let mut aborted_runs = Vec::new();
             if !interrupted {
@@ -1065,7 +1388,13 @@ impl MultiProviderBridge {
             );
         }
 
+        let run_lifecycle_guard = RunLifecycleTerminalGuard::started(
+            self.inner.run_lifecycle_tx.clone(),
+            thread_id.to_owned(),
+            run_id.to_owned(),
+        );
         let task: JoinHandle<()> = tokio::spawn(async move {
+            let _run_lifecycle_guard = run_lifecycle_guard;
             let _run_lease = run_lease;
             let _permit = run_permit;
             let mut graph_state = RunGraphState::new(
@@ -1660,6 +1989,59 @@ impl MultiProviderBridge {
         client_intent_id: Option<String>,
         origin_metadata: HashMap<String, Value>,
     ) -> Option<QueuedStreamingInput> {
+        self.add_streaming_input_with_metadata_mode(
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            client_intent_id,
+            origin_metadata,
+            None,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn add_streaming_input_with_metadata_exact(
+        &self,
+        thread_id: &str,
+        message: &str,
+        images: Option<Vec<ImagePayload>>,
+        files: Option<Vec<FilePayload>>,
+        attachments: Option<Vec<PromptAttachment>>,
+        client_intent_id: Option<String>,
+        origin_metadata: HashMap<String, Value>,
+        pending_input_id: String,
+    ) -> Option<QueuedStreamingInput> {
+        self.add_streaming_input_with_metadata_mode(
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            client_intent_id,
+            origin_metadata,
+            Some(pending_input_id),
+            false,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn add_streaming_input_with_metadata_mode(
+        &self,
+        thread_id: &str,
+        message: &str,
+        images: Option<Vec<ImagePayload>>,
+        files: Option<Vec<FilePayload>>,
+        attachments: Option<Vec<PromptAttachment>>,
+        client_intent_id: Option<String>,
+        origin_metadata: HashMap<String, Value>,
+        pending_input_id: Option<String>,
+        allow_retry: bool,
+    ) -> Option<QueuedStreamingInput> {
         let provider_key = self
             .inner
             .thread_affinity
@@ -1699,7 +2081,8 @@ impl MultiProviderBridge {
             let provider_message =
                 render_streaming_user_message_for_provider(&self.inner, thread_id, message).await;
             let pending_input = PendingUserInput {
-                id: format!("queued_input:{}", uuid::Uuid::new_v4()),
+                id: pending_input_id
+                    .unwrap_or_else(|| format!("queued_input:{}", uuid::Uuid::new_v4())),
                 bridge_run_id: run_id.clone(),
                 text: message.to_owned(),
                 content: build_pending_input_content(message, &image_payloads, &staged_attachments),
@@ -1728,21 +2111,27 @@ impl MultiProviderBridge {
                 },
                 attachments: staged_attachments,
             };
-            if queue_streaming_input_with_retry(
-                &self.inner,
-                provider.clone(),
-                thread_id,
-                provider_input,
-            )
-            .await
-            {
+            let accepted = if allow_retry {
+                queue_streaming_input_with_retry(
+                    &self.inner,
+                    provider.clone(),
+                    thread_id,
+                    provider_input,
+                )
+                .await
+            } else {
+                provider
+                    .add_streaming_input(thread_id, provider_input)
+                    .await
+            };
+            if accepted {
                 return Some(QueuedStreamingInput {
                     pending_input_id: pending_input.id,
                     run_id,
                 });
             }
 
-            if let Some(tx) = persistence_tx {
+            if allow_retry && let Some(tx) = persistence_tx {
                 let _ = tx.send(ThreadPersistenceCommand::DropPendingInput {
                     pending_input_id: pending_input.id,
                 });

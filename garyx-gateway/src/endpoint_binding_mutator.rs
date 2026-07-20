@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -14,11 +15,15 @@ use garyx_router::{
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 
-use crate::garyx_db::GaryxDbService;
+use crate::garyx_db::{DispatchAdmissionRecord, GaryxDbService};
+use crate::sqlite_thread_store::{
+    AtomicCreateCommit, AtomicExistingDispatchCommit, SqliteThreadStore,
+};
 
 pub(crate) struct SqlEndpointBindingMutator {
     thread_store: Arc<dyn ThreadStore>,
     garyx_db: Arc<GaryxDbService>,
+    sqlite_thread_store: Option<Arc<SqliteThreadStore>>,
     mutation_lock: Mutex<()>,
     binding_freezes: Arc<StdMutex<HashMap<String, u64>>>,
     next_freeze_token: AtomicU64,
@@ -56,9 +61,18 @@ impl Drop for ThreadBindingFreezeGuard {
 
 impl SqlEndpointBindingMutator {
     pub(crate) fn new(thread_store: Arc<dyn ThreadStore>, garyx_db: Arc<GaryxDbService>) -> Self {
+        Self::new_with_sqlite_store(thread_store, garyx_db, None)
+    }
+
+    pub(crate) fn new_with_sqlite_store(
+        thread_store: Arc<dyn ThreadStore>,
+        garyx_db: Arc<GaryxDbService>,
+        sqlite_thread_store: Option<Arc<SqliteThreadStore>>,
+    ) -> Self {
         Self {
             thread_store,
             garyx_db,
+            sqlite_thread_store,
             mutation_lock: Mutex::new(()),
             binding_freezes: Arc::new(StdMutex::new(HashMap::new())),
             next_freeze_token: AtomicU64::new(0),
@@ -216,6 +230,232 @@ impl SqlEndpointBindingMutator {
                         subject_thread_id.to_owned()
                     }
                 },
+                message: error.to_string(),
+            })
+    }
+
+    /// Create a new target, move its requested endpoint, update the registry,
+    /// and commit the create/dispatch ledgers in the store's shared sorted-key
+    /// transaction domain.
+    pub(crate) async fn commit_created_thread_with_binding(
+        &self,
+        command: AtomicCreateCommit,
+        requested_binding: ChannelBinding,
+    ) -> Result<EndpointBindResult, EndpointBindingMutationError> {
+        let _guard = self.mutation_lock.lock().await;
+        self.commit_created_thread_with_binding_locked(command, requested_binding)
+            .await
+    }
+
+    /// Resolve a public bot selector only after the endpoint mutation lock is
+    /// held. This makes enabled endpoint/config state part of the same
+    /// serialized decision as the final projected owner lookup.
+    pub(crate) async fn commit_created_thread_with_binding_resolver<F, Fut>(
+        &self,
+        command: AtomicCreateCommit,
+        resolver: F,
+    ) -> Result<EndpointBindResult, EndpointBindingMutationError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<ChannelBinding, EndpointBindingMutationError>>,
+    {
+        let _guard = self.mutation_lock.lock().await;
+        let requested_binding = resolver().await?;
+        self.commit_created_thread_with_binding_locked(command, requested_binding)
+            .await
+    }
+
+    async fn commit_created_thread_with_binding_locked(
+        &self,
+        mut command: AtomicCreateCommit,
+        requested_binding: ChannelBinding,
+    ) -> Result<EndpointBindResult, EndpointBindingMutationError> {
+        let target_thread_id = command.target_thread_id.trim().to_owned();
+        if self.thread_is_frozen(&target_thread_id) {
+            return Err(EndpointBindingMutationError::ThreadLifecycleInProgress(
+                target_thread_id,
+            ));
+        }
+        let store = self.sqlite_thread_store.as_ref().ok_or_else(|| {
+            EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.clone(),
+                message: "atomic create requires the SQLite thread store".to_owned(),
+            }
+        })?;
+        let endpoint_key = requested_binding.endpoint_key();
+        let owner = self.projected_owner(&endpoint_key).await?;
+        let binding = if let Some(owner) = owner.as_ref() {
+            let mut binding = binding_from_endpoint(owner);
+            if requested_binding.last_inbound_at.is_some() {
+                binding.last_inbound_at = requested_binding.last_inbound_at;
+            }
+            if requested_binding.last_delivery_at.is_some() {
+                binding.last_delivery_at = requested_binding.last_delivery_at;
+            }
+            binding
+        } else {
+            requested_binding
+        };
+        validate_thread_accepts_bot_binding(
+            &target_thread_id,
+            &command.target_data,
+            &binding.channel,
+            &binding.account_id,
+        )
+        .map_err(EndpointBindingMutationError::Incompatible)?;
+
+        let previous_thread_id = owner
+            .as_ref()
+            .and_then(|owner| owner.thread_id.clone())
+            .filter(|previous| previous != &target_thread_id);
+        if let Some(previous_thread_id) = previous_thread_id.as_deref() {
+            let mut previous = self
+                .thread_store
+                .get(previous_thread_id)
+                .await
+                .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                    thread_id: previous_thread_id.to_owned(),
+                    message: error.to_string(),
+                })?
+                .ok_or_else(|| {
+                    EndpointBindingMutationError::PreviousOwnerUnavailable(
+                        previous_thread_id.to_owned(),
+                    )
+                })?;
+            if !remove_binding(&mut previous, &endpoint_key) {
+                return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                    previous_thread_id.to_owned(),
+                ));
+            }
+            command.merges.push(AtomicRecordMerge {
+                thread_id: previous_thread_id.to_owned(),
+                fields: binding_fields_of(&previous),
+                create_if_missing: false,
+            });
+        }
+        upsert_binding(&mut command.target_data, binding.clone());
+        command.merges.push(self.registry_merge(&binding).await?);
+        store
+            .commit_create_intent_atomic(command)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.clone(),
+                message: error.to_string(),
+            })?;
+        Ok(EndpointBindResult {
+            thread_id: target_thread_id,
+            previous_thread_id,
+            binding,
+            changed: true,
+        })
+    }
+
+    /// Move/update an existing endpoint and publish a correlated dispatch in
+    /// the same sorted record-lock and SQLite transaction domain.
+    pub(crate) async fn commit_existing_dispatch_with_binding(
+        &self,
+        mut command: AtomicExistingDispatchCommit,
+        requested_binding: ChannelBinding,
+    ) -> Result<DispatchAdmissionRecord, EndpointBindingMutationError> {
+        let _guard = self.mutation_lock.lock().await;
+        let target_thread_id = command.target_thread_id.trim().to_owned();
+        if self.thread_is_frozen(&target_thread_id) {
+            return Err(EndpointBindingMutationError::ThreadLifecycleInProgress(
+                target_thread_id,
+            ));
+        }
+        let store = self.sqlite_thread_store.as_ref().ok_or_else(|| {
+            EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.clone(),
+                message: "durable dispatch requires the SQLite thread store".to_owned(),
+            }
+        })?;
+        let endpoint_key = requested_binding.endpoint_key();
+        let owner = self.projected_owner(&endpoint_key).await?;
+        let binding = if let Some(owner) = owner.as_ref() {
+            let mut binding = binding_from_endpoint(owner);
+            if requested_binding.last_inbound_at.is_some() {
+                binding.last_inbound_at = requested_binding.last_inbound_at;
+            }
+            if requested_binding.last_delivery_at.is_some() {
+                binding.last_delivery_at = requested_binding.last_delivery_at;
+            }
+            binding
+        } else {
+            requested_binding
+        };
+        if self.is_archived(&target_thread_id).await? {
+            return Err(EndpointBindingMutationError::TargetArchived(
+                target_thread_id,
+            ));
+        }
+        let mut target = self
+            .thread_store
+            .get(&target_thread_id)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.clone(),
+                message: error.to_string(),
+            })?
+            .ok_or_else(|| {
+                EndpointBindingMutationError::TargetNotFound(target_thread_id.clone())
+            })?;
+        command
+            .target_patch
+            .apply_to(&mut target)
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.clone(),
+                message: error.to_string(),
+            })?;
+        validate_thread_accepts_bot_binding(
+            &target_thread_id,
+            &target,
+            &binding.channel,
+            &binding.account_id,
+        )
+        .map_err(EndpointBindingMutationError::Incompatible)?;
+
+        let previous_thread_id = owner
+            .as_ref()
+            .and_then(|owner| owner.thread_id.clone())
+            .filter(|previous| previous != &target_thread_id);
+        if let Some(previous_thread_id) = previous_thread_id.as_deref() {
+            let mut previous = self
+                .thread_store
+                .get(previous_thread_id)
+                .await
+                .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                    thread_id: previous_thread_id.to_owned(),
+                    message: error.to_string(),
+                })?
+                .ok_or_else(|| {
+                    EndpointBindingMutationError::PreviousOwnerUnavailable(
+                        previous_thread_id.to_owned(),
+                    )
+                })?;
+            if !remove_binding(&mut previous, &endpoint_key) {
+                return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                    previous_thread_id.to_owned(),
+                ));
+            }
+            command.merges.push(AtomicRecordMerge {
+                thread_id: previous_thread_id.to_owned(),
+                fields: binding_fields_of(&previous),
+                create_if_missing: false,
+            });
+        }
+        upsert_binding(&mut target, binding.clone());
+        command.merges.push(AtomicRecordMerge {
+            thread_id: target_thread_id.clone(),
+            fields: binding_fields_of(&target),
+            create_if_missing: false,
+        });
+        command.merges.push(self.registry_merge(&binding).await?);
+        store
+            .commit_existing_dispatch_atomic(command)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id,
                 message: error.to_string(),
             })
     }

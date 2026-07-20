@@ -21,6 +21,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use crate::composition::runtime_config_projection::RuntimeConfigProjection;
+use crate::conversation_admission::ConversationAdmissionService;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
@@ -29,10 +30,12 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::meetings::MeetingService;
+use crate::prompt_attachment_lifecycle::PromptAttachmentLifecycle;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::sqlite_thread_store::SqliteThreadStore;
 use crate::thread_lifecycle::LifecycleService;
 
 pub struct RuntimeState {
@@ -46,6 +49,7 @@ pub struct RuntimeState {
 
 pub struct ThreadState {
     pub thread_store: Arc<dyn ThreadStore>,
+    pub(crate) sqlite_thread_store: Option<Arc<SqliteThreadStore>>,
     pub history: Arc<ThreadHistoryRepository>,
     pub message_ledger: Arc<MessageLedgerStore>,
     pub router: Arc<Mutex<MessageRouter>>,
@@ -63,6 +67,8 @@ pub struct OpsState {
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
     pub garyx_db: Arc<GaryxDbService>,
+    pub(crate) conversation_admission: ConversationAdmissionService,
+    pub(crate) prompt_attachments: PromptAttachmentLifecycle,
     pub meetings: Arc<MeetingService>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
@@ -479,6 +485,7 @@ impl AppState {
             },
             threads: ThreadState {
                 thread_store: self.threads.thread_store.clone(),
+                sqlite_thread_store: self.threads.sqlite_thread_store.clone(),
                 history: self.threads.history.clone(),
                 message_ledger: self.threads.message_ledger.clone(),
                 router: self.threads.router.clone(),
@@ -495,6 +502,8 @@ impl AppState {
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
+                conversation_admission: self.ops.conversation_admission.clone(),
+                prompt_attachments: self.ops.prompt_attachments.clone(),
                 meetings: self.ops.meetings.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),

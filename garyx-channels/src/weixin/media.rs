@@ -183,6 +183,7 @@ pub(super) async fn extract_inline_image_attachments(
             continue;
         };
         attachments.push(PromptAttachment {
+            attachment_id: None,
             kind: PromptAttachmentKind::Image,
             path,
             name,
@@ -241,6 +242,7 @@ pub(super) async fn extract_cdn_image_attachments(
                     continue;
                 };
                 attachments.push(PromptAttachment {
+                    attachment_id: None,
                     kind: PromptAttachmentKind::Image,
                     path,
                     name,

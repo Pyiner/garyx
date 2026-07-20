@@ -285,6 +285,7 @@ impl HostInboundHandler {
                         continue;
                     }
                     prompt_attachments.push(PromptAttachment {
+                        attachment_id: None,
                         kind: PromptAttachmentKind::Image,
                         path: trimmed.to_owned(),
                         name: Path::new(trimmed)

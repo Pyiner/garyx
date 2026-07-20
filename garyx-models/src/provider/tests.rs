@@ -361,6 +361,7 @@ fn build_prompt_message_with_attachments_appends_instructions() {
     let message = build_prompt_message_with_attachments(
         "Please summarize these.",
         &[PromptAttachment {
+            attachment_id: None,
             kind: PromptAttachmentKind::File,
             path: "/tmp/report.md".to_owned(),
             name: "report.md".to_owned(),
@@ -377,12 +378,14 @@ fn build_user_content_from_parts_prefers_structured_attachments() {
         "Check both",
         &[
             PromptAttachment {
+                attachment_id: None,
                 kind: PromptAttachmentKind::Image,
                 path: "/tmp/shot.png".to_owned(),
                 name: "shot.png".to_owned(),
                 media_type: "image/png".to_owned(),
             },
             PromptAttachment {
+                attachment_id: None,
                 kind: PromptAttachmentKind::File,
                 path: "/tmp/report.pdf".to_owned(),
                 name: "report.pdf".to_owned(),

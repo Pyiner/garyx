@@ -239,6 +239,7 @@ pub(super) async fn enrich_inbound_request_with_discord_attachments(
         };
         if downloaded.is_image {
             image_attachments.push(PromptAttachment {
+                attachment_id: None,
                 kind: PromptAttachmentKind::Image,
                 path: downloaded.path,
                 name: downloaded.name,

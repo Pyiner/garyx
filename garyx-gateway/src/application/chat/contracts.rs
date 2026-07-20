@@ -7,6 +7,13 @@ use garyx_router::is_thread_key;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IdempotencyScope {
+    pub identity: String,
+    pub epoch: i64,
+}
+
 /// WebSocket `start` payload fields.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +29,8 @@ pub struct ChatRequest {
     pub thread_id: Option<String>,
     #[serde(default, alias = "clientIntentId", alias = "client_intent_id")]
     pub client_intent_id: Option<String>,
+    #[serde(default)]
+    pub idempotency_scope: Option<IdempotencyScope>,
     #[serde(default)]
     pub bot: Option<String>,
     #[serde(default = "default_from_id")]
@@ -82,6 +91,8 @@ pub struct StreamInputRequest {
     pub thread_id: Option<String>,
     #[serde(default, alias = "clientIntentId", alias = "client_intent_id")]
     pub client_intent_id: Option<String>,
+    #[serde(default)]
+    pub idempotency_scope: Option<IdempotencyScope>,
     pub message: String,
     #[serde(default)]
     pub attachments: Vec<PromptAttachment>,
@@ -98,6 +109,16 @@ pub struct StartChatResponse {
     pub status: String,
     pub run_id: String,
     pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispatch_outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_input_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_replay: Option<bool>,
 }
 
 /// POST /api/chat/stream-input response body.
@@ -111,7 +132,17 @@ pub struct StreamInputResponse {
     pub client_intent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_input_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_run_id: Option<String>,
     pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_replay: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// POST /api/chat/interrupt request body.

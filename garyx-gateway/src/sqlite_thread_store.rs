@@ -21,7 +21,10 @@ use garyx_router::{
 };
 use serde_json::Value;
 
-use crate::garyx_db::{GaryxDbResult, GaryxDbService, ThreadRecordProjections};
+use crate::garyx_db::{
+    CreateIntentKey, DispatchAdmissionKey, DispatchAdmissionRecord, DispatchOutcome, GaryxDbResult,
+    GaryxDbService, NewDispatchAdmission, ThreadRecordProjections,
+};
 use crate::recent_thread_projection::{
     ActiveRunProbe, recent_thread_draft_from_thread_data_with_active_run, resolve_active_run_id,
 };
@@ -55,6 +58,32 @@ pub(crate) struct SqliteThreadStore {
     /// cannot interleave (folded in from RecentThreadProjectingStore).
     key_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     run_coordinator: Arc<ThreadRunCoordinator>,
+}
+
+pub(crate) struct AtomicCreateDispatchLedger {
+    pub key: DispatchAdmissionKey,
+    pub request_fingerprint: String,
+    pub requested_run_id: String,
+    pub effective_run_id: String,
+    pub pending_input_id: Option<String>,
+    pub outcome: DispatchOutcome,
+    pub attachment_claims: Vec<crate::garyx_db::PromptAttachmentClaim>,
+}
+
+pub(crate) struct AtomicCreateCommit {
+    pub create_key: CreateIntentKey,
+    pub create_request_fingerprint: String,
+    pub target_thread_id: String,
+    pub target_data: Value,
+    pub merges: Vec<garyx_router::AtomicRecordMerge>,
+    pub dispatch: Option<AtomicCreateDispatchLedger>,
+}
+
+pub(crate) struct AtomicExistingDispatchCommit {
+    pub target_thread_id: String,
+    pub target_patch: ThreadRecordPatch,
+    pub merges: Vec<garyx_router::AtomicRecordMerge>,
+    pub dispatch: AtomicCreateDispatchLedger,
 }
 
 impl SqliteThreadStore {
@@ -146,6 +175,213 @@ impl SqliteThreadStore {
                 }
                 other => ThreadStoreError::Backend(other.to_string()),
             })
+    }
+
+    /// Shared sorted-key write domain for atomic thread creation. The new
+    /// target, optional endpoint-owner merges, every derived projection,
+    /// create claim, and dispatch admission reach one SQLite commit.
+    pub(crate) async fn commit_create_intent_atomic(
+        &self,
+        command: AtomicCreateCommit,
+    ) -> Result<(), ThreadStoreError> {
+        let mut keys = command
+            .merges
+            .iter()
+            .map(|entry| entry.thread_id.clone())
+            .chain(std::iter::once(command.target_thread_id.clone()))
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        let locks = keys
+            .iter()
+            .map(|key| self.key_lock(key))
+            .collect::<Vec<_>>();
+        let mut guards = Vec::with_capacity(locks.len());
+        for lock in &locks {
+            guards.push(lock.lock().await);
+        }
+
+        let mut writes = Vec::with_capacity(keys.len());
+        for key in keys {
+            let mut data = if key == command.target_thread_id {
+                if self.get(&key).await?.is_some() {
+                    return Err(ThreadStoreError::Backend(format!(
+                        "reserved thread id already exists: {key}"
+                    )));
+                }
+                command.target_data.clone()
+            } else {
+                let create_if_missing = command
+                    .merges
+                    .iter()
+                    .filter(|entry| entry.thread_id == key)
+                    .all(|entry| entry.create_if_missing);
+                match self.get(&key).await? {
+                    Some(data) => data,
+                    None if create_if_missing => Value::Object(serde_json::Map::new()),
+                    None => return Err(ThreadStoreError::NotFound(key)),
+                }
+            };
+            for entry in command.merges.iter().filter(|entry| entry.thread_id == key) {
+                if let (Some(target), Some(fields)) =
+                    (data.as_object_mut(), entry.fields.as_object())
+                {
+                    for (field, value) in fields {
+                        target.insert(field.clone(), value.clone());
+                    }
+                }
+            }
+            strip_retired_record_fields(&mut data);
+            let body =
+                serde_json::to_string(&data).map_err(|error| ThreadStoreError::Serialization {
+                    thread_id: key.clone(),
+                    message: error.to_string(),
+                })?;
+            let updated_at = data
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let projections = self.derive_projections(&key, &data).await;
+            writes.push(crate::garyx_db::ThreadRecordWrite {
+                key,
+                body,
+                updated_at,
+                projections,
+            });
+        }
+
+        let db = Arc::clone(&self.garyx_db);
+        let create_key = command.create_key;
+        let create_fingerprint = command.create_request_fingerprint;
+        let target_thread_id = command.target_thread_id;
+        let dispatch = command.dispatch;
+        db.run_blocking(move |db| {
+            let dispatch_input = dispatch.as_ref().map(|dispatch| NewDispatchAdmission {
+                key: &dispatch.key,
+                request_fingerprint: &dispatch.request_fingerprint,
+                requested_run_id: Some(&dispatch.requested_run_id),
+                effective_run_id: Some(&dispatch.effective_run_id),
+                pending_input_id: dispatch.pending_input_id.as_deref(),
+                outcome: Some(dispatch.outcome),
+            });
+            db.commit_create_intent_records(
+                &create_key,
+                &create_fingerprint,
+                &target_thread_id,
+                writes,
+                dispatch_input,
+                dispatch
+                    .as_ref()
+                    .map(|dispatch| dispatch.attachment_claims.as_slice())
+                    .unwrap_or_default(),
+            )
+        })
+        .await
+        .map_err(|error| match error {
+            crate::garyx_db::GaryxDbError::ThreadArchived(thread_id) => {
+                ThreadStoreError::Archived(thread_id)
+            }
+            other => ThreadStoreError::Backend(other.to_string()),
+        })?;
+        drop(guards);
+        Ok(())
+    }
+
+    /// Shared sorted-key admission domain for an existing thread. Prepared
+    /// top-level changes, an optional endpoint mutation batch, projections,
+    /// the ledger row, and attachment claims have one commit point.
+    pub(crate) async fn commit_existing_dispatch_atomic(
+        &self,
+        command: AtomicExistingDispatchCommit,
+    ) -> Result<DispatchAdmissionRecord, ThreadStoreError> {
+        let mut keys = command
+            .merges
+            .iter()
+            .map(|entry| entry.thread_id.clone())
+            .chain(std::iter::once(command.target_thread_id.clone()))
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        let locks = keys
+            .iter()
+            .map(|key| self.key_lock(key))
+            .collect::<Vec<_>>();
+        let mut guards = Vec::with_capacity(locks.len());
+        for lock in &locks {
+            guards.push(lock.lock().await);
+        }
+
+        let mut writes = Vec::with_capacity(keys.len());
+        for key in keys {
+            let create_if_missing = command
+                .merges
+                .iter()
+                .filter(|entry| entry.thread_id == key)
+                .all(|entry| entry.create_if_missing);
+            let mut data = match self.get(&key).await? {
+                Some(data) => data,
+                None if key != command.target_thread_id && create_if_missing => {
+                    Value::Object(serde_json::Map::new())
+                }
+                None => return Err(ThreadStoreError::NotFound(key)),
+            };
+            if key == command.target_thread_id {
+                command.target_patch.apply_to(&mut data)?;
+            }
+            for entry in command.merges.iter().filter(|entry| entry.thread_id == key) {
+                if let (Some(target), Some(fields)) =
+                    (data.as_object_mut(), entry.fields.as_object())
+                {
+                    for (field, value) in fields {
+                        target.insert(field.clone(), value.clone());
+                    }
+                }
+            }
+            strip_retired_record_fields(&mut data);
+            let body =
+                serde_json::to_string(&data).map_err(|error| ThreadStoreError::Serialization {
+                    thread_id: key.clone(),
+                    message: error.to_string(),
+                })?;
+            let updated_at = data
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let projections = self.derive_projections(&key, &data).await;
+            writes.push(crate::garyx_db::ThreadRecordWrite {
+                key,
+                body,
+                updated_at,
+                projections,
+            });
+        }
+
+        let db = Arc::clone(&self.garyx_db);
+        let dispatch = command.dispatch;
+        let record = db
+            .run_blocking(move |db| {
+                db.insert_dispatch_admission_with_records_for_existing_thread(
+                    NewDispatchAdmission {
+                        key: &dispatch.key,
+                        request_fingerprint: &dispatch.request_fingerprint,
+                        requested_run_id: Some(&dispatch.requested_run_id),
+                        effective_run_id: Some(&dispatch.effective_run_id),
+                        pending_input_id: dispatch.pending_input_id.as_deref(),
+                        outcome: Some(dispatch.outcome),
+                    },
+                    writes,
+                    &dispatch.attachment_claims,
+                )
+            })
+            .await
+            .map_err(|error| match error {
+                crate::garyx_db::GaryxDbError::ThreadArchived(thread_id) => {
+                    ThreadStoreError::Archived(thread_id)
+                }
+                other => ThreadStoreError::Backend(other.to_string()),
+            })?;
+        drop(guards);
+        Ok(record)
     }
 }
 

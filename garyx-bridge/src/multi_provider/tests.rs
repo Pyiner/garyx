@@ -23,7 +23,7 @@ use garyx_router::{
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
 
-use super::MultiProviderBridge;
+use super::{MultiProviderBridge, RunLifecycleEvent};
 use crate::provider_trait::{
     BridgeError, ClearSessionOutcome, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
 };
@@ -1900,6 +1900,7 @@ async fn run_inline_streaming_uses_global_run_limiter() {
 #[tokio::test]
 async fn test_start_and_complete_run() {
     let bridge = MultiProviderBridge::new();
+    let mut lifecycle = bridge.subscribe_run_lifecycle();
     let p = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
     bridge.register_provider("p1", p).await;
     bridge.set_default_provider_key("p1").await;
@@ -1912,8 +1913,26 @@ async fn test_start_and_complete_run() {
         .await;
     assert!(result.is_ok());
 
-    // Give the spawned task time to complete.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), lifecycle.recv())
+            .await
+            .expect("run start lifecycle timeout")
+            .expect("run lifecycle channel"),
+        RunLifecycleEvent::Started {
+            thread_id: "sess::tg::123".to_owned(),
+            run_id: "run-1".to_owned(),
+        }
+    );
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), lifecycle.recv())
+            .await
+            .expect("run terminal lifecycle timeout")
+            .expect("run lifecycle channel"),
+        RunLifecycleEvent::Terminal {
+            thread_id: "sess::tg::123".to_owned(),
+            run_id: "run-1".to_owned(),
+        }
+    );
 
     // Run should have been cleaned up.
     assert!(!bridge.is_run_active("run-1").await);
@@ -2225,7 +2244,8 @@ async fn test_start_run_rejected_when_bridge_overloaded() {
 #[tokio::test]
 async fn test_abort_run() {
     let bridge = MultiProviderBridge::new();
-    let p = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    let mut lifecycle = bridge.subscribe_run_lifecycle();
+    let p = Arc::new(MockProvider::with_delay(ProviderType::ClaudeCode, 5_000));
     bridge.register_provider("p1", p).await;
     bridge.set_default_provider_key("p1").await;
 
@@ -2237,9 +2257,23 @@ async fn test_abort_run() {
         .await
         .unwrap();
 
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), lifecycle.recv())
+            .await
+            .expect("run start lifecycle timeout")
+            .expect("run lifecycle channel"),
+        RunLifecycleEvent::Started { ref run_id, .. } if run_id == "run-1"
+    ));
+
     let aborted = bridge.abort_run("run-1").await;
-    // Either task was cancelled or cleanup happened.
-    assert!(aborted || !bridge.is_run_active("run-1").await);
+    assert!(aborted);
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), lifecycle.recv())
+            .await
+            .expect("run terminal lifecycle timeout")
+            .expect("run lifecycle channel"),
+        RunLifecycleEvent::Terminal { ref run_id, .. } if run_id == "run-1"
+    ));
 }
 
 #[tokio::test]
@@ -3549,6 +3583,7 @@ async fn test_start_agent_run_preserves_metadata_attachments_for_active_stream_f
         .expect("provider should emit the initial streamed delta");
 
     let attachment = PromptAttachment {
+        attachment_id: None,
         kind: PromptAttachmentKind::File,
         path: "/tmp/garyx-test/inbound/spec.txt".to_owned(),
         name: "spec.txt".to_owned(),

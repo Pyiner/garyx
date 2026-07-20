@@ -212,6 +212,7 @@ async fn build_image_attachment_from_file(
     }
 
     Some(PromptAttachment {
+        attachment_id: None,
         kind: PromptAttachmentKind::Image,
         path: local_path.to_string_lossy().to_string(),
         name,
