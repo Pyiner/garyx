@@ -396,8 +396,10 @@ impl GaryxDbService {
                 marker.unwrap_or_default()
             )));
         }
-        tx.execute_batch(DISPATCH_ADMISSIONS_TABLE_SQL)?;
-        tx.execute_batch(DISPATCH_ADMISSIONS_INDEX_SQL)?;
+        if marker.is_none() {
+            tx.execute_batch(DISPATCH_ADMISSIONS_TABLE_SQL)?;
+            tx.execute_batch(DISPATCH_ADMISSIONS_INDEX_SQL)?;
+        }
         validate_dispatch_admission_schema(&tx)?;
         if marker.is_none() {
             record_projection_state_tx(
@@ -751,6 +753,33 @@ mod tests {
             .migrate_dispatch_admission_ledger_v1()
             .expect_err("committed marker must validate its physical schema");
         assert!(matches!(error, GaryxDbError::Configuration(_)));
+    }
+
+    #[test]
+    fn committed_marker_does_not_recreate_a_missing_ledger() {
+        let db = GaryxDbService::memory().expect("memory db");
+        db.migrate_dispatch_admission_ledger_v1()
+            .expect("first migration");
+        db.conn()
+            .unwrap()
+            .execute_batch("DROP TABLE dispatch_admissions")
+            .unwrap();
+
+        let error = db
+            .migrate_dispatch_admission_ledger_v1()
+            .expect_err("a committed marker must not repair a missing ledger");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+        let table_count: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'table' AND name = 'dispatch_admissions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 0, "marked schema drift must remain unrepaired");
     }
 
     #[test]

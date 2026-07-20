@@ -447,10 +447,18 @@ impl GaryxDbService {
                 marker.unwrap_or_default()
             )));
         }
-        tx.execute_batch(CREATE_INTENTS_TABLE_SQL)?;
-        tx.execute_batch(CREATE_INTENTS_INDEX_SQL)?;
-        tx.execute_batch(CREATE_RESOURCES_TABLE_SQL)?;
-        tx.execute_batch(CREATE_RESOURCES_INDEX_SQL)?;
+        let foreign_keys: i64 = tx.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+        if foreign_keys != 1 {
+            return Err(GaryxDbError::Configuration(
+                "create-intent migration requires PRAGMA foreign_keys=ON".to_owned(),
+            ));
+        }
+        if marker.is_none() {
+            tx.execute_batch(CREATE_INTENTS_TABLE_SQL)?;
+            tx.execute_batch(CREATE_INTENTS_INDEX_SQL)?;
+            tx.execute_batch(CREATE_RESOURCES_TABLE_SQL)?;
+            tx.execute_batch(CREATE_RESOURCES_INDEX_SQL)?;
+        }
         validate_schema(&tx)?;
         if marker.is_none() {
             record_projection_state_tx(
@@ -1118,6 +1126,86 @@ mod tests {
             query_plan.contains("idx_thread_create_intents_scope_intent"),
             "create-intent recovery must remain a point lookup: {query_plan}"
         );
+    }
+
+    #[test]
+    fn committed_marker_does_not_recreate_a_missing_claim_index() {
+        let db = GaryxDbService::memory().unwrap();
+        db.migrate_thread_create_intent_claim_v1().unwrap();
+        db.conn()
+            .unwrap()
+            .execute_batch("DROP INDEX idx_thread_create_intents_scope_intent")
+            .unwrap();
+
+        let error = db
+            .migrate_thread_create_intent_claim_v1()
+            .expect_err("a committed marker must not repair a missing claim index");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+        let index_count: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_thread_create_intents_scope_intent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 0, "marked schema drift must remain unrepaired");
+    }
+
+    #[test]
+    fn migration_requires_foreign_keys_and_resource_owner_is_restricted() {
+        let disabled = GaryxDbService::memory().unwrap();
+        disabled
+            .conn()
+            .unwrap()
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        let error = disabled
+            .migrate_thread_create_intent_claim_v1()
+            .expect_err("create-intent ownership requires foreign keys");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+
+        let db = GaryxDbService::memory().unwrap();
+        db.migrate_thread_create_intent_claim_v1().unwrap();
+        let key = key("restricted-resource-owner");
+        let claim = db
+            .reserve_create_intent(NewCreateIntent {
+                key: &key,
+                thread_id: "thread::restricted-resource-owner",
+                request_fingerprint: "fingerprint",
+                command_kind: CreateCommandKind::CreateOnly,
+                dispatch_client_intent_id: None,
+            })
+            .unwrap();
+        assert!(
+            db.mark_create_intent_preparing(&key, "test-boot", "2099-01-01T00:00:00Z")
+                .unwrap()
+        );
+        db.begin_create_resource_materialization(
+            &key,
+            CreateResourceKind::ManagedWorkspace,
+            "/tmp/test-restricted-thread-workspace",
+            "owner",
+        )
+        .unwrap();
+
+        let error = db
+            .conn()
+            .unwrap()
+            .execute(
+                "DELETE FROM thread_create_intents WHERE id = ?1",
+                params![claim.id],
+            )
+            .expect_err("ON DELETE RESTRICT must preserve a referenced create intent");
+        match error {
+            rusqlite::Error::SqliteFailure(code, _) => {
+                assert_eq!(code.code, rusqlite::ErrorCode::ConstraintViolation)
+            }
+            other => panic!("expected a SQLite constraint violation, got {other:?}"),
+        }
+        assert!(db.create_intent(&key).unwrap().is_some());
     }
 
     #[test]

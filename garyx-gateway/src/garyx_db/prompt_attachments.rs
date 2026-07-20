@@ -211,6 +211,16 @@ fn validate_prompt_attachment_schema(tx: &Transaction<'_>) -> GaryxDbResult<()> 
     Ok(())
 }
 
+fn parse_prompt_attachment_timestamp(field: &str, value: &str) -> GaryxDbResult<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|error| {
+            GaryxDbError::Configuration(format!(
+                "invalid prompt attachment {field} timestamp '{value}': {error}"
+            ))
+        })
+}
+
 fn decode_prompt_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<PromptAttachmentRecord> {
     let state = row.get::<_, String>(9)?;
     Ok(PromptAttachmentRecord {
@@ -261,6 +271,7 @@ pub(super) fn claim_prompt_attachments_tx(
     owner: &PromptAttachmentOwner<'_>,
     now: &str,
 ) -> GaryxDbResult<()> {
+    let claim_time = parse_prompt_attachment_timestamp("claim time", now)?;
     for claim in claims {
         let record = tx
             .query_row(
@@ -303,7 +314,7 @@ pub(super) fn claim_prompt_attachments_tx(
                 claim.attachment_id
             )));
         }
-        if record.expires_at.as_str() <= now {
+        if parse_prompt_attachment_timestamp("expiry", &record.expires_at)? <= claim_time {
             return Err(GaryxDbError::BadRequest(format!(
                 "prompt attachment expired: {}",
                 claim.attachment_id
@@ -369,8 +380,10 @@ impl GaryxDbService {
                 marker.unwrap_or_default()
             )));
         }
-        tx.execute_batch(PROMPT_ATTACHMENTS_TABLE_SQL)?;
-        tx.execute_batch(PROMPT_ATTACHMENTS_INDEX_SQL)?;
+        if marker.is_none() {
+            tx.execute_batch(PROMPT_ATTACHMENTS_TABLE_SQL)?;
+            tx.execute_batch(PROMPT_ATTACHMENTS_INDEX_SQL)?;
+        }
         validate_prompt_attachment_schema(&tx)?;
         if marker.is_none() {
             record_projection_state_tx(
@@ -619,6 +632,82 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.to_string().contains("already claimed"));
+    }
+
+    #[test]
+    fn committed_marker_does_not_recreate_a_missing_attachment_index() {
+        let db = GaryxDbService::memory().unwrap();
+        db.migrate_prompt_attachment_lifecycle_v1().unwrap();
+        db.conn()
+            .unwrap()
+            .execute_batch("DROP INDEX idx_prompt_attachments_owner_run")
+            .unwrap();
+
+        let error = db
+            .migrate_prompt_attachment_lifecycle_v1()
+            .expect_err("a committed marker must not repair a missing attachment index");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+        let index_count: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_prompt_attachments_owner_run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 0, "marked schema drift must remain unrepaired");
+    }
+
+    #[test]
+    fn claim_expiry_compares_rfc3339_instants_at_submillisecond_precision() {
+        let db = GaryxDbService::memory().unwrap();
+        db.migrate_prompt_attachment_lifecycle_v1().unwrap();
+        db.insert_ready_prompt_attachments(&[
+            ready(
+                "attachment:precision-valid",
+                "2026-07-21T00:00:00.123456+00:00",
+            ),
+            ready(
+                "attachment:precision-expired",
+                "2026-07-21T00:00:00.123456+00:00",
+            ),
+        ])
+        .unwrap();
+        let claim = |attachment_id: &str| PromptAttachmentClaim {
+            attachment_id: attachment_id.to_owned(),
+            expected_relative_path: format!("{attachment_id}/payload"),
+            expected_kind: "file".to_owned(),
+            expected_sha256: "abcd".to_owned(),
+        };
+        fn owner<'a>(intent: &'a str, run: &'a str) -> PromptAttachmentOwner<'a> {
+            PromptAttachmentOwner {
+                scope_identity: "attachment-test",
+                scope_epoch: 1,
+                thread_id: "thread::precision",
+                kind: DispatchAdmissionKind::ChatStart,
+                client_intent_id: Some(intent),
+                requested_run_id: Some(run),
+                effective_run_id: run,
+                lease_expires_at: "2026-07-21T02:00:00Z",
+            }
+        }
+
+        db.claim_prompt_attachments(
+            &[claim("attachment:precision-valid")],
+            owner("intent-valid", "run-valid"),
+            "2026-07-21T00:00:00.123Z",
+        )
+        .expect("123.456ms expiry remains valid at 123ms");
+        let error = db
+            .claim_prompt_attachments(
+                &[claim("attachment:precision-expired")],
+                owner("intent-expired", "run-expired"),
+                "2026-07-21T00:00:00.124Z",
+            )
+            .expect_err("123.456ms expiry is expired at 124ms");
+        assert!(error.to_string().contains("expired"));
     }
 
     #[test]
