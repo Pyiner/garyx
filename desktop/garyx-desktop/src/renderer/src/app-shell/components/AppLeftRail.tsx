@@ -36,7 +36,7 @@ type AppLeftRailProps = {
   settingsActiveTab: SettingsTabId;
   selectedAutomationId: string | null;
   activeBotConversationGroupId: string | null;
-  activeWorkspaceThreadGroupPath: string | null;
+  gatewayHome: string | null;
   botGroups: ReturnType<typeof buildBotGroups>;
   pinnedThreadRows: PinnedThreadRow[];
   pinnedThreadSyncPending: boolean;
@@ -61,11 +61,12 @@ type AppLeftRailProps = {
   onPinnedThreadDragCancel: () => void;
   onReorderPinnedThreads: (threadIds: string[]) => void;
   onToggleBotConversationGroup: (group: ReturnType<typeof buildBotGroups>[number]) => void;
-  onToggleWorkspaceThreadGroup: (workspacePath: string) => void;
   onAddBot: () => void;
   onAddWorkspace: () => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
+  onRequestRenameWorkspace: (workspace: DesktopWorkspace) => void;
+  onPinWorkspace: (workspace: DesktopWorkspace, pinned: boolean) => void;
   setWorkspaceMenuOpenPath: Dispatch<SetStateAction<string | null>>;
   onOpenSettings: () => void;
   onSidebarResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
@@ -86,7 +87,7 @@ export function AppLeftRail({
   settingsActiveTab,
   selectedAutomationId,
   activeBotConversationGroupId,
-  activeWorkspaceThreadGroupPath,
+  gatewayHome,
   botGroups,
   pinnedThreadRows,
   pinnedThreadSyncPending,
@@ -111,7 +112,8 @@ export function AppLeftRail({
   onPinnedThreadDragCancel,
   onReorderPinnedThreads,
   onToggleBotConversationGroup,
-  onToggleWorkspaceThreadGroup,
+  onRequestRenameWorkspace,
+  onPinWorkspace,
   onAddBot,
   onAddWorkspace,
   onCreateThreadForWorkspace,
@@ -251,11 +253,14 @@ export function AppLeftRail({
             />
 
             <WorkspaceThreadSidebar
-              activeWorkspacePath={activeWorkspaceThreadGroupPath}
+              activeThreadId={visibleSelectedThreadId}
+              gatewayHome={gatewayHome}
               onAddWorkspace={onAddWorkspace}
               onCreateThreadForWorkspace={onCreateThreadForWorkspace}
+              onOpenThread={onOpenPinnedThread}
+              onPinWorkspace={onPinWorkspace}
               onRequestRemoveWorkspace={onRequestRemoveWorkspace}
-              onToggleWorkspaceThreads={onToggleWorkspaceThreadGroup}
+              onRequestRenameWorkspace={onRequestRenameWorkspace}
               setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
               workspaceMenuOpenPath={workspaceMenuOpenPath}
               workspaceMutation={workspaceMutation}

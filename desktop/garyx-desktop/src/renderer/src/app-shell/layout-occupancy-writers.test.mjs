@@ -63,7 +63,6 @@ const legacySetterNames = [
   "setInspectorOpenLegacy",
   "setRecentThreadsRailOpenLegacy",
   "setBotConversationGroupIdLegacy",
-  "setWorkspaceConversationPathLegacy",
 ];
 
 test("all legacy occupancy setters have exactly one centralized call site", () => {
@@ -87,7 +86,10 @@ test("all legacy occupancy setters have exactly one centralized call site", () =
     "setInspectorOpen",
     "setRecentThreadsRailOpen",
     "setBotConversationGroupId",
+    // The workspace conversation rail itself is retired: the whole setter
+    // family must never come back (inline thread subtree replaced it).
     "setWorkspaceConversationPath",
+    "setWorkspaceConversationPathLegacy",
   ]) {
     assert.doesNotMatch(
       appShell,
@@ -150,10 +152,6 @@ test("route, capsule, and cleanup writers enter the same bridge", () => {
   );
   assert.match(
     appShell,
-    /onToggleWorkspaceThreadGroup=\{[\s\S]*?commitLegacyLayoutIntent\("user-route"/,
-  );
-  assert.match(
-    appShell,
     /onCloseCapsuleTab=\{[\s\S]*?commitLegacyLayoutIntent\("user-route"/,
   );
   assert.match(
@@ -163,7 +161,9 @@ test("route, capsule, and cleanup writers enter the same bridge", () => {
   assert.equal(
     (appShell.match(/commitLegacyLayoutIntent\("system-cleanup"/g) || [])
       .length,
-    6,
+    5,
+    // Was 6 before the workspace conversation rail retired; its stale-path
+    // cleanup writer went with it.
     "route, data, Escape, and capsule cleanup paths are normalized",
   );
 });

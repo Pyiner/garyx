@@ -52,6 +52,7 @@ import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
+import { WorkspaceRenameDialog } from "../components/WorkspaceRenameDialog";
 // Side-effect import: wires cross-store capsule cache invalidation (a `/serve`
 // 404 in either the HTML or thumbnail store tombstones the other for that id).
 import "./capsule-cache";
@@ -66,7 +67,6 @@ import {
   type SideToolWorkspaceFile,
 } from "./components/SideToolsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
-import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
 import { RecentConversationSidebar } from "../RecentConversationSidebar";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import {
@@ -241,8 +241,7 @@ type ThreadEntrySelectionSource =
   | "pinned"
   | "recent"
   | "bot-root"
-  | "bot-conversation"
-  | "workspace-conversation";
+  | "bot-conversation";
 
 type LegacyLayoutIntentState = {
   globalSidebarOpen: boolean;
@@ -258,16 +257,9 @@ type LegacyLayoutIntentUpdate = (
 function conversationRailIntentFromLegacyState(input: {
   botConversationGroupId: string | null;
   recentThreadsRailOpen: boolean;
-  workspaceConversationPath: string | null;
 }): ConversationRailIntent {
   if (input.botConversationGroupId) {
     return { kind: "bot", groupId: input.botConversationGroupId };
-  }
-  if (input.workspaceConversationPath) {
-    return {
-      kind: "workspace",
-      workspacePath: input.workspaceConversationPath,
-    };
   }
   return input.recentThreadsRailOpen ? { kind: "recent" } : { kind: "closed" };
 }
@@ -278,8 +270,6 @@ function conversationRailKey(intent: ConversationRailIntent): string | null {
       return "recent";
     case "bot":
       return `bot:${intent.groupId}`;
-    case "workspace":
-      return `workspace:${intent.workspacePath.trim().toLowerCase()}`;
     case "closed":
       return null;
   }
@@ -719,8 +709,6 @@ export function AppShell() {
   const [botConversationGroupId, setBotConversationGroupIdLegacy] = useState<
     string | null
   >(null);
-  const [workspaceConversationPath, setWorkspaceConversationPathLegacy] =
-    useState<string | null>(null);
   const [recentThreadsRailOpen, setRecentThreadsRailOpenLegacy] =
     useState(restoredLayoutOccupancy?.conversationRail ?? false);
   // Batch 6c-2b: contentView is a SELECTOR over the committed route — the
@@ -767,6 +755,9 @@ export function AppShell() {
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
+  const [workspaceRenameTarget, setWorkspaceRenameTarget] =
+    useState<DesktopWorkspace | null>(null);
+  const [workspaceRenameSaving, setWorkspaceRenameSaving] = useState(false);
   const [, setPinnedThreadsVersion] = useState(0);
   const [addWorkspaceDialog, setAddWorkspaceDialog] = useState<{
     source: "new-thread" | "task";
@@ -1161,11 +1152,7 @@ export function AppShell() {
   const activeHistoryPagination = activeThreadMirror?.historyPagination || null;
   const secondaryConversationRailRequested =
     contentView === "thread" &&
-    Boolean(
-      botConversationGroupId ||
-        workspaceConversationPath ||
-        recentThreadsRailOpen,
-    );
+    Boolean(botConversationGroupId || recentThreadsRailOpen);
   const {
     compactSidebarViewport,
     currentConversationWidth,
@@ -1200,7 +1187,6 @@ export function AppShell() {
       ? conversationRailIntentFromLegacyState({
           botConversationGroupId,
           recentThreadsRailOpen,
-          workspaceConversationPath,
         })
       : { kind: "closed" },
     inspectorOpen,
@@ -1224,11 +1210,6 @@ export function AppShell() {
       setBotConversationGroupIdLegacy(
         nextApplied.conversationRail.kind === "bot"
           ? nextApplied.conversationRail.groupId
-          : null,
-      );
-      setWorkspaceConversationPathLegacy(
-        nextApplied.conversationRail.kind === "workspace"
-          ? nextApplied.conversationRail.workspacePath
           : null,
       );
     },
@@ -1842,10 +1823,6 @@ export function AppShell() {
     visibleThreadEntrySelectionSource === "bot-conversation"
       ? visibleSelectedThreadId
       : null;
-  const workspaceConversationSelectedThreadId =
-    visibleThreadEntrySelectionSource === "workspace-conversation"
-      ? visibleSelectedThreadId
-      : null;
   const threadFavorites = useThreadFavorites({
     enabled: Boolean(desktopState?.entitiesGatewayUrl),
     gatewayScope: desktopState?.entitiesGatewayUrl || "",
@@ -2108,49 +2085,6 @@ export function AppShell() {
       ) || null
     );
   }, [botConversationGroupId, visibleBotGroups]);
-  useEffect(() => {
-    if (!workspaceConversationPath) {
-      return;
-    }
-    const workspaceExists = workspaceThreadGroups.some((group) => {
-      const workspacePath = group.workspace.path || group.workspace.name;
-      return (
-        workspacePath.trim().toLowerCase() ===
-        workspaceConversationPath.trim().toLowerCase()
-      );
-    });
-    if (!workspaceExists) {
-      commitLegacyLayoutIntent("system-cleanup", (current) => ({
-        ...current,
-        conversationRail: { kind: "closed" },
-      }));
-    }
-  }, [
-    commitLegacyLayoutIntent,
-    workspaceConversationPath,
-    workspaceThreadGroups,
-  ]);
-  const activeWorkspaceThreadGroup = useMemo(() => {
-    if (
-      activeBotConversationGroup ||
-      !workspaceConversationPath
-    ) {
-      return null;
-    }
-    return (
-      workspaceThreadGroups.find((group) => {
-        const workspacePath = group.workspace.path || group.workspace.name;
-        return (
-          workspacePath.trim().toLowerCase() ===
-          workspaceConversationPath.trim().toLowerCase()
-        );
-      }) || null
-    );
-  }, [
-    activeBotConversationGroup,
-    workspaceConversationPath,
-    workspaceThreadGroups,
-  ]);
   const appShellClassName = [
     "app-shell",
     sidebarCollapsed ? "sidebar-collapsed" : null,
@@ -3725,6 +3659,60 @@ export function AppShell() {
     await handleRemoveWorkspace(workspace.path || "");
   }
 
+  async function handlePinWorkspace(
+    workspace: DesktopWorkspace,
+    pinned: boolean,
+  ) {
+    if (!workspace.path) {
+      return;
+    }
+    setError(null);
+    setWorkspaceMenuOpenPath(null);
+    try {
+      const nextState = await requestDesktopState(() =>
+        window.garyxDesktop.pinWorkspace({
+          workspacePath: workspace.path || "",
+          pinned,
+        }),
+      );
+      setDesktopState(nextState);
+    } catch (pinError) {
+      setError(
+        pinError instanceof Error ? pinError.message : "Failed to pin workspace",
+      );
+    }
+  }
+
+  async function handleRenameWorkspaceSubmit(
+    workspace: DesktopWorkspace,
+    name: string,
+  ) {
+    if (!workspace.path) {
+      setWorkspaceRenameTarget(null);
+      return;
+    }
+    setError(null);
+    setWorkspaceRenameSaving(true);
+    try {
+      const nextState = await requestDesktopState(() =>
+        window.garyxDesktop.renameWorkspace({
+          workspacePath: workspace.path || "",
+          name,
+        }),
+      );
+      setDesktopState(nextState);
+      setWorkspaceRenameTarget(null);
+    } catch (renameError) {
+      setError(
+        renameError instanceof Error
+          ? renameError.message
+          : "Failed to rename workspace",
+      );
+    } finally {
+      setWorkspaceRenameSaving(false);
+    }
+  }
+
   async function archiveThreadOptimistically(input?: {
     threadId?: string | null;
     endpointKey?: string | null;
@@ -4593,9 +4581,7 @@ export function AppShell() {
         activeBotConversationGroupId={
           shouldShowConversationRail ? botConversationGroupId : null
         }
-        activeWorkspaceThreadGroupPath={
-          shouldShowConversationRail ? workspaceConversationPath : null
-        }
+        gatewayHome={desktopState?.gatewayHome ?? null}
         botGroups={visibleBotGroups}
         formatThreadTimestamp={formatThreadTimestamp}
         isAutomationView={isAutomationView}
@@ -4669,23 +4655,11 @@ export function AppShell() {
                 : { kind: "bot", groupId: group.id },
           }));
         }}
-        onToggleWorkspaceThreadGroup={(workspacePath) => {
-          commitLegacyLayoutIntent("user-route", (current) => {
-            const currentKey =
-              current.conversationRail.kind === "workspace"
-                ? current.conversationRail.workspacePath
-                    .trim()
-                    .toLowerCase()
-                : "";
-            const nextKey = workspacePath.trim().toLowerCase();
-            return {
-              ...current,
-              conversationRail:
-                currentKey === nextKey
-                  ? { kind: "closed" }
-                  : { kind: "workspace", workspacePath },
-            };
-          });
+        onPinWorkspace={(workspace, pinned) => {
+          void handlePinWorkspace(workspace, pinned);
+        }}
+        onRequestRenameWorkspace={(workspace) => {
+          setWorkspaceRenameTarget(workspace);
         }}
         onAddBot={() => {
           void openAddBotDialog();
@@ -4774,34 +4748,7 @@ export function AppShell() {
           railResizing={railResizing}
           selectedThreadId={botConversationSelectedThreadId}
         />
-      ) : conversationRailPresented && activeWorkspaceThreadGroup ? (
-        <WorkspaceConversationSidebar
-          deletingThreadId={deletingThreadId}
-          desktopState={desktopState}
-          formatThreadTimestamp={formatThreadTimestamp}
-          group={activeWorkspaceThreadGroup}
-          isThreadRuntimeBusy={(threadId) => {
-            return isRuntimeBusy(
-              selectThreadRuntime(messageState, threadId)?.state,
-            );
-          }}
-          onClose={() => {
-            commitLegacyLayoutIntent("user-route", (current) => ({
-              ...current,
-              conversationRail: { kind: "closed" },
-            }));
-          }}
-          onArchiveThread={(threadId) => {
-            void handleDeleteThread(threadId);
-          }}
-          onOpenThread={(threadId) => {
-            void openExistingThread(threadId, "workspace-conversation");
-          }}
-          onRailResizeStart={handleRailResizeStart}
-          railResizing={railResizing}
-          selectedThreadId={workspaceConversationSelectedThreadId}
-          threadAvatarCatalog={threadAvatarCatalog}
-        />
+
       ) : conversationRailPresented && recentThreadsRailOpen ? (
         <RecentConversationSidebar
           collapseLabel={t("Collapse recent threads")}
@@ -4863,6 +4810,14 @@ export function AppShell() {
         onCreateChannel={handleAddChannelAccount}
         ref={addBotDialogRef}
         workspaces={workspacePickerWorkspaces}
+      />
+      <WorkspaceRenameDialog
+        onCancel={() => setWorkspaceRenameTarget(null)}
+        onSubmit={(workspace, name) => {
+          void handleRenameWorkspaceSubmit(workspace, name);
+        }}
+        saving={workspaceRenameSaving}
+        workspace={workspaceRenameTarget}
       />
       <WorkspacePathPickerDialog
         open={Boolean(addWorkspaceDialog)}

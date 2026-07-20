@@ -1,8 +1,7 @@
 export type ConversationRailIntent =
   | { kind: "closed" }
   | { kind: "recent" }
-  | { kind: "bot"; groupId: string }
-  | { kind: "workspace"; workspacePath: string };
+  | { kind: "bot"; groupId: string };
 
 export function deferConversationRailUnmount(
   current: ConversationRailIntent,

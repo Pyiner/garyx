@@ -672,3 +672,230 @@
 .workspace-row:hover .sidebar-section-chevron {
   opacity: 1;
 }
+
+/* ---------------------------------------------------------------------------
+ * Codex-parity workspace rows (captured 2026-07-21; see
+ * docs/design/desktop-workspace-management.md §2). Row grammar: 24px row,
+ * 10px radius, 4px padding, 13px/445 label; hover reveals the actions
+ * cluster; chevron expands an inline thread subtree.
+ * ------------------------------------------------------------------------ */
+
+.workspace-thread-block .workspace-row {
+  min-height: 24px;
+  padding: 0 4px;
+  border-radius: 10px;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 445;
+}
+
+.workspace-thread-block .workspace-row-main {
+  min-height: 24px;
+}
+
+.workspace-thread-block .workspace-row-copy {
+  gap: 4px;
+}
+
+.workspace-thread-block .workspace-name {
+  font-size: 13px;
+  font-weight: 445;
+  line-height: 1.4286;
+}
+
+.workspace-pin-flag {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-token-description-foreground);
+  flex: none;
+}
+
+/* Actions cluster appears on row hover, like the Codex project row. */
+.workspace-thread-block .workspace-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.workspace-thread-block .workspace-row-shell:hover .workspace-actions,
+.workspace-thread-block .workspace-actions:has([data-state="open"]),
+.workspace-thread-block .workspace-actions:focus-within {
+  opacity: 1;
+}
+
+.workspace-row-chevron .workspace-chevron {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.workspace-row-chevron .workspace-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+/* Inline thread subtree under an expanded workspace row. */
+.workspace-thread-subtree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 1px 0 3px;
+  margin-left: 14px;
+  border-left: 1px solid var(--color-token-border);
+}
+
+.workspace-thread-subtree-row {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  margin: 0;
+  border-radius: 0 10px 10px 0;
+  background: transparent;
+  color: color-mix(in oklab, var(--color-token-text-primary) 78%, transparent);
+  font-size: 13px;
+  font-weight: 445;
+  line-height: 1.4286;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.workspace-thread-subtree-row:hover {
+  background: var(--color-token-row-hover);
+  color: var(--color-token-text-primary);
+}
+
+.workspace-thread-subtree-row.is-active {
+  background: var(--color-token-row-selected);
+  color: var(--color-token-text-primary);
+}
+
+.workspace-thread-subtree-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-thread-subtree-empty {
+  padding: 3px 8px;
+  font-size: var(--text-xs);
+  color: var(--color-token-description-foreground);
+}
+
+/* Bounded section with a show-more/less toggle (Codex overflow behavior). */
+.workspace-list-overflow-toggle {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  border: 0;
+  margin: 0;
+  padding: 2px 8px 2px 27px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-token-description-foreground);
+  font-size: 13px;
+  font-weight: 445;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-list-overflow-toggle:hover {
+  background: var(--color-token-row-hover);
+  color: var(--color-token-text-primary);
+}
+
+/* Delay-appear workspace context card: same frosted surface recipe as the
+ * shared Codex-parity menus. */
+.workspace-hover-card {
+  z-index: 60;
+  min-width: 232px;
+  max-width: 300px;
+  padding: 12px 14px;
+  border-radius: var(--menu-surface-radius);
+  background: var(--menu-surface-bg);
+  backdrop-filter: blur(var(--menu-surface-blur));
+  -webkit-backdrop-filter: blur(var(--menu-surface-blur));
+  box-shadow: var(--menu-surface-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 445;
+  color: var(--color-token-text-primary);
+}
+
+.workspace-hover-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace-hover-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 510;
+}
+
+.workspace-hover-card-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-token-description-foreground);
+  cursor: pointer;
+}
+
+.workspace-hover-card-pin:hover {
+  background: var(--color-token-row-hover);
+  color: var(--color-token-text-primary);
+}
+
+.workspace-hover-card-pin.is-pinned {
+  color: var(--color-token-text-primary);
+}
+
+.workspace-hover-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+}
+
+.workspace-hover-card-branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-hover-card-path {
+  display: block;
+  width: 100%;
+  border: 0;
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-token-text-primary) 4%, transparent);
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: copy;
+}
+
+.workspace-hover-card-path:hover {
+  color: var(--color-token-text-primary);
+}

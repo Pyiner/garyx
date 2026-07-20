@@ -665,6 +665,16 @@ function mapThreadMetadataSummary(
       "workspace_dir",
       `${context}.workspace_dir`,
     ),
+    rootWorkspacePath: optionalNullableStringField(
+      record,
+      "root_workspace_path",
+      `${context}.root_workspace_path`,
+    ),
+    workspaceOrigin: optionalNullableStringField(
+      record,
+      "workspace_origin",
+      `${context}.workspace_origin`,
+    ),
     messageCount,
     agentId: optionalNullableStringField(record, "agent_id", `${context}.agent_id`),
     recentRunId: optionalNullableStringField(

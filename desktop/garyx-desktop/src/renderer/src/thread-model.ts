@@ -315,7 +315,10 @@ export function buildWorkspaceThreadGroups(input: {
 
   const threadsByWorkspacePath = new Map<string, DesktopThreadSummary[]>();
   for (const thread of input.state.threads) {
-    const key = workspacePathKey(thread.workspacePath);
+    // Server-derived membership: worktree threads group under their source
+    // workspace, implicit threads under none. workspacePath is only a
+    // fallback for rows from gateways predating root_workspace_path.
+    const key = workspacePathKey(thread.rootWorkspacePath ?? thread.workspacePath);
     if (!key) {
       continue;
     }

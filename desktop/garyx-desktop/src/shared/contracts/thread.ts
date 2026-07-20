@@ -18,6 +18,13 @@ export interface DesktopThreadSummary {
   updatedAt: string;
   lastMessagePreview: string;
   workspacePath?: string | null;
+  /** Server-derived root-workspace membership: worktree threads map back to
+   *  their source workspace, implicit threads to null. Clients never derive
+   *  this locally. */
+  rootWorkspacePath?: string | null;
+  /** Server-owned provenance: "explicit" (user-chosen directory, including
+   *  worktrees) or "implicit" (Garyx-managed No-workspace directory). */
+  workspaceOrigin?: string | null;
   messageCount?: number;
   agentId?: string | null;
   recentRunId?: string | null;

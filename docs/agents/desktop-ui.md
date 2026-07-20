@@ -54,6 +54,11 @@
 - Keep the desktop app shell horizontal at every supported window width.
   Narrow windows collapse a rail; they must never stack the whole sidebar
   above the conversation or turn the viewport into a document-height page.
+- Sidebar workspace rows follow the Codex project-row grammar: hover reveals
+  the actions cluster, the chevron expands an inline thread subtree under the
+  row, and long lists collapse behind a show-more toggle. The inline subtree
+  is the only workspace thread listing — the secondary conversation rail has
+  no workspace mode (bot and recent modes remain).
 - Auto-hide Garyx's secondary conversation rail at 980px and below before
   auto-collapsing the global rail at 720px and below. Preserve both desired
   states so widening restores them. An explicit compact global-rail open must
