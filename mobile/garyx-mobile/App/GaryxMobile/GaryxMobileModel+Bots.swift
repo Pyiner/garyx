@@ -302,7 +302,7 @@ extension GaryxMobileModel {
         guard runtimeGeneration == gatewayRequestToken else { return }
         switch result {
         case .applied:
-            // A native SwiftUI List cannot safely delete a swipe-action row
+            // A native SwiftUI List cannot safely delete an action-targeted row
             // and reinsert it in the same update cycle when the request
             // fails. Commit every visible row-set mutation exactly once,
             // after the gateway has accepted the destructive operation.

@@ -109,6 +109,55 @@ final class FormRowInteractionTests: XCTestCase {
         )
     }
 
+    /// The picker is presented in its own sheet hosting root, so its thread
+    /// menu host must be attached inside that sheet. Removing the host leaves
+    /// the row focused after a long press but renders none of these actions.
+    func testThreadPickerLongPressPresentsActionsAndScrimDismissesMenu() throws {
+        let app = launchCreateAutomationForm()
+
+        let existingThread = app.buttons["Existing Thread"]
+        XCTAssertTrue(
+            existingThread.waitForExistence(timeout: 10),
+            "Existing Thread target segment"
+        )
+        existingThread.tap()
+
+        let threadSelection = app.buttons
+            .matching(NSPredicate(format: "value == %@", "Thread History"))
+            .firstMatch
+        XCTAssertTrue(
+            threadSelection.waitForExistence(timeout: 10),
+            "Existing-thread mode should expose the selected thread row"
+        )
+        threadSelection.tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Choose thread"].waitForExistence(timeout: 10),
+            "Thread picker sheet should present"
+        )
+        let matchingRows = app.staticTexts.matching(identifier: "Thread History")
+        let threadRow = matchingRows.allElementsBoundByIndex.first(where: \.isHittable)
+            ?? matchingRows.firstMatch
+        XCTAssertTrue(threadRow.waitForExistence(timeout: 10), "Selected picker thread row")
+        XCTAssertTrue(threadRow.isHittable, "Selected picker thread row should be interactive")
+
+        threadRow.press(forDuration: 0.8)
+
+        XCTAssertTrue(app.buttons["Pin thread"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Pin thread"].isHittable)
+        XCTAssertTrue(app.buttons["Favorite thread"].isHittable)
+        XCTAssertTrue(app.buttons["Archive thread"].isHittable)
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.88)).tap()
+
+        XCTAssertFalse(app.buttons["Pin thread"].waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            app.staticTexts["Choose thread"].exists,
+            "Scrim dismissal should keep the picker open"
+        )
+        XCTAssertTrue(threadRow.exists, "Scrim dismissal should clear focus without removing the row")
+    }
+
     // MARK: - Helpers
 
     /// The `GaryxFormMenuRow` surfaces as a button whose combined label carries

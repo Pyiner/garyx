@@ -915,7 +915,6 @@ struct GaryxAutomationThreadPickerSheet: View {
     @StateObject private var transportStore: GaryxThreadPickerTransportStore
     @State private var searchText = ""
     @State private var selectedTarget: GaryxThreadSummary?
-    @State private var openSwipeActionRowId: String?
 
     init(
         model: GaryxMobileModel,
@@ -1033,12 +1032,12 @@ struct GaryxAutomationThreadPickerSheet: View {
                 }
                 .ignoresSafeArea()
         }
+        .garyxThreadActionMenuHost()
         .presentationBackground(.clear)
         .presentationBackgroundInteraction(.enabled)
         .presentationDetents([.fraction(0.93), .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(38)
-        .environment(\.garyxOpenSwipeActionRowId, $openSwipeActionRowId)
         .task(id: searchText) {
             if !searchText.isEmpty {
                 try? await Task.sleep(for: .milliseconds(250))
