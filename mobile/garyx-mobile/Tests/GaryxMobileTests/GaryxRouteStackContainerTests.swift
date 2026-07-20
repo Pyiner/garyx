@@ -5,6 +5,189 @@ import XCTest
 
 @MainActor
 final class GaryxRouteStackContainerTests: XCTestCase {
+    func testSwiftUIUpdateRemovesPreviousThreadSnapshotFromVisibleHost() throws {
+        let previousThreadID = "thread::swiftui-previous-\(UUID().uuidString)"
+        let nextThreadID = "thread::swiftui-next-\(UUID().uuidString)"
+        let hostSize = CGSize(width: 393, height: 180)
+        cacheTranscriptSnapshot(
+            threadID: previousThreadID,
+            size: CGSize(width: 393, height: 600)
+        )
+
+        // Keep a direct reference to the cache's compositor view so the test
+        // can distinguish a truly removed old snapshot from a new empty host.
+        let probeContainer = UIView(frame: CGRect(origin: .zero, size: hostSize))
+        GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
+            for: previousThreadID,
+            in: probeContainer
+        )
+        let previousSnapshot = try XCTUnwrap(probeContainer.subviews.first)
+
+        let previousRoot = GaryxConversationTranscriptSnapshotView(
+            threadID: previousThreadID
+        )
+        .frame(width: hostSize.width, height: hostSize.height)
+        let hostingController = UIHostingController(rootView: previousRoot)
+        let hostWindow = makeTestWindow(frame: CGRect(origin: .zero, size: hostSize))
+        hostWindow.rootViewController = hostingController
+        hostWindow.isHidden = false
+        defer {
+            hostWindow.isHidden = true
+            hostWindow.rootViewController = nil
+        }
+        hostWindow.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertNotNil(previousSnapshot.window)
+
+        hostingController.rootView = GaryxConversationTranscriptSnapshotView(
+            threadID: nextThreadID
+        )
+        .frame(width: hostSize.width, height: hostSize.height)
+        hostingController.view.setNeedsLayout()
+        hostingController.view.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+
+        XCTAssertNil(
+            previousSnapshot.window,
+            "SwiftUI reused the representable host, and its update left the previous thread's cached pixels visible"
+        )
+    }
+
+    func testSnapshotRepresentableUpdateDoesNotRetainPixelsFromPreviousThread() {
+        let previousThreadID = "thread::cached-previous-\(UUID().uuidString)"
+        let nextThreadID = "thread::uncached-next-\(UUID().uuidString)"
+        cacheTranscriptSnapshot(
+            threadID: previousThreadID,
+            size: CGSize(width: 393, height: 600)
+        )
+
+        let reusedRepresentableContainer = UIView(
+            frame: CGRect(x: 0, y: 0, width: 393, height: 180)
+        )
+        GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
+            for: previousThreadID,
+            in: reusedRepresentableContainer
+        )
+        XCTAssertEqual(reusedRepresentableContainer.subviews.count, 1)
+
+        // Mirror UIViewRepresentable.updateUIView when SwiftUI keeps the same
+        // platform view while its value changes to another thread. That next
+        // thread has no snapshot, so no pixels from the previous route may
+        // remain in the container.
+        GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
+            for: nextThreadID,
+            in: reusedRepresentableContainer
+        )
+
+        XCTAssertTrue(
+            reusedRepresentableContainer.subviews.isEmpty,
+            "an uncached destination must clear the prior thread's compositor snapshot instead of showing stale cross-thread transcript pixels"
+        )
+    }
+
+    func testCachedTranscriptSnapshotKeepsCapturedHeightWhenRepresentableStartsAtZeroSize() throws {
+        let threadID = "thread::snapshot-vertical-scale-repro-\(UUID().uuidString)"
+        let capturedSize = CGSize(width: 393, height: 600)
+        let firstPresentedSize = CGSize(width: 393, height: 180)
+
+        let sourceController = UIViewController()
+        let sourceScrollView = UIScrollView(frame: CGRect(origin: .zero, size: capturedSize))
+        sourceScrollView.backgroundColor = .white
+        sourceScrollView.contentSize = capturedSize
+        sourceController.view = sourceScrollView
+
+        let sourceWindow = makeTestWindow(frame: CGRect(origin: .zero, size: capturedSize))
+        sourceWindow.rootViewController = sourceController
+        sourceWindow.isHidden = false
+        defer {
+            sourceWindow.isHidden = true
+            sourceWindow.rootViewController = nil
+        }
+
+        let transcript = UILabel(frame: CGRect(x: 16, y: 16, width: 361, height: 568))
+        transcript.numberOfLines = 0
+        transcript.font = .systemFont(ofSize: 17)
+        transcript.text = """
+        Ran 3 commands
+        会话恢复，逐面提取瞬态界面。
+
+        Ran 2 commands
+        五个页面已经全部提取完成。
+
+        Ran 5 commands
+        设计验证完成，等待后续处理。
+        """
+        sourceScrollView.addSubview(transcript)
+        sourceWindow.layoutIfNeeded()
+
+        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+            threadID: threadID,
+            revision: "captured-600pt-transcript",
+            scrollView: { sourceScrollView }
+        )
+        let snapshotCaptured = waitForTranscriptSnapshot(threadID: threadID)
+        XCTAssertTrue(
+            snapshotCaptured,
+            "the production compositor capture must complete before exercising installation"
+        )
+
+        // Mirror UIViewRepresentable.makeUIView: the cache installs into a
+        // zero-sized container before SwiftUI supplies the first real frame.
+        let openingContainer = UIView(frame: .zero)
+        GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
+            for: threadID,
+            in: openingContainer
+        )
+        openingContainer.frame = CGRect(origin: .zero, size: firstPresentedSize)
+        openingContainer.layoutIfNeeded()
+
+        XCTAssertEqual(openingContainer.subviews.count, 1)
+        let installedSnapshot = try XCTUnwrap(openingContainer.subviews.first)
+        XCTAssertTrue(openingContainer.clipsToBounds)
+        XCTAssertEqual(installedSnapshot.transform, CGAffineTransform.identity)
+        XCTAssertEqual(
+            installedSnapshot.frame.minY,
+            openingContainer.bounds.minY,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            installedSnapshot.frame.minX,
+            openingContainer.bounds.minX,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(installedSnapshot.frame.maxY, openingContainer.bounds.maxY)
+        let horizontalRenderScale = installedSnapshot.bounds.width / capturedSize.width
+        let verticalRenderScale = installedSnapshot.bounds.height / capturedSize.height
+        XCTAssertEqual(horizontalRenderScale, 1, accuracy: 0.001)
+        XCTAssertEqual(
+            verticalRenderScale,
+            1,
+            accuracy: 0.001,
+            "a compositor snapshot must retain its captured 1:1 pixel geometry; resizing its bounds to the transient opening height vertically squashes every text glyph"
+        )
+
+        openingContainer.frame = CGRect(
+            origin: .zero,
+            size: CGSize(width: 240, height: 300)
+        )
+        openingContainer.layoutIfNeeded()
+
+        XCTAssertEqual(installedSnapshot.bounds.width, capturedSize.width, accuracy: 0.001)
+        XCTAssertEqual(installedSnapshot.bounds.height, capturedSize.height, accuracy: 0.001)
+        XCTAssertEqual(
+            installedSnapshot.frame.minY,
+            openingContainer.bounds.minY,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            installedSnapshot.frame.minX,
+            openingContainer.bounds.minX,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(installedSnapshot.frame.maxX, openingContainer.bounds.maxX)
+        XCTAssertGreaterThan(installedSnapshot.frame.maxY, openingContainer.bounds.maxY)
+    }
+
     func testTaskNotificationOpeningRowUsesFullReadingWidth() throws {
         let viewportWidth = try XCTUnwrap(
             UIApplication.shared.connectedScenes
@@ -1485,6 +1668,21 @@ private func pumpMainRunLoop(duration: TimeInterval) {
 }
 
 @MainActor
+private func waitForTranscriptSnapshot(
+    threadID: String,
+    timeout: TimeInterval = 3
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if GaryxConversationTranscriptSnapshotCache.shared.hasSnapshot(for: threadID) {
+            return true
+        }
+        pumpMainRunLoop(duration: 0.02)
+    }
+    return GaryxConversationTranscriptSnapshotCache.shared.hasSnapshot(for: threadID)
+}
+
+@MainActor
 private func makeTestWindow(frame: CGRect) -> UIWindow {
     guard let scene = UIApplication.shared.connectedScenes
         .compactMap({ $0 as? UIWindowScene })
@@ -1493,6 +1691,40 @@ private func makeTestWindow(frame: CGRect) -> UIWindow {
     let window = UIWindow(windowScene: scene)
     window.frame = frame
     return window
+}
+
+@MainActor
+private func cacheTranscriptSnapshot(threadID: String, size: CGSize) {
+    let sourceController = UIViewController()
+    let sourceScrollView = UIScrollView(frame: CGRect(origin: .zero, size: size))
+    sourceScrollView.backgroundColor = .white
+    sourceScrollView.contentSize = size
+    sourceController.view = sourceScrollView
+
+    let transcript = UILabel(frame: sourceScrollView.bounds.insetBy(dx: 16, dy: 16))
+    transcript.numberOfLines = 0
+    transcript.text = "Ran 3 commands\n上一线程的缓存文字"
+    sourceScrollView.addSubview(transcript)
+
+    let sourceWindow = makeTestWindow(frame: CGRect(origin: .zero, size: size))
+    sourceWindow.rootViewController = sourceController
+    sourceWindow.isHidden = false
+    sourceWindow.layoutIfNeeded()
+    defer {
+        sourceWindow.isHidden = true
+        sourceWindow.rootViewController = nil
+    }
+
+    GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+        threadID: threadID,
+        revision: "cross-thread-snapshot-repro",
+        scrollView: { sourceScrollView }
+    )
+    let snapshotCaptured = waitForTranscriptSnapshot(threadID: threadID)
+    XCTAssertTrue(
+        snapshotCaptured,
+        "the production compositor capture must complete before exercising reuse"
+    )
 }
 
 private func nonMagentaHorizontalSpan(in image: UIImage) throws -> CGFloat {

@@ -50,13 +50,37 @@ final class GaryxConversationTranscriptSnapshotCache {
     }
 
     func installSnapshot(for threadID: String, in container: UIView) {
-        guard let entry = entries[threadID] else { return }
+        container.clipsToBounds = true
+        guard let entry = entries[threadID] else {
+            container.subviews.forEach { $0.removeFromSuperview() }
+            return
+        }
+
         let snapshot = entry.view
-        guard snapshot.superview !== container else { return }
-        snapshot.removeFromSuperview()
-        snapshot.frame = container.bounds
-        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        container.addSubview(snapshot)
+        for staleSubview in container.subviews where staleSubview !== snapshot {
+            staleSubview.removeFromSuperview()
+        }
+        if snapshot.superview !== container {
+            snapshot.removeFromSuperview()
+            container.addSubview(snapshot)
+        }
+
+        // A compositor snapshot is already-rendered pixels, not relayoutable
+        // content. Keep its captured geometry at the top of the viewport and
+        // let the dedicated host clip any overflow. Resizing this view to a
+        // transient opening bound non-uniformly scales every glyph.
+        snapshot.transform = .identity
+        snapshot.translatesAutoresizingMaskIntoConstraints = true
+        snapshot.autoresizingMask = [
+            .flexibleRightMargin,
+            .flexibleBottomMargin,
+        ]
+        snapshot.frame = CGRect(
+            x: container.bounds.minX,
+            y: container.bounds.minY,
+            width: entry.size.width,
+            height: entry.size.height
+        )
     }
 
     private func store(_ snapshot: UIView, size: CGSize, for threadID: String) {
