@@ -76,9 +76,6 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         accessibilityTraits.insert(.notEnabled)
         updateDebugAccessibilityState()
         addInteraction(UIScribbleInteraction(delegate: self))
-        let focusTap = UITapGestureRecognizer(target: self, action: #selector(handleFocusTap))
-        focusTap.cancelsTouchesInView = false
-        addGestureRecognizer(focusTap)
     }
 
     required init?(coder: NSCoder) {
@@ -137,22 +134,11 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         }
     }
 
-    @objc private func handleFocusTap() {
-        guard isLive, !isFinalizing else { return }
-        // Run after UITextView's own selection recognizers and any SwiftUI
-        // tap projection. This keeps UIKit the single first-responder owner
-        // even when a stale FocusState frame is still being reconciled.
-        DispatchQueue.main.async { [weak self] in
-            self?.requestFocus()
-        }
-    }
-
     private func updateDebugAccessibilityState() {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] == "1"
         else { return }
         accessibilityLabel = isLive ? "composer-live" : "composer-read-only"
-        accessibilityValue = "selection=\(selectedRange.location);length=\(text.utf16.count)"
         #endif
     }
 
@@ -160,16 +146,14 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         guard isLive, !isFinalizing else { return }
         self.text = text
         publishCurrentText(force: true)
-        #if DEBUG
-        updateDebugAccessibilityState()
-        #endif
     }
 
-    #if DEBUG
-    func observedSelectionDidChange() {
-        updateDebugAccessibilityState()
+    func applyTextContainerInsets(_ insets: UIEdgeInsets) {
+        guard textContainerInset != insets else { return }
+        textContainerInset = insets
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
     }
-    #endif
 
     /// Main-actor critical section used by route commit-release:
     /// freeze admission, unmark synchronously, publish the exact resulting
@@ -314,9 +298,28 @@ extension GaryxComposerOrderedTextView: UIScribbleInteractionDelegate {
     }
 }
 
+struct GaryxComposerTextLayout {
+    let textContainerInsets: UIEdgeInsets
+    let minimumTextHeight: CGFloat
+    let maximumLineCount: Int
+
+    var minimumControlHeight: CGFloat {
+        minimumTextHeight + textContainerInsets.top + textContainerInsets.bottom
+    }
+
+    func controlHeight(fittedHeight: CGFloat, lineHeight: CGFloat) -> CGFloat {
+        let verticalInsets = textContainerInsets.top + textContainerInsets.bottom
+        let fittedTextHeight = max(0, fittedHeight - verticalInsets)
+        let minimum = max(minimumTextHeight, lineHeight)
+        let maximum = max(minimum, lineHeight * CGFloat(maximumLineCount))
+        return min(max(fittedTextHeight, minimum), maximum) + verticalInsets
+    }
+}
+
 struct GaryxComposerUIKitField: UIViewRepresentable {
     let occurrenceID: GaryxRouteInstanceID
     let configuration: GaryxComposerInputConfiguration
+    let layout: GaryxComposerTextLayout
     let isFocused: FocusState<Bool>.Binding
     let onRegister: @MainActor (GaryxComposerInputAdapter) -> Void
     let onUnregister: @MainActor (GaryxComposerInputAdapter) -> Void
@@ -334,18 +337,17 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
             composerKey: configuration.composerKey
         )
         view.delegate = context.coordinator
+        view.applyTextContainerInsets(layout.textContainerInsets)
         context.coordinator.installCallbacks(on: view)
         view.grantLive(configuration)
         onRegister(view)
-        #if DEBUG
-        seedDebugTextIfNeeded(on: view)
-        #endif
         requestDebugFocusIfNeeded(on: view)
         return view
     }
 
     func updateUIView(_ view: GaryxComposerOrderedTextView, context: Context) {
         context.coordinator.parent = self
+        view.applyTextContainerInsets(layout.textContainerInsets)
         context.coordinator.installCallbacks(on: view)
         if view.inputConfiguration != configuration {
             view.grantLive(configuration)
@@ -384,16 +386,6 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         #endif
     }
 
-    #if DEBUG
-    private func seedDebugTextIfNeeded(on view: GaryxComposerOrderedTextView) {
-        guard let text = ProcessInfo.processInfo.environment["GARYX_MOBILE_DEBUG_COMPOSER_TEXT"]
-        else { return }
-        view.replaceLiveText(text)
-        view.selectedRange = NSRange(location: text.utf16.count, length: 0)
-        view.observedSelectionDidChange()
-    }
-    #endif
-
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView: GaryxComposerOrderedTextView,
@@ -405,7 +397,10 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
             CGSize(width: width, height: .greatestFiniteMagnitude)
         )
         let lineHeight = uiView.font?.lineHeight ?? 20
-        let height = min(max(fitted.height, lineHeight), lineHeight * 4)
+        let height = layout.controlHeight(
+            fittedHeight: fitted.height,
+            lineHeight: lineHeight
+        )
         uiView.isScrollEnabled = fitted.height > height
         return CGSize(width: width, height: height)
     }
@@ -442,12 +437,6 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             (textView as? GaryxComposerOrderedTextView)?.observedTextDidChange()
         }
-
-        #if DEBUG
-        func textViewDidChangeSelection(_ textView: UITextView) {
-            (textView as? GaryxComposerOrderedTextView)?.observedSelectionDidChange()
-        }
-        #endif
 
         func textView(
             _ textView: UITextView,

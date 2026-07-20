@@ -651,9 +651,6 @@ final class GaryxMobileModel: ObservableObject {
                 tabName: debugEnvironment["GARYX_MOBILE_DEBUG_SETTINGS_TAB"],
                 showSidebar: debugEnvironment["GARYX_MOBILE_DEBUG_SIDEBAR"] == "1"
             )
-            if debugEnvironment["GARYX_MOBILE_DEBUG_DRAFT"] == "1" {
-                openNewThreadDraft()
-            }
         }
         #endif
         homeProjectionGateway.setResultHandler { [weak self] result in

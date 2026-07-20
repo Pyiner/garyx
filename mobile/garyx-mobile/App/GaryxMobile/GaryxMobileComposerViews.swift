@@ -52,23 +52,6 @@ private enum GaryxComposerLayout {
     static let workspaceModeSelectedStroke = Color.primary.opacity(0.11)
 }
 
-#if DEBUG
-final class GaryxComposerInputRegionProbeView: UIView {}
-
-private struct GaryxComposerInputRegionProbe: UIViewRepresentable {
-    func makeUIView(context: Context) -> GaryxComposerInputRegionProbeView {
-        let view = GaryxComposerInputRegionProbeView()
-        view.isUserInteractionEnabled = false
-        view.isAccessibilityElement = true
-        view.accessibilityIdentifier = "garyx-composer-visible-input-region"
-        view.accessibilityLabel = "Composer visible input region"
-        return view
-    }
-
-    func updateUIView(_ uiView: GaryxComposerInputRegionProbeView, context: Context) {}
-}
-#endif
-
 private enum GaryxComposerCameraAlert: String, Identifiable {
     case permissionDenied
     case unavailable
@@ -178,7 +161,6 @@ struct GaryxConversationOpeningComposerChrome: View {
 
 
 struct GaryxComposer: View {
-    @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxRouteContext) private var routeContext
     @Environment(\.garyxMotion) private var motion
@@ -560,20 +542,15 @@ struct GaryxComposer: View {
     }
 
     private var composerInput: some View {
-        ZStack(alignment: .topLeading) {
-            if routeText.isEmpty {
-                Text(placeholderText)
-                    .font(GaryxFont.subheadline())
-                    .foregroundStyle(Color(.placeholderText))
-                    .padding(.top, 2)
-                    .allowsHitTesting(false)
-            }
+        let layout = composerTextLayout
 
+        return ZStack(alignment: .topLeading) {
             if let configuration = payload.inputConfiguration(),
                routeContext.composerKey.map(payload.routeKeyMatchesActiveSession) ?? true {
                 GaryxComposerUIKitField(
                     occurrenceID: composerOccurrenceID,
                     configuration: configuration,
+                    layout: layout,
                     isFocused: isFocused,
                     onRegister: { adapter in
                         payload.register(
@@ -594,27 +571,44 @@ struct GaryxComposer: View {
                     }
                 )
                 .font(GaryxFont.subheadline())
+            } else {
+                Color.clear
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: layout.minimumControlHeight
+                    )
+                    .allowsHitTesting(false)
+            }
+
+            if routeText.isEmpty {
+                Text(placeholderText)
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(Color(.placeholderText))
+                    .padding(
+                        EdgeInsets(
+                            top: layout.textContainerInsets.top + 2,
+                            leading: layout.textContainerInsets.left,
+                            bottom: layout.textContainerInsets.bottom,
+                            trailing: layout.textContainerInsets.right
+                        )
+                    )
+                    .allowsHitTesting(false)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.inputMinHeight, alignment: .topLeading)
-        .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
-        .padding(
-            .top,
-            routePayloadItems.isEmpty ? GaryxComposerLayout.inputTopPadding : 6
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var composerTextLayout: GaryxComposerTextLayout {
+        GaryxComposerTextLayout(
+            textContainerInsets: UIEdgeInsets(
+                top: routePayloadItems.isEmpty ? GaryxComposerLayout.inputTopPadding : 6,
+                left: GaryxComposerLayout.inputHorizontalPadding,
+                bottom: GaryxComposerLayout.inputBottomPadding,
+                right: GaryxComposerLayout.inputHorizontalPadding
+            ),
+            minimumTextHeight: GaryxComposerLayout.inputMinHeight,
+            maximumLineCount: 4
         )
-        .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
-        #if DEBUG
-        .background {
-            GaryxComposerInputRegionProbe()
-        }
-        #endif
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // `.onTapGesture` ignores `.disabled`; do not pop the keyboard
-            // from a finger-up while the drawer drag has content disabled.
-            guard isEnabled else { return }
-            isFocused.wrappedValue = true
-        }
     }
 
     private var composerOccurrenceID: GaryxRouteInstanceID {

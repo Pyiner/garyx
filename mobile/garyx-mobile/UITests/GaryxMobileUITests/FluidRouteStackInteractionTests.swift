@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 final class FluidRouteStackInteractionTests: XCTestCase {
@@ -334,59 +335,50 @@ final class FluidRouteStackInteractionTests: XCTestCase {
     }
 
     func testProductionComposerTapRepositionsCaretInsideEnteredText() {
-        let app = XCUIApplication()
-        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
-        app.launchEnvironment["GARYX_MOBILE_DEBUG_DRAFT"] = "1"
-        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
-        let original = "ALPHA BRAVO CHARLIE DELTA"
-        app.launchEnvironment["GARYX_MOBILE_DEBUG_COMPOSER_TEXT"] = original
-        app.launch()
-
+        let app = launchProductionConversation()
         let composer = app.textViews["garyx-composer-uikit-input"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        let visibleRegion = app.otherElements["garyx-composer-visible-input-region"]
-        XCTAssertTrue(visibleRegion.waitForExistence(timeout: 10))
-        waitForSelection(original.utf16.count, in: composer)
+        let original = "ALPHA BRAVO CHARLIE DELTA"
+        UIPasteboard.general.string = original
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("v", modifierFlags: .command)
+        waitForValue(original, in: composer)
 
-        visibleRegion.coordinate(
+        let frame = composer.frame
+        composer.coordinate(
             withNormalizedOffset: CGVector(
-                dx: 76 / visibleRegion.frame.width,
-                dy: 25 / visibleRegion.frame.height
+                dx: 76 / frame.width,
+                dy: 25 / frame.height
             )
         ).tap()
-        let tappedSelection = selection(in: composer)
+        UIPasteboard.general.string = "X"
+        app.typeKey("v", modifierFlags: .command)
 
-        print(
-            "COMPOSER_CARET_REPRO textView=\(composer.frame) visible=\(visibleRegion.frame) "
-                + "selectionBefore=\(original.utf16.count) selectionAfter=\(tappedSelection)"
-        )
-        XCTAssertLessThan(
-            tappedSelection,
-            original.utf16.count,
-            "tapping entered text must move the caret away from the trailing insertion point; "
-                + "textView=\(composer.frame) visible=\(visibleRegion.frame)"
+        // UITextView's standard smart-insert behavior adds a separator after
+        // the pasted marker; its position still proves the tap selected the
+        // boundary between "ALPHA " and "BRAVO".
+        let expected = "ALPHA X BRAVO CHARLIE DELTA"
+        waitForValue(expected, in: composer)
+        XCTAssertEqual(
+            composer.value as? String,
+            expected,
+            "the system selection must place inserted text at the tapped coordinate; frame=\(frame)"
         )
     }
 
     // MARK: Helpers
 
-    private func waitForSelection(
-        _ location: Int,
+    private func waitForValue(
+        _ value: String,
         in composer: XCUIElement,
         timeout: TimeInterval = 5
     ) {
-        let predicate = NSPredicate(format: "value BEGINSWITH %@", "selection=\(location);")
+        let predicate = NSPredicate(format: "value == %@", value)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: composer)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
-    }
-
-    private func selection(in composer: XCUIElement) -> Int {
-        guard let value = composer.value as? String,
-              let prefix = value.split(separator: ";").first,
-              let location = Int(prefix.dropFirst("selection=".count)) else {
-            return .max
-        }
-        return location
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: timeout),
+            .completed,
+            "composer value did not become \(value); actual=\(String(describing: composer.value))"
+        )
     }
 
     private func launchFakeRoutes(

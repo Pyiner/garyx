@@ -60,13 +60,30 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         let textView = try XCTUnwrap(
             controller.view.firstDescendant(ofType: GaryxComposerOrderedTextView.self)
         )
-        let visibleRegion = try XCTUnwrap(
-            controller.view.firstDescendant(ofType: GaryxComposerInputRegionProbeView.self)
-        )
 
+        let expectedInsets = UIEdgeInsets(top: 15, left: 16, bottom: 8, right: 16)
+        let expectedHeight: CGFloat = 29 + expectedInsets.top + expectedInsets.bottom
         let actual = textView.convert(textView.bounds, to: controller.view)
-        let expected = visibleRegion.convert(visibleRegion.bounds, to: controller.view)
-        let glyphPoint = CGPoint(x: actual.minX + 60, y: actual.midY)
+        let composerCard = try XCTUnwrap(
+            textView.firstAncestor { candidate in
+                let frame = candidate.convert(candidate.bounds, to: controller.view)
+                return abs(frame.width - (controller.view.bounds.width - 24)) < 0.001
+                    && frame.height > expectedHeight + 0.001
+            }
+        )
+        let composerCardFrame = composerCard.convert(composerCard.bounds, to: controller.view)
+        XCTAssertEqual(composerCardFrame.minX, controller.view.bounds.minX + 12, accuracy: 0.001)
+        XCTAssertEqual(composerCardFrame.width, controller.view.bounds.width - 24, accuracy: 0.001)
+        let expected = CGRect(
+            x: composerCardFrame.minX,
+            y: composerCardFrame.minY,
+            width: composerCardFrame.width,
+            height: expectedHeight
+        )
+        let glyphPoint = CGPoint(
+            x: expected.minX + expectedInsets.left + 60,
+            y: expected.minY + expectedInsets.top + 10
+        )
         let paddedPoint = CGPoint(x: expected.minX + 76, y: expected.minY + 7)
         let glyphHit = controller.view.hitTest(glyphPoint, with: nil)
         let paddedHit = controller.view.hitTest(paddedPoint, with: nil)
@@ -82,10 +99,15 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         XCTAssertTrue(glyphReachesTextView, "a point on the rendered glyph line must reach UITextView")
         XCTAssertTrue(paddedReachesTextView, "every point in the visible input region must reach UITextView")
         XCTAssertEqual(
-            actual,
-            expected,
-            "the system text control must own the composer's complete visible input region"
+            textView.textContainerInset,
+            expectedInsets,
+            "composer spacing must be owned by UITextView rather than an outer hit-test gap"
         )
+        let frameMessage = "the system text control must own the composer's complete visible input region"
+        XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.001, frameMessage)
+        XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.001, frameMessage)
+        XCTAssertEqual(actual.width, expected.width, accuracy: 0.001, frameMessage)
+        XCTAssertEqual(actual.height, expected.height, accuracy: 0.001, frameMessage)
     }
 
     func testRealUIKitHostUnmarksCJKBeforeCapturingExactFinalSequence() throws {
@@ -1649,6 +1671,17 @@ private struct GaryxComposerHitRegionHarness: View {
 
 @MainActor
 private extension UIView {
+    func firstAncestor(where predicate: (UIView) -> Bool) -> UIView? {
+        var candidate = superview
+        while let current = candidate {
+            if predicate(current) {
+                return current
+            }
+            candidate = current.superview
+        }
+        return nil
+    }
+
     func firstDescendant<ViewType: UIView>(ofType type: ViewType.Type) -> ViewType? {
         if let match = self as? ViewType {
             return match
