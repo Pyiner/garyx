@@ -218,7 +218,7 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
         let fixtures = try loadJSONObject("scenarios/durable-delivery.json")
         let consumers = try XCTUnwrap(fixtures["platformConsumers"] as? [String: String])
         XCTAssertEqual(consumers["ios"], "implemented")
-        XCTAssertEqual(consumers["mac"], "p0_g_follow_up")
+        XCTAssertEqual(consumers["mac"], "implemented")
         let scenarios = try XCTUnwrap(fixtures["scenarios"] as? [[String: Any]])
         XCTAssertFalse(scenarios.isEmpty)
 

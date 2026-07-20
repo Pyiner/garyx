@@ -19,10 +19,9 @@ without updating this document and the shared fixtures.
   - Desktop: `desktop/garyx-desktop/src/renderer/src/conversation-state-conformance.test.mjs`
   - iOS: `mobile/garyx-mobile/Tests/GaryxMobileCoreTests/GaryxConversationStateConformanceTests.swift`
 - `spec/conversation-state/scenarios/durable-delivery.json`: the shared
-  durable-send and multi-stage-create fixture definition. iOS consumes it in
-  the conformance suite now. Mac consumption is the explicit P0-G alignment
-  follow-up; the fixture marks that rollout state and Mac must implement the
-  same transitions rather than introduce a second vocabulary.
+  durable-send and multi-stage-create fixture definition. iOS and Mac both
+  execute every scenario in their conformance suites and implement the same
+  transitions rather than introduce a second vocabulary.
 - There is no cross-language code generation. Implementations are
   hand-written; the fixtures are the drift guard. When behavior changes,
   change the fixtures first, then make both implementations pass.
@@ -291,8 +290,8 @@ for the derived activity model. `input.messages` entries are
 
 `scenarios/durable-delivery.json` — action sequences and exact snapshots for
 the durable delivery record and multi-stage create record. `platformConsumers`
-is rollout metadata, not permission to diverge: iOS is implemented in the
-current slice and Mac is the P0-G consumption follow-up.
+is rollout metadata, not permission to diverge: both iOS and Mac execute the
+canonical scenarios.
 
 When adding behavior: extend the fixtures in the same change, and keep both
 conformance suites green (`npm run test:unit` in `desktop/garyx-desktop`,

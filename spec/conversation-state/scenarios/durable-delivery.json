@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "platformConsumers": {
     "ios": "implemented",
-    "mac": "p0_g_follow_up"
+    "mac": "implemented"
   },
   "scenarios": [
     {

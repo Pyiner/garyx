@@ -20,6 +20,28 @@ import {
   nextComposerPhase,
   shouldTrackProviderAckAfterStreamInputResponse,
 } from './message-machine.ts';
+import {
+  DURABLE_CREATE_DELIVERY_PHASES,
+  DURABLE_CREATE_USER_DISPOSITIONS,
+  DURABLE_DELIVERY_EVIDENCE,
+  DURABLE_DELIVERY_STATES,
+  DURABLE_DELIVERY_USER_DISPOSITIONS,
+  acknowledgeDurableCreate,
+  acknowledgeDurableDelivery,
+  acknowledgeDurableDeliveryEvidence,
+  initialDurableCreateDelivery,
+  initialDurableDeliveryRecord,
+  markDurableCreateBindingCompleted,
+  markDurableCreateChatStartAttempted,
+  markDurableCreateResponseLost,
+  markDurableCreateThreadCreated,
+  markDurableDeliveryAmbiguous,
+  markDurableTransportAttempted,
+  resendDurableDeliveryAsDuplicate,
+  restoreDurableDeliveryDraft,
+  settleDurableCreateForScopeRevoke,
+  settleDurableDeliveryForScopeRevoke,
+} from './durable-delivery.ts';
 import { LIVE_STREAM_STATUSES, TRANSCRIPT_ENTRY_STATES } from './app-shell/types.ts';
 import { deriveThreadActivityModel } from './app-shell/thread-activity.ts';
 
@@ -43,15 +65,211 @@ test('enum vocabularies match the shared schema', () => {
   assert.deepEqual([...LIVE_STREAM_STATUSES], states.liveStreamStatus);
   assert.deepEqual([...TRANSCRIPT_ENTRY_STATES], states.transcriptEntryState);
   assert.deepEqual([...COMPOSER_PHASES], states.composerPhase);
+  assert.deepEqual([...DURABLE_DELIVERY_STATES], states.durableDeliveryState);
+  assert.deepEqual([...DURABLE_DELIVERY_EVIDENCE], states.durableDeliveryEvidence);
+  assert.deepEqual(
+    [...DURABLE_DELIVERY_USER_DISPOSITIONS],
+    states.durableDeliveryUserDisposition,
+  );
+  assert.deepEqual(
+    [...DURABLE_CREATE_DELIVERY_PHASES],
+    states.durableCreateDeliveryPhase,
+  );
+  assert.deepEqual(
+    [...DURABLE_CREATE_USER_DISPOSITIONS],
+    states.durableCreateUserDisposition,
+  );
 });
 
-test('durable delivery fixtures reserve the canonical Mac follow-up', () => {
+test('durable delivery fixtures name both canonical consumers', () => {
   assert.equal(durableDeliveryFixtures.platformConsumers.ios, 'implemented');
-  assert.equal(durableDeliveryFixtures.platformConsumers.mac, 'p0_g_follow_up');
+  assert.equal(durableDeliveryFixtures.platformConsumers.mac, 'implemented');
   assert.ok(durableDeliveryFixtures.scenarios.length > 0);
   assert.ok(durableDeliveryFixtures.createScenarios.length > 0);
-  assert.ok(states.durableDeliveryState.length > 0);
 });
+
+const durableFixtureScope = { identity: 'fixture-gateway', epoch: 1 };
+
+function makeDurableDeliveryRecord(
+  id = 'delivery',
+  correlationID = 'intent-original',
+  envelope,
+) {
+  return initialDurableDeliveryRecord({
+    id,
+    scope: durableFixtureScope,
+    entryID: 'fixture-entry',
+    reservationID: 1,
+    correlationID,
+    envelope: envelope || {
+      text: 'fixture message',
+      attachmentIDs: [],
+      generation: 1,
+      clientIntentID: correlationID,
+    },
+  });
+}
+
+function applyDurableDeliveryAction(action, records, label) {
+  const delivery = records.delivery;
+  assert.ok(delivery, `${label}: original delivery missing`);
+  if (action === 'attempt') {
+    const next = markDurableTransportAttempted(delivery);
+    assert.ok(next, `${label}: transport attempt was rejected`);
+    return { ...records, delivery: next };
+  }
+  if (action === 'ambiguous') {
+    const next = markDurableDeliveryAmbiguous(delivery);
+    assert.ok(next, `${label}: ambiguous transition was rejected`);
+    return { ...records, delivery: next };
+  }
+  if (action === 'acknowledge') {
+    return { ...records, delivery: acknowledgeDurableDelivery(delivery) };
+  }
+  if (action === 'evidence' || action === 'evidenceOtherScope') {
+    const result = acknowledgeDurableDeliveryEvidence({
+      correlationID: 'intent-original',
+      authenticatedScope: action === 'evidence'
+        ? durableFixtureScope
+        : { identity: 'other-gateway', epoch: 1 },
+      records,
+    });
+    if (action === 'evidenceOtherScope') {
+      assert.equal(result.disposition, 'rejectedAuthenticationSource', label);
+      assert.deepEqual(result.records, records, `${label}: rejected evidence mutated records`);
+    } else {
+      assert.equal(result.disposition, 'updated', label);
+    }
+    return result.records;
+  }
+  if (action === 'restoreDraft' || action === 'recoverUndispatchedDraft') {
+    const result = restoreDurableDeliveryDraft({
+      record: delivery,
+      conflictSet: {
+        id: action === 'restoreDraft'
+          ? 'fixture-conflict'
+          : 'fixture-undispatched-conflict',
+        scope: durableFixtureScope,
+        candidates: [],
+        pendingDecision: false,
+      },
+      candidate: {
+        entryID: action === 'restoreDraft'
+          ? 'fixture-recovered-entry'
+          : 'fixture-undispatched-entry',
+        label: action === 'restoreDraft'
+          ? 'Recovered send'
+          : 'Recovered unsent message',
+      },
+      membershipDurabilityAvailable: true,
+      allowingUndispatched: action === 'recoverUndispatchedDraft',
+    });
+    assert.equal(result.disposition, 'restored', `${label}: recovery disposition`);
+    assert.equal(result.conflictSet.pendingDecision, true, `${label}: conflict pending`);
+    assert.equal(result.conflictSet.candidates.length, 1, `${label}: conflict membership`);
+    return { ...records, delivery: result.record };
+  }
+  if (action === 'resendCopy') {
+    const result = resendDurableDeliveryAsDuplicate({
+      record: delivery,
+      newRecordID: 'delivery-copy',
+      newClientIntentID: 'intent-copy',
+    });
+    assert.ok(result, `${label}: duplicate resend was rejected`);
+    return {
+      ...records,
+      delivery: result.original,
+      'delivery-copy': result.duplicate,
+    };
+  }
+  if (action === 'scopeRevoke') {
+    return Object.fromEntries(
+      Object.entries(records).map(([id, record]) => [
+        id,
+        settleDurableDeliveryForScopeRevoke(record),
+      ]),
+    );
+  }
+  assert.fail(`${label}: unsupported durable delivery action ${action}`);
+}
+
+function assertDurableDelivery(record, expected, label) {
+  assert.equal(record.state, expected.state, `${label}: state`);
+  assert.equal(record.evidence, expected.evidence, `${label}: evidence`);
+  assert.equal(
+    record.userDisposition,
+    expected.userDisposition,
+    `${label}: userDisposition`,
+  );
+  assert.equal(Boolean(record.envelope), expected.envelopePresent, `${label}: envelope`);
+  if ('duplicateRecordID' in expected) {
+    assertNullableEqual(
+      record.duplicateRecordID,
+      expected.duplicateRecordID,
+      `${label}: duplicateRecordID`,
+    );
+  }
+  if ('clientIntentID' in expected) {
+    assertNullableEqual(
+      record.envelope?.clientIntentID,
+      expected.clientIntentID,
+      `${label}: clientIntentID`,
+    );
+  }
+}
+
+for (const scenario of durableDeliveryFixtures.scenarios) {
+  test(`durable delivery fixture: ${scenario.name}`, () => {
+    let records = { delivery: makeDurableDeliveryRecord() };
+    for (const action of scenario.actions || []) {
+      records = applyDurableDeliveryAction(action, records, scenario.name);
+    }
+    for (const [recordID, expected] of Object.entries(scenario.expect)) {
+      const record = records[recordID];
+      assert.ok(record, `${scenario.name}: ${recordID} should exist`);
+      assertDurableDelivery(record, expected, `${scenario.name}: ${recordID}`);
+    }
+  });
+}
+
+for (const scenario of durableDeliveryFixtures.createScenarios) {
+  test(`durable create fixture: ${scenario.name}`, () => {
+    let state = initialDurableCreateDelivery({
+      scope: durableFixtureScope,
+      createIntentID: 'create-intent',
+      entryID: 'fixture-entry',
+    });
+    for (const action of scenario.actions || []) {
+      if (action === 'created') {
+        state = markDurableCreateThreadCreated(state, 'thread-1');
+      } else if (action === 'bound') {
+        state = markDurableCreateBindingCompleted(state);
+      } else if (action === 'chatAttempted') {
+        state = markDurableCreateChatStartAttempted(state);
+      } else if (action === 'responseLost') {
+        state = markDurableCreateResponseLost(state);
+      } else if (action === 'acknowledged') {
+        state = acknowledgeDurableCreate(state);
+      } else if (action === 'scopeRevoke') {
+        state = settleDurableCreateForScopeRevoke(state);
+      } else {
+        assert.fail(`${scenario.name}: unsupported durable create action ${action}`);
+      }
+    }
+    assert.equal(state.phase, scenario.expect.phase, `${scenario.name}: phase`);
+    assertNullableEqual(
+      state.ambiguousAfter,
+      scenario.expect.ambiguousAfter,
+      `${scenario.name}: ambiguousAfter`,
+    );
+    assert.equal(
+      state.userDisposition,
+      scenario.expect.userDisposition,
+      `${scenario.name}: userDisposition`,
+    );
+    assertNullableEqual(state.threadID, scenario.expect.threadID, `${scenario.name}: threadID`);
+  });
+}
 
 function buildFixtureIntent(raw) {
   return {
