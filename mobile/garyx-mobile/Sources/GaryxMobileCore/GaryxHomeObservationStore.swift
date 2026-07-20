@@ -1,15 +1,30 @@
 import Foundation
 import Observation
 
+public struct GaryxRootSurfaceOccurrenceID: Hashable, Sendable {
+    public let rawValue: UInt64
+
+    public init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+}
+
 public enum GaryxRootSurface: Equatable, Sendable {
-    case navigationShell
+    case navigationShell(GaryxRootSurfaceOccurrenceID)
     case gatewaySetup
+}
+
+public enum GaryxRootSurfaceOccurrenceTransition: Equatable, Sendable {
+    case navigationShellBegan(GaryxRootSurfaceOccurrenceID)
+    case navigationShellEnded(GaryxRootSurfaceOccurrenceID)
 }
 
 @MainActor
 @Observable
 public final class GaryxHomeObservationStore {
     @ObservationIgnored public private(set) var publishCount = 0
+    @ObservationIgnored private var activeNavigationShellOccurrenceID: GaryxRootSurfaceOccurrenceID?
+    @ObservationIgnored private var nextNavigationShellOccurrenceRawValue: UInt64
 
     public private(set) var isGatewayConfigured: Bool
     public private(set) var connectionState: GaryxMobileConnectionState
@@ -30,6 +45,14 @@ public final class GaryxHomeObservationStore {
         hasMoreThreadSummaries: Bool = false,
         loadMoreFooterState: GaryxHomeLoadMoreFooterState = .hidden
     ) {
+        let startsWithNavigationShell = Self.resolvesNavigationShell(
+            isGatewayConfigured: isGatewayConfigured,
+            connectionState: connectionState
+        )
+        activeNavigationShellOccurrenceID = startsWithNavigationShell
+            ? GaryxRootSurfaceOccurrenceID(rawValue: 1)
+            : nil
+        nextNavigationShellOccurrenceRawValue = startsWithNavigationShell ? 2 : 1
         self.isGatewayConfigured = isGatewayConfigured
         self.connectionState = connectionState
         self.debugShowsGatewaySwitcher = debugShowsGatewaySwitcher
@@ -44,17 +67,52 @@ public final class GaryxHomeObservationStore {
     /// Changing this value replaces the complete navigation-shell occurrence,
     /// including its UIKit-owned public edge recognizers.
     public var rootSurface: GaryxRootSurface {
-        guard isGatewayConfigured, case .ready = connectionState else {
+        guard Self.resolvesNavigationShell(
+            isGatewayConfigured: isGatewayConfigured,
+            connectionState: connectionState
+        ) else {
             return .gatewaySetup
         }
-        return .navigationShell
+        guard let activeNavigationShellOccurrenceID else {
+            preconditionFailure("navigation shell is missing its occurrence identity")
+        }
+        return .navigationShell(activeNavigationShellOccurrenceID)
     }
 
+    /// Applies the root branch transition as one ordered ownership boundary.
+    /// The callback runs while the old branch is still publicly visible, so an
+    /// ending Shell can synchronously release every interaction it owns before
+    /// Observation lets SwiftUI replace that occurrence.
     @discardableResult
     public func applyConnection(
         isGatewayConfigured: Bool,
-        connectionState: GaryxMobileConnectionState
+        connectionState: GaryxMobileConnectionState,
+        willTransitionRootSurface: (GaryxRootSurfaceOccurrenceTransition) -> Void
     ) -> Bool {
+        let currentlyShowsNavigationShell = Self.resolvesNavigationShell(
+            isGatewayConfigured: self.isGatewayConfigured,
+            connectionState: self.connectionState
+        )
+        let nextShowsNavigationShell = Self.resolvesNavigationShell(
+            isGatewayConfigured: isGatewayConfigured,
+            connectionState: connectionState
+        )
+
+        if currentlyShowsNavigationShell, !nextShowsNavigationShell {
+            guard let activeNavigationShellOccurrenceID else {
+                preconditionFailure("ending navigation shell is missing its occurrence identity")
+            }
+            willTransitionRootSurface(.navigationShellEnded(activeNavigationShellOccurrenceID))
+            self.activeNavigationShellOccurrenceID = nil
+        } else if !currentlyShowsNavigationShell, nextShowsNavigationShell {
+            let occurrenceID = GaryxRootSurfaceOccurrenceID(
+                rawValue: nextNavigationShellOccurrenceRawValue
+            )
+            nextNavigationShellOccurrenceRawValue &+= 1
+            willTransitionRootSurface(.navigationShellBegan(occurrenceID))
+            activeNavigationShellOccurrenceID = occurrenceID
+        }
+
         var changed = false
         changed = set(\.isGatewayConfigured, to: isGatewayConfigured) || changed
         changed = set(\.connectionState, to: connectionState) || changed
@@ -97,6 +155,14 @@ public final class GaryxHomeObservationStore {
         guard self[keyPath: keyPath] != value else { return false }
         self[keyPath: keyPath] = value
         publishCount += 1
+        return true
+    }
+
+    private static func resolvesNavigationShell(
+        isGatewayConfigured: Bool,
+        connectionState: GaryxMobileConnectionState
+    ) -> Bool {
+        guard isGatewayConfigured, case .ready = connectionState else { return false }
         return true
     }
 }

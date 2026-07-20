@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Root content column owned exclusively by the UIKit occurrence stack.
 struct GaryxRootNavigationView: View, Equatable {
+    let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
     @ObservedObject var routeStore: GaryxProductionRouteStore
     @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
@@ -27,7 +28,8 @@ struct GaryxRootNavigationView: View, Equatable {
     let onArchiveThread: (GaryxThreadSummary) async -> Void
 
     static func == (lhs: GaryxRootNavigationView, rhs: GaryxRootNavigationView) -> Bool {
-        lhs.routeStore === rhs.routeStore
+        lhs.rootSurfaceOccurrenceID == rhs.rootSurfaceOccurrenceID
+            && lhs.routeStore === rhs.routeStore
             && lhs.routeNotFoundStore === rhs.routeNotFoundStore
             && lhs.homeListStore === rhs.homeListStore
             && lhs.isSidebarDragActive == rhs.isSidebarDragActive
@@ -38,6 +40,7 @@ struct GaryxRootNavigationView: View, Equatable {
         let _ = GaryxHomeScrollPerformanceProbe.shared.markRootBody()
         #endif
         GaryxProductionRouteCanvas(
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
             store: routeStore,
             model: model,
             homeContent: AnyView(homeContent),

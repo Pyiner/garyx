@@ -437,6 +437,7 @@ final class GaryxProductionRouteStore: ObservableObject {
 /// view-controller representable. That clips every route host, including page
 /// content and glass materials which intentionally render behind system chrome.
 struct GaryxProductionRouteCanvas: View {
+    let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
     @ObservedObject var store: GaryxProductionRouteStore
     let model: GaryxMobileModel
     let homeContent: AnyView
@@ -445,6 +446,7 @@ struct GaryxProductionRouteCanvas: View {
 
     var body: some View {
         GaryxProductionRouteStack(
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
             store: store,
             model: model,
             homeContent: homeContent,
@@ -456,6 +458,7 @@ struct GaryxProductionRouteCanvas: View {
 }
 
 private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
+    let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
     @ObservedObject var store: GaryxProductionRouteStore
     let model: GaryxMobileModel
     let homeContent: AnyView
@@ -468,19 +471,60 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
 
     final class Coordinator {
         weak var store: GaryxProductionRouteStore?
+        weak var model: GaryxMobileModel?
+        private(set) var rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
+        private(set) var revealHostOccurrenceID: GaryxHorizontalRevealHostOccurrenceID
+        var drawerGestureOccurrenceID: GaryxHorizontalRevealHostOccurrenceID?
+        var taskTreeGestureOccurrenceID: GaryxHorizontalRevealHostOccurrenceID?
         var preferences: GaryxRouteVisualPreferences
 
-        init(store: GaryxProductionRouteStore, preferences: GaryxRouteVisualPreferences) {
+        init(
+            store: GaryxProductionRouteStore,
+            model: GaryxMobileModel,
+            rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID,
+            preferences: GaryxRouteVisualPreferences
+        ) {
             self.store = store
+            self.model = model
+            self.rootSurfaceOccurrenceID = rootSurfaceOccurrenceID
+            revealHostOccurrenceID = Self.makeHostOccurrenceID(rootSurfaceOccurrenceID)
             self.preferences = preferences
+        }
+
+        func transitionRootSurface(
+            to occurrenceID: GaryxRootSurfaceOccurrenceID
+        ) -> GaryxHorizontalRevealHostOccurrenceID? {
+            guard rootSurfaceOccurrenceID != occurrenceID else { return nil }
+            let previousHostOccurrenceID = revealHostOccurrenceID
+            rootSurfaceOccurrenceID = occurrenceID
+            revealHostOccurrenceID = Self.makeHostOccurrenceID(occurrenceID)
+            drawerGestureOccurrenceID = nil
+            taskTreeGestureOccurrenceID = nil
+            return previousHostOccurrenceID
+        }
+
+        private static func makeHostOccurrenceID(
+            _ rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
+        ) -> GaryxHorizontalRevealHostOccurrenceID {
+            GaryxHorizontalRevealHostOccurrenceID(
+                rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
+                rawValue: UUID().uuidString.lowercased()
+            )
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(store: store, preferences: currentPreferences)
+        Coordinator(
+            store: store,
+            model: model,
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
+            preferences: currentPreferences
+        )
     }
 
     func makeUIViewController(context: Context) -> GaryxRouteStackContainer {
+        let revealCoordinator = context.coordinator
+        model.attachGlobalRevealHostOccurrence(revealCoordinator.revealHostOccurrenceID)
         let pushProbe = GaryxRoutePushPerformanceProbe.shared
         let routeLifecycleRegistry = GaryxRouteLifecycleRegistry()
         #if DEBUG
@@ -568,6 +612,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                     GaryxProductionRouteHostEnvironment(
                         model: model,
                         store: store,
+                        homeObservationStore: model.homeObservationStore,
                         node: node,
                         content: content,
                         routeLifecycleRegistry: routeLifecycleRegistry,
@@ -599,8 +644,11 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         pushProbe?.install(in: container)
         let drawerInteraction = model.drawerRevealInteraction
         container.homeLeadingEdgeInteraction = GaryxRouteEdgePanInteraction(
-            isEligible: {
-                drawerInteraction.isGestureEligible
+            isEligible: { [weak revealCoordinator] in
+                guard let occurrenceID = revealCoordinator?.revealHostOccurrenceID else {
+                    return false
+                }
+                return drawerInteraction.isGestureEligible(in: occurrenceID)
             },
             requiresEdgeZone: {
                 drawerInteraction.requiresEdgeZone
@@ -608,29 +656,51 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             acceptedDirection: {
                 drawerInteraction.acceptedDirection
             },
-            began: {
+            began: { [weak revealCoordinator] in
+                guard let revealCoordinator else { return }
+                let occurrenceID = revealCoordinator.revealHostOccurrenceID
+                revealCoordinator.drawerGestureOccurrenceID = occurrenceID
                 GaryxMobileHaptics.shared.prepare(.drawerVisibilityCommitted)
-                drawerInteraction.beginGesture()
+                drawerInteraction.beginGesture(in: occurrenceID)
             },
-            changed: { translation, _ in
-                drawerInteraction.updateGesture(logicalTranslation: translation)
+            changed: { [weak revealCoordinator] translation, _ in
+                guard let occurrenceID = revealCoordinator?.drawerGestureOccurrenceID else {
+                    return
+                }
+                drawerInteraction.updateGesture(
+                    logicalTranslation: translation,
+                    in: occurrenceID
+                )
             },
-            ended: { [weak model] velocity in
-                guard let target = drawerInteraction.endGesture(logicalVelocity: velocity)
+            ended: { [weak model, weak revealCoordinator] velocity in
+                guard let occurrenceID = revealCoordinator?.drawerGestureOccurrenceID else {
+                    return
+                }
+                revealCoordinator?.drawerGestureOccurrenceID = nil
+                guard let target = drawerInteraction.endGesture(
+                    logicalVelocity: velocity,
+                    in: occurrenceID
+                )
                 else { return }
                 model?.setSidebarVisible(target == .open, animated: true)
             },
-            cancelled: { [weak model] in
-                guard let target = drawerInteraction.cancelGesture() else { return }
+            cancelled: { [weak model, weak revealCoordinator] in
+                guard let occurrenceID = revealCoordinator?.drawerGestureOccurrenceID else {
+                    return
+                }
+                revealCoordinator?.drawerGestureOccurrenceID = nil
+                guard let target = drawerInteraction.cancelGesture(in: occurrenceID)
+                else { return }
                 model?.setSidebarVisible(target == .open, animated: true)
             }
         )
 
         let taskTreeInteraction = model.taskTreeRevealInteraction
         container.trailingEdgeInteraction = GaryxRouteEdgePanInteraction(
-            isEligible: { [weak model] in
+            isEligible: { [weak model, weak revealCoordinator] in
                 guard let model,
-                      taskTreeInteraction.isGestureEligible,
+                      let occurrenceID = revealCoordinator?.revealHostOccurrenceID,
+                      taskTreeInteraction.isGestureEligible(in: occurrenceID),
                       !drawerInteraction.isDragging,
                       store.path.last?.destination.composerKey != nil else { return false }
                 if taskTreeInteraction.presentation.phase != .idle
@@ -646,16 +716,32 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             acceptedDirection: {
                 taskTreeInteraction.acceptedDirection
             },
-            began: {
+            began: { [weak revealCoordinator] in
+                guard let revealCoordinator else { return }
+                let occurrenceID = revealCoordinator.revealHostOccurrenceID
+                revealCoordinator.taskTreeGestureOccurrenceID = occurrenceID
                 GaryxMobileHaptics.shared.prepare(.taskTreeVisibilityCommitted)
-                taskTreeInteraction.beginGesture()
+                taskTreeInteraction.beginGesture(in: occurrenceID)
             },
-            changed: { translation, _ in
-                taskTreeInteraction.updateGesture(logicalTranslation: translation)
+            changed: { [weak revealCoordinator] translation, _ in
+                guard let occurrenceID = revealCoordinator?.taskTreeGestureOccurrenceID else {
+                    return
+                }
+                taskTreeInteraction.updateGesture(
+                    logicalTranslation: translation,
+                    in: occurrenceID
+                )
             },
-            ended: { [weak model] velocity in
+            ended: { [weak model, weak revealCoordinator] velocity in
+                guard let occurrenceID = revealCoordinator?.taskTreeGestureOccurrenceID else {
+                    return
+                }
+                revealCoordinator?.taskTreeGestureOccurrenceID = nil
                 guard let model,
-                      let target = taskTreeInteraction.endGesture(logicalVelocity: velocity)
+                      let target = taskTreeInteraction.endGesture(
+                          logicalVelocity: velocity,
+                          in: occurrenceID
+                      )
                 else { return }
                 if target == .open {
                     model.openTaskTreeSidebar()
@@ -663,9 +749,15 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                     model.closeTaskTreeSidebar()
                 }
             },
-            cancelled: { [weak model] in
+            cancelled: { [weak model, weak revealCoordinator] in
+                guard let occurrenceID = revealCoordinator?.taskTreeGestureOccurrenceID else {
+                    return
+                }
+                revealCoordinator?.taskTreeGestureOccurrenceID = nil
                 guard let model,
-                      let target = taskTreeInteraction.cancelGesture() else { return }
+                      let target = taskTreeInteraction.cancelGesture(
+                          in: occurrenceID
+                      ) else { return }
                 if target == .open {
                     model.openTaskTreeSidebar()
                 } else {
@@ -714,6 +806,14 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         _ container: GaryxRouteStackContainer,
         context: Context
     ) {
+        if let previousHostOccurrenceID = context.coordinator.transitionRootSurface(
+            to: rootSurfaceOccurrenceID
+        ) {
+            model.detachGlobalRevealHostOccurrence(previousHostOccurrenceID)
+            model.attachGlobalRevealHostOccurrence(
+                context.coordinator.revealHostOccurrenceID
+            )
+        }
         context.coordinator.preferences = currentPreferences
         container.layoutDirectionOverride = layoutDirection == .rightToLeft
             ? .rightToLeft
@@ -724,6 +824,9 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         _ container: GaryxRouteStackContainer,
         coordinator: Coordinator
     ) {
+        coordinator.model?.detachGlobalRevealHostOccurrence(
+            coordinator.revealHostOccurrenceID
+        )
         coordinator.store?.detach(container)
     }
 
@@ -958,6 +1061,7 @@ private final class GaryxProductionRouteDiagnostics {
 private struct GaryxProductionRouteHostEnvironment: View {
     @ObservedObject var model: GaryxMobileModel
     @ObservedObject var store: GaryxProductionRouteStore
+    @Bindable var homeObservationStore: GaryxHomeObservationStore
     @Environment(\.garyxRouteContext) private var routeContext
     let node: GaryxRoutePresentationNode
     let content: AnyView
@@ -967,9 +1071,10 @@ private struct GaryxProductionRouteHostEnvironment: View {
     var body: some View {
         content
             .environmentObject(model)
-            .environment(model.homeObservationStore)
+            .environment(homeObservationStore)
             .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
             .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
+            .environment(\.garyxRootSurfaceOccurrenceID, rootSurfaceOccurrenceID)
             .environment(\.garyxRouteLifecycleRegistry, routeLifecycleRegistry)
             .environment(\.garyxOpenSidebar, onOpenDrawer)
             .environment(\.garyxRouteNavigationActions, navigationActions)
@@ -988,6 +1093,13 @@ private struct GaryxProductionRouteHostEnvironment: View {
                 )
             )
             .garyxAccessibilityPreferences()
+    }
+
+    private var rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID? {
+        guard case .navigationShell(let occurrenceID) = homeObservationStore.rootSurface else {
+            return nil
+        }
+        return occurrenceID
     }
 
     private var navigationActions: GaryxRouteNavigationActions {

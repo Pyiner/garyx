@@ -156,8 +156,13 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 
         let store = GaryxProductionRouteStore()
         let model = GaryxMobileModel(defaults: defaults)
+        let rootSurfaceOccurrenceID = GaryxRootSurfaceOccurrenceID(rawValue: 1)
+        model.applyGlobalRevealRootSurfaceTransition(
+            .navigationShellBegan(rootSurfaceOccurrenceID)
+        )
         let root = UIHostingController(
             rootView: GaryxProductionRouteCanvas(
+                rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
                 store: store,
                 model: model,
                 homeContent: AnyView(Color.blue),
@@ -186,6 +191,91 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertGreaterThan(root.view.safeAreaInsets.bottom, 0)
         XCTAssertEqual(canvasFrame.minY, root.view.bounds.minY, accuracy: 0.5)
         XCTAssertEqual(canvasFrame.maxY, root.view.bounds.maxY, accuracy: 0.5)
+    }
+
+    func testProductionRouteCanvasRebindsRevealOwnerWhenRootUpdatesInPlace() throws {
+        let suiteName = "GaryxRouteCanvasRootOccurrenceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = GaryxProductionRouteStore()
+        let model = GaryxMobileModel(defaults: defaults)
+        model.gatewayURL = "http://127.0.0.1:4000"
+        model.connectionState = .ready(version: "first")
+        guard case .navigationShell(let firstRootOccurrence) =
+            model.homeObservationStore.rootSurface else {
+            return XCTFail("first navigation Shell did not begin")
+        }
+
+        func canvas(
+            _ occurrenceID: GaryxRootSurfaceOccurrenceID
+        ) -> GaryxProductionRouteCanvas {
+            GaryxProductionRouteCanvas(
+                rootSurfaceOccurrenceID: occurrenceID,
+                store: store,
+                model: model,
+                homeContent: AnyView(Color.blue),
+                routeContent: { _ in AnyView(Color.green) },
+                onOpenDrawer: {}
+            )
+        }
+
+        let root = UIHostingController(rootView: canvas(firstRootOccurrence))
+        let window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = root
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        root.view.frame = window.bounds
+        root.view.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+
+        let initialContainer = try XCTUnwrap(
+            descendants(of: root).compactMap { $0 as? GaryxRouteStackContainer }.first
+        )
+        model.drawerRevealInteraction.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: firstRootOccurrence
+        )
+        let initialInteraction = try XCTUnwrap(initialContainer.homeLeadingEdgeInteraction)
+        XCTAssertTrue(initialInteraction.isEligible())
+        initialInteraction.began()
+        initialInteraction.changed(120, 0)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+
+        // Publish an exit and re-entry before SwiftUI receives a replacement
+        // canvas. Updating the same representable must rotate its host token,
+        // clear the old touch-stream token, and retain the physical container.
+        model.connectionState = .checking
+        model.connectionState = .ready(version: "second")
+        guard case .navigationShell(let secondRootOccurrence) =
+            model.homeObservationStore.rootSurface else {
+            return XCTFail("second navigation Shell did not begin")
+        }
+        XCTAssertNotEqual(secondRootOccurrence, firstRootOccurrence)
+        root.rootView = canvas(secondRootOccurrence)
+        root.view.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+
+        let updatedContainer = try XCTUnwrap(
+            descendants(of: root).compactMap { $0 as? GaryxRouteStackContainer }.first
+        )
+        XCTAssertTrue(updatedContainer === initialContainer)
+        let updatedInteraction = try XCTUnwrap(updatedContainer.homeLeadingEdgeInteraction)
+
+        initialInteraction.changed(180, 0)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .idle)
+        XCTAssertTrue(updatedInteraction.isEligible())
+        updatedInteraction.began()
+        updatedInteraction.changed(80, 0)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+
+        model.connectionState = .checking
+        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
     }
 
     func testFakeRouteHostRequiresExplicitDebugEnvironmentOptIn() throws {

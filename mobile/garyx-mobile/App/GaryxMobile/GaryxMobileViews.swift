@@ -10,9 +10,10 @@ struct GaryxRootView: View {
 
     var body: some View {
         ZStack {
-            if homeObservationStore.rootSurface == .navigationShell {
+            if case .navigationShell(let rootSurfaceOccurrenceID) = homeObservationStore.rootSurface {
                 GaryxShellView(
                     model: model,
+                    rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
                     shellStore: model.shellChromeStore,
                     drawerStore: model.navigationDrawerStore,
                     drawerRevealInteraction: model.drawerRevealInteraction,
@@ -508,6 +509,7 @@ private struct GaryxDrawerPanelClipShape: Shape {
 
 struct GaryxShellView: View, Equatable {
     let model: GaryxMobileModel
+    let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
     @ObservedObject var shellStore: GaryxShellChromeStore
     @ObservedObject var drawerStore: GaryxNavigationDrawerStore
     @ObservedObject var drawerRevealInteraction: GaryxHorizontalRevealInteractionStore
@@ -552,6 +554,7 @@ struct GaryxShellView: View, Equatable {
 
     static func == (lhs: GaryxShellView, rhs: GaryxShellView) -> Bool {
         lhs.model === rhs.model
+            && lhs.rootSurfaceOccurrenceID == rhs.rootSurfaceOccurrenceID
             && lhs.shellStore === rhs.shellStore
             && lhs.drawerStore === rhs.drawerStore
             && lhs.drawerRevealInteraction === rhs.drawerRevealInteraction
@@ -573,31 +576,36 @@ struct GaryxShellView: View, Equatable {
                 \.garyxSidebarDragActive,
                 drawerRevealInteraction.presentation.phase != .idle
             )
+            .environment(\.garyxRootSurfaceOccurrenceID, rootSurfaceOccurrenceID)
             .environment(\.garyxOpenSwipeActionRowId, $openSwipeActionRowId)
             .onAppear {
                 drawerRevealInteraction.configure(
                     extent: width,
-                    restingPosition: shellStore.snapshot.sidebarVisible ? .open : .closed
+                    restingPosition: shellStore.snapshot.sidebarVisible ? .open : .closed,
+                    rootSurfaceOccurrenceID: rootSurfaceOccurrenceID
                 )
             }
             .onChange(of: width) { oldWidth, newWidth in
                 guard oldWidth != newWidth else { return }
                 drawerRevealInteraction.configure(
                     extent: newWidth,
-                    restingPosition: shellStore.snapshot.sidebarVisible ? .open : .closed
+                    restingPosition: shellStore.snapshot.sidebarVisible ? .open : .closed,
+                    rootSurfaceOccurrenceID: rootSurfaceOccurrenceID
                 )
             }
             .onChange(of: shellStore.snapshot.sidebarVisible) { _, visible in
                 drawerRevealInteraction.setTarget(
                     visible ? .open : .closed,
-                    animated: animatesTransitions
+                    animated: animatesTransitions,
+                    rootSurfaceOccurrenceID: rootSurfaceOccurrenceID
                 )
             }
         }
         .onChange(of: horizontalSizeClass) { _, _ in
             drawerRevealInteraction.setTarget(
                 shellStore.snapshot.sidebarVisible ? .open : .closed,
-                animated: false
+                animated: false,
+                rootSurfaceOccurrenceID: rootSurfaceOccurrenceID
             )
         }
     }
@@ -661,6 +669,7 @@ struct GaryxShellView: View, Equatable {
             .offset(x: drawerOffset)
 
             GaryxRootNavigationView(
+                rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
                 routeStore: routeStore,
                 routeNotFoundStore: routeNotFoundStore,
                 homeListStore: homeListStore,

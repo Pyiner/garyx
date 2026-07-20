@@ -27,6 +27,97 @@ public enum GaryxHorizontalRevealPhase: Equatable, Sendable {
     }
 }
 
+public struct GaryxHorizontalRevealHostOccurrenceID: Hashable, Sendable {
+    public let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
+    public let rawValue: String
+
+    public init(
+        rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID,
+        rawValue: String
+    ) {
+        self.rootSurfaceOccurrenceID = rootSurfaceOccurrenceID
+        self.rawValue = rawValue
+    }
+}
+
+public enum GaryxHorizontalRevealHostAttachmentResult: Equatable, Sendable {
+    case attached
+    case alreadyAttached
+    case superseded(GaryxHorizontalRevealHostOccurrenceID)
+    case rejected
+}
+
+/// Ownership ledger for a model-lived reveal whose recognizer lives inside a
+/// replaceable UIKit host. Root transitions revoke the complete surface scope;
+/// host transitions distinguish the current container from stale dismantle and
+/// gesture callbacks belonging to an older occurrence.
+public struct GaryxHorizontalRevealHostOwnership: Equatable, Sendable {
+    public private(set) var rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID?
+    public private(set) var activeHostOccurrenceID: GaryxHorizontalRevealHostOccurrenceID?
+
+    public init() {}
+
+    /// Returns whether the previously admitted owner must be force-terminal.
+    @discardableResult
+    public mutating func applyRootSurfaceTransition(
+        _ transition: GaryxRootSurfaceOccurrenceTransition
+    ) -> Bool {
+        switch transition {
+        case .navigationShellBegan(let occurrenceID):
+            guard rootSurfaceOccurrenceID != occurrenceID else { return false }
+            let supersededAnOccurrence = rootSurfaceOccurrenceID != nil
+            rootSurfaceOccurrenceID = occurrenceID
+            activeHostOccurrenceID = nil
+            return supersededAnOccurrence
+        case .navigationShellEnded(let occurrenceID):
+            guard rootSurfaceOccurrenceID == occurrenceID else { return false }
+            rootSurfaceOccurrenceID = nil
+            activeHostOccurrenceID = nil
+            // Ending the owning surface is itself a terminal boundary, even if
+            // UIKit already dismantled the recognizer occurrence.
+            return true
+        }
+    }
+
+    public mutating func attachHost(
+        _ occurrenceID: GaryxHorizontalRevealHostOccurrenceID
+    ) -> GaryxHorizontalRevealHostAttachmentResult {
+        guard rootSurfaceOccurrenceID == occurrenceID.rootSurfaceOccurrenceID else {
+            return .rejected
+        }
+        guard activeHostOccurrenceID != occurrenceID else { return .alreadyAttached }
+        let superseded = activeHostOccurrenceID
+        activeHostOccurrenceID = occurrenceID
+        if let superseded {
+            return .superseded(superseded)
+        }
+        return .attached
+    }
+
+    /// Returns true only when the dismantled host was the current owner. A
+    /// stale teardown must never revoke the replacement occurrence.
+    @discardableResult
+    public mutating func detachHost(
+        _ occurrenceID: GaryxHorizontalRevealHostOccurrenceID
+    ) -> Bool {
+        guard activeHostOccurrenceID == occurrenceID else { return false }
+        activeHostOccurrenceID = nil
+        return true
+    }
+
+    public func accepts(_ occurrenceID: GaryxHorizontalRevealHostOccurrenceID) -> Bool {
+        activeHostOccurrenceID == occurrenceID
+    }
+
+    public func belongsToRootSurface(_ occurrenceID: GaryxRootSurfaceOccurrenceID) -> Bool {
+        rootSurfaceOccurrenceID == occurrenceID
+    }
+
+    public var hasActiveHost: Bool {
+        activeHostOccurrenceID != nil
+    }
+}
+
 /// External invalidations that must synchronously release reveal interaction
 /// ownership. These mirror the force-terminal events of the route
 /// presentation coordinator: once geometry, scene, or canonical ownership is
@@ -38,6 +129,7 @@ public enum GaryxHorizontalRevealInvalidation: String, CaseIterable, Codable, Se
     case routeInvalidated
     case gatewayForced
     case presentationBarrier
+    case hostOccurrenceEnded
 }
 
 public struct GaryxHorizontalRevealSettle: Equatable, Sendable {
@@ -158,7 +250,8 @@ public struct GaryxHorizontalRevealState: Equatable, Sendable {
              .geometryChanged,
              .routeInvalidated,
              .gatewayForced,
-             .presentationBarrier:
+             .presentationBarrier,
+             .hostOccurrenceEnded:
             synchronize(to: position, extent: extent)
         }
         return hadResidue

@@ -258,15 +258,158 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         }
     }
 
+    func testRootSurfaceAndUIKitHostEndsSynchronouslyReleaseTheDriver() {
+        let harness = Harness(
+            projection: .fullScreenNavigation,
+            bindsToRootSurfaceHost: true
+        )
+        let firstRoot = GaryxRootSurfaceOccurrenceID(rawValue: 1)
+        let firstHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: firstRoot,
+            rawValue: "first-host"
+        )
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellBegan(firstRoot),
+            position: .closed
+        )
+        harness.store.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: firstRoot
+        )
+        harness.store.attachHostOccurrence(firstHost, position: .closed)
+        harness.store.setTarget(.open, animated: true)
+        XCTAssertTrue(harness.frames.isRunning)
+
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellEnded(firstRoot),
+            position: .closed
+        )
+
+        XCTAssertFalse(harness.frames.isRunning)
+        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        XCTAssertTrue(harness.store.presentation.phase.allowsSurfaceHitTesting)
+
+        // Model commands may update the canonical endpoint while no host is
+        // mounted, but cannot create an ownerless animated settle.
+        harness.store.setTarget(.open, animated: true)
+        XCTAssertEqual(harness.store.presentation.phase, .idle)
+        XCTAssertEqual(harness.store.presentation.target, .open)
+        XCTAssertFalse(harness.frames.isRunning)
+
+        let secondRoot = GaryxRootSurfaceOccurrenceID(rawValue: 2)
+        let secondHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: secondRoot,
+            rawValue: "second-host"
+        )
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellBegan(secondRoot),
+            position: .open
+        )
+        harness.store.attachHostOccurrence(secondHost, position: .open)
+
+        harness.store.beginGesture(in: firstHost)
+        XCTAssertEqual(harness.store.presentation.phase, .idle)
+        harness.store.setTarget(.closed, animated: true)
+        XCTAssertTrue(harness.frames.isRunning)
+
+        let replacementHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: secondRoot,
+            rawValue: "replacement-host"
+        )
+        harness.store.attachHostOccurrence(replacementHost, position: .open)
+        XCTAssertFalse(harness.frames.isRunning)
+        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+
+        harness.store.detachHostOccurrence(secondHost, position: .open)
+        harness.store.beginGesture(in: secondHost)
+        XCTAssertEqual(harness.store.presentation.phase, .idle)
+        harness.store.beginGesture(in: replacementHost)
+        XCTAssertEqual(harness.store.presentation.phase, .dragging)
+
+        harness.store.detachHostOccurrence(replacementHost, position: .open)
+        XCTAssertFalse(harness.frames.isRunning)
+        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        XCTAssertTrue(harness.store.presentation.phase.allowsSurfaceHitTesting)
+    }
+
+    func testModelConnectionReplacementTerminatesBeforePublishingTheNewRoot() throws {
+        let suiteName = "GaryxRootInteractionOwnershipTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = GaryxMobileModel(defaults: defaults)
+        model.gatewayURL = "http://127.0.0.1:4000"
+        model.connectionState = .ready(version: "before-reconnect")
+        let firstRoot = try rootOccurrenceID(of: model.homeObservationStore)
+        let firstHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: firstRoot,
+            rawValue: "first-host"
+        )
+        model.drawerRevealInteraction.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: firstRoot
+        )
+        model.attachGlobalRevealHostOccurrence(firstHost)
+        model.drawerRevealInteraction.beginGesture(in: firstHost)
+        model.drawerRevealInteraction.updateGesture(
+            logicalTranslation: 120,
+            in: firstHost
+        )
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+
+        model.connectionState = .checking
+
+        XCTAssertEqual(model.homeObservationStore.rootSurface, .gatewaySetup)
+        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        XCTAssertTrue(
+            model.drawerRevealInteraction.presentation.phase.allowsSurfaceHitTesting
+        )
+
+        model.connectionState = .ready(version: "after-reconnect")
+        let secondRoot = try rootOccurrenceID(of: model.homeObservationStore)
+        let secondHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: secondRoot,
+            rawValue: "second-host"
+        )
+        model.attachGlobalRevealHostOccurrence(secondHost)
+
+        model.drawerRevealInteraction.beginGesture(in: firstHost)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .idle)
+        model.drawerRevealInteraction.beginGesture(in: secondHost)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+        model.detachGlobalRevealHostOccurrence(secondHost)
+        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+    }
+
+    private func rootOccurrenceID(
+        of store: GaryxHomeObservationStore
+    ) throws -> GaryxRootSurfaceOccurrenceID {
+        guard case .navigationShell(let occurrenceID) = store.rootSurface else {
+            throw RootOccurrenceError.navigationShellNotVisible
+        }
+        return occurrenceID
+    }
+
+    private enum RootOccurrenceError: Error {
+        case navigationShellNotVisible
+    }
+
     @MainActor
     private final class Harness {
         let clock = ManualTimeSource()
         let frames = ManualFrameSource()
         let store: GaryxHorizontalRevealInteractionStore
 
-        init(projection: GaryxMotionPhysics.ProjectionPolicy) {
+        init(
+            projection: GaryxMotionPhysics.ProjectionPolicy,
+            bindsToRootSurfaceHost: Bool = false
+        ) {
             store = GaryxHorizontalRevealInteractionStore(
                 projection: projection,
+                bindsToRootSurfaceHost: bindsToRootSurfaceHost,
                 settleDriver: GaryxGestureSettleDriver(
                     timeSource: clock,
                     frameSource: frames

@@ -21,7 +21,13 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
             invalidations += 1
         }
 
-        XCTAssertFalse(store.applyConnection(isGatewayConfigured: true, connectionState: .ready(version: nil)))
+        XCTAssertFalse(store.applyConnection(
+            isGatewayConfigured: true,
+            connectionState: .ready(version: nil),
+            willTransitionRootSurface: { transition in
+                XCTFail("same root surface emitted \(transition)")
+            }
+        ))
         XCTAssertFalse(store.applyPagination(isLoadingMoreThreads: false, hasMoreThreadSummaries: true, loadMoreFooterState: .idle))
         XCTAssertFalse(store.setDebugShowsGatewaySwitcher(false))
         XCTAssertFalse(store.setShowsSettings(false))
@@ -45,6 +51,54 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
         XCTAssertEqual(invalidations, 1)
     }
 
+    func test_rootSurfaceOccurrenceEndsBeforeTheVisibleBranchChanges() throws {
+        let store = GaryxHomeObservationStore(
+            isGatewayConfigured: true,
+            connectionState: .checking
+        )
+        var transitions: [GaryxRootSurfaceOccurrenceTransition] = []
+
+        XCTAssertTrue(store.applyConnection(
+            isGatewayConfigured: true,
+            connectionState: .ready(version: "first"),
+            willTransitionRootSurface: { transition in
+                XCTAssertEqual(store.rootSurface, .gatewaySetup)
+                transitions.append(transition)
+            }
+        ))
+        let firstOccurrence = try XCTUnwrap(store.rootSurface.navigationShellOccurrenceID)
+        XCTAssertEqual(transitions, [.navigationShellBegan(firstOccurrence)])
+
+        XCTAssertTrue(store.applyConnection(
+            isGatewayConfigured: true,
+            connectionState: .ready(version: "same-occurrence"),
+            willTransitionRootSurface: { transition in
+                XCTFail("ready-to-ready replaced the Shell: \(transition)")
+            }
+        ))
+        XCTAssertEqual(store.rootSurface, .navigationShell(firstOccurrence))
+
+        XCTAssertTrue(store.applyConnection(
+            isGatewayConfigured: true,
+            connectionState: .checking,
+            willTransitionRootSurface: { transition in
+                XCTAssertEqual(store.rootSurface, .navigationShell(firstOccurrence))
+                transitions.append(transition)
+            }
+        ))
+        XCTAssertEqual(store.rootSurface, .gatewaySetup)
+        XCTAssertEqual(transitions.last, .navigationShellEnded(firstOccurrence))
+
+        XCTAssertTrue(store.applyConnection(
+            isGatewayConfigured: true,
+            connectionState: .ready(version: "second"),
+            willTransitionRootSurface: { transitions.append($0) }
+        ))
+        let secondOccurrence = try XCTUnwrap(store.rootSurface.navigationShellOccurrenceID)
+        XCTAssertNotEqual(secondOccurrence, firstOccurrence)
+        XCTAssertEqual(transitions.last, .navigationShellBegan(secondOccurrence))
+    }
+
     private func trackStaticHomeReads(
         _ store: GaryxHomeObservationStore,
         onChange: @escaping () -> Void
@@ -61,5 +115,12 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
         } onChange: {
             onChange()
         }
+    }
+}
+
+private extension GaryxRootSurface {
+    var navigationShellOccurrenceID: GaryxRootSurfaceOccurrenceID? {
+        guard case .navigationShell(let occurrenceID) = self else { return nil }
+        return occurrenceID
     }
 }

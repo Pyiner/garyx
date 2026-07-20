@@ -539,10 +539,12 @@ final class GaryxMobileModel: ObservableObject {
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
     let drawerRevealInteraction = GaryxHorizontalRevealInteractionStore(
-        projection: .fullScreenNavigation
+        projection: .fullScreenNavigation,
+        bindsToRootSurfaceHost: true
     )
     let taskTreeRevealInteraction = GaryxHorizontalRevealInteractionStore(
-        projection: .fullScreenNavigation
+        projection: .fullScreenNavigation,
+        bindsToRootSurfaceHost: true
     )
     let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()
     let avatarStore: GaryxAvatarDiskStore

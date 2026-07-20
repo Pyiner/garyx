@@ -27,7 +27,10 @@ extension GaryxMobileModel {
     func refreshHomeObservationConnectionSnapshot() {
         homeObservationStore.applyConnection(
             isGatewayConfigured: hasGatewaySettings,
-            connectionState: connectionState
+            connectionState: connectionState,
+            willTransitionRootSurface: { [unowned self] transition in
+                applyGlobalRevealRootSurfaceTransition(transition)
+            }
         )
     }
 

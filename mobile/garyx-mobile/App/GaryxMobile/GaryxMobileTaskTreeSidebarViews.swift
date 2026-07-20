@@ -42,6 +42,7 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
 
     @Environment(\.garyxMotion) private var motion
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.garyxRootSurfaceOccurrenceID) private var rootSurfaceOccurrenceID
 
     var body: some View {
         GeometryReader { proxy in
@@ -90,26 +91,26 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
                     interaction.presentation.phase.allowsSurfaceHitTesting
                 )
                 .onAppear {
-                    interaction.configure(
+                    configureInteraction(
                         extent: panelWidth,
                         restingPosition: model.isTaskTreeSidebarOpen ? .open : .closed
                     )
                 }
                 .onChange(of: panelWidth) { oldWidth, newWidth in
                     guard oldWidth != newWidth else { return }
-                    interaction.configure(
+                    configureInteraction(
                         extent: newWidth,
                         restingPosition: model.isTaskTreeSidebarOpen ? .open : .closed
                     )
                 }
                 .onChange(of: model.isTaskTreeSidebarOpen) { _, open in
-                    interaction.setTarget(
+                    setInteractionTarget(
                         open ? .open : .closed,
                         animated: animatesTransitions
                     )
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
-                    interaction.setTarget(
+                    setInteractionTarget(
                         model.isTaskTreeSidebarOpen ? .open : .closed,
                         animated: false
                     )
@@ -130,6 +131,36 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
                     }
                 }
         }
+    }
+
+    private func configureInteraction(
+        extent: CGFloat,
+        restingPosition: GaryxHorizontalRevealPosition
+    ) {
+        guard let rootSurfaceOccurrenceID else {
+            assertionFailure("task-tree reveal mounted without a root surface occurrence")
+            return
+        }
+        interaction.configure(
+            extent: extent,
+            restingPosition: restingPosition,
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID
+        )
+    }
+
+    private func setInteractionTarget(
+        _ position: GaryxHorizontalRevealPosition,
+        animated: Bool
+    ) {
+        guard let rootSurfaceOccurrenceID else {
+            assertionFailure("task-tree reveal updated without a root surface occurrence")
+            return
+        }
+        interaction.setTarget(
+            position,
+            animated: animated,
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID
+        )
     }
 
     private func panelBody(
