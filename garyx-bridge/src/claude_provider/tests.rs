@@ -2197,9 +2197,7 @@ async fn test_stop_hook_hold_without_wake_turn_hits_idle_backstop_without_closin
             ])),
         ),
         (20, scripted_success_result("sdk-session-1")),
-        // The task's terminal notification arrives, but the protocol
-        // suppressed the follow-up turn: no wake rows, no fresh stop
-        // observation, ever.
+        // The task's terminal notification arrives ...
         (
             5_000,
             scripted_system(
@@ -2209,6 +2207,21 @@ async fn test_stop_hook_hold_without_wake_turn_hits_idle_backstop_without_closin
                     "subtype": "task_notification",
                     "task_id": "bg-1",
                     "status": "completed",
+                }),
+            ),
+        ),
+        // ... but the protocol suppressed the follow-up turn (real
+        // `SDKInformationalMessage` shape carries `prevent_continuation`):
+        // no wake rows, no fresh stop observation, ever.
+        (
+            5_000,
+            scripted_system(
+                "informational",
+                json!({
+                    "type": "system",
+                    "subtype": "informational",
+                    "content": "Stop hook denied continuation",
+                    "level": "notice",
                     "prevent_continuation": true,
                 }),
             ),
@@ -2221,6 +2234,7 @@ async fn test_stop_hook_hold_without_wake_turn_hits_idle_backstop_without_closin
     ]);
 
     let cb: StreamCallback = Box::new(|_| {});
+    let started = tokio::time::Instant::now();
     let error = provider
         .process_messages_streaming("run-stop-hook-no-wake", "thread::test", &mut source, &cb)
         .await
@@ -2229,6 +2243,16 @@ async fn test_stop_hook_hold_without_wake_turn_hits_idle_backstop_without_closin
     assert!(
         matches!(&error, BridgeError::RunFailed(message) if message.contains("idle")),
         "expected stream-idle failure, got: {error:?}"
+    );
+    // The last stream activity is the suppressed-continuation pair at t=5s;
+    // the failure must land exactly one idle ceiling later, proving the 1h
+    // backstop (and not some earlier teardown) is what ends the hold. The
+    // 3605s literal is deliberate: deriving it from STREAM_IDLE_TIMEOUT_SECS
+    // would let a shortened-timeout mutation pass unnoticed.
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(3_605),
+        "the hold must end exactly at the 1h stream-idle ceiling"
     );
     assert_eq!(
         source.end_input_calls, 0,
