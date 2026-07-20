@@ -162,7 +162,9 @@ enum GaryxSidebarMetrics {
 struct GaryxHomeThreadListView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.garyxMotion) private var motion
-    @StateObject private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
+    // Stable identity without observation: the controller is an imperative
+    // UIKit lifecycle box, and business changes return through callbacks.
+    @State private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
     @State private var threadMenuDismissToken = 0
     #if DEBUG
     @ObservedObject private var performanceProbe = GaryxHomeScrollPerformanceProbe.shared

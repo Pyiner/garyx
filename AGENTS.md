@@ -162,6 +162,11 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   state changes. Gate actions inside an always-attached modifier instead of
   conditionally replacing modifier branches, which can tear down an in-flight
   system presentation.
+- `UIViewRepresentable` make/update callbacks run inside SwiftUI graph updates.
+  Never synchronously publish from those callbacks into SwiftUI-observed
+  storage. Keep imperative UIKit lifecycle controllers in stable,
+  non-observable reference state, attach UIKit observation from UIKit hierarchy
+  callbacks, and return business outcomes through explicit callbacks.
 - Occurrence-scoped async route preparation must release waiters immediately
   when an occurrence is superseded. A stale completion may clean up its own
   waiters, but must never mutate the current occurrence bookkeeping.

@@ -1,4 +1,3 @@
-import Combine
 import SwiftUI
 import UIKit
 
@@ -29,7 +28,12 @@ enum GaryxPinnedThreadReorderRuntimeGate {
 }
 
 @MainActor
-final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
+/// Imperative UIKit lifecycle state. This is deliberately not observable:
+/// recognizer discovery and display-link sampling mutate it while UIKit and
+/// SwiftUI are updating their respective trees. Business outcomes leave the
+/// controller through `Callbacks`; no SwiftUI view reads this state in
+/// production, so publishing it would create an invalid graph backedge.
+final class GaryxPinnedDragLifecycleController: NSObject {
     struct Callbacks {
         var began: () -> Void
         var moved: () -> Void
@@ -39,17 +43,18 @@ final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
         static let none = Callbacks(began: {}, moved: {}, accepted: { _ in }, cancelled: {})
     }
 
-    @Published private(set) var isDragging = false
-    @Published private(set) var beganCount = 0
-    @Published private(set) var acceptedCount = 0
-    @Published private(set) var cancelledCount = 0
-    @Published private(set) var previewCallbackCount = 0
-    @Published private(set) var movementCount = 0
-    @Published private(set) var delegatesUnchanged = true
-    @Published private(set) var lastClassification = "idle"
-    @Published private(set) var observedRecognizerNames = "none"
+    private(set) var isDragging = false
+    private(set) var beganCount = 0
+    private(set) var acceptedCount = 0
+    private(set) var cancelledCount = 0
+    private(set) var previewCallbackCount = 0
+    private(set) var movementCount = 0
+    private(set) var delegatesUnchanged = true
+    private(set) var lastClassification = "idle"
+    private(set) var observedRecognizerNames = "none"
 
     private weak var collectionView: UICollectionView?
+    private var attachmentOwner: ObjectIdentifier?
     private var callbacks = Callbacks.none
     private var displayLink: CADisplayLink?
     private var observedRecognizers: [UIGestureRecognizer] = []
@@ -75,12 +80,13 @@ final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
         self.callbacks = callbacks
     }
 
-    func attach(to collectionView: UICollectionView) {
-        guard self.collectionView !== collectionView else {
+    func attach(to collectionView: UICollectionView, owner: ObjectIdentifier) {
+        guard attachmentOwner != owner || self.collectionView !== collectionView else {
             observeNewRecognizers()
             return
         }
-        detach()
+        detachCurrentAttachment()
+        attachmentOwner = owner
         self.collectionView = collectionView
         expectedDelegateIdentity = identity(of: collectionView.delegate)
         expectedDragDelegateIdentity = identity(of: collectionView.dragDelegate)
@@ -117,7 +123,12 @@ final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
         ].joined(separator: " ")
     }
 
-    private func detach() {
+    func detach(owner: ObjectIdentifier) {
+        guard attachmentOwner == owner else { return }
+        detachCurrentAttachment()
+    }
+
+    private func detachCurrentAttachment() {
         displayLink?.invalidate()
         displayLink = nil
         for recognizer in observedRecognizers {
@@ -125,6 +136,7 @@ final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
         }
         observedRecognizers.removeAll()
         collectionView = nil
+        attachmentOwner = nil
         wasActiveDrag = false
     }
 
@@ -148,6 +160,7 @@ final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
 
     @objc private func sampleCollectionView() {
         guard let collectionView else { return }
+        observeNewRecognizers()
         verifyDelegateIdentity(collectionView)
 
         let hasActiveDrag = collectionView.hasActiveDrag
@@ -286,7 +299,7 @@ final class GaryxPinnedDragLifecycleController: NSObject, ObservableObject {
 }
 
 struct GaryxPinnedDragLifecycleAdapter: UIViewRepresentable {
-    @ObservedObject var controller: GaryxPinnedDragLifecycleController
+    let controller: GaryxPinnedDragLifecycleController
 
     func makeCoordinator() -> Coordinator {
         Coordinator(controller: controller)
@@ -295,36 +308,46 @@ struct GaryxPinnedDragLifecycleAdapter: UIViewRepresentable {
     func makeUIView(context: Context) -> ProbeView {
         let view = ProbeView()
         view.isUserInteractionEnabled = false
-        view.onWindowChange = { [weak coordinator = context.coordinator, weak view] in
+        view.isAccessibilityElement = false
+        view.onHierarchyChange = { [weak coordinator = context.coordinator, weak view] in
             coordinator?.attachNearestCollection(to: view)
         }
-        context.coordinator.attachNearestCollection(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: ProbeView, context: Context) {
-        context.coordinator.controller = controller
-        context.coordinator.attachNearestCollection(to: uiView)
+    /// The controller identity is owned by the parent view's stable `@State`.
+    /// Updating the SwiftUI graph must never perform UIKit observation work or
+    /// write lifecycle state; hierarchy callbacks below own that imperative
+    /// lifecycle instead.
+    func updateUIView(_ uiView: ProbeView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: ProbeView, coordinator: Coordinator) {
+        uiView.onHierarchyChange = nil
+        coordinator.detach(from: uiView)
     }
 
     final class ProbeView: UIView {
-        var onWindowChange: (() -> Void)?
+        var onHierarchyChange: (() -> Void)?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            onWindowChange?()
+            onHierarchyChange?()
         }
 
         override func didMoveToSuperview() {
             super.didMoveToSuperview()
-            onWindowChange?()
+            onHierarchyChange?()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            onHierarchyChange?()
         }
     }
 
     @MainActor
     final class Coordinator {
-        var controller: GaryxPinnedDragLifecycleController
-        private var scheduledAttach = false
+        let controller: GaryxPinnedDragLifecycleController
 
         init(controller: GaryxPinnedDragLifecycleController) {
             self.controller = controller
@@ -333,16 +356,12 @@ struct GaryxPinnedDragLifecycleAdapter: UIViewRepresentable {
         func attachNearestCollection(to probe: UIView?) {
             guard let probe else { return }
             if let collection = nearestCollection(to: probe) {
-                scheduledAttach = false
-                controller.attach(to: collection)
-                return
+                controller.attach(to: collection, owner: ObjectIdentifier(probe))
             }
-            guard !scheduledAttach else { return }
-            scheduledAttach = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak probe] in
-                self?.scheduledAttach = false
-                self?.attachNearestCollection(to: probe)
-            }
+        }
+
+        func detach(from probe: ProbeView) {
+            controller.detach(owner: ObjectIdentifier(probe))
         }
 
         private func nearestCollection(to probe: UIView) -> UICollectionView? {
