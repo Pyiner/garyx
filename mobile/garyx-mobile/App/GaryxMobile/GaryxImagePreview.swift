@@ -147,7 +147,10 @@ struct GaryxFullscreenImageGalleryPreview: View {
             if saveState == .saved {
                 savedConfirmation
                     .padding(.bottom, 28)
-                    .transition(motion.transition(.imageSaveFeedback, moveFrom: .bottom))
+                    .garyxMaterializeTransition(
+                        .imageSaveFeedback,
+                        anchor: .bottom
+                    )
             }
         }
         .garyxAlert(item: $saveAlert, content: saveAlertView)

@@ -245,7 +245,10 @@ struct GaryxConversationView: View {
                                 .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
                         }
                         .buttonStyle(GaryxPressableRowStyle())
-                        .transition(motion.transition(.scrollLatest))
+                        .garyxMaterializeTransition(
+                            .scrollLatest,
+                            anchor: .bottom
+                        )
                         .accessibilityLabel("Scroll to latest message")
                     }
 

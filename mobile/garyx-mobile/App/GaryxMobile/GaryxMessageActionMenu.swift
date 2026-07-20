@@ -127,7 +127,10 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
                         GaryxMessageMenuPanel(request: request)
                             .frame(width: menuWidth(in: proxy.size.width))
                             .offset(panelOffset(for: request, in: proxy))
-                            .transition(motion.transition(.messageMenu))
+                            .garyxMaterializeTransition(
+                                .messageMenu,
+                                anchor: materializeAnchor(for: request)
+                            )
                     }
                 }
                 .animation(motion.animation(.messageMenu), value: request?.token)
@@ -163,6 +166,13 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
     private func menuWidth(in availableWidth: CGFloat) -> CGFloat {
         let preferredWidth: CGFloat = dynamicTypeSize.garyxUsesExpandedReadingLayout ? 340 : 236
         return min(preferredWidth, availableWidth - Self.margin * 2)
+    }
+
+    private func materializeAnchor(for request: GaryxMessageMenuRequest) -> UnitPoint {
+        switch request.edge {
+        case .leading: .topLeading
+        case .trailing: .topTrailing
+        }
     }
 }
 
@@ -477,8 +487,9 @@ private struct GaryxThreadActionMenuHostModifier: ViewModifier {
                         GaryxThreadActionMenuPanel(request: request)
                             .frame(width: panelWidth)
                             .offset(panelOffset(for: request, panelWidth: panelWidth, in: proxy))
-                            .transition(
-                                motion.transition(.threadMenu, anchor: .bottomLeading)
+                            .garyxMaterializeTransition(
+                                .threadMenu,
+                                anchor: .bottomLeading
                             )
                     }
                 }

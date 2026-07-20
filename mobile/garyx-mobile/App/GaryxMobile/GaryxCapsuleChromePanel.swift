@@ -149,7 +149,12 @@ struct GaryxCapsuleChromePanel: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
-                .transition(.opacity)
+                .garyxMaterializeTransition(
+                    .morphOpen,
+                    anchor: .top,
+                    initialScale: 0.985,
+                    initialBlurRadius: 8
+                )
             }
         }
         .opacity(isExpanded ? 1 : 0.999)

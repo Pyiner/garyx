@@ -58,7 +58,7 @@ struct GaryxGlobalErrorToastHost: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, topOffset)
-                .transition(motion.transition(.toast, moveFrom: .top))
+                .garyxMaterializeTransition(.toast, anchor: .top)
                 .zIndex(100)
             }
         }
@@ -112,6 +112,8 @@ struct GaryxGlobalErrorToast: View {
     let onDismiss: () -> Void
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
         Button(action: onDismiss) {
             HStack(spacing: contentSpacing) {
                 Image(systemName: "exclamationmark.circle.fill")
@@ -135,10 +137,14 @@ struct GaryxGlobalErrorToast: View {
             .padding(.horizontal, 12)
             .padding(.vertical, verticalPadding)
             .frame(maxWidth: 360, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: true,
+                in: shape
+            )
+            .contentShape(shape)
             .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+                shape.stroke(GaryxTheme.hairline, lineWidth: 1)
             }
             .shadow(color: Color.black.opacity(0.10), radius: 18, y: 8)
         }
