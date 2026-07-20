@@ -1862,7 +1862,7 @@ async fn test_cron_jobs_no_service() {
 async fn test_cron_jobs_with_service() {
     let state = test_state();
     let tmp = tempfile::TempDir::new().unwrap();
-    let svc = crate::cron::CronService::new(tmp.path().to_path_buf());
+    let svc = crate::automation::CronService::new(tmp.path().to_path_buf());
     let _ = tokio::fs::create_dir_all(tmp.path().join("cron").join("jobs")).await;
     svc.add(garyx_models::config::CronJobConfig {
         id: "test-job".to_owned(),
@@ -1992,12 +1992,12 @@ async fn test_cron_runs_no_service() {
 /// Build a CronService seeded with a mix of system + non-system jobs so the
 /// debug-endpoint tests can assert filtering behavior. Returns the service
 /// (caller wraps it into AppState.ops.cron_service).
-async fn seed_cron_service_for_debug() -> crate::cron::CronService {
+async fn seed_cron_service_for_debug() -> crate::automation::CronService {
     use garyx_models::config::{
         CronAction, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
     };
     let tmp = tempfile::TempDir::new().unwrap();
-    let svc = crate::cron::CronService::new(tmp.path().to_path_buf());
+    let svc = crate::automation::CronService::new(tmp.path().to_path_buf());
     let _ = tokio::fs::create_dir_all(tmp.path().join("cron").join("jobs")).await;
 
     let far_future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();

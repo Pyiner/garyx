@@ -4,7 +4,7 @@ use super::{
     infer_schedule_view, is_automation_job, list_automations, parse_time_hm, to_summary,
     update_automation,
 };
-use crate::cron::{CronJob, CronService, JobRunStatus};
+use crate::automation::engine::{CronJob, CronService, JobRunStatus};
 use crate::garyx_db::AutomationThreadRunDraft;
 use crate::server::AppStateBuilder;
 use axum::{

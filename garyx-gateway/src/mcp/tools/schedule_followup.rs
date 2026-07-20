@@ -4,7 +4,7 @@
 //! some external work completes. Closing the turn at that point silently
 //! ends the conversation — no system primitive currently re-wakes the agent
 //! when the background work is ready. `schedule_followup` closes that loop:
-//! the agent schedules a one-shot cron job in [`crate::cron`] and, when the
+//! the agent schedules a one-shot cron job in [`crate::automation::engine`] and, when the
 //! delay elapses, the scheduler injects a synthetic user turn back into the
 //! originating thread via [`crate::internal_inbound::dispatch_internal_message_to_thread`].
 //!
@@ -69,7 +69,7 @@ fn format_local_wall_clock(instant: chrono::DateTime<chrono::Utc>) -> String {
         .to_string()
 }
 
-fn previous_payload_json(previous: &crate::cron::CronJob) -> serde_json::Value {
+fn previous_payload_json(previous: &crate::automation::CronJob) -> serde_json::Value {
     let scheduled_for = format_local_wall_clock(previous.next_run);
     let payload = match &previous.kind {
         CronJobKind::InternalDispatch { payload } => Some(payload),

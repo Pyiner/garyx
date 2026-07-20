@@ -32,7 +32,7 @@ use std::process::Command;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
-use crate::cron::CronService;
+use crate::automation::CronService;
 use crate::garyx_db::{RecentThreadDraft, TestDbFaultPoint, TestDbMutationPoint, WorkspaceDraft};
 use crate::route_graph::build_router;
 use crate::server::AppStateBuilder;

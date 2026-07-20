@@ -12,7 +12,6 @@ mod composition;
 mod conversation_admission;
 mod create_dispatch;
 mod create_resources;
-pub mod cron;
 mod custom_agents;
 pub mod dashboard;
 mod delivery_target;
@@ -72,7 +71,7 @@ mod managed_mcp_real_tests;
 #[cfg(test)]
 mod source_guard_tests;
 
-pub use cron::CronService;
+pub use automation::CronService;
 pub use route_graph::build_router;
 pub use server::{AppState, Gateway};
 pub use thread_logs::{ThreadFileLogger, default_thread_log_dir};

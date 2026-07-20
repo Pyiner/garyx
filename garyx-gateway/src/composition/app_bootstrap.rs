@@ -22,7 +22,7 @@ use crate::agent_identity::GatewayThreadCreator;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
 use crate::composition::runtime_config_projection::RuntimeConfigProjection;
 use crate::conversation_admission::ConversationAdmissionService;
-use crate::cron::CronService;
+use crate::automation::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
 use crate::event_stream_hub::EventStreamHub;

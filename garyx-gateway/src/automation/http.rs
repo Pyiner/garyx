@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::agent_identity::resolve_new_agent_binding_from_store;
-use crate::cron::{CronJob, JobRunStatus, RunRecord};
+use super::engine::{CronJob, JobRunStatus, RunRecord};
 use crate::garyx_db::AutomationThreadRunRecord;
 use crate::server::AppState;
 use crate::thread_type::thread_summary_type_from_record;
@@ -249,7 +249,7 @@ fn parse_month_day(day: u8) -> Result<u8, String> {
 }
 
 fn parse_once_input(raw: &str) -> Result<DateTime<Utc>, String> {
-    crate::cron::parse_once_timestamp(raw)
+    super::engine::parse_once_timestamp(raw)
         .ok_or_else(|| "schedule.at must use YYYY-MM-DDTHH:MM or ONCE:YYYY-MM-DD HH:MM".to_owned())
 }
 
@@ -410,7 +410,7 @@ pub(crate) fn infer_schedule_view(
             })
         }
         CronSchedule::Once { .. } => {
-            let timestamp = crate::cron::parse_once_timestamp(match schedule {
+            let timestamp = super::engine::parse_once_timestamp(match schedule {
                 CronSchedule::Once { at } => at,
                 _ => unreachable!(),
             })
@@ -620,7 +620,7 @@ fn unread_hint_timestamp(job: &CronJob, latest_run: Option<&RunRecord>) -> Optio
 
 fn automation_next_run(job: &CronJob) -> String {
     match &job.schedule {
-        CronSchedule::Once { at } => crate::cron::parse_once_timestamp(at)
+        CronSchedule::Once { at } => super::engine::parse_once_timestamp(at)
             .map(|timestamp| timestamp.to_rfc3339())
             .unwrap_or_else(|| job.next_run.to_rfc3339()),
         _ => job.next_run.to_rfc3339(),
@@ -837,7 +837,7 @@ fn resolve_automation_workspace_input(
 
 async fn cron_service(
     state: &Arc<AppState>,
-) -> Result<Arc<crate::cron::CronService>, (StatusCode, Json<Value>)> {
+) -> Result<Arc<super::engine::CronService>, (StatusCode, Json<Value>)> {
     state
         .ops
         .cron_service
@@ -848,7 +848,7 @@ async fn cron_service(
 async fn automation_job(
     state: &Arc<AppState>,
     automation_id: &str,
-) -> Result<(Arc<crate::cron::CronService>, CronJob), (StatusCode, Json<Value>)> {
+) -> Result<(Arc<super::engine::CronService>, CronJob), (StatusCode, Json<Value>)> {
     let service = cron_service(state).await?;
     let Some(job) = service.get(automation_id).await else {
         return Err(not_found("automation not found"));
@@ -1439,4 +1439,5 @@ pub async fn automation_activity(
 }
 
 #[cfg(test)]
+#[path = "http_tests.rs"]
 mod tests;

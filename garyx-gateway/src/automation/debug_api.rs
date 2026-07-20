@@ -1,4 +1,4 @@
-//! Cron/automation data and debug-cron handlers.
+//! Cron-data listing and debug-cron HTTP handlers for the automation domain.
 
 use crate::server::AppState;
 use axum::Json;
@@ -174,7 +174,7 @@ pub(super) fn parse_since(raw: &str) -> Option<chrono::DateTime<Utc>> {
 }
 
 /// Render a single system cron job (plus its recent runs) into the debug shape.
-pub(super) fn debug_job_json(job: &crate::cron::CronJob, recent_runs: Vec<Value>) -> Value {
+pub(super) fn debug_job_json(job: &super::engine::CronJob, recent_runs: Vec<Value>) -> Value {
     let kind = match &job.kind {
         garyx_models::config::CronJobKind::AutomationPrompt => {
             json!({ "type": "automation_prompt" })
@@ -207,7 +207,7 @@ pub(super) fn debug_job_json(job: &crate::cron::CronJob, recent_runs: Vec<Value>
 }
 
 /// Render a RunRecord into JSON (mirrors the `cron_runs` shape, adds thread_id).
-pub(super) fn debug_run_json(r: &crate::cron::RunRecord) -> Value {
+pub(super) fn debug_run_json(r: &super::engine::RunRecord) -> Value {
     json!({
         "run_id": r.run_id,
         "job_id": r.job_id,

@@ -1,7 +1,7 @@
 //! Automation scheduler wiring: the one place that connects the cron engine
 //! to the assembled [`AppState`].
 //!
-//! The engine (`crate::cron`) has no `AppState` knowledge — it executes
+//! The engine (`crate::automation::engine`) has no `AppState` knowledge — it executes
 //! against an [`AutomationExecEnv`] whose gateway-state operations go through
 //! the narrow [`AutomationDispatchPort`]. This module implements that port
 //! over a `Weak<AppState>` and builds the env from live state, so the
@@ -14,7 +14,7 @@ use std::sync::{Arc, Weak};
 use garyx_models::provider::AgentDispatchOutcome;
 
 use crate::app_state::AppState;
-use crate::cron::{AutomationDispatchError, AutomationDispatchPort, AutomationExecEnv};
+use crate::automation::dispatch::{AutomationDispatchError, AutomationDispatchPort, AutomationExecEnv};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 
 /// [`AutomationDispatchPort`] implementation over the assembled gateway state.

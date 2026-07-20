@@ -670,7 +670,7 @@ async fn test_add_accepts_once_protocol_timestamp() {
         .await
         .unwrap();
 
-    let expected = crate::cron::parse_once_timestamp("ONCE:2026-03-08 16:00").unwrap();
+    let expected = super::parse_once_timestamp("ONCE:2026-03-08 16:00").unwrap();
     assert_eq!(job.next_run, expected);
 }
 
@@ -2419,7 +2419,7 @@ fn test_build_followup_body_contains_metadata_block() {
         delay_seconds_requested: 300,
     };
     let body =
-        crate::cron::build_followup_body("followup_deadbeefdeadbeef", &payload, scheduled_for);
+        super::build_followup_body("followup_deadbeefdeadbeef", &payload, scheduled_for);
     assert!(body.starts_with("<garyx_followup_metadata>"));
     assert!(body.contains("schedule_id: followup_deadbeefdeadbeef"));
     assert!(body.contains("delay_seconds_requested: 300"));
