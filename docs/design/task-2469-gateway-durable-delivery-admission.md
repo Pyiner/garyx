@@ -39,6 +39,11 @@ The non-negotiable invariants are:
    marker but missing or drifting from the v1 table/index shape fails startup;
    it is not repaired by `CREATE TABLE IF NOT EXISTS`, a read route, a
    backfill, or a reconcile pass.
+6. Live endpoint ownership and mutable binding metadata have one writer
+   domain after startup migration/import. Bind, detach, and delivery-activity
+   changes all enter the endpoint mutator; holder and
+   known-endpoint-registry records change atomically, while an ordinary stale
+   whole-record write cannot change `channel_bindings`.
 
 The provider runtimes do not expose a durable idempotency primitive. Therefore
 this design promises **durable at-most-once provider handoff**, not
@@ -73,6 +78,14 @@ between, that stale write can restore `channel_bindings` on the previous owner
 and make the endpoint projection point back to it. The atomic command therefore
 requires the record-mutation contract in Section 4.6; sharing locks only at the
 new transaction is not sufficient.
+
+The same field also has a sanctioned metadata writer today:
+`sync_endpoint_delivery_timestamp` performs two independent
+`get -> mutate channel_bindings[].last_delivery_at -> set` operations, one for
+the holder and one for the known-endpoint registry. Besides being rejected by
+the protected-field fence proposed below, a crash between those writes can
+already leave the two records divergent. Delivery activity is therefore moved
+into the endpoint mutator rather than being granted a `set` exception.
 
 `upload_chat_attachments` writes random files below the global temporary
 directory and returns their paths. It records neither an owner nor an expiry,
@@ -534,18 +547,65 @@ contract under its write guard. A successful changed write calls the
 unsupported error before touching storage; there is no `get + set` fallback
 for injected stores.
 
-`channel_bindings` is endpoint-mutator-owned. Ordinary `patch` and `update`
-reject a patch containing that key. As a second belt, `set` of an existing
-record re-reads under the same key guard and returns a typed
-`ProtectedFieldConflict` without writing if the supplied body's
-`channel_bindings` differs from the current value (including add/remove).
-Comparison uses a validated map keyed by canonical endpoint key (missing and
-an empty list are equivalent); malformed or duplicate bindings fail closed.
-Thus any unconverted or future stale full-body writer fails instead of
-resurrecting an endpoint. The endpoint mutator's sorted multi-record primitive
-is the only production path allowed to change that field and its registry and
-projection together. If a stale `set` wins the key guard first, the later move
-removes the binding; if the move wins first, the stale `set` is rejected.
+For live existing records after startup migration/import, `channel_bindings`
+is endpoint-mutator-owned, including both endpoint presence and mutable
+per-binding metadata such as `last_inbound_at` and `last_delivery_at`.
+Ordinary `patch` and `update` reject a patch containing that key. As a second
+belt, `set` of an existing record re-reads under the same key guard and returns
+a typed `ProtectedFieldConflict` without writing if the supplied body's
+`channel_bindings` differs from the current value (including add/remove or
+metadata changes). Comparison uses a validated map keyed by canonical endpoint
+key (missing and an empty list are equivalent); malformed or duplicate
+bindings fail closed. Thus any unconverted or future stale full-body writer
+fails instead of resurrecting an endpoint. If a stale `set` wins the key guard
+first, the later move removes the binding; if the move wins first, the stale
+`set` is rejected.
+
+The endpoint mutator exposes exactly three mutation families: bind, detach,
+and a typed delivery-activity operation:
+
+```text
+sync_delivery_timestamp(
+    endpoint_key,
+    expected_holder_thread_id,
+    last_delivery_at: Some(rfc3339) | None,
+) -> Applied | Unchanged | OwnerChanged { current_holder } | NotFound
+```
+
+`Some` sets and `None` clears the timestamp. The operation acquires the same
+endpoint `mutation_lock`, resolves the authoritative owner by the indexed
+projection, and compares it with `expected_holder_thread_id` before changing
+anything. A mismatch is the explicit, non-error `OwnerChanged` result: a late
+delivery or clear from a previous owner must never modify the new owner. A
+match point-reads the holder and requires its projected canonical binding to
+exist. That holder binding is authoritative for identity and other metadata;
+the operation changes only its `last_delivery_at`, then upserts the resulting
+full binding into `meta::known_channel_endpoints`. This deliberately converges
+a registry timestamp that drifted before rollout instead of making the drift
+permanent. The two top-level binding merges and records' `updated_at` values
+commit through one `update_many_atomic`. The mutator lock serializes this
+full-binding merge with bind/detach, while the store primitive acquires the two
+shared record guards in sorted order and commits both records and all
+projections in one transaction (`create_if_missing` is allowed only for the
+registry record). It never scans the store and has no sequential fallback;
+malformed/duplicate holder or registry bindings still fail closed.
+
+Bind remains the only live operation that adds an endpoint or merges explicit
+inbound/request binding metadata (including `last_inbound_at`) into the
+authoritative binding; detach remains the only removal operation. Neither
+metadata path exposes a generic `channel_bindings` patch to callers.
+
+If activity wins before a move, bind reads and carries the authoritative
+binding metadata into the target (overriding only explicitly newer request
+metadata). If the move wins first, the old expected-holder activity returns
+`OwnerChanged` without touching either record. The existing router
+`sync_endpoint_delivery_timestamp` store helper and its public re-export are
+removed; all three delivery-context call sites invoke the mutator operation
+and explicitly handle `OwnerChanged`/`NotFound` or log a storage error instead
+of discarding `Err`. `upsert_known_channel_endpoint`, which has no production
+caller and is another registry `get -> set` escape hatch, is also removed;
+router tests seed through their test mutator or absent-record fixtures. There
+is no direct-store or custom-store fallback for either helper.
 
 This batch migrates every production multi-provider full-body update to
 `patch`: streaming persistence, terminal persistence, provider runtime/model
@@ -578,8 +638,22 @@ updates of existing live thread records in router/gateway code to `patch` where
 they need retry-free field updates. The inventory includes router navigation,
 dispatch-state, delivery-context, and task mutations; gateway chat title,
 thread-update/history, and task-agent mutations; and the five bridge writers
-above. Whole-body `set` remains for absent-record creation, boot-time import,
-and explicit authoritative replacement; the protected-field comparison still
+above. Four easily misclassified sites are explicit in that inventory:
+
+- `persist_thread_provider_type_if_missing` becomes a patch limited to
+  `provider_type` and `updated_at`;
+- the task-creation augmentation after `create_thread_record` becomes a patch
+  limited to `label`, `thread_title_source`, removal of
+  `provider_thread_title`, `thread_kind`, `task`, and `updated_at`;
+- `create_thread_for_agent_reference` puts its already-resolved top-level
+  `agent_id` into the initial creation draft and removes the redundant second
+  `set`; and
+- `seed_imported_thread_history`, which necessarily follows transcript
+  materialization, becomes a patch limited to the two message-preview fields,
+  `message_count`, `history`, and `updated_at`.
+
+Whole-body `set` remains for absent-record creation, boot-time import, and
+explicit authoritative replacement; the protected-field comparison still
 makes any accidental concurrent endpoint change fail closed. This is an
 internal store contract change with no wire or persisted-schema version.
 
@@ -1074,9 +1148,10 @@ commits:
 
 1. dispatch migration/service/bridge supplied IDs and HTTP+WS contract;
 2. create-and-dispatch prerequisite: atomic record patch/protected-field
-   contract, bridge/router/gateway existing-record writer migration, and stale
-   bridge-write regression tests; then create-intent migration, point query,
-   and atomic create-and-dispatch;
+   contract, endpoint-mutator delivery-activity command, removal of direct
+   binding writers, bridge/router/gateway existing-record writer migration,
+   and stale bridge-write regression tests; then create-intent migration,
+   point query, and atomic create-and-dispatch;
 3. attachment migration, managed upload root, claims, lifecycle worker, and GC;
 4. cross-path/restart/fault integration tests and capability publication;
 5. Mac canonical durable-delivery consumer plus the cross-platform shared
@@ -1137,6 +1212,28 @@ The required deterministic evidence is:
   changes only the Section 4.6 allowlist. A deliberately malformed ordinary
   patch that includes `channel_bindings` is rejected without a record or
   projection write.
+- The real delivery-context path calls
+  `EndpointBindingMutator::sync_delivery_timestamp` with the holder expectation
+  while the protected-field `set` fence is enabled. It advances and clears
+  `last_delivery_at` in the holder and known-endpoint registry together,
+  leaves the SQL endpoint owner unchanged, and performs zero `list_keys`
+  calls. An injected failure for either record proves both timestamps roll
+  back; no call site silently discards that storage error. A fixture with a
+  pre-rollout stale or missing registry copy converges it from the
+  authoritative holder in that same commit.
+- A deterministic activity/rebind race covers both orders. Activity first
+  commits holder+registry before bind carries the authoritative metadata to
+  the target. Rebind first makes the old holder's set or clear return
+  `OwnerChanged`; neither the target timestamp nor registry is then changed by
+  the stale operation. In both orders the two bodies and
+  `thread_channel_endpoints` agree on exactly one holder and both futures
+  finish under a timeout.
+- The repository writer-audit test/source inventory names the former
+  `sync_endpoint_delivery_timestamp` and `upsert_known_channel_endpoint`
+  escapes and the four easily missed existing-record sites in Section 4.6.
+  It proves the two binding helpers are absent, the provider-type/task/import
+  paths use their exact patch allowlists, and agent-reference creation has no
+  second whole-body write.
 - Every SQLite failpoint in the multi-record commit leaves either none of the
   thread/claim/admission/binding/attachment changes or all of them.
 - Managed workspace/worktree/transcript preparation crash points prove owner
@@ -1226,6 +1323,9 @@ volatile desktop queue into a durable one.
   attachment claims share one transaction.
 - Endpoint uniqueness still has one mutator domain, and every affected record
   reuses the sorted `SqliteThreadStore` key-lock domain before the writer.
+- Delivery timestamps use that mutator domain with an expected-holder fence;
+  holder, registry, and projection cannot partially diverge, and an old owner
+  cannot clear or stamp the new owner's binding after a move.
 - Live bridge/router updates carry explicit field patches rather than observed
   whole bodies; ordinary patch/update cannot name `channel_bindings`, and an
   existing-record `set` cannot change it after an endpoint move.
