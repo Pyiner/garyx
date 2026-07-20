@@ -9,6 +9,10 @@ use std::path::Path;
 use tempfile::tempdir;
 use tower::ServiceExt;
 
+use crate::garyx_db::PromptAttachmentState;
+use crate::server::AppStateBuilder;
+use garyx_models::config::GaryxConfig;
+
 #[tokio::test]
 async fn builds_sorted_directory_listing() {
     let temp = tempdir().unwrap();
@@ -133,6 +137,47 @@ async fn upload_route_accepts_large_phone_photo_payloads() {
 
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn chat_attachment_upload_creates_scoped_managed_row() {
+    let state = AppStateBuilder::new(GaryxConfig::default()).build();
+    let scope = IdempotencyScope {
+        identity: "upload-contract-test".to_owned(),
+        epoch: 7,
+    };
+    let result = write_uploaded_chat_attachments(
+        &state,
+        UploadChatAttachmentsBody {
+            idempotency_scope: Some(scope.clone()),
+            files: vec![UploadChatAttachment {
+                kind: PromptAttachmentKind::File,
+                name: "notes.txt".to_owned(),
+                media_type: Some("text/plain".to_owned()),
+                data_base64: BASE64.encode("durable payload"),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.files.len(), 1);
+    let uploaded = &result.files[0];
+    assert!(uploaded.attachment_id.starts_with("attachment:"));
+    assert!(uploaded.path.contains("prompt-attachments-v1"));
+    assert!(Path::new(&uploaded.path).is_file());
+    let row = state
+        .ops
+        .garyx_db
+        .prompt_attachment_by_id(&uploaded.attachment_id)
+        .unwrap()
+        .expect("upload ownership row");
+    assert_eq!(row.scope_identity, scope.identity);
+    assert_eq!(row.scope_epoch, scope.epoch);
+    assert_eq!(row.state, PromptAttachmentState::Ready);
+    assert_eq!(row.original_name, "notes.txt");
+    assert_eq!(row.media_type, "text/plain");
+    assert_eq!(row.byte_size, 15);
 }
 
 #[cfg(unix)]

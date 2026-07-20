@@ -16,6 +16,8 @@ use serde_json::json;
 use tokio::fs::{self, File};
 use tokio::io::AsyncReadExt;
 
+use crate::application::chat::contracts::IdempotencyScope;
+use crate::prompt_attachment_lifecycle::{PromptAttachmentLifecycleError, PromptAttachmentUpload};
 use crate::server::AppState;
 
 const MAX_DIRECTORY_ENTRIES: usize = 500;
@@ -47,6 +49,8 @@ pub struct UploadWorkspaceFilesBody {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadChatAttachmentsBody {
+    #[serde(default)]
+    pub idempotency_scope: Option<IdempotencyScope>,
     pub files: Vec<UploadChatAttachment>,
 }
 
@@ -121,10 +125,12 @@ pub struct UploadChatAttachmentsResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadedChatAttachment {
+    pub attachment_id: String,
     pub kind: PromptAttachmentKind,
     pub path: String,
     pub name: String,
     pub media_type: String,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,10 +174,10 @@ pub async fn upload_workspace_files(
 }
 
 pub async fn upload_chat_attachments(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(body): Json<UploadChatAttachmentsBody>,
 ) -> impl IntoResponse {
-    match write_uploaded_chat_attachments(body).await {
+    match write_uploaded_chat_attachments(&state, body).await {
         Ok(result) => (StatusCode::OK, Json(json!(result))).into_response(),
         Err(error) => error.into_response(),
     }
@@ -367,6 +373,7 @@ async fn write_uploaded_files(
 }
 
 async fn write_uploaded_chat_attachments(
+    state: &Arc<AppState>,
     body: UploadChatAttachmentsBody,
 ) -> Result<UploadChatAttachmentsResult, WorkspaceFileError> {
     if body.files.is_empty() {
@@ -380,14 +387,7 @@ async fn write_uploaded_chat_attachments(
         ));
     }
 
-    let target_dir = std::env::temp_dir()
-        .join("garyx-gateway")
-        .join("prompt-attachments");
-    fs::create_dir_all(&target_dir)
-        .await
-        .map_err(|error| WorkspaceFileError::io(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-
-    let mut uploaded = Vec::with_capacity(body.files.len());
+    let mut uploads = Vec::with_capacity(body.files.len());
     for file in body.files {
         let file_name = validate_upload_name(&file.name)?;
         let decoded = decode_uploaded_bytes(&file.data_base64)?;
@@ -398,20 +398,29 @@ async fn write_uploaded_chat_attachments(
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| detect_media_type(&file_name));
-        let destination = target_dir.join(format!("{}-{}", uuid::Uuid::new_v4(), file_name));
-
-        fs::write(&destination, decoded)
-            .await
-            .map_err(|error| WorkspaceFileError::io(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-
-        uploaded.push(UploadedChatAttachment {
+        uploads.push(PromptAttachmentUpload {
             kind: file.kind,
-            path: destination.to_string_lossy().to_string(),
             name: file_name,
-            media_type: media_type.clone(),
+            media_type,
+            bytes: decoded,
         });
     }
-
+    let uploaded = state
+        .ops
+        .prompt_attachments
+        .upload(body.idempotency_scope.as_ref(), uploads)
+        .await
+        .map_err(WorkspaceFileError::from)?
+        .into_iter()
+        .map(|attachment| UploadedChatAttachment {
+            attachment_id: attachment.attachment_id,
+            kind: attachment.kind,
+            path: attachment.path,
+            name: attachment.name,
+            media_type: attachment.media_type,
+            expires_at: attachment.expires_at,
+        })
+        .collect();
     Ok(UploadChatAttachmentsResult { files: uploaded })
 }
 
@@ -865,6 +874,19 @@ impl WorkspaceFileError {
                 "Access to this file or folder is blocked by macOS permissions.".to_owned()
             } else {
                 error.to_string()
+            },
+        }
+    }
+}
+
+impl From<PromptAttachmentLifecycleError> for WorkspaceFileError {
+    fn from(error: PromptAttachmentLifecycleError) -> Self {
+        match error {
+            PromptAttachmentLifecycleError::Invalid(message) => Self::bad_request(message),
+            PromptAttachmentLifecycleError::Conflict(message) => Self::conflict(message),
+            PromptAttachmentLifecycleError::Storage(message) => Self {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message,
             },
         }
     }
