@@ -53,7 +53,7 @@ struct GaryxMobileSettingsPanel: View {
         .garyxFullScreenCover(isPresented: $showsCreateBot) {
             GaryxBotAccountForm(account: nil)
         }
-        .garyxFullScreenCover(isPresented: $showsCreateCommand) {
+        .garyxSheet(isPresented: $showsCreateCommand) {
             GaryxCreateSlashCommandCard()
         }
         .garyxFullScreenCover(isPresented: $showsCreateMcp) {
@@ -343,7 +343,7 @@ struct GaryxSavedGatewayProfileRow: View {
             }
         }
         .onAppear(perform: fillDraft)
-        .garyxFullScreenCover(isPresented: $showsEditForm) {
+        .garyxSheet(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit Gateway",
                 canSave: canSaveGateway,
@@ -371,6 +371,8 @@ struct GaryxSavedGatewayProfileRow: View {
                     GaryxGatewayHeadersEditor(text: $headers)
                 }
             }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .garyxConfirmationDialog("Delete gateway?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {

@@ -19,7 +19,7 @@ struct GaryxCommandsView: View {
                 showsCreateCommand = true
             }
         }
-        .garyxFullScreenCover(isPresented: $showsCreateCommand) {
+        .garyxSheet(isPresented: $showsCreateCommand) {
             GaryxCreateSlashCommandCard()
         }
     }
@@ -85,6 +85,8 @@ struct GaryxCreateSlashCommandCard: View {
                 )
             }
         }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 
     private var canCreate: Bool {
@@ -140,7 +142,7 @@ struct GaryxSlashCommandCard: View {
             description = command.description
             prompt = command.prompt
         }
-        .garyxFullScreenCover(isPresented: $showsEditForm) {
+        .garyxSheet(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit Command",
                 canSave: canSaveCommand,
@@ -167,6 +169,8 @@ struct GaryxSlashCommandCard: View {
                     )
                 }
             }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .garyxConfirmationDialog("Delete command?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {

@@ -173,7 +173,7 @@ struct GaryxSkillCard: View {
                 optimisticEnabled = nil
             }
         }
-        .garyxFullScreenCover(isPresented: $showsEditForm) {
+        .garyxSheet(isPresented: $showsEditForm) {
             GaryxFormSheet(
                 title: "Edit Skill Info",
                 canSave: canSaveSkill,
@@ -186,6 +186,8 @@ struct GaryxSkillCard: View {
                     mode: .editable
                 )
             }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .garyxConfirmationDialog("Delete skill?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
