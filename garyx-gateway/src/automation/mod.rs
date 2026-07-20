@@ -18,6 +18,7 @@ pub mod debug_api;
 pub(crate) mod dispatch;
 pub mod engine;
 pub mod http;
+pub(crate) mod mapping;
 
 pub use engine::{CronJob, CronService, JobRunStatus, RunRecord};
 pub use http::{

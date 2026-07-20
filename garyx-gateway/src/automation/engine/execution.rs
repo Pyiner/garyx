@@ -1,95 +1,52 @@
-use garyx_router::ThreadStoreExt;
+//! Job execution: the scheduler tick, claim/prepare/execute/settle flow,
+//! agent-turn dispatch through the injected execution environment, and the
+//! `schedule_followup` retry driver.
+
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
-use chrono_tz::Tz;
-use cron::Schedule;
+use chrono::{DateTime, Local, Utc};
+use garyx_models::config::{CronAction, CronJobKind, InternalDispatchJobPayload};
+use garyx_models::thread_logs::ThreadLogEvent;
+use garyx_router::ThreadStoreExt;
+use garyx_router::{ThreadEnsureOptions, delete_thread_record};
+use tokio::sync::RwLock;
+use uuid::Uuid;
+
+use super::super::dispatch::{AutomationDispatchError, AutomationExecEnv};
+use super::model::{
+    CronJob, JobRunStatus, RunRecord, is_automation_prompt_job, uses_generated_automation_thread_job,
+};
+use super::store::{MAX_RUN_HISTORY, delete_job_file, persist_job, persist_runs};
+use super::{CronService, validate_cron_job};
+use crate::agent_identity::create_thread_for_agent_reference;
+use crate::delivery_target::resolve_delivery_target_with_recovery;
+use crate::garyx_db::{AutomationThreadRunDraft, GaryxDbService};
+use crate::skills::sync_default_external_user_skills;
+
 #[cfg(test)]
 use garyx_channels::ChannelDispatcher;
 #[cfg(test)]
 use garyx_channels::{OutboundMessage, SendMessageResult};
 #[cfg(test)]
 use garyx_models::ChannelOutboundContent;
-use garyx_models::config::{
-    CronAction, CronConfig, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
-};
 #[cfg(test)]
 use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
-use garyx_models::thread_logs::{ThreadLogEvent, is_canonical_thread_id};
-use garyx_router::{ThreadEnsureOptions, delete_thread_record};
-use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, mpsc};
-use tokio::task::JoinHandle;
-use uuid::Uuid;
-
-use super::dispatch::{AutomationDispatchError, AutomationExecEnv};
-#[cfg(test)]
-use super::dispatch::AutomationDispatchPort;
-#[cfg(test)]
-use garyx_bridge::MultiProviderBridge;
 #[cfg(test)]
 use garyx_models::thread_logs::ThreadLogSink;
 #[cfg(test)]
 use garyx_router::MessageRouter;
-use crate::agent_identity::create_thread_for_agent_reference;
-use crate::delivery_target::resolve_delivery_target_with_recovery;
-use crate::garyx_db::{AutomationThreadRunDraft, GaryxDbService};
-use crate::skills::sync_default_external_user_skills;
-
-/// Upper bound on interval schedules, in seconds (100 years). Kept far below
-/// the point where `DateTime<Utc> + Duration` overflows chrono's representable
-/// range, so an over-large interval is rejected with a clean error instead of
-/// panicking in `compute_next_run`. No real automation cadence approaches this.
-const MAX_INTERVAL_SECS: u64 = 100 * 365 * 24 * 60 * 60;
-
-// ---------------------------------------------------------------------------
-// Persisted job state
-// ---------------------------------------------------------------------------
-
-/// Status of the last run of a cron job.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum JobRunStatus {
-    Success,
-    Failed,
-    /// Terminal failure where the run was intentionally dropped rather than
-    /// retried further: the target thread is gone, or a transient dispatch
-    /// failure exhausted its retry budget. Distinct from `Failed` so a dropped
-    /// followup is treated as terminal (one-shot jobs are disabled, see
-    /// `CronJob::settle_after_run`) and never silently re-fires.
-    FailedDropped,
-    Running,
-    NeverRun,
-}
-
-/// Run metadata produced by each cron execution (FR-4).
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RunRecord {
-    pub run_id: String,
-    pub job_id: String,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: Option<DateTime<Utc>>,
-    pub duration_ms: Option<u64>,
-    pub status: JobRunStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
 
 /// Maximum number of *retries* (i.e. attempts after the first) for a transient
 /// internal-dispatch failure before the followup is dropped. Total
 /// attempts are `FOLLOWUP_MAX_RETRIES + 1`.
-const FOLLOWUP_MAX_RETRIES: u32 = 3;
+pub(super) const FOLLOWUP_MAX_RETRIES: u32 = 3;
 
 /// Base delay for exponential backoff between internal-dispatch retries. The
 /// nth retry waits `FOLLOWUP_RETRY_BASE_BACKOFF * 2^n` (≈200ms, 400ms, 800ms).
-const FOLLOWUP_RETRY_BASE_BACKOFF: Duration = Duration::from_millis(200);
+pub(super) const FOLLOWUP_RETRY_BASE_BACKOFF: Duration = Duration::from_millis(200);
 
 /// Classification of a single internal-dispatch attempt outcome.
 ///
@@ -97,393 +54,11 @@ const FOLLOWUP_RETRY_BASE_BACKOFF: Duration = Duration::from_millis(200);
 /// is structurally unable to dispatch, so retrying cannot help. `Transient` is
 /// a network/internal failure worth retrying with backoff.
 #[derive(Debug)]
-enum FollowupAttemptError {
+pub(super) enum FollowupAttemptError {
     /// Non-retryable: drop the followup immediately with this reason.
     Dropped(String),
     /// Retryable transient failure carrying the underlying error text.
     Transient(String),
-}
-
-/// Persisted state for a single cron job.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CronJob {
-    pub id: String,
-    pub kind: CronJobKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    pub schedule: CronSchedule,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ui_schedule: Option<garyx_models::config::AutomationScheduleView>,
-    pub action: CronAction,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-    #[serde(default)]
-    pub delete_after_run: bool,
-    pub enabled: bool,
-    pub next_run: DateTime<Utc>,
-    pub last_status: JobRunStatus,
-    #[serde(default)]
-    pub run_count: u64,
-    pub created_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_run_at: Option<DateTime<Utc>>,
-    /// System-managed marker. Mirrors `CronJobConfig.system` and is hidden
-    /// from the default user-facing list. `#[serde(default)]` keeps old
-    /// persisted jobs (written before this field existed) deserializable
-    /// as `system = false`.
-    #[serde(default)]
-    pub system: bool,
-    /// Derived structural validation. Never persisted; every load/mutation
-    /// and both execution paths recompute it from the current job fields.
-    #[serde(skip)]
-    pub validation_error: Option<String>,
-}
-
-impl CronJob {
-    /// Create a new job from config, computing the initial next_run.
-    pub fn from_config(cfg: &CronJobConfig) -> Self {
-        let now = Utc::now();
-        let next_run = Self::compute_next_run(&cfg.schedule, now);
-        let mut job = Self {
-            id: cfg.id.clone(),
-            kind: cfg.kind.clone(),
-            label: cfg.label.clone(),
-            schedule: cfg.schedule.clone(),
-            ui_schedule: cfg.ui_schedule.clone(),
-            action: cfg.action.clone(),
-            target: cfg.target.clone(),
-            message: cfg.message.clone(),
-            workspace_dir: cfg.workspace_dir.clone(),
-            agent_id: cfg.agent_id.clone(),
-            thread_id: cfg.thread_id.clone(),
-            delete_after_run: cfg.delete_after_run,
-            enabled: cfg.enabled,
-            next_run,
-            last_status: JobRunStatus::NeverRun,
-            run_count: 0,
-            created_at: now,
-            last_run_at: None,
-            system: cfg.system,
-            validation_error: None,
-        };
-        job.normalize_agent_contract();
-        job.revalidate();
-        job
-    }
-
-    fn normalize_agent_contract(&mut self) {
-        if is_automation_prompt_job(self)
-            && has_non_empty_cron_text(self.workspace_dir.as_deref())
-            && !has_non_empty_cron_text(self.thread_id.as_deref())
-        {
-            self.agent_id = Some(
-                self.agent_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("claude")
-                    .to_owned(),
-            );
-        }
-    }
-
-    fn revalidate(&mut self) {
-        self.validation_error = validate_cron_job(self);
-    }
-
-    /// Compute the next run time from a schedule relative to `after`.
-    fn compute_next_run(schedule: &CronSchedule, after: DateTime<Utc>) -> DateTime<Utc> {
-        match schedule {
-            CronSchedule::Interval { interval_secs } => i64::try_from(*interval_secs)
-                .ok()
-                .and_then(chrono::Duration::try_seconds)
-                .and_then(|delta| after.checked_add_signed(delta))
-                .unwrap_or_else(|| {
-                    // The interval is so large that representing `after + interval`
-                    // would overflow chrono's timeline (or the Duration itself).
-                    // Park the run far in the future rather than panicking -- a
-                    // panic here would crash the create request and, via
-                    // `advance`, the whole scheduler task. Legitimate intervals
-                    // are bounded well below this by `MAX_INTERVAL_SECS`.
-                    tracing::warn!(
-                        interval_secs = *interval_secs,
-                        "interval schedule overflows the representable timeline; parking next_run far in the future"
-                    );
-                    after
-                        .checked_add_signed(chrono::Duration::days(365 * 100))
-                        .unwrap_or(after)
-                }),
-            CronSchedule::Once { at } => parse_once_timestamp(at).unwrap_or(after),
-            CronSchedule::Cron { expr, timezone } => {
-                if let Some(schedule) = parse_cron_schedule(expr) {
-                    let start = after + chrono::Duration::seconds(1);
-
-                    if let Some(tz_name) =
-                        timezone.as_deref().map(str::trim).filter(|s| !s.is_empty())
-                    {
-                        if let Ok(tz) = tz_name.parse::<Tz>() {
-                            if let Some(next) = next_cron_run_in_timezone(&schedule, start, &tz) {
-                                return next;
-                            }
-                        } else {
-                            tracing::warn!(
-                                timezone = tz_name,
-                                "invalid cron timezone, using machine local timezone"
-                            );
-                        }
-                    }
-
-                    // No (valid) explicit timezone: interpret the cron
-                    // expression in the gateway machine's timezone rather
-                    // than UTC, so a bare "0 9 * * *" means 9am local.
-                    // Prefer resolving the machine zone to an IANA `Tz`
-                    // (TZ env first, then the system setting) so DST
-                    // transitions get chrono-tz's well-defined ambiguity
-                    // semantics; `chrono::Local`'s platform resolver is a
-                    // last-resort fallback because its fall-back handling
-                    // is platform-dependent.
-                    if let Some(tz) = machine_cron_timezone() {
-                        if let Some(next) = next_cron_run_in_timezone(&schedule, start, &tz) {
-                            return next;
-                        }
-                    } else if let Some(next) = next_cron_run_in_timezone(&schedule, start, &Local)
-                    {
-                        return next;
-                    }
-                }
-                // Fallback: avoid hot-looping invalid cron expressions.
-                after + chrono::Duration::hours(1)
-            }
-        }
-    }
-
-    /// Advance next_run after a successful tick.
-    fn advance(&mut self) {
-        let now = Utc::now();
-        self.last_run_at = Some(now);
-        self.run_count += 1;
-        match &self.schedule {
-            CronSchedule::Interval { .. } | CronSchedule::Cron { .. } => {
-                self.next_run = Self::compute_next_run(&self.schedule, now);
-            }
-            CronSchedule::Once { .. } => {
-                // One-shot jobs disable themselves after firing.
-                self.enabled = false;
-                // Set next_run far in the future so it won't fire again.
-                self.next_run = now + chrono::Duration::days(365 * 100);
-            }
-        }
-    }
-
-    /// Apply post-run bookkeeping after a run produced `status`, returning
-    /// whether the job file should be deleted (`delete_after_run` on a terminal
-    /// outcome). Single source of truth for both the `run_now` and `tick` paths.
-    ///
-    /// `Success` advances/disables the schedule as before. `FailedDropped` is a
-    /// *terminal* failure: one-shot jobs are disabled so a dropped followup is
-    /// not re-claimed every tick (`is_due` only exempts past-at-registration
-    /// jobs, so a fired-but-not-advanced `Once` job would otherwise re-fire
-    /// indefinitely), and `delete_after_run` is honored just like `Success`.
-    /// All other statuses keep the prior behavior (bump counters, leave the
-    /// schedule untouched).
-    fn settle_after_run(&mut self, status: &JobRunStatus, started_at: DateTime<Utc>) -> bool {
-        self.last_status = status.clone();
-        match status {
-            JobRunStatus::Success => self.advance(),
-            JobRunStatus::FailedDropped => {
-                self.last_run_at = Some(started_at);
-                self.run_count += 1;
-                if matches!(self.schedule, CronSchedule::Once { .. }) {
-                    self.enabled = false;
-                }
-            }
-            _ => {
-                self.last_run_at = Some(started_at);
-                self.run_count += 1;
-            }
-        }
-        self.delete_after_run
-            && matches!(status, JobRunStatus::Success | JobRunStatus::FailedDropped)
-    }
-
-    /// Is this job due to run?
-    fn is_due(&self) -> bool {
-        if !self.enabled {
-            return false;
-        }
-
-        if matches!(self.schedule, CronSchedule::Once { .. }) && self.created_at > self.next_run {
-            // Python parity: one-shot jobs already in the past at registration/startup
-            // are considered exhausted and should not auto-fire.
-            return false;
-        }
-
-        Utc::now() >= self.next_run
-    }
-}
-
-pub(crate) fn parse_once_timestamp(raw: &str) -> Option<DateTime<Utc>> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Ok(timestamp) = trimmed.parse::<DateTime<Utc>>() {
-        return Some(timestamp);
-    }
-
-    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(trimmed) {
-        return Some(timestamp.with_timezone(&Utc));
-    }
-
-    let naive = trimmed
-        .strip_prefix("ONCE:")
-        .map(str::trim)
-        .and_then(parse_local_once_naive)
-        .or_else(|| parse_local_once_naive(trimmed))?;
-
-    match Local.from_local_datetime(&naive) {
-        LocalResult::Single(timestamp) => Some(timestamp.with_timezone(&Utc)),
-        LocalResult::Ambiguous(first, _) => Some(first.with_timezone(&Utc)),
-        LocalResult::None => None,
-    }
-}
-
-fn parse_local_once_naive(raw: &str) -> Option<NaiveDateTime> {
-    for format in ["%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
-        if let Ok(timestamp) = NaiveDateTime::parse_from_str(raw, format) {
-            return Some(timestamp);
-        }
-    }
-
-    None
-}
-
-fn parse_cron_schedule(expr: &str) -> Option<Schedule> {
-    let trimmed = expr.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // Primary format in Rust runtime: second-precision cron expression.
-    if let Ok(schedule) = Schedule::from_str(trimmed) {
-        return Some(schedule);
-    }
-
-    // Python parity: accept 5-field crontab expressions used by croniter.
-    let fields: Vec<&str> = trimmed.split_whitespace().collect();
-    if fields.len() == 5 {
-        let normalized = format!("0 {trimmed}");
-        if let Ok(schedule) = Schedule::from_str(&normalized) {
-            return Some(schedule);
-        }
-    }
-
-    None
-}
-
-/// Resolve the next cron firing after `start`, with the expression's fields
-/// interpreted as wall-clock time in `tz`.
-///
-/// The cron crate's own timezone-aware iterator resolves every candidate via
-/// `TimeZone::from_local_datetime(..).single()`, so on a DST fall-back day an
-/// ambiguous wall-clock time (one that occurs twice) yields `None` and the
-/// schedule silently skips the whole day. To match croniter semantics
-/// instead, enumerate candidates on the naive wall clock (pretending it is
-/// UTC so the cron crate performs no timezone resolution of its own), then
-/// map each candidate back to a real instant: ambiguous times fire at their
-/// earliest still-future occurrence, and times inside a spring-forward gap
-/// skip to the next candidate.
-///
-/// Invariant: the returned instant is always `>= start`. Wall-clock
-/// candidates are strictly after `start`'s wall clock, but across a
-/// fall-back transition an ambiguous candidate's earlier instant can still
-/// precede `start` in real time; returning it would arm `next_run` in the
-/// past and storm-fire every scheduler tick until the transition passes.
-fn next_cron_run_in_timezone<Z: TimeZone>(
-    schedule: &Schedule,
-    start: DateTime<Utc>,
-    tz: &Z,
-) -> Option<DateTime<Utc>> {
-    // Upper bound on consecutive gap-skipped candidates: a second-precision
-    // expression has 3600 candidates inside a one-hour DST gap. Anything
-    // beyond this bound means a pathological zone jump; returning `None`
-    // there falls back to the hourly retry in `compute_next_run`, which
-    // self-heals as `after` advances past the gap.
-    const MAX_GAP_CANDIDATES: usize = 10_000;
-
-    let start_wall = Utc.from_utc_datetime(&start.with_timezone(tz).naive_local());
-    for candidate in schedule.after(&start_wall).take(MAX_GAP_CANDIDATES) {
-        let (first, second) = match tz.from_local_datetime(&candidate.naive_utc()) {
-            LocalResult::Single(instant) => (Some(instant), None),
-            // Fall-back transition: the wall-clock time occurs twice; order
-            // the pair by instant instead of trusting the tuple order —
-            // `chrono::Local`'s platform-backed resolver has been observed
-            // returning it swapped (review #TASK-1817), unlike chrono-tz.
-            LocalResult::Ambiguous(a, b) => {
-                if a <= b {
-                    (Some(a), Some(b))
-                } else {
-                    (Some(b), Some(a))
-                }
-            }
-            // Spring-forward gap: this wall-clock time never occurs.
-            LocalResult::None => (None, None),
-        };
-        for instant in [first, second].into_iter().flatten() {
-            let utc = instant.with_timezone(&Utc);
-            if utc >= start {
-                return Some(utc);
-            }
-        }
-    }
-    None
-}
-
-/// Resolve the timezone a bare cron expression (no explicit `timezone`)
-/// should be interpreted in, as an IANA zone: the `TZ` environment variable
-/// wins when it names a TZDB zone (legacy names like `EST5EDT` are real TZDB
-/// zones and parse; full POSIX transition specs like `EST5EDT,M3.2.0/2`
-/// fail to parse and fall through), otherwise the machine's configured
-/// system zone.
-///
-/// Pure so tests can pin the precedence without touching process env.
-fn resolve_bare_cron_timezone(tz_env: Option<&str>, system_zone: Option<&str>) -> Option<Tz> {
-    let parse = |value: Option<&str>| {
-        value
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|value| value.parse::<Tz>().ok())
-    };
-    parse(tz_env).or_else(|| parse(system_zone))
-}
-
-/// [`resolve_bare_cron_timezone`] fed from the live process environment,
-/// mirroring how `chrono::Local` itself honors `TZ` before the system zone.
-fn machine_cron_timezone() -> Option<Tz> {
-    let tz_env = std::env::var("TZ").ok();
-    let system_zone = iana_time_zone::get_timezone().ok();
-    resolve_bare_cron_timezone(tz_env.as_deref(), system_zone.as_deref())
-}
-
-fn has_non_empty_cron_text(value: Option<&str>) -> bool {
-    value
-        .map(str::trim)
-        .is_some_and(|candidate| !candidate.is_empty())
-}
-
-fn is_automation_prompt_job(job: &CronJob) -> bool {
-    job.kind == CronJobKind::AutomationPrompt
-        && job.action == CronAction::AgentTurn
-        && has_non_empty_cron_text(job.message.as_deref())
 }
 
 /// Render the synthetic user-turn body for a fired `schedule_followup` job.
@@ -537,499 +112,7 @@ pub(crate) fn build_followup_body(
     lines.join("\n")
 }
 
-fn uses_generated_automation_thread_job(job: &CronJob) -> bool {
-    is_automation_prompt_job(job)
-        && has_non_empty_cron_text(job.workspace_dir.as_deref())
-        && !has_non_empty_cron_text(job.thread_id.as_deref())
-}
-
-/// Structural validator shared by list state and dispatch admission. It does
-/// not query mutable stores: target existence is rechecked by the execution
-/// path, while this closes the historical thread-less pseudo-run bypass.
-pub(crate) fn validate_cron_job(job: &CronJob) -> Option<String> {
-    if matches!(job.kind, CronJobKind::InternalDispatch { .. }) {
-        return None;
-    }
-    match job.action {
-        CronAction::AgentTurn => {
-            let thread_id = job
-                .thread_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            if thread_id.is_some_and(|value| !is_canonical_thread_id(value)) {
-                return Some("invalid canonical thread_id for agent turn".to_owned());
-            }
-            let has_thread = thread_id.is_some();
-            let has_target = has_non_empty_cron_text(job.target.as_deref());
-            let generated = thread_id.is_none()
-                && is_automation_prompt_job(job)
-                && has_non_empty_cron_text(job.workspace_dir.as_deref());
-            if !has_thread && !has_target && !generated {
-                Some("missing canonical target for agent turn".to_owned())
-            } else {
-                None
-            }
-        }
-        CronAction::SystemEvent => {
-            let thread_id = job
-                .thread_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            if thread_id.is_some_and(|value| !is_canonical_thread_id(value)) {
-                return Some("invalid canonical thread_id for system event".to_owned());
-            }
-            let has_thread = thread_id.is_some();
-            let has_target = has_non_empty_cron_text(job.target.as_deref());
-            if !has_thread && !has_target {
-                Some("missing canonical target for system event".to_owned())
-            } else {
-                None
-            }
-        }
-        CronAction::Log => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Persistence helpers
-// ---------------------------------------------------------------------------
-
-/// Directory layout: `<data_dir>/cron/jobs/<id>.json`
-fn jobs_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("cron").join("jobs")
-}
-
-fn runs_file(data_dir: &Path) -> PathBuf {
-    data_dir.join("cron").join("runs.json")
-}
-
-async fn ensure_dirs(data_dir: &Path) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(jobs_dir(data_dir)).await
-}
-
-async fn persist_job(data_dir: &Path, job: &CronJob) -> std::io::Result<()> {
-    let path = jobs_dir(data_dir).join(format!("{}.json", job.id));
-    let tmp = path.with_extension("tmp");
-    let bytes = serde_json::to_vec_pretty(job).map_err(std::io::Error::other)?;
-    tokio::fs::write(&tmp, &bytes).await?;
-    tokio::fs::rename(&tmp, &path).await?;
-    Ok(())
-}
-
-async fn delete_job_file(data_dir: &Path, id: &str) -> std::io::Result<()> {
-    let path = jobs_dir(data_dir).join(format!("{id}.json"));
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-async fn load_jobs(data_dir: &Path) -> std::io::Result<Vec<CronJob>> {
-    let dir = jobs_dir(data_dir);
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut jobs = Vec::new();
-    let mut entries = tokio::fs::read_dir(&dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => match serde_json::from_slice::<CronJob>(&bytes) {
-                Ok(job) => jobs.push(job),
-                Err(e) => {
-                    tracing::warn!(path = %path.display(), error = %e, "skipping corrupt cron job file");
-                    let _ = tokio::fs::remove_file(&path).await;
-                }
-            },
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "failed to read cron job file");
-            }
-        }
-    }
-    Ok(jobs)
-}
-
-async fn load_runs(data_dir: &Path) -> std::io::Result<VecDeque<RunRecord>> {
-    let path = runs_file(data_dir);
-    if !path.exists() {
-        return Ok(VecDeque::new());
-    }
-
-    let bytes = tokio::fs::read(&path).await?;
-    let records: Vec<RunRecord> = match serde_json::from_slice(&bytes) {
-        Ok(records) => records,
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                error = %error,
-                "skipping corrupt cron runs file"
-            );
-            let _ = tokio::fs::remove_file(&path).await;
-            return Ok(VecDeque::new());
-        }
-    };
-
-    let mut deque = VecDeque::from(records);
-    while deque.len() > MAX_RUN_HISTORY {
-        deque.pop_front();
-    }
-    Ok(deque)
-}
-
-async fn persist_runs(data_dir: &Path, runs: &VecDeque<RunRecord>) -> std::io::Result<()> {
-    let path = runs_file(data_dir);
-    let tmp = path.with_extension("tmp");
-    let list: Vec<RunRecord> = runs.iter().cloned().collect();
-    let bytes = serde_json::to_vec_pretty(&list).map_err(std::io::Error::other)?;
-    tokio::fs::write(&tmp, &bytes).await?;
-    tokio::fs::rename(&tmp, &path).await?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// CronService
-// ---------------------------------------------------------------------------
-
-const MAX_RUN_HISTORY: usize = 200;
-
-/// Cron scheduler service.
-///
-/// Lifecycle: `start(env)` spawns a background tokio task that ticks every
-/// second, checking whether any job is due. `stop()` sends a signal to
-/// terminate the loop. The execution environment is injected exactly once at
-/// start time; there are no post-construction mutation channels.
-pub struct CronService {
-    data_dir: PathBuf,
-    jobs: Arc<RwLock<HashMap<String, CronJob>>>,
-    runs: Arc<RwLock<VecDeque<RunRecord>>>,
-    active_agent_runs: Arc<RwLock<HashMap<String, String>>>,
-    /// Send () to stop the scheduler loop.
-    stop_tx: StdMutex<Option<mpsc::Sender<()>>>,
-    scheduler_task: StdMutex<Option<JoinHandle<()>>>,
-}
-
 impl CronService {
-    /// Create a new CronService.
-    ///
-    /// Does NOT start the scheduler loop. Call `start(env)` after creation.
-    pub fn new(data_dir: PathBuf) -> Self {
-        Self {
-            data_dir,
-            jobs: Arc::new(RwLock::new(HashMap::new())),
-            runs: Arc::new(RwLock::new(VecDeque::new())),
-            active_agent_runs: Arc::new(RwLock::new(HashMap::new())),
-            stop_tx: StdMutex::new(None),
-            scheduler_task: StdMutex::new(None),
-        }
-    }
-
-    /// Attach bridge+router runtime for agent-turn/system-event dispatch.
-    /// Load persisted jobs from disk, then merge config-defined jobs
-    /// (config jobs take precedence for schedule/action, but persisted
-    /// runtime state like run_count is preserved).
-    pub async fn load(&self, config: &CronConfig) -> std::io::Result<()> {
-        ensure_dirs(&self.data_dir).await?;
-
-        // Load from disk first.
-        let disk_jobs = load_jobs(&self.data_dir).await?;
-        let mut map = HashMap::new();
-        for mut job in disk_jobs {
-            if let Err(error) = validate_cron_schedule(&job.schedule) {
-                tracing::warn!(
-                    job_id = %job.id,
-                    error = %error,
-                    "skipping persisted cron job with invalid schedule"
-                );
-                let _ = delete_job_file(&self.data_dir, &job.id).await;
-                continue;
-            }
-            // A `Running` status persisted across a restart is a stale claim:
-            // the run that set it was killed with the previous process (Garyx
-            // restarts are non-graceful / SIGKILL and never settle the in-flight
-            // tick). No run survives a restart, so treat it as an interrupted
-            // failure and make the job claimable again -- otherwise
-            // `claim_job_for_execution` skips it forever and the schedule
-            // silently stops firing with no recovery via the UI. This mirrors
-            // the startup reconciliation that repairs interrupted threads
-            // and tasks.
-            if job.last_status == JobRunStatus::Running {
-                tracing::warn!(
-                    job_id = %job.id,
-                    "resetting stale `Running` cron job left by an interrupted run/restart"
-                );
-                job.last_status = JobRunStatus::Failed;
-            }
-            job.normalize_agent_contract();
-            job.revalidate();
-            map.insert(job.id.clone(), job);
-        }
-
-        // Merge config-defined jobs.
-        for cfg_job in &config.jobs {
-            if let Err(error) = validate_cron_schedule(&cfg_job.schedule) {
-                tracing::warn!(
-                    job_id = %cfg_job.id,
-                    error = %error,
-                    "skipping config cron job with invalid schedule"
-                );
-                map.remove(&cfg_job.id);
-                continue;
-            }
-            if let Some(existing) = map.get_mut(&cfg_job.id) {
-                // Update schedule/action/enabled from config, keep runtime state.
-                let schedule_changed = existing.schedule != cfg_job.schedule;
-                existing.kind = cfg_job.kind.clone();
-                existing.label = cfg_job.label.clone();
-                existing.schedule = cfg_job.schedule.clone();
-                existing.ui_schedule = cfg_job.ui_schedule.clone();
-                existing.action = cfg_job.action.clone();
-                existing.target = cfg_job.target.clone();
-                existing.message = cfg_job.message.clone();
-                existing.workspace_dir = cfg_job.workspace_dir.clone();
-                existing.agent_id = cfg_job.agent_id.clone();
-                existing.thread_id = cfg_job.thread_id.clone();
-                existing.delete_after_run = cfg_job.delete_after_run;
-                existing.enabled = cfg_job.enabled;
-                existing.system = cfg_job.system;
-                existing.normalize_agent_contract();
-                existing.revalidate();
-                if schedule_changed {
-                    existing.next_run = CronJob::compute_next_run(&existing.schedule, Utc::now());
-                }
-            } else {
-                let job = CronJob::from_config(cfg_job);
-                map.insert(job.id.clone(), job);
-            }
-        }
-
-        // Persist merged state.
-        for job in map.values() {
-            persist_job(&self.data_dir, job).await?;
-        }
-
-        *self.jobs.write().await = map;
-
-        let runs = load_runs(&self.data_dir).await?;
-        *self.runs.write().await = runs;
-
-        tracing::info!(count = self.jobs.read().await.len(), "cron jobs loaded");
-        Ok(())
-    }
-
-    /// Start the scheduler loop as a background task.
-    /// Start the scheduler loop with its execution environment.
-    ///
-    /// Called once after the application state is assembled (see
-    /// `composition::automation_wiring::start_automation_scheduler`); the env
-    /// is owned by the loop for its whole lifetime.
-    pub(crate) fn start(&self, env: AutomationExecEnv) {
-        let mut stop_slot = self.stop_tx.lock().expect("cron stop_tx lock poisoned");
-        if stop_slot.is_some() {
-            tracing::warn!("cron scheduler already running; duplicate start ignored");
-            return;
-        }
-
-        let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
-        *stop_slot = Some(stop_tx);
-        drop(stop_slot);
-
-        let jobs = self.jobs.clone();
-        let runs = self.runs.clone();
-        let active_agent_runs = self.active_agent_runs.clone();
-        let data_dir = self.data_dir.clone();
-
-        let task = tokio::spawn(async move {
-            tracing::info!("cron scheduler started");
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    _ = stop_rx.recv() => {
-                        tracing::info!("cron scheduler stopping");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        Self::tick(
-                            &jobs,
-                            &runs,
-                            &active_agent_runs,
-                            &data_dir,
-                            &env,
-                        ).await;
-                    }
-                }
-            }
-            tracing::info!("cron scheduler stopped");
-        });
-        *self
-            .scheduler_task
-            .lock()
-            .expect("cron scheduler_task lock poisoned") = Some(task);
-    }
-
-    /// Stop the scheduler loop.
-    pub async fn stop(&self) {
-        let stop_tx = self
-            .stop_tx
-            .lock()
-            .expect("cron stop_tx lock poisoned")
-            .take();
-        if let Some(tx) = stop_tx {
-            let _ = tx.send(()).await;
-        }
-        let task = self
-            .scheduler_task
-            .lock()
-            .expect("cron scheduler_task lock poisoned")
-            .take();
-        if let Some(task) = task {
-            let _ = task.await;
-        }
-    }
-
-    /// List jobs visible to user-facing surfaces (default).
-    ///
-    /// System-managed jobs (e.g. those scheduled by the
-    /// `schedule_followup` MCP tool) are filtered out so they don't pollute
-    /// the user's automation list. Use [`Self::list_all`] when the caller
-    /// genuinely needs every job — including the system-managed ones — such
-    /// as the scheduler's own internal accounting or tests.
-    pub async fn list(&self) -> Vec<CronJob> {
-        self.jobs
-            .read()
-            .await
-            .values()
-            .filter(|job| !job.system)
-            .cloned()
-            .collect()
-    }
-
-    /// List every job, including system-managed ones.
-    pub async fn list_all(&self) -> Vec<CronJob> {
-        self.jobs.read().await.values().cloned().collect()
-    }
-
-    pub async fn get(&self, id: &str) -> Option<CronJob> {
-        self.jobs.read().await.get(id).cloned()
-    }
-
-    /// List recent runs in reverse chronological order.
-    pub async fn list_runs(&self, limit: usize, offset: usize) -> Vec<RunRecord> {
-        let runs = self.runs.read().await;
-        runs.iter()
-            .rev()
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect()
-    }
-
-    /// Total number of persisted run records.
-    pub async fn total_runs(&self) -> usize {
-        self.runs.read().await.len()
-    }
-
-    pub async fn list_runs_for_job(
-        &self,
-        job_id: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Vec<RunRecord> {
-        let runs = self.runs.read().await;
-        runs.iter()
-            .rev()
-            .filter(|record| record.job_id == job_id)
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect()
-    }
-
-    /// Add a new job dynamically.
-    pub async fn add(&self, cfg: CronJobConfig) -> std::io::Result<CronJob> {
-        validate_cron_schedule(&cfg.schedule)?;
-        ensure_dirs(&self.data_dir).await?;
-        let job = CronJob::from_config(&cfg);
-        persist_job(&self.data_dir, &job).await?;
-        self.jobs.write().await.insert(job.id.clone(), job.clone());
-        tracing::info!(job_id = %cfg.id, "cron job added");
-        Ok(job)
-    }
-
-    /// Insert-or-replace a job by id, atomically capturing any prior job.
-    ///
-    /// Used by `schedule_followup` to dedupe per `(thread_id, run_id)` —
-    /// callers derive a deterministic id and call `upsert`; the returned
-    /// `previous` slot tells them whether they replaced an existing schedule
-    /// (and, if so, what its terms were).
-    pub async fn upsert(&self, cfg: CronJobConfig) -> std::io::Result<(CronJob, Option<CronJob>)> {
-        validate_cron_schedule(&cfg.schedule)?;
-        ensure_dirs(&self.data_dir).await?;
-        let new_job = CronJob::from_config(&cfg);
-        let previous = self
-            .jobs
-            .write()
-            .await
-            .insert(new_job.id.clone(), new_job.clone());
-        persist_job(&self.data_dir, &new_job).await?;
-        if previous.is_some() {
-            tracing::info!(job_id = %cfg.id, "cron job replaced via upsert");
-        } else {
-            tracing::info!(job_id = %cfg.id, "cron job added via upsert");
-        }
-        Ok((new_job, previous))
-    }
-
-    /// Update an existing job in-place, preserving runtime counters/state.
-    pub async fn update(&self, id: &str, cfg: CronJobConfig) -> std::io::Result<Option<CronJob>> {
-        validate_cron_schedule(&cfg.schedule)?;
-        ensure_dirs(&self.data_dir).await?;
-        let updated = {
-            let mut jobs = self.jobs.write().await;
-            let Some(job) = jobs.get_mut(id) else {
-                return Ok(None);
-            };
-            job.schedule = cfg.schedule;
-            job.kind = cfg.kind;
-            job.label = cfg.label;
-            job.ui_schedule = cfg.ui_schedule;
-            job.action = cfg.action;
-            job.target = cfg.target;
-            job.message = cfg.message;
-            job.workspace_dir = cfg.workspace_dir;
-            job.agent_id = cfg.agent_id;
-            job.thread_id = cfg.thread_id;
-            job.delete_after_run = cfg.delete_after_run;
-            job.enabled = cfg.enabled;
-            job.system = cfg.system;
-            job.next_run = CronJob::compute_next_run(&job.schedule, Utc::now());
-            job.normalize_agent_contract();
-            job.revalidate();
-
-            job.clone()
-        };
-
-        persist_job(&self.data_dir, &updated).await?;
-        tracing::info!(job_id = %id, "cron job updated");
-        Ok(Some(updated))
-    }
-
-    /// Delete a job by ID.
-    pub async fn delete(&self, id: &str) -> std::io::Result<bool> {
-        let removed = self.jobs.write().await.remove(id).is_some();
-        if removed {
-            self.active_agent_runs.write().await.remove(id);
-            delete_job_file(&self.data_dir, id).await?;
-            tracing::info!(job_id = %id, "cron job deleted");
-        }
-        Ok(removed)
-    }
-
     /// Execute a specific job immediately.
     pub(crate) async fn run_now(&self, id: &str, env: &AutomationExecEnv) -> Option<RunRecord> {
         let invalid = {
@@ -1129,7 +212,7 @@ impl CronService {
     // Internal
     // -----------------------------------------------------------------------
 
-    async fn append_run_record(
+    pub(super) async fn append_run_record(
         data_dir: &Path,
         runs: &Arc<RwLock<VecDeque<RunRecord>>>,
         record: RunRecord,
@@ -1142,7 +225,7 @@ impl CronService {
         persist_runs(data_dir, &guard).await
     }
 
-    async fn provider_runtime_ready_for_job(
+    pub(super) async fn provider_runtime_ready_for_job(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         env: &AutomationExecEnv,
         id: &str,
@@ -1165,7 +248,7 @@ impl CronService {
         env.port.provider_runtime_ready()
     }
 
-    async fn claim_job_for_execution(
+    pub(super) async fn claim_job_for_execution(
         data_dir: &Path,
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
@@ -1192,7 +275,7 @@ impl CronService {
         Some(claimed)
     }
 
-    async fn clear_inactive_agent_run(
+    pub(super) async fn clear_inactive_agent_run(
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         env: &AutomationExecEnv,
         job_id: &str,
@@ -1207,18 +290,18 @@ impl CronService {
         }
     }
 
-    fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    pub(super) fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
         value
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     }
 
-    fn automation_label(job: &CronJob) -> String {
+    pub(super) fn automation_label(job: &CronJob) -> String {
         Self::trimmed_non_empty(job.label.as_deref()).unwrap_or_else(|| job.id.clone())
     }
 
-    fn automation_thread_run_status(status: &JobRunStatus) -> &'static str {
+    pub(super) fn automation_thread_run_status(status: &JobRunStatus) -> &'static str {
         match status {
             JobRunStatus::Success => "success",
             JobRunStatus::Failed => "failed",
@@ -1228,7 +311,7 @@ impl CronService {
         }
     }
 
-    fn automation_thread_options(
+    pub(super) fn automation_thread_options(
         automation_id: &str,
         label: &str,
         workspace_dir: &str,
@@ -1266,7 +349,7 @@ impl CronService {
         }
     }
 
-    async fn prepare_job_for_execution(
+    pub(super) async fn prepare_job_for_execution(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         id: &str,
         run_id: &str,
@@ -1333,7 +416,7 @@ impl CronService {
         Ok(updated)
     }
 
-    fn failed_run_record(job: &CronJob, run_id: &str, error: String) -> RunRecord {
+    pub(super) fn failed_run_record(job: &CronJob, run_id: &str, error: String) -> RunRecord {
         let started_at = Utc::now();
         RunRecord {
             run_id: run_id.to_owned(),
@@ -1347,7 +430,7 @@ impl CronService {
         }
     }
 
-    async fn finish_recorded_automation_thread_run(
+    pub(super) async fn finish_recorded_automation_thread_run(
         garyx_db: Option<&Arc<GaryxDbService>>,
         record: &RunRecord,
     ) {
@@ -1376,7 +459,7 @@ impl CronService {
         }
     }
 
-    async fn cleanup_rejected_automation_thread(
+    pub(super) async fn cleanup_rejected_automation_thread(
         env: &AutomationExecEnv,
         prepared_thread_id: Option<&str>,
     ) {
@@ -1397,7 +480,7 @@ impl CronService {
     }
 
     /// Called every tick to find and execute due jobs.
-    async fn tick(
+    pub(super) async fn tick(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         runs: &Arc<RwLock<VecDeque<RunRecord>>>,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
@@ -1476,7 +559,7 @@ impl CronService {
     }
 
     /// Execute a single job's action. Returns a `RunRecord`.
-    async fn execute_job(
+    pub(super) async fn execute_job(
         job: &CronJob,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         env: &AutomationExecEnv,
@@ -1590,7 +673,7 @@ impl CronService {
     /// when the followup is dropped — either non-retryably (thread gone) or
     /// because the retry budget was exhausted. The reason string is recorded in
     /// the run record so a drop is never silent.
-    async fn dispatch_internal_followup_with_retry(
+    pub(super) async fn dispatch_internal_followup_with_retry(
         job: &CronJob,
         run_id: &str,
         payload: &InternalDispatchJobPayload,
@@ -1613,7 +696,7 @@ impl CronService {
     /// succeeds, hits a non-retryable `Dropped` outcome, or exhausts
     /// `max_retries` transient failures. Every drop path emits a `tracing::warn`
     /// so drops are observable; the nth retry sleeps `base_backoff * 2^n`.
-    async fn run_followup_with_retry<F, Fut>(
+    pub(super) async fn run_followup_with_retry<F, Fut>(
         max_retries: u32,
         base_backoff: Duration,
         job_id: &str,
@@ -1684,7 +767,7 @@ impl CronService {
     /// A missing thread_id / unavailable gateway state, or a thread that is no
     /// longer present in the thread store, yields `Dropped` (retrying cannot
     /// help). Any other dispatch error yields `Transient`.
-    async fn dispatch_internal_followup_once(
+    pub(super) async fn dispatch_internal_followup_once(
         job: &CronJob,
         run_id: &str,
         payload: &InternalDispatchJobPayload,
@@ -1768,7 +851,7 @@ impl CronService {
     /// Returns the run id that owns the reply — the requested one for a fresh
     /// run, or the already-active run's id when the prompt was queued into it
     /// — so run records and automation activity resolve the real transcript.
-    async fn dispatch_agent_turn_via_thread(
+    pub(super) async fn dispatch_agent_turn_via_thread(
         job: &CronJob,
         run_id: &str,
         message: &str,
@@ -1870,7 +953,7 @@ impl CronService {
         }
     }
 
-    async fn dispatch_agent_turn(
+    pub(super) async fn dispatch_agent_turn(
         job: &CronJob,
         run_id: &str,
         message: &str,
@@ -1959,48 +1042,8 @@ impl CronService {
     }
 }
 
-fn validate_cron_schedule(schedule: &CronSchedule) -> std::io::Result<()> {
-    match schedule {
-        CronSchedule::Interval { interval_secs } => {
-            if *interval_secs > MAX_INTERVAL_SECS {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("interval schedule exceeds max interval_secs={MAX_INTERVAL_SECS}"),
-                ));
-            }
-        }
-        CronSchedule::Once { at } => {
-            if parse_once_timestamp(at).is_none() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("invalid once timestamp: {at}"),
-                ));
-            }
-        }
-        CronSchedule::Cron { expr, timezone } => {
-            if parse_cron_schedule(expr).is_none() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("invalid cron expression: {expr}"),
-                ));
-            }
-
-            if let Some(tz_name) = timezone.as_deref().map(str::trim).filter(|s| !s.is_empty())
-                && tz_name.parse::<Tz>().is_err()
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("invalid cron timezone: {tz_name}"),
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
-fn format_scheduled_message(text: &str, thread_id: &str) -> String {
+pub(super) fn format_scheduled_message(text: &str, thread_id: &str) -> String {
     if text.is_empty() || !MessageRouter::is_scheduled_thread(thread_id) {
         return text.to_owned();
     }
@@ -2014,19 +1057,19 @@ fn format_scheduled_message(text: &str, thread_id: &str) -> String {
 }
 
 #[cfg(test)]
-struct ScheduledResponseContext {
-    thread_id: String,
-    channel: String,
-    account_id: String,
-    chat_id: String,
-    delivery_target_type: String,
-    delivery_target_id: String,
-    delivery_thread_id: Option<String>,
-    thread_log_id: Option<String>,
+pub(super) struct ScheduledResponseContext {
+    pub(super) thread_id: String,
+    pub(super) channel: String,
+    pub(super) account_id: String,
+    pub(super) chat_id: String,
+    pub(super) delivery_target_type: String,
+    pub(super) delivery_target_id: String,
+    pub(super) delivery_thread_id: Option<String>,
+    pub(super) thread_log_id: Option<String>,
 }
 
 #[cfg(test)]
-fn build_scheduled_response_callback(
+pub(super) fn build_scheduled_response_callback(
     dispatcher: Arc<dyn ChannelDispatcher>,
     thread_logs: Arc<dyn ThreadLogSink>,
     context: ScheduledResponseContext,
@@ -2146,7 +1189,7 @@ fn build_scheduled_response_callback(
 }
 
 #[cfg(test)]
-fn append_inline_assistant_separator(buffer: &mut String) {
+pub(super) fn append_inline_assistant_separator(buffer: &mut String) {
     if buffer.trim().is_empty() || buffer.ends_with("\n\n") {
         return;
     }
@@ -2159,7 +1202,7 @@ fn append_inline_assistant_separator(buffer: &mut String) {
 
 #[cfg(test)]
 #[derive(Default)]
-struct ScheduledStreamState {
+pub(super) struct ScheduledStreamState {
     text: String,
     closed_after_user_ack: bool,
 }
@@ -2167,7 +1210,3 @@ struct ScheduledStreamState {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-#[cfg(test)]
-#[path = "engine_tests.rs"]
-mod tests;
