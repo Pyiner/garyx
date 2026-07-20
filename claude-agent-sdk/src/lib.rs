@@ -7,6 +7,7 @@ mod transport;
 pub mod types;
 
 // Re-exports for convenience
+pub use client::STOP_HOOK_OBSERVATION_SUBTYPE;
 pub use control::CanUseToolRequest;
 pub use error::{ClaudeSDKError, Result};
 pub use run_streaming::{

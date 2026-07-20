@@ -46,6 +46,33 @@ impl From<mpsc::Receiver<Value>> for Prompt {
 type PendingMap = HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>;
 const FINISH_READER_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Callback id declared for the SDK-level `Stop` hook observer.
+const STOP_HOOK_OBSERVER_CALLBACK_ID: &str = "garyx_stop_hook_observer";
+
+/// Subtype of the synthetic [`SystemMessage`](crate::SystemMessage) the reader
+/// forwards for each `Stop` hook observation. The full `StopHookInput` payload
+/// is available under the message's `data.input`.
+pub const STOP_HOOK_OBSERVATION_SUBTYPE: &str = "garyx_stop_hook_observation";
+
+/// `initialize` hooks declaration for the stop-hook observer.
+fn stop_hook_observer_hooks() -> Value {
+    serde_json::json!({
+        "Stop": [{ "hookCallbackIds": [STOP_HOOK_OBSERVER_CALLBACK_ID] }]
+    })
+}
+
+/// Build the synthetic in-band message for a stop-hook observation.
+fn stop_hook_observation_message(input: Option<&Value>) -> Message {
+    Message::System(crate::types::SystemMessage {
+        subtype: STOP_HOOK_OBSERVATION_SUBTYPE.to_owned(),
+        data: serde_json::json!({
+            "type": "system",
+            "subtype": STOP_HOOK_OBSERVATION_SUBTYPE,
+            "input": input.cloned().unwrap_or(Value::Null),
+        }),
+    })
+}
+
 /// Internal client for bidirectional conversations with Claude Code.
 ///
 /// Public consumers should use [`run_streaming`](crate::run_streaming::run_streaming).
@@ -121,16 +148,21 @@ impl ClaudeSDKClient {
         self.start_reader(transport.clone());
 
         // If streaming, send initialize
-        if is_streaming
-            && let Err(err) = self
+        if is_streaming {
+            let hooks = self
+                .options
+                .stop_hook_observer
+                .then(stop_hook_observer_hooks);
+            if let Err(err) = self
                 .send_control_request(
-                    ControlRequestKind::Initialize { hooks: None },
+                    ControlRequestKind::Initialize { hooks },
                     std::time::Duration::from_secs(60),
                 )
                 .await
-        {
-            self.cleanup_after_failed_connect().await?;
-            return Err(err);
+            {
+                self.cleanup_after_failed_connect().await?;
+                return Err(err);
+            }
         }
 
         // If we have a stream prompt, start streaming it
@@ -500,7 +532,31 @@ impl ClaudeSDKClient {
                                 value.clone(),
                             ) {
                                 Ok(req) => {
-                                    Some(incoming_control_response(req, can_use_tool.clone()).await)
+                                    if let IncomingRequestPayload::HookCallback(hook) = &req.request
+                                        && hook.callback_id == STOP_HOOK_OBSERVER_CALLBACK_ID
+                                    {
+                                        // Forward the observation in-band BEFORE
+                                        // acking so consumers always see it ahead
+                                        // of the turn's result message, then
+                                        // answer with an empty hook output so the
+                                        // stop is never blocked or delayed.
+                                        let observation =
+                                            stop_hook_observation_message(hook.input.as_ref());
+                                        if msg_tx.send(Ok(observation)).await.is_err() {
+                                            debug!(
+                                                "Message receiver dropped, discarding stop-hook observation"
+                                            );
+                                        }
+                                        Some(ControlResponseMessage::success(
+                                            &req.request_id,
+                                            serde_json::json!({}),
+                                        ))
+                                    } else {
+                                        Some(
+                                            incoming_control_response(req, can_use_tool.clone())
+                                                .await,
+                                        )
+                                    }
                                 }
                                 Err(err) => {
                                     error!("Incoming control request parse error: {err}");

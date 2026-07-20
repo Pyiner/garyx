@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use claude_agent_sdk::{
     AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun,
     ClaudeRunControl, ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage,
-    PermissionMode, SystemMessage, TextBlock, UserInput, run_streaming as sdk_run_streaming,
+    PermissionMode, STOP_HOOK_OBSERVATION_SUBTYPE, SystemMessage, TextBlock, UserInput,
+    run_streaming as sdk_run_streaming,
 };
 use garyx_models::{
     is_builtin_provider_agent_id,
@@ -189,6 +190,28 @@ fn update_claude_background_tasks(
         }
         _ => {}
     }
+}
+
+/// Interpret a stop-hook observation (synthetic
+/// [`STOP_HOOK_OBSERVATION_SUBTYPE`] message): does the CLI report in-flight
+/// background work at this turn stop?
+///
+/// The `StopHookInput.background_tasks` array is the CLI's authoritative
+/// in-flight list ("running/pending + backgrounded"), documented to be empty
+/// when nothing is in flight. Entries carry `id`/`status` (not `task_id`).
+/// Returns `None` when the payload carries no `background_tasks` field (older
+/// CLI without the field): no signal, leave the gate to the stream-event set.
+fn stop_hook_reports_background_work(data: &Value) -> Option<bool> {
+    let tasks = data.get("input")?.get("background_tasks")?.as_array()?;
+    Some(tasks.iter().any(|task| {
+        task.get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            // Defensive: terminal entries should not appear in this list, but
+            // if one does it must not hold stdin open forever.
+            .map(|status| !is_terminal_claude_background_task_status(status))
+            .unwrap_or(true)
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,6 +1295,9 @@ impl ClaudeCliProvider {
             setting_sources: (!self.config.setting_sources.is_empty())
                 .then(|| self.config.setting_sources.clone()),
             fork_session,
+            // Every turn stop reports the CLI's authoritative in-flight
+            // background-task list, which gates the post-result stdin close.
+            stop_hook_observer: true,
             ..Default::default()
         }
     }
@@ -1627,6 +1653,15 @@ impl ClaudeCliProvider {
         // answer invisible for seconds).
         let mut assistant_text_in_flight = false;
         let mut active_background_tasks = HashSet::new();
+        // Latest stop-hook observation: the CLI's authoritative "background
+        // work in flight" snapshot, refreshed at every turn stop right before
+        // its result message. Unlike `active_background_tasks` (derived from
+        // level/edge stream events whose relative ordering is unspecified),
+        // this is computed by the CLI at the stop decision point, so it is
+        // the primary guard against closing stdin under a live task. `false`
+        // until the first observation (older CLIs never send one), which
+        // preserves the stream-event-only behavior.
+        let mut stop_hook_holds_input = false;
         let mut input_ended = false;
 
         let idle_timeout = Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
@@ -1634,8 +1669,10 @@ impl ClaudeCliProvider {
             Duration::from_secs(POST_RESULT_INPUT_DRAIN_TIMEOUT_SECS);
 
         loop {
-            let waiting_to_end_input =
-                !input_ended && result_seen && active_background_tasks.is_empty();
+            let waiting_to_end_input = !input_ended
+                && result_seen
+                && active_background_tasks.is_empty()
+                && !stop_hook_holds_input;
             let read_timeout = if waiting_to_end_input {
                 post_result_input_drain_timeout
             } else {
@@ -1820,6 +1857,28 @@ impl ClaudeCliProvider {
                         });
                     }
                     Ok(Message::System(sys_msg)) => {
+                        if sys_msg.subtype == STOP_HOOK_OBSERVATION_SUBTYPE {
+                            // Synthetic SDK-side observation (not a CLI stream
+                            // event): it only feeds the stdin-close gate. When
+                            // the task later settles, the CLI's notification
+                            // wakes a follow-up turn whose own stop refreshes
+                            // this snapshot, so a held stdin always converges.
+                            if let Some(background_work) =
+                                stop_hook_reports_background_work(&sys_msg.data)
+                            {
+                                stop_hook_holds_input = background_work;
+                                // INFO on purpose: one line per turn stop, and
+                                // the production log is the only place to
+                                // verify the hold decision after an incident.
+                                tracing::info!(
+                                    run_id = %run_id,
+                                    thread_id = %thread_id,
+                                    background_work_in_flight = background_work,
+                                    "claude stop-hook observation"
+                                );
+                            }
+                            continue;
+                        }
                         update_claude_background_tasks(&sys_msg, &mut active_background_tasks);
                         if sys_msg.subtype == "task_notification" {
                             result_seen = false;

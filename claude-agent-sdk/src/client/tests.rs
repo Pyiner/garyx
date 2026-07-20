@@ -231,6 +231,140 @@ printf '%s\\n' \"$response\" > '{}'\n",
 }
 
 #[tokio::test]
+async fn test_stop_hook_observer_declares_hook_and_forwards_observation() {
+    let nonce = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let init_marker = std::env::temp_dir().join(format!("claude-sdk-stop-hook-init-{nonce}"));
+    let resp_marker = std::env::temp_dir().join(format!("claude-sdk-stop-hook-resp-{nonce}"));
+    let script = write_mock_claude_script(
+        "stop-hook-observer",
+        &format!(
+            "#!/bin/sh\n\
+IFS= read -r line || exit 1\n\
+printf '%s\\n' \"$line\" > '{init}'\n\
+request_id=$(printf '%s\\n' \"$line\" | sed -E 's/.*\"request_id\":\"([^\"]+)\".*/\\1/')\n\
+printf '%s\\n' \"{{\\\"type\\\":\\\"control_response\\\",\\\"response\\\":{{\\\"subtype\\\":\\\"success\\\",\\\"request_id\\\":\\\"$request_id\\\",\\\"response\\\":{{}}}}}}\"\n\
+printf '%s\\n' '{{\"type\":\"control_request\",\"request_id\":\"req_hook_1\",\"request\":{{\"subtype\":\"hook_callback\",\"callback_id\":\"garyx_stop_hook_observer\",\"input\":{{\"hook_event_name\":\"Stop\",\"background_tasks\":[{{\"id\":\"bg-1\",\"type\":\"shell\",\"status\":\"running\"}}]}}}}}}'\n\
+IFS= read -r response || exit 2\n\
+printf '%s\\n' \"$response\" > '{resp}'\n",
+            init = init_marker.to_string_lossy(),
+            resp = resp_marker.to_string_lossy()
+        ),
+    );
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        stop_hook_observer: true,
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    client
+        .connect(None)
+        .await
+        .expect("streaming connect should succeed");
+
+    // The initialize request must declare the Stop hook observer callback.
+    let init_line = fs::read_to_string(&init_marker).expect("initialize line should be captured");
+    let init_json: Value = serde_json::from_str(init_line.trim()).unwrap();
+    assert_eq!(
+        init_json["request"]["hooks"]["Stop"][0]["hookCallbackIds"][0],
+        "garyx_stop_hook_observer"
+    );
+
+    // The observation must be forwarded in-band as a synthetic system message.
+    let mut rx = client
+        .take_message_receiver()
+        .expect("message receiver should be available");
+    let observation = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Some(Ok(Message::System(system)))
+                    if system.subtype == super::STOP_HOOK_OBSERVATION_SUBTYPE =>
+                {
+                    break system;
+                }
+                Some(_) => continue,
+                None => panic!("message stream ended before stop-hook observation"),
+            }
+        }
+    })
+    .await
+    .expect("stop-hook observation should arrive");
+    assert_eq!(
+        observation.data["input"]["background_tasks"][0]["id"],
+        "bg-1"
+    );
+
+    // The reader must answer with an empty hook output (never blocking stop).
+    for _ in 0..50 {
+        if resp_marker.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let response: Value =
+        serde_json::from_str(fs::read_to_string(&resp_marker).unwrap().trim()).unwrap();
+    assert_eq!(response["response"]["subtype"], "success");
+    assert_eq!(response["response"]["request_id"], "req_hook_1");
+    assert_eq!(response["response"]["response"], serde_json::json!({}));
+
+    client.finish().await.expect("finish should succeed");
+    let _ = fs::remove_file(script);
+    let _ = fs::remove_file(init_marker);
+    let _ = fs::remove_file(resp_marker);
+}
+
+#[tokio::test]
+async fn test_connect_without_stop_hook_observer_sends_null_hooks() {
+    let init_marker = std::env::temp_dir().join(format!(
+        "claude-sdk-no-hooks-init-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let script = write_mock_claude_script(
+        "no-hooks-init",
+        &format!(
+            "#!/bin/sh\n\
+IFS= read -r line || exit 1\n\
+printf '%s\\n' \"$line\" > '{init}'\n\
+request_id=$(printf '%s\\n' \"$line\" | sed -E 's/.*\"request_id\":\"([^\"]+)\".*/\\1/')\n\
+printf '%s\\n' \"{{\\\"type\\\":\\\"control_response\\\",\\\"response\\\":{{\\\"subtype\\\":\\\"success\\\",\\\"request_id\\\":\\\"$request_id\\\",\\\"response\\\":{{}}}}}}\"\n",
+            init = init_marker.to_string_lossy()
+        ),
+    );
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    client
+        .connect(None)
+        .await
+        .expect("streaming connect should succeed");
+
+    let init_line = fs::read_to_string(&init_marker).expect("initialize line should be captured");
+    let init_json: Value = serde_json::from_str(init_line.trim()).unwrap();
+    assert!(
+        init_json["request"]["hooks"].is_null(),
+        "hooks must stay null when the observer is disabled: {init_json}"
+    );
+
+    client.finish().await.expect("finish should succeed");
+    let _ = fs::remove_file(script);
+    let _ = fs::remove_file(init_marker);
+}
+
+#[tokio::test]
 async fn test_connect_rejects_can_use_tool_with_explicit_permission_prompt_tool() {
     let script = write_mock_claude_script("permission-conflict", "#!/bin/sh\nexit 0\n");
     let options = ClaudeAgentOptions {

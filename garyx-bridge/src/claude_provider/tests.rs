@@ -1764,6 +1764,10 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
 struct ScriptedMessageSource {
     items: VecDeque<(tokio::time::Instant, claude_agent_sdk::Result<Message>)>,
     end_input_calls: usize,
+    /// Number of not-yet-consumed scripted items when `end_input` first ran.
+    /// A premature stdin close (the truncation bug shape) leaves the
+    /// follow-up script unconsumed at close time.
+    remaining_at_first_end_input: Option<usize>,
 }
 
 impl ScriptedMessageSource {
@@ -1775,6 +1779,7 @@ impl ScriptedMessageSource {
                 .map(|(offset_ms, message)| (start + Duration::from_millis(offset_ms), message))
                 .collect(),
             end_input_calls: 0,
+            remaining_at_first_end_input: None,
         }
     }
 }
@@ -1789,6 +1794,8 @@ impl MessageSource for ScriptedMessageSource {
 
     async fn end_input(&mut self) -> claude_agent_sdk::Result<()> {
         self.end_input_calls += 1;
+        self.remaining_at_first_end_input
+            .get_or_insert(self.items.len());
         Ok(())
     }
 }
@@ -1987,6 +1994,219 @@ async fn test_process_messages_streaming_survives_gap_when_task_edge_precedes_re
         "sdk-session-2"
     );
     assert_eq!(source.end_input_calls, 1, "stdin should close exactly once");
+}
+
+fn scripted_stop_hook_observation(background_tasks: Value) -> claude_agent_sdk::Result<Message> {
+    scripted_system(
+        STOP_HOOK_OBSERVATION_SUBTYPE,
+        json!({
+            "type": "system",
+            "subtype": STOP_HOOK_OBSERVATION_SUBTYPE,
+            "input": {
+                "hook_event_name": "Stop",
+                "stop_hook_active": false,
+                "background_tasks": background_tasks,
+            },
+        }),
+    )
+}
+
+/// Inert far-future row keeping the scripted stream pending so the
+/// post-result input-drain timer can actually fire: an exhausted script
+/// returns `None` instantly, which ends the loop before any drain and would
+/// mask whether the gate held. First-end_input bookkeeping then reads
+/// `Some(1)` when stdin closed with only this sentinel left unconsumed.
+fn scripted_far_future_sentinel() -> (u64, claude_agent_sdk::Result<Message>) {
+    (
+        60_000,
+        scripted_system("status", json!({"type": "system", "subtype": "status"})),
+    )
+}
+
+/// The production truncation shape (#thread bd57f9d3, 2026-07-20): the CLI's
+/// level/edge stream events for a live background task never made it into the
+/// tracked set, so the post-result drain closed stdin and the CLI teardown
+/// killed the task. The stop-hook observation is computed by the CLI at the
+/// stop decision point and must hold stdin open on its own, without any
+/// task_started/background_tasks_changed stream event.
+#[tokio::test(start_paused = true)]
+async fn test_stop_hook_observation_holds_stdin_without_stream_task_events() {
+    let provider = make_provider();
+    provider
+        .initialize_pending_inputs("run-stop-hook-hold")
+        .await;
+
+    let mut source = ScriptedMessageSource::new(vec![
+        (0, scripted_user_text("start tier2 in background")),
+        (0, scripted_assistant_text("interim summary")),
+        (
+            10,
+            scripted_stop_hook_observation(json!([
+                {"id": "bg-1", "type": "shell", "status": "running"}
+            ])),
+        ),
+        (20, scripted_success_result("sdk-session-1")),
+        // Far beyond the 2s input-drain window: the wake flow after the task
+        // settles. Without the stop-hook hold the drain would have closed
+        // stdin long before these rows.
+        (
+            6_000,
+            scripted_system(
+                "task_notification",
+                json!({
+                    "type": "system",
+                    "subtype": "task_notification",
+                    "task_id": "bg-1",
+                    "status": "completed",
+                }),
+            ),
+        ),
+        (
+            6_010,
+            scripted_task_notification_user("<task-notification>completed</task-notification>"),
+        ),
+        (6_020, scripted_assistant_text("follow-up summary")),
+        (6_030, scripted_stop_hook_observation(json!([]))),
+        (6_040, scripted_success_result("sdk-session-2")),
+        scripted_far_future_sentinel(),
+    ]);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let (response_text, result_data, _signals) = provider
+        .process_messages_streaming("run-stop-hook-hold", "thread::test", &mut source, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(response_text, "interim summary\n\nfollow-up summary");
+    assert_eq!(
+        result_data.expect("expected final result").session_id,
+        "sdk-session-2"
+    );
+    assert_eq!(source.end_input_calls, 1, "stdin should close exactly once");
+    assert_eq!(
+        source.remaining_at_first_end_input,
+        Some(1),
+        "stdin must only close after the wake turn fully drained \
+         (a premature drain would close it with the wake rows still pending)"
+    );
+}
+
+/// An observation whose entries are all terminal must not hold stdin open:
+/// the defensive status filter treats it as "nothing in flight", and the
+/// post-result drain closes stdin on schedule.
+#[tokio::test(start_paused = true)]
+async fn test_stop_hook_observation_with_terminal_entries_releases_stdin() {
+    let provider = make_provider();
+    provider
+        .initialize_pending_inputs("run-stop-hook-terminal")
+        .await;
+
+    let mut source = ScriptedMessageSource::new(vec![
+        (0, scripted_user_text("start background task")),
+        (0, scripted_assistant_text("interim summary")),
+        (
+            10,
+            scripted_stop_hook_observation(json!([
+                {"id": "bg-1", "type": "shell", "status": "completed"},
+                {"id": "bg-2", "type": "shell", "status": "killed"}
+            ])),
+        ),
+        (20, scripted_success_result("sdk-session-1")),
+        scripted_far_future_sentinel(),
+    ]);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let (response_text, result_data, _signals) = provider
+        .process_messages_streaming("run-stop-hook-terminal", "thread::test", &mut source, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(response_text, "interim summary");
+    assert_eq!(
+        result_data.expect("expected result").session_id,
+        "sdk-session-1"
+    );
+    assert_eq!(source.end_input_calls, 1, "stdin should close exactly once");
+    assert_eq!(
+        source.remaining_at_first_end_input,
+        Some(1),
+        "terminal-only entries must not delay the post-result drain"
+    );
+}
+
+/// A later stop with an empty in-flight list releases a hold set by an
+/// earlier stop in the same run (wake-turn convergence).
+#[tokio::test(start_paused = true)]
+async fn test_stop_hook_observation_empty_list_releases_prior_hold() {
+    let provider = make_provider();
+    provider
+        .initialize_pending_inputs("run-stop-hook-release")
+        .await;
+
+    let mut source = ScriptedMessageSource::new(vec![
+        (0, scripted_assistant_text("interim summary")),
+        (
+            10,
+            scripted_stop_hook_observation(json!([
+                {"id": "bg-1", "type": "shell", "status": "running"}
+            ])),
+        ),
+        (20, scripted_success_result("sdk-session-1")),
+        (3_000, scripted_stop_hook_observation(json!([]))),
+        scripted_far_future_sentinel(),
+    ]);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let (response_text, _result_data, _signals) = provider
+        .process_messages_streaming("run-stop-hook-release", "thread::test", &mut source, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(response_text, "interim summary");
+    assert_eq!(source.end_input_calls, 1, "stdin should close exactly once");
+    assert_eq!(
+        source.remaining_at_first_end_input,
+        Some(1),
+        "stdin must close only after the empty observation released the hold"
+    );
+}
+
+#[test]
+fn test_stop_hook_reports_background_work_parses_summary_shapes() {
+    // Running entry (real CLI shape uses `id`, not `task_id`).
+    assert_eq!(
+        stop_hook_reports_background_work(&json!({
+            "input": {"background_tasks": [{"id": "bg-1", "status": "running"}]}
+        })),
+        Some(true)
+    );
+    // Empty list: nothing in flight.
+    assert_eq!(
+        stop_hook_reports_background_work(&json!({
+            "input": {"background_tasks": [], "session_crons": []}
+        })),
+        Some(false)
+    );
+    // Entry without a status stays conservative (holds).
+    assert_eq!(
+        stop_hook_reports_background_work(&json!({
+            "input": {"background_tasks": [{"id": "bg-1"}]}
+        })),
+        Some(true)
+    );
+    // Terminal-only entries release.
+    assert_eq!(
+        stop_hook_reports_background_work(&json!({
+            "input": {"background_tasks": [{"id": "bg-1", "status": "failed"}]}
+        })),
+        Some(false)
+    );
+    // Older CLI without the field: no signal at all.
+    assert_eq!(
+        stop_hook_reports_background_work(&json!({"input": {"hook_event_name": "Stop"}})),
+        None
+    );
+    assert_eq!(stop_hook_reports_background_work(&json!({})), None);
 }
 
 struct NeverEndingMessageSource;

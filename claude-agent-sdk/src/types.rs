@@ -380,6 +380,16 @@ pub struct ClaudeAgentOptions {
     pub max_thinking_tokens: Option<i64>,
     pub output_format: Option<Value>,
     pub enable_file_checkpointing: bool,
+    /// Register an SDK-level `Stop` hook observer during `initialize`.
+    ///
+    /// When enabled, each turn stop fires a `hook_callback` control request
+    /// whose `StopHookInput` carries the CLI's authoritative in-flight
+    /// background-task list. The client answers immediately with an empty
+    /// hook output (never blocking the stop) and forwards the observation
+    /// in-band as a synthetic [`SystemMessage`] with subtype
+    /// [`STOP_HOOK_OBSERVATION_SUBTYPE`](crate::STOP_HOOK_OBSERVATION_SUBTYPE),
+    /// ordered ahead of the turn's result message on the same stream.
+    pub stop_hook_observer: bool,
     pub can_use_tool: Option<CanUseToolCallback>,
 }
 
@@ -416,6 +426,7 @@ impl std::fmt::Debug for ClaudeAgentOptions {
             .field("max_thinking_tokens", &self.max_thinking_tokens)
             .field("output_format", &self.output_format)
             .field("enable_file_checkpointing", &self.enable_file_checkpointing)
+            .field("stop_hook_observer", &self.stop_hook_observer)
             .field(
                 "can_use_tool",
                 &self.can_use_tool.as_ref().map(|_| "<handler>"),
@@ -458,6 +469,7 @@ impl Default for ClaudeAgentOptions {
             max_thinking_tokens: None,
             output_format: None,
             enable_file_checkpointing: false,
+            stop_hook_observer: false,
             can_use_tool: None,
         }
     }
