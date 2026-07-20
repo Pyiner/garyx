@@ -3223,20 +3223,20 @@ async fn engine_tracing_keeps_the_stable_cron_target() {
     );
 }
 
-/// Source-level completion of the tracing-target contract: the capturing
-/// subscriber test above proves the stable target at runtime for the paths
-/// it drives, but cannot reach all engine callsites. This guard scans every
-/// engine source file and requires each `tracing::<level>!` invocation —
-/// with any whitespace between the macro bang, the paren, and the first
-/// argument — to open with the explicit stable target, so no callsite,
-/// current or future, can silently fall back to a module-path-derived
-/// target.
+/// Structural completion of the tracing-target contract (the capturing
+/// subscriber test above is the runtime half): every engine event goes
+/// through the `log.rs` wrapper macros, which pin the stable
+/// `garyx_gateway::cron` target by construction. This guard bans the
+/// `tracing` token from every other engine source file, so neither a direct
+/// `tracing::<level>!` call nor an aliased import
+/// (`use tracing::warn as …`) can reintroduce a module-path-derived target.
 #[test]
-fn every_engine_tracing_event_pins_the_stable_cron_target() {
+fn engine_sources_route_all_logging_through_the_cron_wrappers() {
     let engine_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/automation/engine");
 
-    let mut scanned_invocations = 0usize;
+    let mut wrapper_calls = 0usize;
     let mut violations = Vec::new();
+    let mut saw_log_rs = false;
     for entry in std::fs::read_dir(&engine_dir).expect("read engine dir") {
         let path = entry.expect("engine dir entry").path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
@@ -3246,91 +3246,42 @@ fn every_engine_tracing_event_pins_the_stable_cron_target() {
             continue;
         }
         let source = std::fs::read_to_string(&path).expect("read engine source");
-        let (scanned, mut file_violations) = scan_tracing_target_violations(&source, &name);
-        scanned_invocations += scanned;
-        violations.append(&mut file_violations);
+        if name == "log.rs" {
+            saw_log_rs = true;
+            // The one allowed tracing surface must actually pin the stable
+            // target on every wrapper level.
+            for level in ["debug", "error", "info", "warn"] {
+                let pinned =
+                    format!("tracing::{level}!(target: \"garyx_gateway::cron\", $($arg)*)");
+                assert!(
+                    source.contains(&pinned),
+                    "log.rs wrapper for {level} no longer pins the stable target"
+                );
+            }
+            continue;
+        }
+        for (index, line) in source.lines().enumerate() {
+            if line.contains("tracing") {
+                violations.push(format!("{name}:{} {}", index + 1, line.trim()));
+            }
+        }
+        for level in ["debug", "error", "info", "warn"] {
+            wrapper_calls += source.matches(&format!("cron_{level}!(")).count();
+        }
     }
 
-    // Sensitivity control: the scanner must actually see the engine's
-    // events — a refactor that breaks the scan pattern must fail loudly
-    // instead of green-lighting an empty result set.
+    assert!(saw_log_rs, "engine/log.rs wrapper module is missing");
+    // Sensitivity control: the guard must actually see the engine's events —
+    // an emptied engine or a renamed wrapper family must fail loudly instead
+    // of green-lighting an empty result set.
     assert!(
-        scanned_invocations >= 30,
-        "the tracing guard scanned only {scanned_invocations} invocations; \
-         the scan pattern no longer matches the engine sources"
+        wrapper_calls >= 30,
+        "only {wrapper_calls} cron_* wrapper calls found; the engine's logging \
+         no longer routes through the wrapper family this guard understands"
     );
     assert!(
         violations.is_empty(),
-        "engine tracing events without the stable garyx_gateway::cron target: {violations:?}"
+        "engine sources reference tracing outside the log.rs wrappers \
+         (direct calls and aliased imports both drift the stable target): {violations:?}"
     );
-}
-
-/// Whitespace-tolerant scan for `tracing::<level>!` invocations that do not
-/// open with the stable explicit target. Returns (scanned, violations).
-fn scan_tracing_target_violations(source: &str, name: &str) -> (usize, Vec<String>) {
-    const LEVELS: [&str; 5] = ["trace", "debug", "info", "warn", "error"];
-    const STABLE: &str = "target: \"garyx_gateway::cron\"";
-
-    let mut scanned = 0usize;
-    let mut violations = Vec::new();
-    for level in LEVELS {
-        let needle = format!("tracing::{level}!");
-        let mut cursor = 0usize;
-        while let Some(pos) = source[cursor..].find(&needle) {
-            let invocation_at = cursor + pos;
-            let after_bang = &source[invocation_at + needle.len()..];
-            cursor = invocation_at + needle.len();
-            // Any whitespace may separate the bang from the delimiter; a
-            // non-paren token here means this was a longer identifier match
-            // (no such macro exists today) — treat it as a violation too
-            // rather than silently skipping it.
-            let after_open = after_bang.trim_start();
-            scanned += 1;
-            let compliant = after_open
-                .strip_prefix(['(', '[', '{'])
-                .map(str::trim_start)
-                .is_some_and(|args| args.starts_with(STABLE));
-            if !compliant {
-                let line = source[..invocation_at].matches('\n').count() + 1;
-                violations.push(format!("{name}:{line} tracing::{level}!"));
-            }
-        }
-    }
-    (scanned, violations)
-}
-
-/// Meta-regression for the guard itself (R3 review): legal whitespace
-/// variants between the macro bang, the delimiter, and the argument list
-/// must still be recognized — and flagged when the stable target is
-/// missing.
-#[test]
-fn tracing_target_scanner_rejects_whitespace_bypass_variants() {
-    let flagged = [
-        "tracing::warn! (\"drifting target\");",
-        "tracing::warn!(\n        \"drifting target\");",
-        "tracing::info!  (job_id = %id, \"drifting\");",
-        "tracing::error![\"drifting\"];",
-    ];
-    for source in flagged {
-        let (scanned, violations) = scan_tracing_target_violations(source, "probe.rs");
-        assert_eq!(scanned, 1, "scanner missed the invocation in: {source}");
-        assert_eq!(
-            violations.len(),
-            1,
-            "scanner failed to flag the drifting invocation in: {source}"
-        );
-    }
-
-    let compliant = [
-        "tracing::warn!(target: \"garyx_gateway::cron\", \"stable\");",
-        "tracing::warn! (\n    target: \"garyx_gateway::cron\",\n    \"stable\");",
-    ];
-    for source in compliant {
-        let (scanned, violations) = scan_tracing_target_violations(source, "probe.rs");
-        assert_eq!(scanned, 1, "scanner missed the invocation in: {source}");
-        assert!(
-            violations.is_empty(),
-            "scanner wrongly flagged a compliant invocation in: {source}"
-        );
-    }
 }

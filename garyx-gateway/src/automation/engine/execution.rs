@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::super::dispatch::{AutomationDispatchError, AutomationExecEnv};
+use super::log::{cron_debug, cron_info, cron_warn};
 use super::model::{
     CronJob, JobRunStatus, RunRecord, is_automation_prompt_job,
     uses_generated_automation_thread_job,
@@ -136,8 +137,7 @@ impl CronService {
             return Some(record);
         }
         if !Self::provider_runtime_ready_for_job(&self.jobs, env, id).await {
-            tracing::info!(target: "garyx_gateway::cron",
-                job_id = %id,
+            cron_info!(job_id = %id,
                 "cron run_now skipped: provider runtime is still starting"
             );
             return None;
@@ -154,7 +154,7 @@ impl CronService {
         {
             Some(job) => job,
             None => {
-                tracing::info!(target: "garyx_gateway::cron", job_id = %id, "cron run_now skipped: job missing, disabled, or already running");
+                cron_info!(job_id = %id, "cron run_now skipped: job missing, disabled, or already running");
                 return None;
             }
         };
@@ -163,27 +163,25 @@ impl CronService {
         }
         let run_id = Uuid::new_v4().to_string();
         let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
-        let (record, prepared_thread_id) = match Self::prepare_job_for_execution(
-            &self.jobs, id, &run_id, env,
-        )
-        .await
-        {
-            Ok(prepared_job) => {
-                let prepared_thread_id = if should_cleanup_prepared_thread {
-                    prepared_job.thread_id.clone()
-                } else {
-                    None
-                };
-                (
-                    Self::execute_job(&prepared_job, &self.active_agent_runs, env, &run_id).await,
-                    prepared_thread_id,
-                )
-            }
-            Err(error) => {
-                tracing::warn!(target: "garyx_gateway::cron", job_id = %id, error = %error, "cron job preparation failed");
-                (Self::failed_run_record(&job, &run_id, error), None)
-            }
-        };
+        let (record, prepared_thread_id) =
+            match Self::prepare_job_for_execution(&self.jobs, id, &run_id, env).await {
+                Ok(prepared_job) => {
+                    let prepared_thread_id = if should_cleanup_prepared_thread {
+                        prepared_job.thread_id.clone()
+                    } else {
+                        None
+                    };
+                    (
+                        Self::execute_job(&prepared_job, &self.active_agent_runs, env, &run_id)
+                            .await,
+                        prepared_thread_id,
+                    )
+                }
+                Err(error) => {
+                    cron_warn!(job_id = %id, error = %error, "cron job preparation failed");
+                    (Self::failed_run_record(&job, &run_id, error), None)
+                }
+            };
 
         // Update runtime job state.
         let mut should_delete = false;
@@ -453,8 +451,7 @@ impl CronService {
             })
             .await
         {
-            tracing::warn!(target: "garyx_gateway::cron",
-                job_id = %record.job_id,
+            cron_warn!(job_id = %record.job_id,
                 run_id = %record.run_id,
                 error = %error,
                 "failed to finish recorded automation thread association"
@@ -474,8 +471,7 @@ impl CronService {
         };
 
         if let Err(error) = delete_thread_record(&env.thread_store, prepared_thread_id).await {
-            tracing::warn!(target: "garyx_gateway::cron",
-                thread_id = prepared_thread_id,
+            cron_warn!(thread_id = prepared_thread_id,
                 error = %error,
                 "failed to delete rejected cron automation thread"
             );
@@ -501,8 +497,7 @@ impl CronService {
 
         for id in due_ids {
             if !Self::provider_runtime_ready_for_job(jobs, env, &id).await {
-                tracing::debug!(target: "garyx_gateway::cron",
-                    job_id = %id,
+                cron_debug!(job_id = %id,
                     "cron tick skipped due job while provider runtime is starting"
                 );
                 continue;
@@ -515,27 +510,24 @@ impl CronService {
             };
             let run_id = Uuid::new_v4().to_string();
             let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
-            let (record, prepared_thread_id) = match Self::prepare_job_for_execution(
-                jobs, &id, &run_id, env,
-            )
-            .await
-            {
-                Ok(prepared_job) => {
-                    let prepared_thread_id = if should_cleanup_prepared_thread {
-                        prepared_job.thread_id.clone()
-                    } else {
-                        None
-                    };
-                    (
-                        Self::execute_job(&prepared_job, active_agent_runs, env, &run_id).await,
-                        prepared_thread_id,
-                    )
-                }
-                Err(error) => {
-                    tracing::warn!(target: "garyx_gateway::cron", job_id = %id, error = %error, "cron job preparation failed");
-                    (Self::failed_run_record(&job, &run_id, error), None)
-                }
-            };
+            let (record, prepared_thread_id) =
+                match Self::prepare_job_for_execution(jobs, &id, &run_id, env).await {
+                    Ok(prepared_job) => {
+                        let prepared_thread_id = if should_cleanup_prepared_thread {
+                            prepared_job.thread_id.clone()
+                        } else {
+                            None
+                        };
+                        (
+                            Self::execute_job(&prepared_job, active_agent_runs, env, &run_id).await,
+                            prepared_thread_id,
+                        )
+                    }
+                    Err(error) => {
+                        cron_warn!(job_id = %id, error = %error, "cron job preparation failed");
+                        (Self::failed_run_record(&job, &run_id, error), None)
+                    }
+                };
 
             // Update state under write lock.
             let mut should_delete = false;
@@ -573,7 +565,7 @@ impl CronService {
         let run_id = run_id.to_owned();
         let started_at = Utc::now();
 
-        tracing::info!(target: "garyx_gateway::cron", job_id = %job.id, run_id = %run_id, action = ?job.action, "cron job executing");
+        cron_info!(job_id = %job.id, run_id = %run_id, action = ?job.action, "cron job executing");
 
         // The run id recorded on the RunRecord. A scheduled turn queued into
         // a thread's already-active run is owned by that run — automation
@@ -603,7 +595,7 @@ impl CronService {
             }
             CronJobKind::AutomationPrompt => match &job.action {
                 CronAction::Log => {
-                    tracing::info!(target: "garyx_gateway::cron", job_id = %job.id, "cron log action fired");
+                    cron_info!(job_id = %job.id, "cron log action fired");
                     (JobRunStatus::Success, None)
                 }
                 CronAction::SystemEvent | CronAction::AgentTurn => {
@@ -643,8 +635,7 @@ impl CronService {
         let finished_at = Utc::now();
         let duration_ms = (finished_at - started_at).num_milliseconds().max(0) as u64;
 
-        tracing::info!(target: "garyx_gateway::cron",
-            job_id = %job.id,
+        cron_info!(job_id = %job.id,
             run_id = %run_id,
             status = ?status,
             duration_ms,
@@ -699,7 +690,7 @@ impl CronService {
     ///
     /// Calls `attempt` (receiving the zero-based attempt index) until it
     /// succeeds, hits a non-retryable `Dropped` outcome, or exhausts
-    /// `max_retries` transient failures. Every drop path emits a `tracing::warn`
+    /// `max_retries` transient failures. Every drop path emits a warn event
     /// so drops are observable; the nth retry sleeps `base_backoff * 2^n`.
     pub(super) async fn run_followup_with_retry<F, Fut>(
         max_retries: u32,
@@ -717,8 +708,7 @@ impl CronService {
             match attempt(n).await {
                 Ok(()) => return Ok(()),
                 Err(FollowupAttemptError::Dropped(reason)) => {
-                    tracing::warn!(target: "garyx_gateway::cron",
-                        job_id = %job_id,
+                    cron_warn!(job_id = %job_id,
                         run_id = %run_id,
                         reason = %reason,
                         "schedule_followup dropped (non-retryable)"
@@ -729,8 +719,7 @@ impl CronService {
                     last_error = error;
                     if n < max_retries {
                         let backoff = base_backoff * 2u32.pow(n);
-                        tracing::warn!(target: "garyx_gateway::cron",
-                            job_id = %job_id,
+                        cron_warn!(job_id = %job_id,
                             run_id = %run_id,
                             attempt = n + 1,
                             max_attempts = max_retries + 1,
@@ -750,8 +739,7 @@ impl CronService {
             "dispatch failed after {} retries: {}",
             max_retries, last_error
         );
-        tracing::warn!(target: "garyx_gateway::cron",
-            job_id = %job_id,
+        cron_warn!(job_id = %job_id,
             run_id = %run_id,
             reason = %reason,
             "schedule_followup dropped (retry budget exhausted)"
@@ -880,8 +868,7 @@ impl CronService {
             .await;
 
         if let Err(error) = sync_default_external_user_skills() {
-            tracing::warn!(target: "garyx_gateway::cron",
-                error = %error,
+            cron_warn!(error = %error,
                 thread_id = %thread_key,
                 "failed to sync external user skills before scheduled dispatch"
             );
@@ -1096,7 +1083,7 @@ pub(super) fn build_scheduled_response_callback(
             let mut buf = match pending.lock() {
                 Ok(buf) => buf,
                 Err(_) => {
-                    tracing::warn!(target: "garyx_gateway::cron", "scheduled response callback buffer lock poisoned");
+                    cron_warn!("scheduled response callback buffer lock poisoned");
                     return;
                 }
             };
@@ -1186,7 +1173,7 @@ pub(super) fn build_scheduled_response_callback(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(target: "garyx_gateway::cron", error = %e, "failed to send scheduled cron response");
+                    cron_warn!(error = %e, "failed to send scheduled cron response");
                 }
             }
         });

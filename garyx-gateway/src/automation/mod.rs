@@ -4,9 +4,10 @@
 //! One domain, five layers:
 //! - [`engine`]: job model (`CronJob`/`RunRecord`), persistence, schedule
 //!   math, the scheduler loop, and job execution against an injected
-//!   execution environment. Engine tracing keeps the stable
-//!   `garyx_gateway::cron` target (explicit `target:` on every event) so
-//!   operator `RUST_LOG` filters and alert rules survive module moves.
+//!   execution environment. Engine logging routes through the
+//!   `engine/log.rs` wrapper macros, which pin the stable
+//!   `garyx_gateway::cron` target structurally so operator `RUST_LOG`
+//!   filters and alert rules survive module moves.
 //! - [`dispatch`]: the execution-time contracts ([`dispatch::AutomationExecEnv`],
 //!   [`dispatch::AutomationDispatchPort`]) implemented at the composition
 //!   seam (`crate::composition::automation_wiring`) — the engine has no

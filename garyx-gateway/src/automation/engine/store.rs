@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
+use super::log::cron_warn;
 use super::model::{CronJob, RunRecord};
 
 pub(super) const MAX_RUN_HISTORY: usize = 200;
@@ -59,12 +60,12 @@ pub(super) async fn load_jobs(data_dir: &Path) -> std::io::Result<Vec<CronJob>> 
             Ok(bytes) => match serde_json::from_slice::<CronJob>(&bytes) {
                 Ok(job) => jobs.push(job),
                 Err(e) => {
-                    tracing::warn!(target: "garyx_gateway::cron", path = %path.display(), error = %e, "skipping corrupt cron job file");
+                    cron_warn!(path = %path.display(), error = %e, "skipping corrupt cron job file");
                     let _ = tokio::fs::remove_file(&path).await;
                 }
             },
             Err(e) => {
-                tracing::warn!(target: "garyx_gateway::cron", path = %path.display(), error = %e, "failed to read cron job file");
+                cron_warn!(path = %path.display(), error = %e, "failed to read cron job file");
             }
         }
     }
@@ -81,8 +82,7 @@ pub(super) async fn load_runs(data_dir: &Path) -> std::io::Result<VecDeque<RunRe
     let records: Vec<RunRecord> = match serde_json::from_slice(&bytes) {
         Ok(records) => records,
         Err(error) => {
-            tracing::warn!(target: "garyx_gateway::cron",
-                path = %path.display(),
+            cron_warn!(path = %path.display(),
                 error = %error,
                 "skipping corrupt cron runs file"
             );

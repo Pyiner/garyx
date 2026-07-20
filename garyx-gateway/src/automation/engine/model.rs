@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use garyx_models::thread_logs::is_canonical_thread_id;
 
+use super::log::cron_warn;
 use super::schedule::{
     has_non_empty_cron_text, machine_cron_timezone, next_cron_run_in_timezone, parse_cron_schedule,
     parse_once_timestamp,
@@ -156,8 +157,7 @@ impl CronJob {
                     // panic here would crash the create request and, via
                     // `advance`, the whole scheduler task. Legitimate intervals
                     // are bounded well below this by `MAX_INTERVAL_SECS`.
-                    tracing::warn!(target: "garyx_gateway::cron",
-                        interval_secs = *interval_secs,
+                    cron_warn!(interval_secs = *interval_secs,
                         "interval schedule overflows the representable timeline; parking next_run far in the future"
                     );
                     after
@@ -177,8 +177,7 @@ impl CronJob {
                                 return next;
                             }
                         } else {
-                            tracing::warn!(target: "garyx_gateway::cron",
-                                timezone = tz_name,
+                            cron_warn!(timezone = tz_name,
                                 "invalid cron timezone, using machine local timezone"
                             );
                         }
