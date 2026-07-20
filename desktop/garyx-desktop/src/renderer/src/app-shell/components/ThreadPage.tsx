@@ -995,27 +995,32 @@ export function ThreadPage({
             }),
           )}
 
-          {showTailThinking ? (
-            <Bubble
-              className="w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
-              variant="ghost"
-            >
-              <BubbleContent>
-                <div
-                  aria-label={t("Garyx is working")}
-                  className="message-loading"
-                >
-                  <p className="message-loading-label message-loading-label--thinking">
-                    {t(RUN_LOADING_LABEL)}
-                  </p>
-                </div>
-              </BubbleContent>
-            </Bubble>
-          ) : null}
-
           <RateLimitBanner onContinue={onRateLimitContinue} rateLimit={rateLimit} />
+          <span aria-hidden="true" className="messages-tail-anchor" />
           </MessageScrollerContent>
           </MessageScrollerViewport>
+          {showTailThinking ? (
+            <div
+              className="messages-tail-thinking"
+              data-tail-thinking-chrome="true"
+            >
+              <Bubble
+                className="w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+                variant="ghost"
+              >
+                <BubbleContent>
+                  <div
+                    aria-label={t("Garyx is working")}
+                    className="message-loading"
+                  >
+                    <p className="message-loading-label message-loading-label--thinking">
+                      {t(RUN_LOADING_LABEL)}
+                    </p>
+                  </div>
+                </BubbleContent>
+              </Bubble>
+            </div>
+          ) : null}
           <MessageScrollerButton behavior="smooth" className="rounded-full shadow-sm">
             <ArrowDown aria-hidden size={16} strokeWidth={2} />
             <span className="sr-only">{t("Scroll to latest")}</span>

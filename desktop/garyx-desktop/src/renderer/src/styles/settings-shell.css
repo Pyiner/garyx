@@ -292,6 +292,7 @@
    `.messages-content` / `.messages-item` carry the column layout that
    used to live on `.messages` itself. */
 .messages-scroller {
+  anchor-scope: --garyx-transcript-tail;
   height: calc(100% - var(--composer-scroll-clip-height));
   min-height: 0;
   width: min(var(--thread-content-max-width), 100%);
@@ -318,10 +319,35 @@
 
 .messages-content,
 .messages-item {
+  --messages-row-gap: 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--messages-row-gap);
   min-width: 0;
+}
+
+/* Tail thinking is transient chrome, not transcript content. Keep a permanent
+   zero-extent anchor after the final renderable child, then position the
+   conditional chrome against it outside the scroll viewport. Cancelling the
+   column gap makes both visibility states identical scroll geometry. */
+.messages-tail-anchor {
+  anchor-name: --garyx-transcript-tail;
+  block-size: 0;
+  margin-block-start: calc(-1 * var(--messages-row-gap));
+  flex: 0 0 auto;
+  min-block-size: 0;
+  pointer-events: none;
+}
+
+.messages-tail-thinking {
+  position: absolute;
+  position-anchor: --garyx-transcript-tail;
+  top: calc(anchor(top) + 8px);
+  left: anchor(left);
+  z-index: 1;
+  width: anchor-size(width);
+  max-width: 100%;
+  pointer-events: none;
 }
 
 /* The composer overlays the bottom of thread-main and intrudes into the
