@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::store::ThreadStoreError;
+use crate::store::{ThreadRecordPatch, ThreadStoreError};
 use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
 use crate::{WorkspaceMode, prepare_thread_worktree};
 
@@ -258,22 +258,6 @@ pub fn validate_thread_accepts_bot_binding(
     }
 
     Ok(())
-}
-
-pub async fn upsert_known_channel_endpoint(
-    store: &Arc<dyn ThreadStore>,
-    binding: &ChannelBinding,
-) -> Result<(), String> {
-    let mut value = store
-        .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
-        .await
-        .map_err(|error| error.to_string())?
-        .unwrap_or_else(|| Value::Object(Map::new()));
-    upsert_binding(&mut value, binding.clone());
-    store
-        .set(KNOWN_CHANNEL_ENDPOINTS_KEY, value)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 pub fn workspace_dir_from_value(value: &Value) -> Option<String> {
@@ -603,6 +587,7 @@ pub async fn update_thread_record(
     else {
         return Err(format!("thread not found: {thread_id}"));
     };
+    let observed = value.clone();
     let existing_workspace_dir = workspace_dir_from_value(&value);
     let Some(obj) = ensure_object(&mut value) else {
         return Err(format!("thread payload is not an object: {thread_id}"));
@@ -646,8 +631,20 @@ pub async fn update_thread_record(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
+    let patch = ThreadRecordPatch::from_diff(
+        &observed,
+        &value,
+        &[
+            "label",
+            "thread_title_source",
+            "provider_thread_title",
+            "workspace_dir",
+            "updated_at",
+        ],
+    )
+    .map_err(|error| error.to_string())?;
     store
-        .set(thread_id, value.clone())
+        .patch(thread_id, patch)
         .await
         .map_err(|error| error.to_string())?;
     Ok(value)
@@ -674,66 +671,6 @@ pub async fn delete_thread_record(
     {
         return Err(format!("thread not found: {thread_id}"));
     }
-    Ok(())
-}
-
-/// Update `last_delivery_at` on one endpoint's binding with point reads: the
-/// known-endpoints registry plus the binding's holder thread. Steady state,
-/// an endpoint binding lives on exactly one thread and every caller operates
-/// on it, so there is nothing for a store scan to find — the previous
-/// `list_keys` walk ran on every run delivery.
-pub async fn sync_endpoint_delivery_timestamp(
-    store: &Arc<dyn ThreadStore>,
-    channel: &str,
-    account_id: &str,
-    binding_key: &str,
-    last_delivery_at: Option<&str>,
-    holder_thread_id: &str,
-) -> Result<(), String> {
-    let target_key = endpoint_key(channel, account_id, binding_key);
-
-    for key in [KNOWN_CHANNEL_ENDPOINTS_KEY, holder_thread_id] {
-        if key != KNOWN_CHANNEL_ENDPOINTS_KEY && !is_thread_key(key) {
-            continue;
-        }
-        let Some(mut value) = store.get(key).await.map_err(|error| error.to_string())? else {
-            continue;
-        };
-        let Some(obj) = ensure_object(&mut value) else {
-            continue;
-        };
-        let Some(items) = obj
-            .get_mut("channel_bindings")
-            .and_then(Value::as_array_mut)
-        else {
-            continue;
-        };
-
-        let mut changed = false;
-        for item in items.iter_mut() {
-            let Ok(mut binding) = serde_json::from_value::<ChannelBinding>(item.clone()) else {
-                continue;
-            };
-            if binding.endpoint_key() != target_key {
-                continue;
-            }
-            binding.last_delivery_at = last_delivery_at.map(ToOwned::to_owned);
-            *item = serde_json::to_value(binding).unwrap_or(Value::Null);
-            changed = true;
-        }
-
-        if changed {
-            obj.insert(
-                "updated_at".to_owned(),
-                Value::String(Utc::now().to_rfc3339()),
-            );
-            store
-                .set(key, value)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-    }
-
     Ok(())
 }
 

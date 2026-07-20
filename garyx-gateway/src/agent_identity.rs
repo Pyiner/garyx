@@ -90,15 +90,6 @@ pub(crate) fn snapshot_agent_runtime_metadata_to_thread_record(
     Ok(())
 }
 
-fn set_thread_metadata_fields(value: &mut Value, entries: &[(&str, Value)]) {
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    for (key, entry_value) in entries {
-        object.insert((*key).to_owned(), entry_value.clone());
-    }
-}
-
 pub(crate) async fn create_thread_for_agent_reference(
     thread_store: Arc<dyn ThreadStore>,
     bridge: Arc<MultiProviderBridge>,
@@ -132,7 +123,7 @@ pub(crate) async fn create_thread_for_agent_reference(
         canonical_options.workspace_dir = default_workspace_dir_from_agent_reference(&resolved);
     }
 
-    let (thread_id, mut data) = create_thread_record(&thread_store, canonical_options)
+    let (thread_id, data) = create_thread_record(&thread_store, canonical_options)
         .await
         .map_err(|error| {
             if error.starts_with("workspace_mode=worktree") {
@@ -141,17 +132,6 @@ pub(crate) async fn create_thread_for_agent_reference(
                 ThreadCreationError::Storage(error)
             }
         })?;
-    set_thread_metadata_fields(
-        &mut data,
-        &[(
-            "agent_id",
-            Value::String(resolved.bound_agent_id().to_owned()),
-        )],
-    );
-
-    if let Err(error) = thread_store.set(&thread_id, data.clone()).await {
-        tracing::warn!(thread_id = %thread_id, error = %error, "failed to persist agent runtime snapshot");
-    }
     if let Some(workspace_dir) = workspace_dir_from_value(&data) {
         bridge
             .set_thread_workspace_binding(&thread_id, Some(workspace_dir))

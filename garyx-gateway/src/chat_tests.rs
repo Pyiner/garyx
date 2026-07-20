@@ -16,8 +16,8 @@ use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
 use garyx_router::{
-    AdmittedRun, AgentDispatcher, ThreadCreationError, ThreadCreator, ThreadEnsureOptions,
-    ThreadStore,
+    AdmittedRun, AgentDispatcher, ChannelBinding, EndpointBindingMutator, ThreadCreationError,
+    ThreadCreator, ThreadEnsureOptions, ThreadStore,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -926,27 +926,26 @@ async fn test_chat_start_http_forwards_bound_reply_using_run_start_binding_snaps
     started.notified().await;
 
     state
-        .threads
-        .thread_store
-        .set(
+        .ops
+        .endpoint_binding_mutator
+        .detach_endpoint("telegram::bot1::test-user")
+        .await
+        .unwrap();
+    state
+        .ops
+        .endpoint_binding_mutator
+        .bind_endpoint(
             "thread::bound-http",
-            json!({
-                "thread_id": "thread::bound-http",
-                "channel": "api",
-                "account_id": "main",
-                "from_id": "api-user",
-                "workspace_dir": "/tmp/garyx-bound-http",
-                "messages": [],
-                "channel_bindings": [{
-                    "channel": "telegram",
-                    "account_id": "bot1",
-                    "binding_key": "test-user",
-                    "chat_id": "new-chat",
-                    "delivery_target_type": "chat_id",
-                    "delivery_target_id": "new-chat",
-                    "display_label": "Test User"
-                }]
-            }),
+            ChannelBinding {
+                channel: "telegram".to_owned(),
+                account_id: "bot1".to_owned(),
+                binding_key: "test-user".to_owned(),
+                chat_id: "new-chat".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "new-chat".to_owned(),
+                display_label: "Test User".to_owned(),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

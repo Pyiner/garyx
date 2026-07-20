@@ -1,13 +1,12 @@
 use super::super::*;
-use crate::store::ThreadStoreExt;
+use crate::store::{ThreadRecordPatch, ThreadStoreExt};
+use crate::{EndpointDeliveryTimestampResult, endpoint_key};
 use chrono::{DateTime, Utc};
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use garyx_models::thread_logs::{ThreadLogEvent, is_canonical_thread_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tracing::{debug, warn};
-
-use crate::threads::sync_endpoint_delivery_timestamp;
 
 impl MessageRouter {
     fn delivery_binding_key(ctx: &DeliveryContext) -> &str {
@@ -116,6 +115,7 @@ impl MessageRouter {
             );
             return;
         };
+        let observed = thread_data.clone();
         let Some(obj) = thread_data.as_object_mut() else {
             warn!(
                 thread_id,
@@ -175,18 +175,84 @@ impl MessageRouter {
             Value::String(Utc::now().to_rfc3339()),
         );
 
-        self.threads.set_logged(thread_id, thread_data).await;
+        match ThreadRecordPatch::from_diff(
+            &observed,
+            &thread_data,
+            &[
+                "last_channel",
+                "last_to",
+                "last_account_id",
+                "last_thread_id",
+                "lastChannel",
+                "lastTo",
+                "lastAccountId",
+                "lastThreadId",
+                "delivery_context",
+                "lastUpdatedAt",
+                "updated_at",
+            ],
+        ) {
+            Ok(patch) => {
+                if let Err(error) = self.threads.patch(thread_id, patch).await {
+                    warn!(thread_id, error = %error, "failed to patch delivery context");
+                }
+            }
+            Err(error) => {
+                warn!(thread_id, error = %error, "invalid delivery-context patch");
+            }
+        }
         if sync_endpoint_timestamp {
             let binding_key = Self::delivery_binding_key(ctx);
-            let _ = sync_endpoint_delivery_timestamp(
-                &self.threads,
+            self.sync_delivery_timestamp(
                 &ctx.channel,
                 &ctx.account_id,
                 binding_key,
-                Some(&Utc::now().to_rfc3339()),
                 thread_id,
+                Some(Utc::now().to_rfc3339()),
             )
             .await;
+        }
+    }
+
+    async fn sync_delivery_timestamp(
+        &self,
+        channel: &str,
+        account_id: &str,
+        binding_key: &str,
+        expected_holder_thread_id: &str,
+        last_delivery_at: Option<String>,
+    ) {
+        let endpoint_key = endpoint_key(channel, account_id, binding_key);
+        let Some(mutator) = self.endpoint_binding_mutator() else {
+            warn!(
+                endpoint_key,
+                "endpoint binding mutator unavailable for delivery timestamp"
+            );
+            return;
+        };
+        match mutator
+            .sync_delivery_timestamp(&endpoint_key, expected_holder_thread_id, last_delivery_at)
+            .await
+        {
+            Ok(EndpointDeliveryTimestampResult::Applied)
+            | Ok(EndpointDeliveryTimestampResult::Unchanged) => {}
+            Ok(EndpointDeliveryTimestampResult::OwnerChanged { current_holder }) => {
+                debug!(
+                    endpoint_key,
+                    expected_holder_thread_id,
+                    ?current_holder,
+                    "skipped stale delivery timestamp after endpoint owner changed"
+                );
+            }
+            Ok(EndpointDeliveryTimestampResult::NotFound) => {
+                debug!(
+                    endpoint_key,
+                    "skipped delivery timestamp for detached endpoint"
+                );
+            }
+            Err(error) => {
+                warn!(endpoint_key, error = %error, "failed to persist delivery timestamp");
+            }
         }
     }
 
@@ -222,13 +288,12 @@ impl MessageRouter {
         let Some(mut thread_data) = self.threads.get_logged(thread_id).await else {
             if sync_endpoint_timestamp && let Some(ctx) = existing_ctx {
                 let binding_key = Self::delivery_binding_key(&ctx);
-                let _ = sync_endpoint_delivery_timestamp(
-                    &self.threads,
+                self.sync_delivery_timestamp(
                     &ctx.channel,
                     &ctx.account_id,
                     binding_key,
-                    None,
                     thread_id,
+                    None,
                 )
                 .await;
             }
@@ -237,6 +302,7 @@ impl MessageRouter {
         let Some(obj) = thread_data.as_object_mut() else {
             return;
         };
+        let observed = Value::Object(obj.clone());
 
         for key in [
             "last_channel",
@@ -256,16 +322,40 @@ impl MessageRouter {
             "updated_at".to_owned(),
             Value::String(Utc::now().to_rfc3339()),
         );
-        self.threads.set_logged(thread_id, thread_data).await;
+        match ThreadRecordPatch::from_diff(
+            &observed,
+            &thread_data,
+            &[
+                "last_channel",
+                "last_to",
+                "last_account_id",
+                "last_thread_id",
+                "lastChannel",
+                "lastTo",
+                "lastAccountId",
+                "lastThreadId",
+                "delivery_context",
+                "lastUpdatedAt",
+                "updated_at",
+            ],
+        ) {
+            Ok(patch) => {
+                if let Err(error) = self.threads.patch(thread_id, patch).await {
+                    warn!(thread_id, error = %error, "failed to clear delivery context");
+                }
+            }
+            Err(error) => {
+                warn!(thread_id, error = %error, "invalid delivery-context clear patch");
+            }
+        }
         if sync_endpoint_timestamp && let Some(ctx) = existing_ctx {
             let binding_key = Self::delivery_binding_key(&ctx);
-            let _ = sync_endpoint_delivery_timestamp(
-                &self.threads,
+            self.sync_delivery_timestamp(
                 &ctx.channel,
                 &ctx.account_id,
                 binding_key,
-                None,
                 thread_id,
+                None,
             )
             .await;
         }

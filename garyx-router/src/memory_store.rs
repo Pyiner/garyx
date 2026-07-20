@@ -6,7 +6,10 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::run_admission::ThreadRunCoordinator;
-use crate::store::{AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadTerminalState};
+use crate::store::{
+    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError,
+    ThreadTerminalState, ensure_channel_bindings_unchanged, ensure_update_has_no_protected_fields,
+};
 
 #[derive(Default)]
 struct MemoryState {
@@ -82,6 +85,9 @@ impl ThreadStore for InMemoryThreadStore {
         if state.terminal_states.contains_key(thread_id) {
             return Err(ThreadStoreError::Archived(thread_id.to_owned()));
         }
+        if let Some(current) = state.records.get(thread_id) {
+            ensure_channel_bindings_unchanged(thread_id, current, &data)?;
+        }
         state.records.insert(thread_id.to_owned(), data);
         drop(state);
         self.run_coordinator.record_written(thread_id);
@@ -134,6 +140,7 @@ impl ThreadStore for InMemoryThreadStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        ensure_update_has_no_protected_fields(thread_id, &updates)?;
         let mut guard = self.store.write().await;
         if guard.terminal_states.contains_key(thread_id) {
             return Err(ThreadStoreError::Archived(thread_id.to_owned()));
@@ -149,6 +156,29 @@ impl ThreadStore for InMemoryThreadStore {
             }
         }
         Ok(())
+    }
+
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: ThreadRecordPatch,
+    ) -> Result<ThreadPatchResult, ThreadStoreError> {
+        let mut guard = self.store.write().await;
+        if guard.terminal_states.contains_key(thread_id) {
+            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
+        }
+        let record = guard
+            .records
+            .get_mut(thread_id)
+            .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
+        let changed = patch.apply_to(record)?;
+        drop(guard);
+        if changed {
+            self.run_coordinator.record_written(thread_id);
+            Ok(ThreadPatchResult::Applied)
+        } else {
+            Ok(ThreadPatchResult::Unchanged)
+        }
     }
 
     async fn update_many_atomic(

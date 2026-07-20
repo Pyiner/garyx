@@ -23,6 +23,14 @@ pub struct EndpointDetachResult {
     pub changed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndpointDeliveryTimestampResult {
+    Applied,
+    Unchanged,
+    OwnerChanged { current_holder: Option<String> },
+    NotFound,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EndpointBindingMutationError {
     #[error("endpoint binding mutator is unavailable")]
@@ -60,4 +68,13 @@ pub trait EndpointBindingMutator: Send + Sync {
         &self,
         endpoint_key: &str,
     ) -> Result<EndpointDetachResult, EndpointBindingMutationError>;
+
+    async fn sync_delivery_timestamp(
+        &self,
+        _endpoint_key: &str,
+        _expected_holder_thread_id: &str,
+        _last_delivery_at: Option<String>,
+    ) -> Result<EndpointDeliveryTimestampResult, EndpointBindingMutationError> {
+        Err(EndpointBindingMutationError::Unavailable)
+    }
 }

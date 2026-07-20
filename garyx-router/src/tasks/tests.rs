@@ -328,6 +328,13 @@ impl ThreadStore for FailNthGetStore {
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), crate::ThreadStoreError> {
         self.inner.update(thread_id, updates).await
     }
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: crate::ThreadRecordPatch,
+    ) -> Result<crate::ThreadPatchResult, crate::ThreadStoreError> {
+        self.inner.patch(thread_id, patch).await
+    }
 }
 
 #[async_trait]
@@ -352,6 +359,13 @@ impl ThreadStore for StoreWithTaskProjection {
     }
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), crate::ThreadStoreError> {
         self.inner.update(thread_id, updates).await
+    }
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: crate::ThreadRecordPatch,
+    ) -> Result<crate::ThreadPatchResult, crate::ThreadStoreError> {
+        self.inner.patch(thread_id, patch).await
     }
     fn task_projection(&self) -> Option<Arc<dyn TaskProjectionReader>> {
         Some(self.reader.clone())

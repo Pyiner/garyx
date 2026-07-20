@@ -57,9 +57,10 @@ use garyx_router::ThreadStoreExt;
 use garyx_router::create_thread_record;
 use garyx_router::{
     ArchiveBarrier, ChannelBinding, CoordinationError, KnownChannelEndpoint,
-    THREAD_TRANSCRIPT_REPLAY_CAP, ThreadCreationError, ThreadEnsureOptions, ThreadTranscriptRecord,
-    WorkspaceMode, bindings_from_value, history_message_count, is_thread_key, update_thread_record,
-    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
+    THREAD_TRANSCRIPT_REPLAY_CAP, ThreadCreationError, ThreadEnsureOptions, ThreadRecordPatch,
+    ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, history_message_count,
+    is_thread_key, update_thread_record, workspace_dir_from_value,
+    workspace_git_status as router_workspace_git_status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

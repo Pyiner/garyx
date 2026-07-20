@@ -1,17 +1,17 @@
 use super::*;
 use crate::endpoint_binding::{
     EndpointBindResult, EndpointBindingMutationError, EndpointBindingMutator, EndpointBindingOwner,
-    EndpointDetachResult,
+    EndpointDeliveryTimestampResult, EndpointDetachResult,
 };
 use crate::memory_store::InMemoryThreadStore;
 use crate::message_ledger::MessageLedgerStore;
 use crate::recent_threads::{
     RecentThreadFilter, RecentThreadListEntry, RecentThreadPage, RecentThreadPageReader,
 };
-use crate::store::ThreadStoreError;
+use crate::store::{AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStoreError};
 use crate::threads::{
-    ChannelBinding, bindings_from_value, remove_binding, upsert_binding,
-    upsert_known_channel_endpoint, validate_thread_accepts_bot_binding,
+    ChannelBinding, KNOWN_CHANNEL_ENDPOINTS_KEY, bindings_from_value, remove_binding,
+    upsert_binding, validate_thread_accepts_bot_binding,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -63,6 +63,39 @@ impl ThreadStore for NoScanThreadStore {
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
         self.inner.update(thread_id, updates).await
+    }
+
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: ThreadRecordPatch,
+    ) -> Result<ThreadPatchResult, ThreadStoreError> {
+        self.inner.patch(thread_id, patch).await
+    }
+
+    async fn update_many_atomic(
+        &self,
+        entries: Vec<AtomicRecordMerge>,
+    ) -> Result<(), ThreadStoreError> {
+        self.inner.update_many_atomic(entries).await
+    }
+}
+
+fn test_binding_merge(
+    thread_id: &str,
+    record: &Value,
+    create_if_missing: bool,
+) -> AtomicRecordMerge {
+    AtomicRecordMerge {
+        thread_id: thread_id.to_owned(),
+        fields: serde_json::json!({
+            "channel_bindings": record
+                .get("channel_bindings")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+            "updated_at": record.get("updated_at").cloned().unwrap_or(Value::Null),
+        }),
+        create_if_missing,
     }
 }
 
@@ -120,6 +153,7 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
             .map(|owner| owner.thread_id.as_str())
             .filter(|owner| *owner != target_thread_id)
             .map(ToOwned::to_owned);
+        let mut entries = Vec::new();
         if let Some(previous_thread_id) = previous_thread_id.as_deref() {
             match self
                 .store
@@ -129,10 +163,7 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
             {
                 Some(mut previous) => {
                     if remove_binding(&mut previous, &endpoint_key) {
-                        self.store
-                            .set(previous_thread_id, previous)
-                            .await
-                            .expect("test store");
+                        entries.push(test_binding_merge(previous_thread_id, &previous, false));
                     } else {
                         return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                             previous_thread_id.to_owned(),
@@ -154,16 +185,29 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
             != Some(&binding);
         if target_changed || previous_thread_id.is_some() {
             upsert_binding(&mut target, binding.clone());
-            self.store
-                .set(target_thread_id, target)
-                .await
-                .expect("test store");
+            entries.push(test_binding_merge(target_thread_id, &target, false));
         }
-        upsert_known_channel_endpoint(&self.store, &binding)
+        let mut registry = self
+            .store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
             .await
-            .map_err(|message| EndpointBindingMutationError::WriteFailed {
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
                 thread_id: crate::threads::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-                message,
+                message: error.to_string(),
+            })?
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+        upsert_binding(&mut registry, binding.clone());
+        entries.push(test_binding_merge(
+            KNOWN_CHANNEL_ENDPOINTS_KEY,
+            &registry,
+            true,
+        ));
+        self.store
+            .update_many_atomic(entries)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.to_owned(),
+                message: error.to_string(),
             })?;
         owners.insert(
             endpoint_key,
@@ -194,13 +238,11 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 changed: false,
             });
         };
+        let mut entries = Vec::new();
         match self.store.get(&owner.thread_id).await.expect("test store") {
             Some(mut previous) => {
                 if remove_binding(&mut previous, endpoint_key) {
-                    self.store
-                        .set(&owner.thread_id, previous)
-                        .await
-                        .expect("test store");
+                    entries.push(test_binding_merge(&owner.thread_id, &previous, false));
                 } else {
                     return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                         owner.thread_id,
@@ -213,17 +255,115 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 ));
             }
         }
-        upsert_known_channel_endpoint(&self.store, &owner.binding)
+        let mut registry = self
+            .store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
             .await
-            .map_err(|message| EndpointBindingMutationError::WriteFailed {
-                thread_id: crate::threads::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-                message,
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message: error.to_string(),
+            })?
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+        upsert_binding(&mut registry, owner.binding.clone());
+        entries.push(test_binding_merge(
+            KNOWN_CHANNEL_ENDPOINTS_KEY,
+            &registry,
+            true,
+        ));
+        self.store
+            .update_many_atomic(entries)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: owner.thread_id.clone(),
+                message: error.to_string(),
             })?;
         Ok(EndpointDetachResult {
             previous_thread_id: Some(owner.thread_id),
             binding: Some(owner.binding),
             changed: true,
         })
+    }
+
+    async fn sync_delivery_timestamp(
+        &self,
+        endpoint_key: &str,
+        expected_holder_thread_id: &str,
+        last_delivery_at: Option<String>,
+    ) -> Result<EndpointDeliveryTimestampResult, EndpointBindingMutationError> {
+        let mut owners = self.owners.lock().await;
+        let Some(owner) = owners.get(endpoint_key).cloned() else {
+            return Ok(EndpointDeliveryTimestampResult::NotFound);
+        };
+        if owner.thread_id != expected_holder_thread_id {
+            return Ok(EndpointDeliveryTimestampResult::OwnerChanged {
+                current_holder: Some(owner.thread_id),
+            });
+        }
+        let mut binding = owner.binding;
+        let mut holder = self
+            .store
+            .get(expected_holder_thread_id)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: expected_holder_thread_id.to_owned(),
+                message: error.to_string(),
+            })?
+            .ok_or_else(|| {
+                EndpointBindingMutationError::PreviousOwnerUnavailable(
+                    expected_holder_thread_id.to_owned(),
+                )
+            })?;
+        let mut registry = self
+            .store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message: error.to_string(),
+            })?
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+        let holder_changed = binding.last_delivery_at != last_delivery_at;
+        binding.last_delivery_at = last_delivery_at;
+        let registry_changed = bindings_from_value(&registry)
+            .into_iter()
+            .find(|candidate| candidate.endpoint_key() == endpoint_key)
+            .as_ref()
+            != Some(&binding);
+        if !holder_changed && !registry_changed {
+            return Ok(EndpointDeliveryTimestampResult::Unchanged);
+        }
+        let mut entries = Vec::new();
+        if holder_changed {
+            upsert_binding(&mut holder, binding.clone());
+            entries.push(test_binding_merge(
+                expected_holder_thread_id,
+                &holder,
+                false,
+            ));
+        }
+        if registry_changed {
+            upsert_binding(&mut registry, binding.clone());
+            entries.push(test_binding_merge(
+                KNOWN_CHANNEL_ENDPOINTS_KEY,
+                &registry,
+                true,
+            ));
+        }
+        self.store
+            .update_many_atomic(entries)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: expected_holder_thread_id.to_owned(),
+                message: error.to_string(),
+            })?;
+        owners.insert(
+            endpoint_key.to_owned(),
+            EndpointBindingOwner {
+                thread_id: expected_holder_thread_id.to_owned(),
+                binding,
+            },
+        );
+        Ok(EndpointDeliveryTimestampResult::Applied)
     }
 }
 

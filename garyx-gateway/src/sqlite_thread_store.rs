@@ -15,8 +15,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use garyx_router::{
-    ThreadRunCoordinator, ThreadStore, ThreadStoreError, ThreadTerminalState,
-    ThreadTranscriptStore, is_thread_key,
+    ThreadPatchResult, ThreadRecordPatch, ThreadRunCoordinator, ThreadStore, ThreadStoreError,
+    ThreadTerminalState, ThreadTranscriptStore, ensure_channel_bindings_unchanged,
+    ensure_update_has_no_protected_fields, is_thread_key,
 };
 use serde_json::Value;
 
@@ -187,6 +188,9 @@ impl ThreadStore for SqliteThreadStore {
     async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
+        if let Some(current) = self.get(thread_id).await? {
+            ensure_channel_bindings_unchanged(thread_id, &current, &data)?;
+        }
         // Archived threads reject writes with Err(Archived): the tombstone
         // check runs inside the record-write transaction itself, so a
         // racing archive can never be overtaken (#TASK-2099; rejection
@@ -261,6 +265,7 @@ impl ThreadStore for SqliteThreadStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        ensure_update_has_no_protected_fields(thread_id, &updates)?;
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
         // Read-merge-write under the per-key lock: equivalent to an atomic
@@ -279,6 +284,28 @@ impl ThreadStore for SqliteThreadStore {
             }
         }
         self.write_record(thread_id, data).await
+    }
+
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: ThreadRecordPatch,
+    ) -> Result<ThreadPatchResult, ThreadStoreError> {
+        let lock = self.key_lock(thread_id);
+        let _guard = lock.lock().await;
+        if self.terminal_state(thread_id).await?.is_some() {
+            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
+        }
+        let mut data = self
+            .get(thread_id)
+            .await?
+            .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
+        if !patch.apply_to(&mut data)? {
+            return Ok(ThreadPatchResult::Unchanged);
+        }
+        self.write_record(thread_id, data).await?;
+        self.run_coordinator.record_written(thread_id);
+        Ok(ThreadPatchResult::Applied)
     }
 
     async fn update_many_atomic(
@@ -501,6 +528,75 @@ mod contract_tests {
         ));
     }
 
+    async fn run_patch_and_protected_field_contract(store: &dyn ThreadStore) {
+        let thread_id = "thread::patch-contract";
+        let binding = json!({
+            "channel": "telegram",
+            "account_id": "main",
+            "binding_key": "1000000001",
+            "chat_id": "1000000001",
+            "last_delivery_at": "2026-07-20T00:00:00Z"
+        });
+        store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": "before",
+                    "history": {"message_count": 1},
+                    "channel_bindings": [binding]
+                }),
+            )
+            .await
+            .unwrap();
+
+        let observed = store.get(thread_id).await.unwrap().unwrap();
+        let mut desired = observed.clone();
+        desired["label"] = json!("after");
+        let patch = ThreadRecordPatch::from_diff(&observed, &desired, &["label"]).unwrap();
+        assert_eq!(
+            store.patch(thread_id, patch).await.unwrap(),
+            ThreadPatchResult::Applied
+        );
+        let patched = store.get(thread_id).await.unwrap().unwrap();
+        assert_eq!(patched["label"], "after");
+        assert_eq!(patched["history"]["message_count"], 1);
+        assert_eq!(patched["channel_bindings"], observed["channel_bindings"]);
+
+        let unchanged = ThreadRecordPatch::from_diff(&patched, &patched, &["label"]).unwrap();
+        assert_eq!(
+            store.patch(thread_id, unchanged).await.unwrap(),
+            ThreadPatchResult::Unchanged
+        );
+        assert!(matches!(
+            store
+                .update(thread_id, json!({"channel_bindings": []}))
+                .await,
+            Err(ThreadStoreError::ProtectedFieldConflict { .. })
+        ));
+
+        let mut changed_binding = patched.clone();
+        changed_binding["channel_bindings"][0]["last_delivery_at"] = json!("2026-07-20T00:01:00Z");
+        assert!(matches!(
+            store.set(thread_id, changed_binding).await,
+            Err(ThreadStoreError::ProtectedFieldConflict { .. })
+        ));
+
+        let mut illegal_patch = serde_json::Map::new();
+        illegal_patch.insert("channel_bindings".to_owned(), json!([]));
+        assert!(matches!(
+            ThreadRecordPatch::new(illegal_patch, std::collections::BTreeSet::new()),
+            Err(ThreadStoreError::InvalidPatch(_))
+        ));
+
+        let mut unexpected = patched.clone();
+        unexpected["history"]["message_count"] = json!(2);
+        assert!(matches!(
+            ThreadRecordPatch::from_diff(&patched, &unexpected, &["label"]),
+            Err(ThreadStoreError::InvalidPatch(_))
+        ));
+    }
+
     #[tokio::test]
     async fn in_memory_store_satisfies_the_contract() {
         let store = InMemoryThreadStore::new();
@@ -522,6 +618,17 @@ mod contract_tests {
             Arc::new(GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"));
         let store = sqlite_store(garyx_db);
         run_contract(&store).await;
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_protects_endpoint_fields_and_applies_patches() {
+        run_patch_and_protected_field_contract(&InMemoryThreadStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_protects_endpoint_fields_and_applies_patches() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        run_patch_and_protected_field_contract(&sqlite_store(garyx_db)).await;
     }
 
     #[tokio::test]

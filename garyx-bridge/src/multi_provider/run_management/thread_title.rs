@@ -1,5 +1,5 @@
 use super::*;
-use garyx_router::ThreadStoreExt;
+use garyx_router::{ThreadPatchResult, ThreadRecordPatch, ThreadStoreExt};
 
 pub(super) fn summarize_text(value: &str, limit: usize) -> String {
     let sanitized = value.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -59,6 +59,7 @@ pub(super) async fn persist_provider_thread_title_if_missing(
 ) -> Option<String> {
     let title = title.and_then(normalize_provider_thread_title)?;
     let mut value = store.get_logged(thread_id).await?;
+    let observed = value.clone();
     if !should_apply_provider_thread_title(&value) {
         return None;
     }
@@ -76,10 +77,30 @@ pub(super) async fn persist_provider_thread_title_if_missing(
         "updated_at".to_owned(),
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
-    if !store.set_logged(thread_id, value).await {
-        return None;
+    let patch = match ThreadRecordPatch::from_diff(
+        &observed,
+        &value,
+        &[
+            "label",
+            "provider_thread_title",
+            "thread_title_source",
+            "updated_at",
+        ],
+    ) {
+        Ok(patch) => patch,
+        Err(error) => {
+            tracing::warn!(thread_id, error = %error, "invalid provider thread-title patch");
+            return None;
+        }
+    };
+    match store.patch(thread_id, patch).await {
+        Ok(ThreadPatchResult::Applied) => Some(title),
+        Ok(ThreadPatchResult::Unchanged) => None,
+        Err(error) => {
+            tracing::warn!(thread_id, error = %error, "provider thread-title patch did not persist");
+            None
+        }
     }
-    Some(title)
 }
 
 pub(super) fn forward_applied_thread_title_update(

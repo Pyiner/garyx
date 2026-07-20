@@ -12,7 +12,7 @@ use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_models::{SERVER_OWNED_AGENT_METADATA_KEYS, strip_server_owned_agent_metadata};
 use garyx_router::{
-    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreationError,
+    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreationError, ThreadRecordPatch,
     build_runtime_context_metadata, is_thread_key, normalize_workspace_dir, update_thread_record,
     workspace_dir_from_value,
 };
@@ -133,6 +133,7 @@ async fn persist_thread_provider_type_if_missing(
     let Some(mut thread_data) = state.threads.thread_store.get_logged(thread_id).await else {
         return false;
     };
+    let observed = thread_data.clone();
     if thread_bound_provider_type(&thread_data).is_some() {
         return false;
     }
@@ -147,11 +148,24 @@ async fn persist_thread_provider_type_if_missing(
         "updated_at".to_owned(),
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
-    state
-        .threads
-        .thread_store
-        .set_logged(thread_id, thread_data)
-        .await
+    let patch = match ThreadRecordPatch::from_diff(
+        &observed,
+        &thread_data,
+        &["provider_type", "updated_at"],
+    ) {
+        Ok(patch) => patch,
+        Err(error) => {
+            tracing::warn!(thread_id, error = %error, "invalid provider-type patch");
+            return false;
+        }
+    };
+    match state.threads.thread_store.patch(thread_id, patch).await {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(thread_id, error = %error, "provider-type patch did not persist");
+            false
+        }
+    }
 }
 
 pub(crate) async fn prepare_chat_request(
@@ -491,10 +505,16 @@ async fn persist_thread_label_if_missing(
             Value::String(chrono::Utc::now().to_rfc3339()),
         );
     }
+    let patch = ThreadRecordPatch::from_diff(
+        &existing,
+        &next,
+        &["label", "thread_title_source", "updated_at"],
+    )
+    .map_err(storage_error(thread_id))?;
     state
         .threads
         .thread_store
-        .set(thread_id, next)
+        .patch(thread_id, patch)
         .await
         .map_err(storage_error(thread_id))?;
     Ok(Some(next_label))

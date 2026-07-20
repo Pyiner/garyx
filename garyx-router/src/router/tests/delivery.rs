@@ -256,7 +256,12 @@ async fn test_set_last_delivery_with_persistence_updates_binding_timestamp() {
         .await
         .unwrap();
 
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let owner = bindings_from_value(&store.get("thread::delivery").await.unwrap().unwrap())
+        .into_iter()
+        .next()
+        .unwrap();
+    let (mut router, mutator) = test_router(store.clone(), GaryxConfig::default());
+    mutator.seed_owner("thread::delivery", owner).await;
     router
         .set_last_delivery_with_persistence(
             "thread::delivery",
@@ -311,7 +316,12 @@ async fn test_clear_last_delivery_with_persistence_clears_binding_timestamp() {
         .await
         .unwrap();
 
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let owner = bindings_from_value(&store.get("thread::delivery").await.unwrap().unwrap())
+        .into_iter()
+        .next()
+        .unwrap();
+    let (mut router, mutator) = test_router(store.clone(), GaryxConfig::default());
+    mutator.seed_owner("thread::delivery", owner).await;
     router
         .clear_last_delivery_with_persistence("thread::delivery")
         .await;
@@ -343,7 +353,18 @@ async fn test_delivery_persistence_sync_never_lists_store_keys() {
         .await
         .unwrap();
 
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let owner = bindings_from_value(
+        &store
+            .get("thread::delivery-no-scan")
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .into_iter()
+    .next()
+    .unwrap();
+    let (mut router, mutator) = test_router(store.clone(), GaryxConfig::default());
+    mutator.seed_owner("thread::delivery-no-scan", owner).await;
     router
         .set_last_delivery_with_persistence(
             "thread::delivery-no-scan",

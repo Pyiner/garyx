@@ -6818,6 +6818,10 @@ async fn local_provider_session_import_uses_atomic_transcript_replace() {
         json!({"role": "assistant", "content": "replacement answer"}),
     ];
     let mut thread_data = json!({"thread_id": thread_id, "history": {}});
+    thread_store
+        .set(thread_id, thread_data.clone())
+        .await
+        .expect("seed imported thread record");
 
     seed_imported_thread_history(&state, thread_id, &mut thread_data, &imported_messages)
         .await
@@ -10077,23 +10081,25 @@ async fn cached_channel_endpoints_reuses_snapshot_until_invalidated() {
     assert_eq!(initial[0].display_label, "Initial Chat");
 
     state
-        .threads
-        .thread_store
-        .set(
+        .ops
+        .endpoint_binding_mutator
+        .detach_endpoint("telegram::main::chat-1")
+        .await
+        .unwrap();
+    state
+        .ops
+        .endpoint_binding_mutator
+        .bind_endpoint(
             "thread::cached-endpoint",
-            serde_json::json!({
-                "thread_id": "thread::cached-endpoint",
-                "label": "Cached Endpoint",
-                "updated_at": "2026-03-16T01:00:01Z",
-                "channel_bindings": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "binding_key": "chat-1",
-                    "chat_id": "chat-1",
-                    "display_label": "Updated Chat",
-                    "last_inbound_at": "2026-03-16T01:00:01Z"
-                }]
-            }),
+            ChannelBinding {
+                channel: "telegram".to_owned(),
+                account_id: "main".to_owned(),
+                binding_key: "chat-1".to_owned(),
+                chat_id: "chat-1".to_owned(),
+                display_label: "Updated Chat".to_owned(),
+                last_inbound_at: Some("2026-03-16T01:00:01Z".to_owned()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

@@ -13,14 +13,41 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{TaskCounterError, TaskCounterStore};
-use crate::{ThreadEnsureOptions, ThreadStore, WorkspaceMode, create_thread_record, is_thread_key};
+use crate::{
+    ThreadEnsureOptions, ThreadRecordPatch, ThreadStore, WorkspaceMode, create_thread_record,
+    is_thread_key,
+};
 
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
 const TASK_THREAD_TITLE_SOURCE: &str = "task";
+const TASK_RECORD_PATCH_FIELDS: &[&str] = &[
+    "label",
+    "thread_title_source",
+    "provider_thread_title",
+    "thread_kind",
+    "task",
+    "updated_at",
+    "agent_id",
+    "provider_type",
+    "metadata",
+    "workspace_dir",
+];
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
 static TASK_THREAD_LOCKS: OnceLock<StdMutex<HashMap<String, TaskThreadLock>>> = OnceLock::new();
+
+async fn patch_task_record(
+    store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    observed: &Value,
+    desired: &Value,
+) -> Result<(), TaskServiceError> {
+    let patch = ThreadRecordPatch::from_diff(observed, desired, TASK_RECORD_PATCH_FIELDS)
+        .map_err(store_error)?;
+    store.patch(thread_id, patch).await.map_err(store_error)?;
+    Ok(())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TaskServiceError {
@@ -505,6 +532,7 @@ impl TaskService {
                 TaskServiceError::Store(error)
             }
         })?;
+        let observed_record = record.clone();
 
         // The task body is no longer seeded into a record `messages` copy
         // (#TASK-1864 batch 1c): `task.body` is the canonical source and the
@@ -543,10 +571,7 @@ impl TaskService {
         }
         set_task_thread_title(&mut record, &task)?;
         set_task_on_record(&mut record, &task)?;
-        self.thread_store
-            .set(&thread_id, record)
-            .await
-            .map_err(store_error)?;
+        patch_task_record(&self.thread_store, &thread_id, &observed_record, &record).await?;
         Ok((thread_id, task))
     }
 
@@ -636,6 +661,7 @@ impl TaskService {
             .await
             .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let observed_record = record.clone();
         let mut task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
 
@@ -705,10 +731,7 @@ impl TaskService {
             );
         }
         set_task_on_record(&mut record, &task)?;
-        self.thread_store
-            .set(&thread_id, record.clone())
-            .await
-            .map_err(store_error)?;
+        patch_task_record(&self.thread_store, &thread_id, &observed_record, &record).await?;
         Ok((thread_id, record, task))
     }
 
@@ -826,13 +849,11 @@ impl TaskService {
             .await
             .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let observed_record = record.clone();
         let task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         remove_task_from_record(&mut record)?;
-        self.thread_store
-            .set(&thread_id, record)
-            .await
-            .map_err(store_error)?;
+        patch_task_record(&self.thread_store, &thread_id, &observed_record, &record).await?;
         Ok((thread_id, task))
     }
 
@@ -855,6 +876,7 @@ impl TaskService {
             .await
             .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let observed_record = record.clone();
         let mut task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         let should_update_thread_title = is_task_thread_title_managed(&record, &task);
@@ -876,10 +898,7 @@ impl TaskService {
             set_task_thread_title(&mut record, &task)?;
         }
         set_task_on_record(&mut record, &task)?;
-        self.thread_store
-            .set(&thread_id, record)
-            .await
-            .map_err(store_error)?;
+        patch_task_record(&self.thread_store, &thread_id, &observed_record, &record).await?;
         Ok(task)
     }
 
@@ -896,14 +915,12 @@ impl TaskService {
             .await
             .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let observed_record = record.clone();
         let mut task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         f(&mut task)?;
         set_task_on_record(&mut record, &task)?;
-        self.thread_store
-            .set(&thread_id, record)
-            .await
-            .map_err(store_error)?;
+        patch_task_record(&self.thread_store, &thread_id, &observed_record, &record).await?;
         Ok(task)
     }
 
@@ -1005,6 +1022,7 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     let Some(mut record) = thread_store.get(thread_id).await.map_err(store_error)? else {
         return Ok(None);
     };
+    let observed_record = record.clone();
     let Some(mut task) = task_from_record(&record)? else {
         return Ok(None);
     };
@@ -1038,10 +1056,7 @@ pub async fn mark_thread_task_in_review_if_in_progress(
         None,
     );
     set_task_on_record(&mut record, &task)?;
-    thread_store
-        .set(thread_id, record)
-        .await
-        .map_err(store_error)?;
+    patch_task_record(thread_store, thread_id, &observed_record, &record).await?;
     Ok(Some(EnterReview { task, handoff }))
 }
 
@@ -1056,6 +1071,7 @@ pub async fn mark_thread_task_in_progress_on_wake(
     let Some(mut record) = thread_store.get(thread_id).await.map_err(store_error)? else {
         return Ok(None);
     };
+    let observed_record = record.clone();
     let Some(mut task) = task_from_record(&record)? else {
         return Ok(None);
     };
@@ -1075,10 +1091,7 @@ pub async fn mark_thread_task_in_progress_on_wake(
         None,
     );
     set_task_on_record(&mut record, &task)?;
-    thread_store
-        .set(thread_id, record)
-        .await
-        .map_err(store_error)?;
+    patch_task_record(thread_store, thread_id, &observed_record, &record).await?;
     Ok(Some(task))
 }
 

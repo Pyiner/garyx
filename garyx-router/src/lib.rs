@@ -32,7 +32,9 @@ pub mod storage {
     pub use crate::message_ledger::{
         MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore,
     };
-    pub use crate::store::{ThreadStore, ThreadStoreError, ThreadTerminalState};
+    pub use crate::store::{
+        ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError, ThreadTerminalState,
+    };
     pub use crate::thread_history::{
         BackfillOutcome, DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
         THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError, ThreadHistoryRepository,
@@ -51,15 +53,15 @@ pub mod threading {
         is_default_thread_list_hidden, is_hidden_thread_value, is_thread_key, label_from_value,
         list_known_channel_endpoints, list_registry_channel_endpoints, new_thread_key,
         normalize_workspace_dir, remove_binding, thread_kind_from_value,
-        thread_metadata_from_value, update_thread_record, upsert_binding,
-        upsert_known_channel_endpoint, upsert_thread_fields, validate_thread_accepts_bot_binding,
-        workspace_dir_from_value, worktree_base_dir_for_config,
+        thread_metadata_from_value, update_thread_record, upsert_binding, upsert_thread_fields,
+        validate_thread_accepts_bot_binding, workspace_dir_from_value,
+        worktree_base_dir_for_config,
     };
 }
 
 pub use endpoint_binding::{
     EndpointBindResult, EndpointBindingMutationError, EndpointBindingMutator, EndpointBindingOwner,
-    EndpointDetachResult,
+    EndpointDeliveryTimestampResult, EndpointDetachResult,
 };
 pub use endpoint_projection::{
     ChannelEndpointProjection, DeliveryContextRow, ScanChannelEndpointProjection,
@@ -80,7 +82,9 @@ pub use run_admission::{
 };
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::{
-    AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadStoreExt, ThreadTerminalState,
+    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError,
+    ThreadStoreExt, ThreadTerminalState, ensure_channel_bindings_unchanged,
+    ensure_update_has_no_protected_fields, validate_channel_bindings,
 };
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
@@ -105,7 +109,7 @@ pub use threads::{
     is_default_thread_list_hidden, is_hidden_thread_value, is_thread_key, label_from_value,
     list_known_channel_endpoints, list_registry_channel_endpoints, new_thread_key,
     normalize_workspace_dir, remove_binding, thread_kind_from_value, thread_metadata_from_value,
-    update_thread_record, upsert_binding, upsert_known_channel_endpoint, upsert_thread_fields,
+    update_thread_record, upsert_binding, upsert_thread_fields,
     validate_thread_accepts_bot_binding, workspace_dir_from_value, worktree_base_dir_for_config,
 };
 pub use worktree::{

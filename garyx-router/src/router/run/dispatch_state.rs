@@ -1,4 +1,4 @@
-use crate::store::ThreadStoreExt;
+use crate::store::{ThreadRecordPatch, ThreadStoreExt};
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -18,6 +18,7 @@ impl MessageRouter {
         let Some(mut data) = self.threads.get_logged(thread_id).await else {
             return;
         };
+        let observed = data.clone();
         let Some(obj) = data.as_object_mut() else {
             return;
         };
@@ -48,7 +49,20 @@ impl MessageRouter {
                 "updated_at".to_owned(),
                 Value::String(Utc::now().to_rfc3339()),
             );
-            self.threads.set_logged(thread_id, data).await;
+            match ThreadRecordPatch::from_diff(
+                &observed,
+                &data,
+                &["channel", "account_id", "from_id", "is_group", "updated_at"],
+            ) {
+                Ok(patch) => {
+                    if let Err(error) = self.threads.patch(thread_id, patch).await {
+                        tracing::warn!(thread_id, error = %error, "dispatch-state patch failed");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(thread_id, error = %error, "invalid dispatch-state patch");
+                }
+            }
         }
     }
 

@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use garyx_models::config::GaryxConfig;
 use garyx_router::{
     AtomicRecordMerge, ChannelBinding, EndpointBindResult, EndpointBindingMutationError,
-    EndpointBindingMutator, EndpointBindingOwner, EndpointDetachResult,
-    KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadStore, ThreadStoreError,
-    bindings_from_value, remove_binding, upsert_binding, validate_thread_accepts_bot_binding,
+    EndpointBindingMutator, EndpointBindingOwner, EndpointDeliveryTimestampResult,
+    EndpointDetachResult, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadStore,
+    ThreadStoreError, bindings_from_value, remove_binding, upsert_binding,
+    validate_channel_bindings, validate_thread_accepts_bot_binding,
 };
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -210,7 +211,10 @@ impl SqlEndpointBindingMutator {
                 thread_id: match &error {
                     ThreadStoreError::NotFound(id) | ThreadStoreError::Archived(id) => id.clone(),
                     ThreadStoreError::Serialization { thread_id, .. } => thread_id.clone(),
-                    ThreadStoreError::Backend(_) => subject_thread_id.to_owned(),
+                    ThreadStoreError::ProtectedFieldConflict { thread_id, .. } => thread_id.clone(),
+                    ThreadStoreError::InvalidPatch(_) | ThreadStoreError::Backend(_) => {
+                        subject_thread_id.to_owned()
+                    }
                 },
                 message: error.to_string(),
             })
@@ -433,6 +437,104 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
             changed: true,
         })
     }
+
+    async fn sync_delivery_timestamp(
+        &self,
+        endpoint_key: &str,
+        expected_holder_thread_id: &str,
+        last_delivery_at: Option<String>,
+    ) -> Result<EndpointDeliveryTimestampResult, EndpointBindingMutationError> {
+        let _guard = self.mutation_lock.lock().await;
+        let endpoint_key = endpoint_key.trim();
+        let expected_holder_thread_id = expected_holder_thread_id.trim();
+        let Some(owner) = self.projected_owner(endpoint_key).await? else {
+            return Ok(EndpointDeliveryTimestampResult::NotFound);
+        };
+        let Some(current_holder) = owner.thread_id.clone() else {
+            return Err(EndpointBindingMutationError::Projection(format!(
+                "endpoint projection '{endpoint_key}' has no owner"
+            )));
+        };
+        if current_holder != expected_holder_thread_id {
+            return Ok(EndpointDeliveryTimestampResult::OwnerChanged {
+                current_holder: Some(current_holder),
+            });
+        }
+
+        let mut holder = self
+            .thread_store
+            .get(&current_holder)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: current_holder.clone(),
+                message: error.to_string(),
+            })?
+            .ok_or_else(|| {
+                EndpointBindingMutationError::PreviousOwnerUnavailable(current_holder.clone())
+            })?;
+        validate_channel_bindings(&current_holder, &holder).map_err(|error| {
+            EndpointBindingMutationError::WriteFailed {
+                thread_id: current_holder.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let Some(mut binding) = bindings_from_value(&holder)
+            .into_iter()
+            .find(|binding| binding.endpoint_key() == endpoint_key)
+        else {
+            return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                current_holder,
+            ));
+        };
+        let holder_changed = binding.last_delivery_at != last_delivery_at;
+        binding.last_delivery_at = last_delivery_at;
+
+        let mut registry = self
+            .thread_store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message: error.to_string(),
+            })?
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        validate_channel_bindings(KNOWN_CHANNEL_ENDPOINTS_KEY, &registry).map_err(|error| {
+            EndpointBindingMutationError::WriteFailed {
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        let registry_changed = bindings_from_value(&registry)
+            .into_iter()
+            .find(|candidate| candidate.endpoint_key() == endpoint_key)
+            .as_ref()
+            != Some(&binding);
+
+        if !holder_changed && !registry_changed {
+            return Ok(EndpointDeliveryTimestampResult::Unchanged);
+        }
+
+        let mut entries = Vec::with_capacity(2);
+        if holder_changed {
+            upsert_binding(&mut holder, binding.clone());
+            entries.push(AtomicRecordMerge {
+                thread_id: expected_holder_thread_id.to_owned(),
+                fields: binding_fields_of(&holder),
+                create_if_missing: false,
+            });
+        }
+        if registry_changed {
+            upsert_binding(&mut registry, binding);
+            entries.push(AtomicRecordMerge {
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                fields: binding_fields_of(&registry),
+                create_if_missing: true,
+            });
+        }
+        self.commit_atomic(expected_holder_thread_id, entries)
+            .await?;
+        Ok(EndpointDeliveryTimestampResult::Applied)
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +614,14 @@ mod tests {
                 return Err(ThreadStoreError::NotFound(thread_id.to_owned()));
             }
             self.inner.update(thread_id, updates).await
+        }
+
+        async fn patch(
+            &self,
+            thread_id: &str,
+            patch: garyx_router::ThreadRecordPatch,
+        ) -> Result<garyx_router::ThreadPatchResult, ThreadStoreError> {
+            self.inner.patch(thread_id, patch).await
         }
 
         fn channel_endpoint_projection(
@@ -652,6 +762,184 @@ mod tests {
             store.get("thread::target").await.unwrap().unwrap()["delivery_context"].is_object()
         );
         assert_eq!(store.list_calls.load(Ordering::SeqCst), 0);
+    }
+
+    fn delivery_timestamp(value: &Value) -> Option<String> {
+        bindings_from_value(value)
+            .into_iter()
+            .find(|candidate| candidate.endpoint_key() == "telegram::main::1000000001")
+            .and_then(|binding| binding.last_delivery_at)
+    }
+
+    #[tokio::test]
+    async fn delivery_timestamp_updates_holder_and_registry_atomically_without_scan() {
+        let (db, store, mutator) = fixture();
+        seed_thread(&store, "thread::holder").await;
+        mutator
+            .bind_endpoint("thread::holder", binding())
+            .await
+            .expect("initial bind");
+
+        let applied = mutator
+            .sync_delivery_timestamp(
+                "telegram::main::1000000001",
+                "thread::holder",
+                Some("2026-07-20T01:00:00Z".to_owned()),
+            )
+            .await
+            .expect("timestamp sync");
+        assert_eq!(applied, EndpointDeliveryTimestampResult::Applied);
+        let holder = store.get("thread::holder").await.unwrap().unwrap();
+        let registry = store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            delivery_timestamp(&holder).as_deref(),
+            Some("2026-07-20T01:00:00Z")
+        );
+        assert_eq!(delivery_timestamp(&registry), delivery_timestamp(&holder));
+        assert_eq!(
+            db.get_thread_channel_endpoint("telegram::main::1000000001")
+                .unwrap()
+                .unwrap()
+                .thread_id
+                .as_deref(),
+            Some("thread::holder")
+        );
+        assert_eq!(store.list_calls.load(Ordering::SeqCst), 0);
+
+        assert_eq!(
+            mutator
+                .sync_delivery_timestamp("telegram::main::1000000001", "thread::holder", None,)
+                .await
+                .unwrap(),
+            EndpointDeliveryTimestampResult::Applied
+        );
+        assert_eq!(
+            delivery_timestamp(&store.get("thread::holder").await.unwrap().unwrap()),
+            None
+        );
+        assert_eq!(
+            delivery_timestamp(
+                &store
+                    .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn delivery_timestamp_failure_rolls_back_both_records_and_repairs_registry_drift() {
+        let (_db, store, mutator) = fixture();
+        seed_thread(&store, "thread::holder").await;
+        mutator
+            .bind_endpoint("thread::holder", binding())
+            .await
+            .expect("initial bind");
+
+        store.fail_update(KNOWN_CHANNEL_ENDPOINTS_KEY);
+        let error = mutator
+            .sync_delivery_timestamp(
+                "telegram::main::1000000001",
+                "thread::holder",
+                Some("2026-07-20T02:00:00Z".to_owned()),
+            )
+            .await
+            .expect_err("registry failure aborts activity mutation");
+        assert!(matches!(
+            error,
+            EndpointBindingMutationError::WriteFailed { ref thread_id, .. }
+                if thread_id == KNOWN_CHANNEL_ENDPOINTS_KEY
+        ));
+        assert_eq!(
+            delivery_timestamp(&store.get("thread::holder").await.unwrap().unwrap()),
+            None
+        );
+        store.failed_updates.lock().unwrap().clear();
+
+        let mut registry = store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut drifted = binding();
+        drifted.last_delivery_at = Some("2026-07-20T00:30:00Z".to_owned());
+        upsert_binding(&mut registry, drifted);
+        store
+            .update_many_atomic(vec![AtomicRecordMerge {
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                fields: binding_fields_of(&registry),
+                create_if_missing: true,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(
+            mutator
+                .sync_delivery_timestamp("telegram::main::1000000001", "thread::holder", None,)
+                .await
+                .unwrap(),
+            EndpointDeliveryTimestampResult::Applied
+        );
+        assert_eq!(
+            delivery_timestamp(
+                &store
+                    .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            ),
+            None,
+            "authoritative holder repairs pre-rollout registry drift"
+        );
+    }
+
+    #[tokio::test]
+    async fn delivery_timestamp_and_rebind_are_ordered_by_expected_holder() {
+        let (_db, store, mutator) = fixture();
+        seed_thread(&store, "thread::old").await;
+        seed_thread(&store, "thread::target").await;
+        mutator
+            .bind_endpoint("thread::old", binding())
+            .await
+            .expect("initial bind");
+        mutator
+            .sync_delivery_timestamp(
+                "telegram::main::1000000001",
+                "thread::old",
+                Some("2026-07-20T03:00:00Z".to_owned()),
+            )
+            .await
+            .unwrap();
+        mutator
+            .bind_endpoint("thread::target", binding())
+            .await
+            .expect("move after activity");
+        assert_eq!(
+            delivery_timestamp(&store.get("thread::target").await.unwrap().unwrap()).as_deref(),
+            Some("2026-07-20T03:00:00Z"),
+            "activity-first metadata moves with the authoritative binding"
+        );
+
+        let stale = mutator
+            .sync_delivery_timestamp("telegram::main::1000000001", "thread::old", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            stale,
+            EndpointDeliveryTimestampResult::OwnerChanged {
+                current_holder: Some("thread::target".to_owned())
+            }
+        );
+        assert_eq!(
+            delivery_timestamp(&store.get("thread::target").await.unwrap().unwrap()).as_deref(),
+            Some("2026-07-20T03:00:00Z"),
+            "old-owner clear cannot touch the rebound endpoint"
+        );
     }
 
     #[tokio::test]

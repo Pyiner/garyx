@@ -210,6 +210,7 @@ pub(super) async fn seed_imported_thread_history(
     if messages.is_empty() {
         return Ok(());
     }
+    let observed = thread_data.clone();
 
     let append_result = state
         .threads
@@ -299,10 +300,22 @@ pub(super) async fn seed_imported_thread_history(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
+    let patch = ThreadRecordPatch::from_diff(
+        &observed,
+        thread_data,
+        &[
+            "last_user_preview",
+            "last_assistant_preview",
+            "message_count",
+            "history",
+            "updated_at",
+        ],
+    )
+    .map_err(|error| error.to_string())?;
     state
         .threads
         .thread_store
-        .set(thread_id, thread_data.clone())
+        .patch(thread_id, patch)
         .await
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -1141,6 +1154,7 @@ pub async fn update_thread(
     .await
     {
         Ok(mut data) => {
+            let observed = data.clone();
             let runtime_cells_changed = apply_thread_runtime_cells(&mut data, &body);
             if runtime_cells_changed {
                 if let Some(obj) = data.as_object_mut() {
@@ -1149,12 +1163,20 @@ pub async fn update_thread(
                         Value::String(Utc::now().to_rfc3339()),
                     );
                 }
-                if let Err(error) = state
-                    .threads
-                    .thread_store
-                    .set(&thread_id, data.clone())
-                    .await
-                {
+                let patch = match ThreadRecordPatch::from_diff(
+                    &observed,
+                    &data,
+                    &["metadata", "updated_at"],
+                ) {
+                    Ok(patch) => patch,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": error.to_string() })),
+                        );
+                    }
+                };
+                if let Err(error) = state.threads.thread_store.patch(&thread_id, patch).await {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({ "error": error.to_string() })),

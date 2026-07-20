@@ -1,11 +1,15 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::ThreadRunCoordinator;
 use crate::endpoint_projection::ChannelEndpointProjection;
 use crate::tasks::TaskProjectionReader;
+use crate::threads::ChannelBinding;
+
+const PROTECTED_CHANNEL_BINDINGS_FIELD: &str = "channel_bindings";
 
 /// Durable terminal state recorded by the canonical thread tombstone.
 ///
@@ -50,6 +54,214 @@ pub struct AtomicRecordMerge {
     /// Missing records normally abort the mutation; registry-style
     /// records owned by the mutation itself are created on first write.
     pub create_if_missing: bool,
+}
+
+/// A validated top-level mutation for one existing thread record.
+///
+/// The fields are private so callers cannot accidentally carry an observed
+/// whole body across an await. Use [`ThreadRecordPatch::from_diff`] to prove
+/// that every changed field belongs to the caller's explicit allowlist.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThreadRecordPatch {
+    set_fields: Map<String, Value>,
+    remove_fields: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadPatchResult {
+    Applied,
+    Unchanged,
+}
+
+impl ThreadRecordPatch {
+    /// Build a patch from two complete observations while allowing only the
+    /// named top-level fields to differ. Any unexpected difference is an
+    /// error before storage is touched.
+    pub fn from_diff(
+        observed: &Value,
+        desired: &Value,
+        allowed_fields: &[&str],
+    ) -> Result<Self, ThreadStoreError> {
+        let observed = observed.as_object().ok_or_else(|| {
+            ThreadStoreError::InvalidPatch("observed thread record is not an object".to_owned())
+        })?;
+        let desired = desired.as_object().ok_or_else(|| {
+            ThreadStoreError::InvalidPatch("desired thread record is not an object".to_owned())
+        })?;
+        let allowed = allowed_fields.iter().copied().collect::<BTreeSet<_>>();
+        let keys = observed
+            .keys()
+            .chain(desired.keys())
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let mut set_fields = Map::new();
+        let mut remove_fields = BTreeSet::new();
+
+        for key in keys {
+            if observed.get(key) == desired.get(key) {
+                continue;
+            }
+            if key == PROTECTED_CHANNEL_BINDINGS_FIELD {
+                return Err(ThreadStoreError::InvalidPatch(format!(
+                    "protected field '{key}' cannot be patched"
+                )));
+            }
+            if !allowed.contains(key) {
+                return Err(ThreadStoreError::InvalidPatch(format!(
+                    "field '{key}' is outside the patch allowlist"
+                )));
+            }
+            match desired.get(key) {
+                Some(value) => {
+                    set_fields.insert(key.to_owned(), value.clone());
+                }
+                None => {
+                    remove_fields.insert(key.to_owned());
+                }
+            }
+        }
+
+        Self::validated(set_fields, remove_fields)
+    }
+
+    /// Build a patch from explicit fields. This is primarily useful for
+    /// callers that did not start from a whole-record observation.
+    pub fn new(
+        set_fields: Map<String, Value>,
+        remove_fields: BTreeSet<String>,
+    ) -> Result<Self, ThreadStoreError> {
+        Self::validated(set_fields, remove_fields)
+    }
+
+    fn validated(
+        set_fields: Map<String, Value>,
+        remove_fields: BTreeSet<String>,
+    ) -> Result<Self, ThreadStoreError> {
+        if set_fields.contains_key(PROTECTED_CHANNEL_BINDINGS_FIELD)
+            || remove_fields.contains(PROTECTED_CHANNEL_BINDINGS_FIELD)
+        {
+            return Err(ThreadStoreError::InvalidPatch(format!(
+                "protected field '{PROTECTED_CHANNEL_BINDINGS_FIELD}' cannot be patched"
+            )));
+        }
+        if let Some(field) = set_fields.keys().find(|key| remove_fields.contains(*key)) {
+            return Err(ThreadStoreError::InvalidPatch(format!(
+                "field '{field}' cannot be both set and removed"
+            )));
+        }
+        Ok(Self {
+            set_fields,
+            remove_fields,
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set_fields.is_empty() && self.remove_fields.is_empty()
+    }
+
+    pub fn changed_fields(&self) -> impl Iterator<Item = &str> {
+        self.set_fields
+            .keys()
+            .map(String::as_str)
+            .chain(self.remove_fields.iter().map(String::as_str))
+    }
+
+    pub fn apply_to(&self, record: &mut Value) -> Result<bool, ThreadStoreError> {
+        let object = record.as_object_mut().ok_or_else(|| {
+            ThreadStoreError::InvalidPatch("stored thread record is not an object".to_owned())
+        })?;
+        let mut changed = false;
+        for (field, value) in &self.set_fields {
+            if object.get(field) != Some(value) {
+                object.insert(field.clone(), value.clone());
+                changed = true;
+            }
+        }
+        for field in &self.remove_fields {
+            changed |= object.remove(field).is_some();
+        }
+        Ok(changed)
+    }
+}
+
+fn canonical_channel_bindings(
+    thread_id: &str,
+    record: &Value,
+) -> Result<BTreeMap<String, ChannelBinding>, ThreadStoreError> {
+    let Some(value) = record.get(PROTECTED_CHANNEL_BINDINGS_FIELD) else {
+        return Ok(BTreeMap::new());
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| ThreadStoreError::ProtectedFieldConflict {
+            thread_id: thread_id.to_owned(),
+            field: PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+        })?;
+    let mut bindings = BTreeMap::new();
+    for item in items {
+        let binding = serde_json::from_value::<ChannelBinding>(item.clone()).map_err(|_| {
+            ThreadStoreError::ProtectedFieldConflict {
+                thread_id: thread_id.to_owned(),
+                field: PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+            }
+        })?;
+        if binding.channel.trim().is_empty()
+            || binding.account_id.trim().is_empty()
+            || binding.binding_key.trim().is_empty()
+        {
+            return Err(ThreadStoreError::ProtectedFieldConflict {
+                thread_id: thread_id.to_owned(),
+                field: PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+            });
+        }
+        let endpoint_key = binding.endpoint_key();
+        if bindings.insert(endpoint_key, binding).is_some() {
+            return Err(ThreadStoreError::ProtectedFieldConflict {
+                thread_id: thread_id.to_owned(),
+                field: PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+            });
+        }
+    }
+    Ok(bindings)
+}
+
+pub fn validate_channel_bindings(thread_id: &str, record: &Value) -> Result<(), ThreadStoreError> {
+    canonical_channel_bindings(thread_id, record).map(|_| ())
+}
+
+/// Reject an existing-record replacement that changes endpoint ownership or
+/// binding metadata. Missing and an empty list are semantically equivalent.
+pub fn ensure_channel_bindings_unchanged(
+    thread_id: &str,
+    current: &Value,
+    incoming: &Value,
+) -> Result<(), ThreadStoreError> {
+    if canonical_channel_bindings(thread_id, current)?
+        == canonical_channel_bindings(thread_id, incoming)?
+    {
+        Ok(())
+    } else {
+        Err(ThreadStoreError::ProtectedFieldConflict {
+            thread_id: thread_id.to_owned(),
+            field: PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+        })
+    }
+}
+
+pub fn ensure_update_has_no_protected_fields(
+    thread_id: &str,
+    updates: &Value,
+) -> Result<(), ThreadStoreError> {
+    if updates
+        .as_object()
+        .is_some_and(|fields| fields.contains_key(PROTECTED_CHANNEL_BINDINGS_FIELD))
+    {
+        return Err(ThreadStoreError::ProtectedFieldConflict {
+            thread_id: thread_id.to_owned(),
+            field: PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -102,6 +314,19 @@ pub trait ThreadStore: Send + Sync {
     /// Returns [`ThreadStoreError::NotFound`] if the thread does not exist
     /// and [`ThreadStoreError::Archived`] if it is tombstoned.
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError>;
+
+    /// Apply a validated top-level patch to an existing record. Backends that
+    /// cannot hold their write guard across re-read and merge fail closed.
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: ThreadRecordPatch,
+    ) -> Result<ThreadPatchResult, ThreadStoreError> {
+        drop((thread_id, patch));
+        Err(ThreadStoreError::Backend(
+            "this thread store backend does not support atomic record patches".to_owned(),
+        ))
+    }
 
     /// Apply top-level field merges to SEVERAL records as one
     /// all-or-nothing mutation. Multi-record state transitions (moving an
@@ -230,6 +455,10 @@ pub enum ThreadStoreError {
     Archived(String),
     #[error("thread record serialization failed for {thread_id}: {message}")]
     Serialization { thread_id: String, message: String },
+    #[error("thread record patch is invalid: {0}")]
+    InvalidPatch(String),
+    #[error("thread '{thread_id}' protected field conflict: {field}")]
+    ProtectedFieldConflict { thread_id: String, field: String },
     #[error("thread store backend failed: {0}")]
     Backend(String),
 }

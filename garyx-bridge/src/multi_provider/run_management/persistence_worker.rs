@@ -1,5 +1,5 @@
 use super::*;
-use garyx_router::ThreadStoreExt;
+use garyx_router::{ThreadRecordPatch, ThreadStoreExt};
 
 pub(super) fn insert_snapshot_field(
     metadata: &mut Map<String, Value>,
@@ -40,6 +40,7 @@ pub(super) async fn persist_thread_runtime_snapshot(
     let Some(mut thread_data) = store.get_logged(thread_id).await else {
         return;
     };
+    let observed = thread_data.clone();
     let existing_top_level_overrides = [
         MODEL_OVERRIDE_METADATA_KEY,
         MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
@@ -97,8 +98,16 @@ pub(super) async fn persist_thread_runtime_snapshot(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
-    if !store.set_logged(thread_id, thread_data).await {
-        tracing::warn!(thread_id, "pending-input persistence write did not persist");
+    let patch =
+        match ThreadRecordPatch::from_diff(&observed, &thread_data, &["metadata", "updated_at"]) {
+            Ok(patch) => patch,
+            Err(error) => {
+                tracing::warn!(thread_id, error = %error, "invalid runtime snapshot patch");
+                return;
+            }
+        };
+    if let Err(error) = store.patch(thread_id, patch).await {
+        tracing::warn!(thread_id, error = %error, "runtime snapshot patch did not persist");
     }
 }
 

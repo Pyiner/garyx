@@ -1,12 +1,196 @@
 use super::*;
-use garyx_router::{InMemoryThreadStore, ThreadHistoryRepository, ThreadTranscriptStore};
+use async_trait::async_trait;
+use garyx_router::{
+    AtomicRecordMerge, InMemoryThreadStore, ThreadHistoryRepository, ThreadPatchResult,
+    ThreadRecordPatch, ThreadRunCoordinator, ThreadStoreError, ThreadTranscriptStore,
+};
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+struct MoveEndpointAfterReadStore {
+    inner: Arc<dyn ThreadStore>,
+    previous_owner: String,
+    move_entries: Vec<AtomicRecordMerge>,
+    moved: AtomicBool,
+}
+
+#[async_trait]
+impl ThreadStore for MoveEndpointAfterReadStore {
+    fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+        self.inner.run_coordinator()
+    }
+
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
+        let observed = self.inner.get(thread_id).await?;
+        if thread_id == self.previous_owner
+            && self
+                .moved
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            self.inner
+                .update_many_atomic(self.move_entries.clone())
+                .await?;
+        }
+        Ok(observed)
+    }
+
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
+        self.inner.set(thread_id, data).await
+    }
+
+    async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+        self.inner.delete(thread_id).await
+    }
+
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
+        self.inner.list_keys(prefix).await
+    }
+
+    async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+        self.inner.exists(thread_id).await
+    }
+
+    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        self.inner.update(thread_id, updates).await
+    }
+
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: ThreadRecordPatch,
+    ) -> Result<ThreadPatchResult, ThreadStoreError> {
+        self.inner.patch(thread_id, patch).await
+    }
+
+    async fn update_many_atomic(
+        &self,
+        entries: Vec<AtomicRecordMerge>,
+    ) -> Result<(), ThreadStoreError> {
+        self.inner.update_many_atomic(entries).await
+    }
+}
 
 fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     Arc::new(ThreadHistoryRepository::new(
         store,
         Arc::new(ThreadTranscriptStore::memory()),
     ))
+}
+
+#[tokio::test]
+async fn streaming_persistence_cannot_resurrect_a_binding_moved_after_its_read() {
+    let previous_owner = "thread::previous-owner";
+    let target = "thread::target-owner";
+    let registry = "meta::known_channel_endpoints";
+    let binding = json!({
+        "channel": "api",
+        "account_id": "test-account",
+        "binding_key": "test-peer",
+        "chat_id": "test-chat",
+        "delivery_target_type": "chat_id",
+        "delivery_target_id": "test-chat",
+        "display_label": "Test endpoint"
+    });
+    let previous_body = json!({
+        "thread_id": previous_owner,
+        "runtime_marker": "must-survive",
+        "channel_bindings": [binding.clone()]
+    });
+    let base = Arc::new(InMemoryThreadStore::new());
+    base.set(previous_owner, previous_body.clone())
+        .await
+        .unwrap();
+    base.set(target, json!({"thread_id": target, "channel_bindings": []}))
+        .await
+        .unwrap();
+    base.set(
+        registry,
+        json!({"channel_bindings": [{
+            "channel": "api",
+            "account_id": "test-account",
+            "binding_key": "test-peer",
+            "thread_id": previous_owner
+        }]}),
+    )
+    .await
+    .unwrap();
+
+    let moved_registry_binding = json!({
+        "channel": "api",
+        "account_id": "test-account",
+        "binding_key": "test-peer",
+        "thread_id": target
+    });
+    let inner: Arc<dyn ThreadStore> = base.clone();
+    let store: Arc<dyn ThreadStore> = Arc::new(MoveEndpointAfterReadStore {
+        inner,
+        previous_owner: previous_owner.to_owned(),
+        move_entries: vec![
+            AtomicRecordMerge {
+                thread_id: previous_owner.to_owned(),
+                fields: json!({"channel_bindings": []}),
+                create_if_missing: false,
+            },
+            AtomicRecordMerge {
+                thread_id: target.to_owned(),
+                fields: json!({"channel_bindings": [binding.clone()]}),
+                create_if_missing: false,
+            },
+            AtomicRecordMerge {
+                thread_id: registry.to_owned(),
+                fields: json!({"channel_bindings": [moved_registry_binding.clone()]}),
+                create_if_missing: false,
+            },
+        ],
+        moved: AtomicBool::new(false),
+    });
+    let history = make_history(store.clone());
+    let metadata = run_metadata("run::stale-binding");
+    let messages = vec![ProviderMessage::assistant_text("persisted after the move")];
+
+    save_streaming_partial(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: previous_owner,
+            user_message: "keep the endpoint move",
+            user_timestamp: Some("2026-07-20T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "persisted after the move",
+            sdk_session_id: Some("sdk-stale-binding"),
+            provider_key: "provider::stale-binding",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &messages,
+            metadata: &metadata,
+        },
+        &[],
+        &[],
+        messages.len(),
+        0,
+    )
+    .await;
+
+    let previous = base.get(previous_owner).await.unwrap().unwrap();
+    let target_body = base.get(target).await.unwrap().unwrap();
+    let registry_body = base.get(registry).await.unwrap().unwrap();
+    assert_eq!(previous["runtime_marker"], "must-survive");
+    assert_eq!(previous["channel_bindings"], json!([]));
+    assert_eq!(previous["history"]["message_count"], 2);
+    assert_eq!(target_body["channel_bindings"], json!([binding]));
+    assert_eq!(
+        registry_body["channel_bindings"],
+        json!([moved_registry_binding])
+    );
+
+    let error = base
+        .set(previous_owner, previous_body)
+        .await
+        .expect_err("the stale whole-body negative control must be fenced");
+    assert!(matches!(
+        error,
+        ThreadStoreError::ProtectedFieldConflict { field, .. } if field == "channel_bindings"
+    ));
 }
 
 /// Terminal persistence only reconciles the transcript for an identified

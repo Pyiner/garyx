@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::store::ThreadStoreExt;
+use crate::store::{ThreadRecordPatch, ThreadStoreExt};
 use chrono::Utc;
 use serde_json::Value;
 
@@ -180,11 +180,9 @@ impl MessageRouter {
         label: Option<&str>,
     ) {
         let now = Utc::now().to_rfc3339();
-        let mut thread_data = self
-            .threads
-            .get_logged(thread_id)
-            .await
-            .unwrap_or_else(|| serde_json::json!({}));
+        let existing = self.threads.get_logged(thread_id).await;
+        let observed = existing.clone();
+        let mut thread_data = existing.unwrap_or_else(|| serde_json::json!({}));
         let Some(obj) = thread_data.as_object_mut() else {
             return;
         };
@@ -231,6 +229,34 @@ impl MessageRouter {
         }
 
         obj.insert("updated_at".to_owned(), Value::String(now));
-        self.threads.set_logged(thread_id, thread_data).await;
+        if let Some(observed) = observed {
+            match ThreadRecordPatch::from_diff(
+                &observed,
+                &thread_data,
+                &[
+                    "thread_id",
+                    "channel",
+                    "account_id",
+                    "thread_binding_key",
+                    "created_at",
+                    "message_count",
+                    "history",
+                    "context",
+                    "label",
+                    "updated_at",
+                ],
+            ) {
+                Ok(patch) => {
+                    if let Err(error) = self.threads.patch(thread_id, patch).await {
+                        tracing::warn!(thread_id, error = %error, "navigation thread patch failed");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(thread_id, error = %error, "invalid navigation thread patch");
+                }
+            }
+        } else {
+            self.threads.set_logged(thread_id, thread_data).await;
+        }
     }
 }

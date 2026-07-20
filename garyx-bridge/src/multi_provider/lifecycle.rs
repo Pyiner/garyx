@@ -1,4 +1,4 @@
-use garyx_router::ThreadStoreExt;
+use garyx_router::{ThreadRecordPatch, ThreadStoreExt};
 use std::collections::{HashMap, HashSet};
 
 use crate::provider_trait::{BridgeError, ProviderModelDefaults};
@@ -432,6 +432,7 @@ impl MultiProviderBridge {
             Some(store) => store.get_logged(thread_id).await,
             None => None,
         };
+        let observed_thread_record = thread_record.clone();
         if let Some(record) = thread_record.as_ref() {
             garyx_models::provider::merge_thread_model_cells(record, metadata);
             merge_thread_agent_runtime_snapshot(record, metadata);
@@ -473,7 +474,11 @@ impl MultiProviderBridge {
         for (key, value) in &snapshot {
             metadata.entry(key.clone()).or_insert_with(|| value.clone());
         }
-        if let (Some(store), Some(record)) = (thread_store, thread_record.as_mut()) {
+        if let (Some(store), Some(record), Some(observed)) = (
+            thread_store,
+            thread_record.as_mut(),
+            observed_thread_record.as_ref(),
+        ) {
             let changed = {
                 let Some(obj) = record.as_object_mut() else {
                     return;
@@ -503,8 +508,19 @@ impl MultiProviderBridge {
                         Value::String(chrono::Utc::now().to_rfc3339()),
                     );
                 }
-                if !store.set_logged(thread_id, record.clone()).await {
-                    tracing::warn!(thread_id, "agent runtime snapshot write did not persist");
+                let patch = match ThreadRecordPatch::from_diff(
+                    observed,
+                    record,
+                    &["metadata", "updated_at"],
+                ) {
+                    Ok(patch) => patch,
+                    Err(error) => {
+                        tracing::warn!(thread_id, error = %error, "invalid agent runtime snapshot patch");
+                        return;
+                    }
+                };
+                if let Err(error) = store.patch(thread_id, patch).await {
+                    tracing::warn!(thread_id, error = %error, "agent runtime snapshot patch did not persist");
                 }
             }
         }

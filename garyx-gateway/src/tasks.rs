@@ -15,7 +15,8 @@ use garyx_models::{
 };
 use garyx_router::{
     CreateTaskInput, NewTaskAgentGate, TaskListFilter, TaskRuntimeInput, TaskService,
-    TaskServiceError, UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
+    TaskServiceError, ThreadRecordPatch, UpdateTaskStatusInput, WorkspaceMode,
+    workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -773,6 +774,7 @@ async fn ensure_created_task_thread_provider_from_bound_agent(
     else {
         return Ok(());
     };
+    let observed = updated.clone();
     if updated.get("provider_type").is_some() {
         return Ok(());
     }
@@ -809,10 +811,16 @@ async fn ensure_created_task_thread_provider_from_bound_agent(
             Value::String(Utc::now().to_rfc3339()),
         );
     }
+    let patch = ThreadRecordPatch::from_diff(
+        &observed,
+        &updated,
+        &["agent_id", "provider_type", "metadata", "updated_at"],
+    )
+    .map_err(|error| TaskServiceError::Store(error.to_string()))?;
     state
         .threads
         .thread_store
-        .set(thread_id, updated)
+        .patch(thread_id, patch)
         .await
         .map_err(|error| TaskServiceError::Store(error.to_string()))?;
     Ok(())

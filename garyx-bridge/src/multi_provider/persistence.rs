@@ -1,4 +1,3 @@
-use garyx_router::ThreadStoreExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -9,7 +8,8 @@ use garyx_models::provider::{
 };
 use garyx_router::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
-    RunTranscriptRecordDraft, ThreadHistoryRepository, ThreadStore, history_message_count,
+    RunTranscriptRecordDraft, ThreadHistoryRepository, ThreadRecordPatch, ThreadStore,
+    history_message_count,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,6 +20,50 @@ use crate::provider_common::metadata_string;
 /// Maximum number of messages to keep per session (matches Python's limit).
 pub(super) const MAX_SESSION_MESSAGES: usize = 100;
 const PROVIDER_SDK_SESSION_IDS_KEY: &str = "provider_sdk_session_ids";
+const RUN_PERSISTENCE_PATCH_FIELDS: &[&str] = &[
+    "pending_user_inputs",
+    "provider_sdk_session_ids",
+    "provider_type",
+    "provider_key",
+    "sdk_session_id",
+    "history",
+    "last_user_preview",
+    "last_assistant_preview",
+    "updated_at",
+];
+
+async fn persist_run_record_patch(
+    store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    observed: &Value,
+    desired: &Value,
+    record_existed: bool,
+) -> bool {
+    let patch = match ThreadRecordPatch::from_diff(observed, desired, RUN_PERSISTENCE_PATCH_FIELDS)
+    {
+        Ok(patch) => patch,
+        Err(error) => {
+            warn!(thread_id, error = %error, "invalid run persistence patch");
+            return false;
+        }
+    };
+    if !record_existed {
+        return match store.set(thread_id, desired.clone()).await {
+            Ok(()) => true,
+            Err(error) => {
+                warn!(thread_id, error = %error, "initial run persistence record did not persist");
+                false
+            }
+        };
+    }
+    match store.patch(thread_id, patch).await {
+        Ok(_) => true,
+        Err(error) => {
+            warn!(thread_id, error = %error, "run persistence patch did not persist");
+            false
+        }
+    }
+}
 
 fn attach_run_fields(
     object: &mut serde_json::Map<String, Value>,
@@ -1217,13 +1261,15 @@ pub(super) async fn save_streaming_partial(
     // A failed record read must not fall back to an empty record: writing
     // that skeleton back would clobber thread metadata. Skip this
     // persistence tick instead; the next tick retries.
-    let mut session_data = match store.get(run.thread_id).await {
-        Ok(existing) => existing.unwrap_or_else(|| serde_json::json!({})),
+    let (mut session_data, record_existed) = match store.get(run.thread_id).await {
+        Ok(Some(existing)) => (existing, true),
+        Ok(None) => (serde_json::json!({}), false),
         Err(error) => {
             warn!(thread_id = %run.thread_id, error = %error, "failed to read thread record; skipping streaming persistence tick");
             return (appended, committed_pairs);
         }
     };
+    let observed_session_data = session_data.clone();
     let committed_total = match committed_total {
         Some(total) => total,
         None => history
@@ -1276,7 +1322,15 @@ pub(super) async fn save_streaming_partial(
             Value::String(Utc::now().to_rfc3339()),
         );
     }
-    if !store.set_logged(run.thread_id, session_data).await {
+    if !persist_run_record_patch(
+        store,
+        run.thread_id,
+        &observed_session_data,
+        &session_data,
+        record_existed,
+    )
+    .await
+    {
         warn!(thread_id = %run.thread_id, "thread record write did not persist");
     }
     (appended, committed_pairs)
@@ -1382,13 +1436,15 @@ async fn save_thread_messages_with_session_update(
 ) -> Vec<(u64, Value)> {
     // Same clobber guard as the streaming path: a read failure must not
     // degrade into writing a skeleton record over live metadata.
-    let mut session_data = match store.get(run.thread_id).await {
-        Ok(existing) => existing.unwrap_or_else(|| serde_json::json!({})),
+    let (mut session_data, record_existed) = match store.get(run.thread_id).await {
+        Ok(Some(existing)) => (existing, true),
+        Ok(None) => (serde_json::json!({}), false),
         Err(error) => {
             warn!(thread_id = %run.thread_id, error = %error, "failed to read thread record; skipping final run persistence");
             return Vec::new();
         }
     };
+    let observed_session_data = session_data.clone();
     let run_messages = build_run_messages(&run);
     let current_run_id = primary_run_identifier(run.metadata);
     let existing_recent_run_ids = recent_committed_run_ids_from_value(&session_data);
@@ -1584,7 +1640,15 @@ async fn save_thread_messages_with_session_update(
         );
     }
 
-    if !store.set_logged(run.thread_id, session_data).await {
+    if !persist_run_record_patch(
+        store,
+        run.thread_id,
+        &observed_session_data,
+        &session_data,
+        record_existed,
+    )
+    .await
+    {
         warn!(thread_id = %run.thread_id, "thread record write did not persist");
     }
     committed_pairs
