@@ -3250,7 +3250,7 @@ fn engine_sources_route_all_logging_through_the_cron_wrappers() {
             saw_log_rs = true;
             // The one allowed tracing surface must actually pin the stable
             // target on every wrapper level.
-            for level in ["debug", "error", "info", "warn"] {
+            for level in ["debug", "info", "warn"] {
                 let pinned =
                     format!("tracing::{level}!(target: \"garyx_gateway::cron\", $($arg)*)");
                 assert!(
@@ -3265,7 +3265,7 @@ fn engine_sources_route_all_logging_through_the_cron_wrappers() {
                 violations.push(format!("{name}:{} {}", index + 1, line.trim()));
             }
         }
-        for level in ["debug", "error", "info", "warn"] {
+        for level in ["debug", "info", "warn"] {
             wrapper_calls += source.matches(&format!("cron_{level}!(")).count();
         }
     }

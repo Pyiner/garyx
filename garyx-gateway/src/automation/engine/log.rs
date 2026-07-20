@@ -14,12 +14,6 @@ macro_rules! cron_debug {
     };
 }
 
-macro_rules! cron_error {
-    ($($arg:tt)*) => {
-        tracing::error!(target: "garyx_gateway::cron", $($arg)*)
-    };
-}
-
 macro_rules! cron_info {
     ($($arg:tt)*) => {
         tracing::info!(target: "garyx_gateway::cron", $($arg)*)
@@ -32,4 +26,4 @@ macro_rules! cron_warn {
     };
 }
 
-pub(crate) use {cron_debug, cron_error, cron_info, cron_warn};
+pub(crate) use {cron_debug, cron_info, cron_warn};
