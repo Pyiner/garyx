@@ -240,6 +240,18 @@ public struct GaryxConversationScrollState: Equatable {
     /// collapsed tail row) must not regenerate a repair on every frame, or
     /// the reader can never scroll away from the tail.
     private var hadVisibleTailGap = false
+    /// The thread whose render-rows snapshot this state last observed.
+    ///
+    /// `renderRowsChanged` compares the incoming thread against this to tell a
+    /// same-thread older-history prepend (preserve the reading position) from
+    /// a thread switch that merely replays another thread's rows (never
+    /// restore, even when row ids collide across threads — they are
+    /// message-reference based, so `user_turn:history:0` recurs in every
+    /// thread). It is established when the thread opens, so the very first
+    /// prepend after a cold mount — whose cached rows predate the mount and
+    /// therefore never fired a row-id change before it — is still recognized
+    /// as same-thread (#TASK-2488).
+    private var renderRowsThreadIdentity: String?
 
     public init() {}
 
@@ -260,10 +272,21 @@ public struct GaryxConversationScrollState: Equatable {
     /// A thread was opened or switched: reset and jump straight to the tail.
     /// The measured viewport survives the reset — it belongs to the scroll
     /// surface, not the thread, and is not re-reported on switch.
-    public mutating func threadOpened() -> TailScrollRequest {
+    ///
+    /// `threadIdentity` is the thread now shown here (nil for a draft). It
+    /// anchors the render-rows preservation lifecycle at the open, which is the
+    /// only lifecycle point a cold mount reaches before its first prepend.
+    public mutating func threadOpened(threadIdentity: String?) -> TailScrollRequest {
         let viewportHeight = metrics.viewportHeight
+        // Carry the last-observed render-rows thread across the reset. A cold
+        // mount (nil) adopts the opening thread so its very first prepend is
+        // read as same-thread; a switch keeps the OUTGOING thread so the first
+        // post-switch row change is still rejected as cross-thread — regardless
+        // of whether the open or the row change is delivered first (#TASK-2488).
+        let carriedRenderRowsThreadIdentity = renderRowsThreadIdentity ?? threadIdentity
         self = GaryxConversationScrollState()
         metrics.viewportHeight = viewportHeight
+        renderRowsThreadIdentity = carriedRenderRowsThreadIdentity
         return TailScrollRequest(reason: .openingThread, animated: false)
     }
 
@@ -524,9 +547,14 @@ public struct GaryxConversationScrollState: Equatable {
     public mutating func renderRowsChanged(
         previousIds: [String],
         currentIds: [String],
-        threadUnchanged: Bool,
+        threadIdentity: String?,
         hasTailContent: Bool
     ) -> ReadingAnchorRestore? {
+        // Same-thread when the incoming rows belong to the thread of the last
+        // observed snapshot. Advance the anchor either way so the next change
+        // compares against the thread now on screen.
+        let threadUnchanged = renderRowsThreadIdentity == threadIdentity
+        renderRowsThreadIdentity = threadIdentity
         let isHistoryPrepend = Self.preservesScrollForPrependedHistory(
             previousIds: previousIds,
             currentIds: currentIds,

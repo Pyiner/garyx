@@ -136,7 +136,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         _ = state.contentChanged(isInitialLoad: false, isHistoryPrepend: false, hasTailContent: true)
 
-        let request = state.threadOpened()
+        let request = state.threadOpened(threadIdentity: "thread-a")
         XCTAssertEqual(request, .init(reason: .openingThread, animated: false))
         XCTAssertTrue(state.isFollowingTail)
         XCTAssertFalse(state.showsScrollToBottomButton)
@@ -147,7 +147,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         var state = GaryxConversationScrollState()
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
 
-        _ = state.threadOpened()
+        _ = state.threadOpened(threadIdentity: "thread-a")
         XCTAssertEqual(state.metrics.viewportHeight, browsingMetrics().viewportHeight)
         XCTAssertNil(state.metrics.contentTopOffset)
         XCTAssertEqual(state.metrics.contentBottomOffset, 0)
@@ -834,10 +834,11 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertEqual(currentRowIds, ["turn:seq1", "turn:seq3"])
 
         var state = GaryxConversationScrollState()
+        _ = state.threadOpened(threadIdentity: "thread-a")
         let restore = state.renderRowsChanged(
             previousIds: previousRowIds,
             currentIds: currentRowIds,
-            threadUnchanged: true,
+            threadIdentity: "thread-a",
             hasTailContent: true
         )
 
@@ -917,13 +918,14 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     /// unchanged rows, and thread switches must not scroll anywhere.
     func testRenderRowsChangedOnlyRestoresForGenuinePrepends() {
         var state = GaryxConversationScrollState()
+        _ = state.threadOpened(threadIdentity: "thread-a")
 
         // Tail append: no restore.
         XCTAssertNil(
             state.renderRowsChanged(
                 previousIds: ["a", "b"],
                 currentIds: ["a", "b", "c"],
-                threadUnchanged: true,
+                threadIdentity: "thread-a",
                 hasTailContent: true
             )
         )
@@ -932,30 +934,131 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             state.renderRowsChanged(
                 previousIds: ["a", "b"],
                 currentIds: ["a", "b"],
-                threadUnchanged: true,
+                threadIdentity: "thread-a",
                 hasTailContent: true
             )
         )
-        // Thread switch: replay of another thread's rows is not a prepend.
+        // Thread switch: another thread's rows replay the same ids (row ids are
+        // message-reference based, so "a" recurs at index 1), yet a
+        // cross-thread change must never restore.
         XCTAssertNil(
             state.renderRowsChanged(
                 previousIds: ["a", "b"],
                 currentIds: ["x", "a", "b"],
-                threadUnchanged: false,
+                threadIdentity: "thread-b",
                 hasTailContent: true
             )
         )
-        // Genuine prepend anchors to the pre-prepend first row, and the
-        // anchoring state is untouched (restore is not a reader gesture).
+        // Genuine prepend within the now-current thread anchors to the
+        // pre-prepend first row, and the anchoring state is untouched (restore
+        // is not a reader gesture).
         let restore = state.renderRowsChanged(
             previousIds: ["a", "b"],
             currentIds: ["x", "y", "a", "b"],
-            threadUnchanged: true,
+            threadIdentity: "thread-b",
             hasTailContent: true
         )
         XCTAssertEqual(restore?.anchorRowId, "a")
         XCTAssertTrue(state.isFollowingTail)
         XCTAssertFalse(state.hasUserScrolledSinceOpen)
+    }
+
+    /// #TASK-2488 — a cold mount whose cached render rows predate the view's
+    /// first appearance never fires a row-id change before the first real
+    /// prepend. The mounted thread identity must therefore be established when
+    /// the thread opens (onAppear); otherwise the first prepend is misread as a
+    /// cross-thread change, `renderRowsChanged` returns nil, and the reading-
+    /// anchor restore chain is never armed — the viewport jumps from the
+    /// reading position to the freshly loaded oldest rows.
+    func testColdMountCachedRowsPrependArmsRestore() {
+        var state = GaryxConversationScrollState()
+        // onAppear opens the thread over rows that were already cached before
+        // the view first appeared (turns 12...23).
+        _ = state.threadOpened(threadIdentity: "thread-a")
+
+        // The reader scrolled up from the tail (Response 14 at the viewport
+        // top). Anchoring does not gate the restore; this only makes the test
+        // faithful to the reproduction.
+        _ = state.userScrollInteractionChanged(isInteracting: true)
+        _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
+        _ = state.userScrollInteractionChanged(isInteracting: false)
+
+        // The first real content change is the older-history prepend: 12 cached
+        // rows (turns 12...23) grow to 24 (turns 0...23), all in the same
+        // thread.
+        let cached = (12...23).map { "user_turn:history:\($0)" }
+        let prepended = (0...23).map { "user_turn:history:\($0)" }
+        let restore = state.renderRowsChanged(
+            previousIds: cached,
+            currentIds: prepended,
+            threadIdentity: "thread-a",
+            hasTailContent: true
+        )
+        XCTAssertEqual(
+            restore,
+            GaryxConversationScrollState.ReadingAnchorRestore(
+                anchorRowId: "user_turn:history:12"
+            ),
+            "A cold-mount prepend must arm the reading-anchor restore for the pre-prepend first row."
+        )
+    }
+
+    /// The thread-switch guard must not depend on whether the open event or the
+    /// row change is delivered first. In both orderings the OUTGOING thread's
+    /// identity is what the first post-switch row change is compared against, so
+    /// a cross-thread row replay (ids collide because they are
+    /// message-reference based) is rejected either way (#TASK-2488).
+    func testThreadSwitchRejectsRestoreRegardlessOfEventOrder() {
+        func openAndSettleThreadA() -> GaryxConversationScrollState {
+            var state = GaryxConversationScrollState()
+            _ = state.threadOpened(threadIdentity: "thread-a")
+            _ = state.renderRowsChanged(
+                previousIds: [],
+                currentIds: ["user_turn:history:5"],
+                threadIdentity: "thread-a",
+                hasTailContent: true
+            )
+            return state
+        }
+
+        // Order 1: the open(thread-b) event lands before the thread-a→b row
+        // change. The open must NOT overwrite the outgoing identity, or the
+        // colliding row id "user_turn:history:5" is misread as a same-thread
+        // prepend.
+        var openFirst = openAndSettleThreadA()
+        _ = openFirst.threadOpened(threadIdentity: "thread-b")
+        XCTAssertNil(
+            openFirst.renderRowsChanged(
+                previousIds: ["user_turn:history:5"],
+                currentIds: ["user_turn:history:1", "user_turn:history:5"],
+                threadIdentity: "thread-b",
+                hasTailContent: true
+            ),
+            "open-before-rows switch must not restore across threads"
+        )
+
+        // Order 2: the thread-a→b row change lands before open(thread-b).
+        var rowsFirst = openAndSettleThreadA()
+        XCTAssertNil(
+            rowsFirst.renderRowsChanged(
+                previousIds: ["user_turn:history:5"],
+                currentIds: ["user_turn:history:1", "user_turn:history:5"],
+                threadIdentity: "thread-b",
+                hasTailContent: true
+            ),
+            "rows-before-open switch must not restore across threads"
+        )
+        _ = rowsFirst.threadOpened(threadIdentity: "thread-b")
+
+        // And once thread-b is the established current thread, a genuine
+        // in-thread prepend still restores.
+        let restore = rowsFirst.renderRowsChanged(
+            previousIds: ["user_turn:history:5"],
+            currentIds: ["user_turn:history:2", "user_turn:history:5"],
+            threadIdentity: "thread-b",
+            hasTailContent: true
+        )
+        XCTAssertEqual(restore?.anchorRowId, "user_turn:history:5")
     }
 
     func testPreservesScrollForPrependedHistory() {

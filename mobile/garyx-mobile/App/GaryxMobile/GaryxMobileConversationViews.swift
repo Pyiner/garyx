@@ -169,7 +169,6 @@ struct GaryxConversationView: View {
     @State private var rowGeometryBox = GaryxTurnRowGeometryBox()
     @State private var showsScrollToBottomButton = false
     @State private var scrollPreservationThreadId: String?
-    @State private var rowScrollPreservationThreadId: String?
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
@@ -272,15 +271,18 @@ struct GaryxConversationView: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
-                    updateScrollState(proxy: proxy) { $0.threadOpened() }
+                    updateScrollState(proxy: proxy) {
+                        $0.threadOpened(threadIdentity: liveStore.threadID)
+                    }
                     resetTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: liveStore.routeIdentity) { _, _ in
                     setRuntimePanelVisible(false)
                     scrollPreservationThreadId = liveStore.threadID
-                    rowScrollPreservationThreadId = liveStore.threadID
                     pendingHistoryPrefetchThreadId = nil
-                    updateScrollState(proxy: proxy) { $0.threadOpened() }
+                    updateScrollState(proxy: proxy) {
+                        $0.threadOpened(threadIdentity: liveStore.threadID)
+                    }
                     resetTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: liveStore.messages(in: model)) { oldValue, newValue in
@@ -303,12 +305,10 @@ struct GaryxConversationView: View {
                     }
                 }
                 .onChange(of: routeTurnRows.map(\.id)) { oldValue, newValue in
-                    let threadUnchanged = liveStore.threadID == rowScrollPreservationThreadId
-                    rowScrollPreservationThreadId = liveStore.threadID
                     let restore = scrollStateBox.state.renderRowsChanged(
                         previousIds: oldValue,
                         currentIds: newValue,
-                        threadUnchanged: threadUnchanged,
+                        threadIdentity: liveStore.threadID,
                         hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
                     )
                     if let restore {
