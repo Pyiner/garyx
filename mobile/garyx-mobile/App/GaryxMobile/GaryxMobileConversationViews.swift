@@ -168,7 +168,6 @@ struct GaryxConversationView: View {
     @State private var hostScrollViewBox = GaryxConversationHostScrollViewBox()
     @State private var rowGeometryBox = GaryxTurnRowGeometryBox()
     @State private var showsScrollToBottomButton = false
-    @State private var scrollPreservationThreadId: String?
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
@@ -271,45 +270,36 @@ struct GaryxConversationView: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
-                    updateScrollState(proxy: proxy) {
-                        $0.threadOpened(threadIdentity: liveStore.threadID)
-                    }
+                    updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: liveStore.routeIdentity) { _, _ in
                     setRuntimePanelVisible(false)
-                    scrollPreservationThreadId = liveStore.threadID
                     pendingHistoryPrefetchThreadId = nil
-                    updateScrollState(proxy: proxy) {
-                        $0.threadOpened(threadIdentity: liveStore.threadID)
-                    }
+                    updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
                 }
-                .onChange(of: liveStore.messages(in: model)) { oldValue, newValue in
+                .onChange(of: messageScrollObservation) { oldValue, newValue in
                     defer {
                         prefetchOlderHistoryIfNeeded()
                     }
-                    let threadUnchanged = liveStore.threadID == scrollPreservationThreadId
-                    scrollPreservationThreadId = liveStore.threadID
-                    let isHistoryPrepend = GaryxConversationScrollState.preservesScrollForPrependedHistory(
-                        previousIds: oldValue.map(\.id),
-                        currentIds: newValue.map(\.id),
-                        threadUnchanged: threadUnchanged
-                    )
                     updateScrollState(proxy: proxy) {
-                        $0.contentChanged(
-                            isInitialLoad: oldValue.isEmpty,
-                            isHistoryPrepend: isHistoryPrepend,
-                            hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
+                        $0.messagesChanged(
+                            previousIds: oldValue.value.map(\.id),
+                            currentIds: newValue.value.map(\.id),
+                            previousScopeIdentity: oldValue.scopeIdentity,
+                            currentScopeIdentity: newValue.scopeIdentity,
+                            hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
                         )
                     }
                 }
-                .onChange(of: routeTurnRows.map(\.id)) { oldValue, newValue in
+                .onChange(of: renderRowScrollObservation) { oldValue, newValue in
                     let restore = scrollStateBox.state.renderRowsChanged(
-                        previousIds: oldValue,
-                        currentIds: newValue,
-                        threadIdentity: liveStore.threadID,
-                        hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
+                        previousIds: oldValue.value,
+                        currentIds: newValue.value,
+                        previousScopeIdentity: oldValue.scopeIdentity,
+                        currentScopeIdentity: newValue.scopeIdentity,
+                        hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
                     )
                     if let restore {
                         // Captured BEFORE the new rows lay out: the geometry
@@ -321,7 +311,7 @@ struct GaryxConversationView: View {
                             proxy: proxy
                         )
                     }
-                    rowGeometryBox.retain(only: Set(newValue))
+                    rowGeometryBox.retain(only: Set(newValue.value))
                 }
                 .onChange(of: liveStore.isThinking(in: model)) { _, _ in
                     syncTailThinkingPresentation(proxy: proxy)
@@ -642,6 +632,20 @@ struct GaryxConversationView: View {
 
     private var routeTurnRows: [GaryxMobileTurnRow] {
         liveStore.turnRows(in: model, isCanonicalTop: routeContext.isCanonicalTop)
+    }
+
+    private var messageScrollObservation: GaryxConversationScrollObservation<[GaryxMobileMessage]> {
+        GaryxConversationScrollObservation(
+            scopeIdentity: liveStore.routeIdentity,
+            value: liveStore.messages(in: model)
+        )
+    }
+
+    private var renderRowScrollObservation: GaryxConversationScrollObservation<[String]> {
+        GaryxConversationScrollObservation(
+            scopeIdentity: liveStore.routeIdentity,
+            value: routeTurnRows.map(\.id)
+        )
     }
 
     private var conversationBottomChromeClearance: CGFloat {
