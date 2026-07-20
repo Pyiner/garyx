@@ -104,6 +104,7 @@
 		6DC88B0C85F37F4FF31A5F17 /* GaryxHomeObservationBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D310463019E301471BF316EA /* GaryxHomeObservationBridgeTests.swift */; };
 		6FCD4F6B5D81D92C28876469 /* GaryxCapsuleThumbnailRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E42CD6AB432FCC77B8F51FD0 /* GaryxCapsuleThumbnailRenderer.swift */; };
 		70C259ED45CDD7B06009E0AA /* GaryxMobileModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E7A65AE986E412F21281C0 /* GaryxMobileModel+Bots.swift */; };
+		70CB612DC4375411239E2CBC /* GaryxAnchoredFullscreenMorph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97C04E47B84E7DB379AC686D /* GaryxAnchoredFullscreenMorph.swift */; };
 		7129E3DD2479CDC42A540C29 /* GaryxPinnedDragLifecycleAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 630A78D60519B846FE4A4800 /* GaryxPinnedDragLifecycleAdapter.swift */; };
 		7285150768A04AB2EC36ECAD /* GaryxThreadSummaryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30971E0F9E9DE6A994575820 /* GaryxThreadSummaryCache.swift */; };
 		72C95C73F55D2EA1E1EF690C /* GaryxLifecycleMutationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D496CE2DB1B0B33E2FC7658 /* GaryxLifecycleMutationState.swift */; };
@@ -239,6 +240,7 @@
 		E783C14B4A2B67D9167DB03A /* GaryxTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108FCB261320207A3DDD8BAB /* GaryxTypography.swift */; };
 		E8F104E8FE21D0D644D554F4 /* GaryxMobileAgentTargetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88DE602284DF2E4E1D0C75BF /* GaryxMobileAgentTargetModel.swift */; };
 		E903BCEFF1E02BE8854BAFFC /* GaryxMobileMessageBubbleViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D17D14F9F01A618BFD956F /* GaryxMobileMessageBubbleViews.swift */; };
+		E91E4089037B6D7FF4275253 /* GaryxCapsuleGalleryMorph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA6C48A5735669D1B855DD4E /* GaryxCapsuleGalleryMorph.swift */; };
 		EA0B67DD5146FBBFD55FCB88 /* GaryxMobileWidgetData.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAA3239C2D11D3B8E2652C4 /* GaryxMobileWidgetData.swift */; };
 		EA9717CAA970F9A331041724 /* GaryxThreadMutationHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC37F76977E07368B6B2D016 /* GaryxThreadMutationHub.swift */; };
 		EBF1A8EBDAA5586AA8A6A436 /* HomeListScrollPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41FFFC856AEF7CBCB0EB0F2 /* HomeListScrollPerformanceTests.swift */; };
@@ -462,6 +464,7 @@
 		9454AC169A0256AE22F8A36B /* GaryxMobileMcpViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileMcpViews.swift; sourceTree = "<group>"; };
 		955839CE9DCFC2CAA91A7C17 /* GaryxHomeNewThreadFab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxHomeNewThreadFab.swift; sourceTree = "<group>"; };
 		97B7102FD5063F3C602C95B2 /* GaryxConversationStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxConversationStateMachine.swift; sourceTree = "<group>"; };
+		97C04E47B84E7DB379AC686D /* GaryxAnchoredFullscreenMorph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxAnchoredFullscreenMorph.swift; sourceTree = "<group>"; };
 		99DA2A298163A9C1175892EF /* GaryxTranscriptMergeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxTranscriptMergeModel.swift; sourceTree = "<group>"; };
 		9BD0CF17BB5D96B99A744A04 /* GaryxComposerDurabilityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxComposerDurabilityStore.swift; sourceTree = "<group>"; };
 		9C754FF792781E60C691CEE3 /* GaryxRouteStackContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxRouteStackContainer.swift; sourceTree = "<group>"; };
@@ -502,6 +505,7 @@
 		B9DF55A783112995BDA7E1E7 /* GaryxMobileModel+ThreadHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GaryxMobileModel+ThreadHistory.swift"; sourceTree = "<group>"; };
 		BA00F3E020E70A7967A4B180 /* GaryxMobileModel+Capsules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GaryxMobileModel+Capsules.swift"; sourceTree = "<group>"; };
 		BA1A8B8A51777EBADB028139 /* GaryxRestartNoticePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxRestartNoticePresentation.swift; sourceTree = "<group>"; };
+		BA6C48A5735669D1B855DD4E /* GaryxCapsuleGalleryMorph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxCapsuleGalleryMorph.swift; sourceTree = "<group>"; };
 		BB54908FC41AFD7FA230EFE2 /* GaryxMobileModel+TurnRowsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GaryxMobileModel+TurnRowsWindow.swift"; sourceTree = "<group>"; };
 		BDD26281D5C43E79EC0CA49C /* GaryxThreadArchiveRequestBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxThreadArchiveRequestBuilder.swift; sourceTree = "<group>"; };
 		BDEF4D00BDF25CD4A9F91F54 /* GaryxRecentThreadsWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GaryxRecentThreadsWidget.entitlements; sourceTree = "<group>"; };
@@ -651,6 +655,7 @@
 				9F01B5C203B64242C4E5AE1E /* GaryxCapsuleChromePanel.swift */,
 				B6615043DDB1B5641E3F401D /* GaryxCapsuleDismissGestureAdapter.swift */,
 				03118985A16E839F37BC35D1 /* GaryxCapsuleFocusedPreviewLoader.swift */,
+				BA6C48A5735669D1B855DD4E /* GaryxCapsuleGalleryMorph.swift */,
 				2D4B81D82AB9C6F78136D8DB /* GaryxCapsuleGlyph.swift */,
 				E42CD6AB432FCC77B8F51FD0 /* GaryxCapsuleThumbnailRenderer.swift */,
 				461C875D16CABCC307A94593 /* GaryxCapsuleThumbnailStore.swift */,
@@ -764,6 +769,7 @@
 				2A46FD988FEE09B537DD5BF9 /* GaryxAgentEnvDraft.swift */,
 				3B79CE7601C21012EDD835FE /* GaryxAgentProviderPickerPresentation.swift */,
 				1D6D78ABB2D49B6D297185E8 /* GaryxAgentTargetListPresentation.swift */,
+				97C04E47B84E7DB379AC686D /* GaryxAnchoredFullscreenMorph.swift */,
 				9047471E312C2E34CEB22779 /* GaryxAvatarCache.swift */,
 				7F934958AF375BD10CFAC196 /* GaryxAvatarCatalogWriteThrough.swift */,
 				1995E42CFD35A6EE7BA70251 /* GaryxAvatarGenerationFlow.swift */,
@@ -1087,6 +1093,7 @@
 				4A515DFE3683E383D5D6E015 /* GaryxAgentEnvDraft.swift in Sources */,
 				FDA487BE85FACE5ECD28F9C0 /* GaryxAgentProviderPickerPresentation.swift in Sources */,
 				B202E26A03F9867EDABEC2FA /* GaryxAgentTargetListPresentation.swift in Sources */,
+				70CB612DC4375411239E2CBC /* GaryxAnchoredFullscreenMorph.swift in Sources */,
 				3167BA03A4C72D4E78453D18 /* GaryxAvatarCache.swift in Sources */,
 				B55212B78D7561BD5EB7DE98 /* GaryxAvatarCatalogWriteThrough.swift in Sources */,
 				284A6E8C8970E9A94BD2CB3A /* GaryxAvatarDiskStore.swift in Sources */,
@@ -1097,6 +1104,7 @@
 				C38C758E33E46A65D44CB241 /* GaryxCapsuleDragDismiss.swift in Sources */,
 				3C479410E83292FA08979C5F /* GaryxCapsuleFavorites.swift in Sources */,
 				BB5ADB6010833CD4D409E26E /* GaryxCapsuleFocusedPreviewLoader.swift in Sources */,
+				E91E4089037B6D7FF4275253 /* GaryxCapsuleGalleryMorph.swift in Sources */,
 				498F20DFC295B0C2FC8503DB /* GaryxCapsuleGlyph.swift in Sources */,
 				2FA1BB2C795EF62F608EEA56 /* GaryxCapsulePreviewLoadPlanner.swift in Sources */,
 				BED36AB83B94CF66089B4843 /* GaryxCapsulePreviewLoading.swift in Sources */,

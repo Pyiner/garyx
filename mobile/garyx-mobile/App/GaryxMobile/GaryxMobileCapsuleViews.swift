@@ -10,8 +10,12 @@ struct GaryxCapsulesView: View {
     @Environment(\.garyxOpenSidebar) private var openSidebar
     @Environment(\.garyxRouteNavigationActions) private var routeNavigation
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.garyxMotion) private var motion
     @State private var deletionCandidate: GaryxCapsuleSummary?
     @State private var galleryTab = GaryxCapsuleGalleryTab.all
+    @State private var galleryMorphState = GaryxChromeMorphPresentationState.hidden
+    @State private var galleryMorphSelection: GaryxCapsulePreviewSelection?
+    @State private var galleryMorphSourceRect: CGRect?
 
     private var visibleCapsules: [GaryxCapsuleSummary] {
         model.filteredCapsules(for: galleryTab)
@@ -60,9 +64,13 @@ struct GaryxCapsulesView: View {
             .refreshable {
                 await model.refreshCapsules()
             }
-            .garyxFullScreenCover(item: $model.galleryFocusedCapsule) { selection in
-                GaryxCapsuleFocusedPreviewView(selection: selection)
+            .overlayPreferenceValue(GaryxCapsuleGalleryThumbnailAnchorKey.self) { anchors in
+                galleryMorphOverlay(anchors: anchors)
             }
+            .onChange(of: model.galleryFocusedCapsule, initial: true) { _, selection in
+                galleryFocusedSelectionChanged(selection)
+            }
+            .garyxInPlacePresentationBarrier(isPresented: galleryMorphState.isPresented)
             .garyxConfirmationDialog(
                 "Delete capsule?",
                 isPresented: deleteConfirmationPresented,
@@ -144,6 +152,127 @@ struct GaryxCapsulesView: View {
             set: { if !$0 { deletionCandidate = nil } }
         )
     }
+
+    @ViewBuilder
+    private func galleryMorphOverlay(
+        anchors: [String: Anchor<CGRect>]
+    ) -> some View {
+        if galleryMorphState.isPresented, let selection = galleryMorphSelection {
+            GeometryReader { geometry in
+                let liveSourceRect = anchors[selection.id].map { geometry[$0] }
+                let sourceRect = liveSourceRect
+                    ?? galleryMorphSourceRect
+                    ?? GaryxAnchoredFullscreenMorphGeometry.fallbackSourceRect(
+                        containerSize: geometry.size
+                    )
+                let usesSpatialMorph = motion.allowsSpatialMotion(.morphOpen)
+                let progress: CGFloat = usesSpatialMorph
+                    ? (galleryMorphState.isExpanded ? 1 : 0)
+                    : 1
+                let visible = usesSpatialMorph || galleryMorphState.isExpanded
+
+                ZStack(alignment: .topLeading) {
+                    let layout = GaryxAnchoredFullscreenMorphGeometry.layout(
+                        progress: progress,
+                        sourceRect: sourceRect,
+                        containerSize: geometry.size
+                    )
+                    Color.black
+                        .opacity(visible ? layout.scrimOpacity : 0)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: requestGalleryMorphDismiss)
+                        .accessibilityHidden(true)
+
+                    GaryxCapsuleGalleryMorphSurface(
+                        selection: selection,
+                        sourceRect: sourceRect,
+                        containerSize: geometry.size,
+                        onDismiss: requestGalleryMorphDismiss,
+                        progress: progress
+                    )
+                    .opacity(visible ? 1 : 0)
+                    .onAppear {
+                        galleryMorphSourceRect = liveSourceRect ?? sourceRect
+                    }
+                    .onChange(of: liveSourceRect) { _, nextRect in
+                        if let nextRect {
+                            galleryMorphSourceRect = nextRect
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func galleryFocusedSelectionChanged(
+        _ selection: GaryxCapsulePreviewSelection?
+    ) {
+        if let selection {
+            guard galleryMorphSelection?.id != selection.id
+                    || galleryMorphState == .hidden else {
+                galleryMorphSelection = selection
+                return
+            }
+            galleryMorphSelection = selection
+            galleryMorphSourceRect = nil
+            applyGalleryMorphEvent(.requestPresent)
+        } else if galleryMorphState.isPresented {
+            requestGalleryMorphDismiss()
+        }
+    }
+
+    private func requestGalleryMorphDismiss() {
+        applyGalleryMorphEvent(.requestDismiss)
+    }
+
+    private func applyGalleryMorphEvent(_ event: GaryxChromeMorphPresentationEvent) {
+        let transition = GaryxChromeMorphPresentationReducer.reduce(
+            state: galleryMorphState,
+            event: event,
+            transitionMode: motion.resolution(.morphOpen).mode
+        )
+
+        switch transition.animation {
+        case .none:
+            galleryMorphState = transition.state
+        case .open:
+            withAnimation(motion.animation(.morphOpen)) {
+                galleryMorphState = transition.state
+            }
+        case .close:
+            withAnimation(
+                motion.animation(.morphClose),
+                completionCriteria: .logicallyComplete
+            ) {
+                galleryMorphState = transition.state
+            } completion: {
+                applyGalleryMorphEvent(.dismissAnimationCompleted)
+            }
+        }
+
+        switch transition.schedule {
+        case .none:
+            if transition.state == .hidden {
+                finishGalleryMorphDismissal()
+            }
+        case .expandOnNextTick:
+            Task { @MainActor in applyGalleryMorphEvent(.expandTick) }
+        case .completeDismissAfterAnimation:
+            break
+        }
+    }
+
+    private func finishGalleryMorphDismissal() {
+        let dismissedID = galleryMorphSelection?.id
+        galleryMorphSelection = nil
+        galleryMorphSourceRect = nil
+        if model.galleryFocusedCapsule?.id == dismissedID {
+            model.galleryFocusedCapsule = nil
+        }
+    }
 }
 
 // MARK: - Gallery card
@@ -167,6 +296,10 @@ private struct GaryxCapsuleGalleryCard: View {
                     showsBorder: false
                 )
                 .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                .anchorPreference(
+                    key: GaryxCapsuleGalleryThumbnailAnchorKey.self,
+                    value: .bounds
+                ) { [capsule.id: $0] }
 
                 // Hairline divider between the full-bleed preview and the meta,
                 // mirroring Mac `.capsule-card-preview-shell` border-bottom.
@@ -347,6 +480,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
     @Environment(\.garyxMotion) private var motion
     @EnvironmentObject private var model: GaryxMobileModel
     let selection: GaryxCapsulePreviewSelection
+    var onRequestDismiss: (() -> Void)? = nil
     @StateObject private var loader = GaryxCapsuleFocusedPreviewLoader()
     @StateObject private var gestureBridge = GaryxCapsuleDismissGestureBridge()
     @State private var settleDriver = GaryxGestureSettleDriver.displayLinked()
@@ -476,8 +610,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
                 GaryxAdaptiveGlassContainer(spacing: 10) {
                     HStack(spacing: 12) {
                         Button {
-                            loader.cancelForDismiss(model: model)
-                            dismiss()
+                            requestFocusedPreviewDismissal()
                         } label: {
                             GaryxToolbarIcon(systemName: "chevron.down")
                         }
@@ -724,10 +857,17 @@ struct GaryxCapsuleFocusedPreviewView: View {
         switch effect {
         case .dismiss:
             settleDriver.invalidate()
-            dragState = next
             GaryxMobileHaptics.shared.play(.capsuleDismissCommitted)
             loader.cancelForDismiss(model: model)
-            dismiss()
+            if let onRequestDismiss {
+                withAnimation(motion.animation(.morphClose)) {
+                    dragState = next
+                    onRequestDismiss()
+                }
+            } else {
+                dragState = next
+                dismiss()
+            }
         case .snapBack:
             settleCapsuleBack(
                 from: releasedState,
@@ -805,6 +945,15 @@ struct GaryxCapsuleFocusedPreviewView: View {
         dragGestureOrigin = .zero
         dragGestureActive = false
         dragState = GaryxCapsuleDragDismissState()
+    }
+
+    private func requestFocusedPreviewDismissal() {
+        loader.cancelForDismiss(model: model)
+        if let onRequestDismiss {
+            onRequestDismiss()
+        } else {
+            dismiss()
+        }
     }
 
     private func copyLink() {

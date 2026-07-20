@@ -389,6 +389,48 @@ private struct GaryxItemSheetModifier<Item: Identifiable, Presented: View>: View
     }
 }
 
+/// Registers a custom in-place modal surface with the same route barrier used
+/// by system sheets and covers. The view hierarchy stays attached for anchor
+/// morphs, while navigation admission and nested presentation ownership keep
+/// their existing modal semantics.
+private struct GaryxInPlacePresentationBarrierModifier: ViewModifier {
+    @Environment(\.garyxPresentationLeaseCoordinator) private var coordinator
+    @Environment(\.garyxPresentationParentLease) private var parent
+    @Environment(\.garyxPresentationOperationContextProvider) private var operationProvider
+    @StateObject private var session = GaryxPresentationLeaseSession()
+    @State private var activeLeaseToken: GaryxPresentationLeaseToken?
+
+    let isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .environment(
+                \.garyxPresentationParentLease,
+                isPresented ? (activeLeaseToken ?? parent) : parent
+            )
+            .onChange(of: isPresented, initial: true) { _, presented in
+                if presented {
+                    session.acquireIfNeeded(
+                        coordinator: coordinator,
+                        parent: parent,
+                        operationContext: { operationProvider?.make() }
+                    )
+                    session.markPresented()
+                    activeLeaseToken = session.token
+                } else {
+                    session.bindingBecameFalse(completesDismissal: true)
+                    activeLeaseToken = nil
+                }
+            }
+            .onDisappear {
+                guard isPresented else { return }
+                session.markDismissing()
+                session.completeDismissal()
+                activeLeaseToken = nil
+            }
+    }
+}
+
 private struct GaryxFullScreenModifier<Presented: View>: ViewModifier,
     GaryxPresentationLeaseModifierSupport {
     @Environment(\.garyxPresentationLeaseCoordinator) var coordinator
@@ -632,6 +674,10 @@ private struct GaryxItemAlertModifier<Item: Identifiable>: ViewModifier,
 }
 
 extension View {
+    func garyxInPlacePresentationBarrier(isPresented: Bool) -> some View {
+        modifier(GaryxInPlacePresentationBarrierModifier(isPresented: isPresented))
+    }
+
     func garyxSheet<Presented: View>(
         isPresented: Binding<Bool>,
         onDismiss: (() -> Void)? = nil,
