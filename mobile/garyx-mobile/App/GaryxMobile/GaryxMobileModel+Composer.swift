@@ -591,10 +591,14 @@ extension GaryxMobileModel {
                 // Promotion changes only the destination index. The stable
                 // Entry/token continues to own follow-up input that arrived
                 // while thread creation was in flight.
-                try await promoteActiveComposerPayload(to: thread.id)
+                try await promoteActiveComposerPayload(
+                    to: thread.id,
+                    beforePublishingRoute: {
+                        setMessages(draftOptimisticMessages, for: thread.id)
+                        activeAssistantMessageIdsByThread[thread.id] = assistantId
+                    }
+                )
                 optimisticThreadId = thread.id
-                setMessages(draftOptimisticMessages, for: thread.id)
-                activeAssistantMessageIdsByThread[thread.id] = assistantId
             }
             guard runTracker.beginLocalDispatch(
                 threadId: thread.id,

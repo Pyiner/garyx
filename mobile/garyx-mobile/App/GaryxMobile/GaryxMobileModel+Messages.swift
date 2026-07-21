@@ -169,13 +169,20 @@ extension GaryxMobileModel {
         }
     }
 
-    func promoteActiveComposerPayload(to threadID: String) async throws {
+    func promoteActiveComposerPayload(
+        to threadID: String,
+        beforePublishingRoute: () -> Void = {}
+    ) async throws {
         let draftID: String? = if case .draft(let rawDraftID) = composerPayloadCoordinator.activeKey {
             rawDraftID
         } else {
             nil
         }
         try await composerPayloadCoordinator.promoteActive(to: .thread(threadID))
+        // Route replacement synchronously rebuilds the mounted host. Transfer
+        // any local transcript overlay before publishing that replacement so
+        // the promoted occurrence cannot render an empty intermediate frame.
+        beforePublishingRoute()
         if let draftID {
             _ = productionRouteStore.promoteVisibleDraft(
                 draftID: draftID,
