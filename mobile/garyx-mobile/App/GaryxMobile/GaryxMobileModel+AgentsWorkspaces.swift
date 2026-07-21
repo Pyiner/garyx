@@ -792,19 +792,22 @@ extension GaryxMobileModel {
     }
 
 
-    func deleteAgent(_ agent: GaryxAgentSummary) async {
-        guard !agent.builtIn else { return }
+    @discardableResult
+    func deleteAgent(_ agent: GaryxAgentSummary) async -> Bool {
+        guard !agent.builtIn else { return false }
         let runtimeGeneration = gatewayRequestToken
         do {
             _ = try await client().deleteAgent(agentId: agent.id)
-            guard runtimeGeneration == gatewayRequestToken else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             await removeAvatar(id: agent.id)
             agents.removeAll { $0.id == agent.id }
             persistCatalogCacheSnapshot()
             await refreshAgentTargets()
+            return true
         } catch {
-            guard runtimeGeneration == gatewayRequestToken else { return }
+            guard runtimeGeneration == gatewayRequestToken else { return false }
             lastError = displayMessage(for: error)
+            return false
         }
     }
 
