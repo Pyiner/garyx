@@ -1,8 +1,9 @@
 # Task Notification Structured Presentation
 
-Status: draft for adversarial review
+Status: revision 2 for adversarial review (round 1: FAIL, 3 BLOCKER + 8 MAJOR)
 Owner: Gary (orchestrator thread)
-Scope: garyx-bridge, garyx-gateway, garyx-models, desktop renderer, iOS
+Scope: garyx-bridge, garyx-gateway, garyx-models, garyx-router boot, desktop
+renderer, iOS
 
 ## 1. Problem
 
@@ -12,108 +13,130 @@ transcripts): 252 committed task-notification user records, **73 (29%) missing
 the `task_notification` metadata marker**, concentrated in busy orchestrator
 threads — exactly the threads the user watches.
 
-Two independent defects share one root theme: **structure is thrown away and
-then badly reconstructed downstream.**
+Root theme: **structure is thrown away and then badly reconstructed
+downstream**, and metadata durability is decided by accident of code path.
 
 ### Defect A — queue path drops semantic metadata (the live bug)
 
 - Idle target thread: internal dispatch starts a run; the committed user
-  record carries full dispatch metadata including `task_notification: true`
-  and `task_notification_event: "ready_for_review"`. The `garyx-models`
-  reducer marks `presentation: task_notification`; both clients render the
-  card. Works.
+  record carries the dispatch metadata including `task_notification: true` /
+  `task_notification_event`. The reducer marks `presentation`; clients render
+  the card.
 - Busy target thread (`QueuedToActiveRun`): the message enters the pending
   input queue through `dispatch_attribution_metadata`
-  (`garyx-bridge/src/multi_provider/run_management.rs:107`), which filters
-  metadata through the allowlist `DISPATCH_ATTRIBUTION_METADATA_KEYS =
-  [source, automation_id, cron_job_id, cron_action, internal_dispatch]`.
-  Every `task_notification*` key is dropped. The committed record has no
-  marker, the reducer never sets `presentation`, both clients fall back to
-  raw-XML markdown.
-
-This allowlist contradicts the codebase's own single-chokepoint contract:
-`persistence.rs:1147` declares `RUNTIME_ONLY_METADATA_KEYS =
-["garyx_mcp_auth_token", "remote_mcp_servers"]` as "the single persistence
-chokepoint — every dispatch source funnels through it", with **denylist**
-semantics (persist everything except runtime wiring). The queue path invented
-a second, opposite-polarity filter. Two filters drift; this bug is the drift.
-
-Product owner decision (2026-07-21): internal dispatch messages must persist
-with the same metadata logic as ordinary user messages. No parallel filter.
+  (`run_management.rs:107`), whose allowlist drops every `task_notification*`
+  key. The committed record has no marker; both clients fall back to raw-XML
+  markdown.
 
 ### Defect B — prose round-trip (the architectural defect)
 
-`format_task_ready_notification` (gateway) receives structured fields
-(`task_id`, `title`, `final_message`), flattens them into an English prose
-template plus CLI usage instructions, wraps them in XML — and then desktop
-(`task-notification.ts`, TS regex) and iOS
-(`GaryxTaskNotificationPresentation.swift`, NSRegularExpression) each maintain
-a parser that reverse-engineers the prose, coupled word-for-word to the
-template ("Task X is ready for review:", "\nView details:"). Any template
-edit silently breaks both parsers back to raw XML. This violates the
-repository direction that render semantics are server-owned and clients must
-not recompute them.
+`format_task_ready_notification` receives structured fields, flattens them
+into an English prose template plus CLI tutorial text, wraps them in XML —
+and desktop (`task-notification.ts`) and iOS
+(`GaryxTaskNotificationPresentation.swift`) each maintain a regex parser
+coupled word-for-word to the template. Any template edit silently breaks both
+parsers. Restart notices (`<garyx_restarted>`) have the same disease: two
+client prose sniffers, no server presentation at all.
 
-Product owner decision (2026-07-21): parsing collapses into the server side /
-render_state; clients dumb-render structured fields. No client prose regex.
+### Defect C — runtime secrets have no structural boundary (found in review)
+
+Dispatch metadata is one bare `HashMap` mixing durable semantic keys with
+provider runtime configuration. Consequences today:
+
+- The direct persistence path relies on a two-key denylist
+  (`RUNTIME_ONLY_METADATA_KEYS`) while the run-metadata backfill injects far
+  more runtime material — `provider_env` (may contain tokens),
+  `garyx_mcp_headers` (goes into MCP HTTP headers), `desktop_antigravity_env`
+  (arbitrary process env), `system_prompt` — some of which **already leaks
+  into committed transcripts** on the direct path.
+- `PendingUserInput.metadata` is persisted inside the run record and later
+  serialized as the committed message metadata without passing any cleaner.
+
+So neither "extend the allowlist" nor "share the denylist" is sound. The
+boundary must be structural.
 
 ## 2. Design principles
 
-1. **One metadata persistence semantic.** Queued and direct paths persist the
-   same dispatch metadata, cleaned by the same `RUNTIME_ONLY_METADATA_KEYS`
-   denylist. The attribution allowlist is deleted, not extended.
+1. **Typed metadata separation.** Dispatch metadata is split into two
+   containers with different lifecycles:
+   - `durable` — semantic message metadata; persists with the message
+     everywhere (direct commit, pending queue, run record, transcript).
+   - `runtime` — provider runtime configuration (tokens, MCP servers/headers,
+     provider env, antigravity env, system prompt, managed wiring); consumed
+     by provider assembly, **never persisted** into pending inputs, run
+     records, or transcripts.
+   The type system enforces the boundary: `PendingUserInput` and transcript
+   persistence APIs accept only the durable container. No filter lists on the
+   persistence side. Fields needed for audit (e.g. model, agent id) are
+   explicitly projected as safe scalars into `durable`, never bulk-copied.
 2. **Structure is never round-tripped through prose.** The producer already
-   holds the structured fields; they ride the message as metadata and are
-   projected by the reducer. Nobody — server or client — regex-parses the
-   prose body at runtime.
+   holds structured fields; they ride the message as durable metadata and are
+   projected by the reducer. Nobody regex-parses prose at runtime — for task
+   notifications **and** restart notices (no second mechanism left behind).
 3. **The prose/XML body remains the agent-facing surface.** Receiving agents
-   read the text. Human UI reads the projection. Both are generated from the
-   same source at the same commit point, so they cannot drift.
+   read the text; human UI reads the projection; both generate from the same
+   source at the same commit point.
+4. **Server-owned reserved keys.** `task_notification` and `restart_wake`
+   metadata are producible only by the gateway's own dispatchers. The chat
+   ingress strips them from external requests (alongside the existing agent
+   identity strip in `prepare.rs`), so external callers cannot forge cards.
 
 ## 3. Changes
 
-### 3.1 Bridge: delete the attribution allowlist
+### 3.1 Bridge: typed containers replace both filters
 
 - Delete `DISPATCH_ATTRIBUTION_METADATA_KEYS` and
   `dispatch_attribution_metadata`.
-- At the two queue call sites (`run_management.rs:1117`, `:1132`), pass the
-  full dispatch `metadata` minus `RUNTIME_ONLY_METADATA_KEYS`, plus the
-  existing `origin_run_id` (the requested run id recording which dispatch
-  request queued this input — keep it).
-- The strip must happen **at enqueue time**: `PendingUserInput` is persisted
-  inside the run record, so the gateway bearer token and managed MCP
-  definitions must never enter it. Move/export `RUNTIME_ONLY_METADATA_KEYS`
-  so both persistence and enqueue reference the same constant (single truth
-  source).
-- `acknowledge_pending_input` already merges `pending_input.metadata` into
-  the committed record (queue bookkeeping keys win on conflict). Unchanged.
-- Resulting committed shape for a queued internal dispatch:
-  `{queued_input_id, queued_at, origin_id?, origin_run_id, internal_dispatch,
-  task_notification…, requested_provider_type, …}` — i.e. exactly the
-  dispatch metadata, like a direct-path record, minus run-runtime context
-  that only a fresh run would add. Note this also fixes the same latent drop
-  for every other internal dispatch flavor (followups, automation prompts
-  queued into busy threads).
+- Introduce the durable/runtime split at the type level on the dispatch
+  path. The single enforcement point is the one place that constructs
+  `PendingUserInput` (`add_streaming_input_with_metadata_mode`) plus the run
+  persistence entry — not per-call-site cleaning. All enqueue entrances
+  (Legacy, Durable exact, `execute_durable_stream_input`, public
+  `add_streaming_input` used by channels/chat control) converge there and
+  get the same guarantee.
+- `PendingUserInput.metadata` carries the full durable container plus queue
+  bookkeeping (`queued_input_id`, `queued_at`, `origin_id`, `origin_run_id`);
+  `acknowledge_pending_input` merge semantics unchanged.
+- Runtime keys at minimum: `garyx_mcp_auth_token`, `remote_mcp_servers`,
+  `provider_env`, `garyx_mcp_headers`, `desktop_antigravity_env`,
+  `system_prompt`. Classification is by container, not by name — this list
+  seeds the migration of existing call sites, it is not a runtime filter.
+- This unifies direct and queued persistence: the existing direct-path
+  `provider_env`/`system_prompt` leak is fixed by the same boundary.
+  `RUNTIME_ONLY_METADATA_KEYS` disappears with it (superseded by the type
+  split).
+- Internal-dispatch source inventory (all seven flavors keep their semantic
+  keys in `durable`): task notification, `schedule_followup`, quota resend
+  (rides `schedule_followup`), automation, cron, task auto-start
+  (`task_auto_start`, `task_dispatch_reason`, `task_id`), restart wake
+  (`restart_wake`, `restart_wake_id`, `kind`, `target`, `all`, `attempt`).
 
-### 3.2 Gateway: structured metadata object, restructured envelope
+### 3.2 Gateway: one structured object, reserved keys, restructured envelope
 
-- `deliver_task_review_handoff` puts one structured object on the dispatch:
+- `deliver_task_review_handoff` emits a single cohesive durable object — no
+  top-level aliases:
 
   ```json
   "task_notification": {
     "event": "ready_for_review",
     "status": "in_review",
     "task_id": "#TASK-42",
-    "title": "<task title>"
+    "title": "...",
+    "task_thread_id": "thread::...",
+    "source_run_id": "..."
   }
   ```
 
-  replacing the scattered `task_notification: bool` +
-  `task_notification_event` + `task_notification_source_run_id` keys.
-  `task_id` / `task_thread_id` / source run id fold into or alongside this
-  object (reviewer to confirm final key layout; no boolean+string scatter).
-- Envelope restructure: all structured fields become XML attributes; the body
-  becomes the pure handoff message:
+  The scattered `task_notification: bool` / `task_notification_event` /
+  `task_thread_id` / `task_notification_source_run_id` keys are deleted.
+  `task_hooks.rs`'s runtime read of the legacy bool moves to the new object;
+  the legacy shape is read only by the history migration.
+- Reserved-key enforcement: chat ingress (`prepare.rs`) strips
+  `task_notification` and `restart_wake` from externally supplied metadata.
+- Envelope restructure: attributes carry all structured fields (all escaped
+  via `xml_attr`, including `title` — covering `" & < >`, newlines, embedded
+  close tags on top of the existing body tag neutralization); the body is
+  the pure handoff:
 
   ```
   <garyx_task_notification event="ready_for_review" task_id="#TASK-42"
@@ -122,152 +145,229 @@ render_state; clients dumb-render structured fields. No client prose regex.
   </garyx_task_notification>
   ```
 
-  The "Task X is ready for review:" headline and the "View details / Review
-  next / garyx task update …" CLI tutorial block are **deleted from the
-  body**. Receiving agents get the identity from attributes and already know
-  the review workflow from their own prompts/skills; both clients already
-  refused to render the tutorial block. Existing `xml_attr` escaping and
-  `neutralize_task_notification_tag` body guard stay.
-- Bot-channel delivery (`send_notification_message`) sends the same text as
-  today (now shorter). Human readability of raw XML on Telegram/Discord is a
-  known, separate issue — out of scope here.
+- **Prompt before deletion**: the approve/reject lifecycle moves into the
+  base instructions injected for every provider
+  (`gary_prompt.rs::GARY_BASE_INSTRUCTIONS`): approve → `--status done`;
+  needs changes → feedback via `garyx thread send task` (wake) and status
+  back to in_progress. A provider-envelope test asserts the injected prompt
+  carries both rules. Only then is the "View details / Review next" tutorial
+  block deleted from the notification body. One mechanism: prompt.
+- Restart notices: the producer (`restart_wake.rs`) already attaches
+  structured `restart_wake` metadata; no producer change beyond reserved-key
+  protection.
 
-### 3.3 Models: presentation carries the payload
+### 3.3 Models: presentation carries the payload (flattened), plus restart
 
-- `RenderMessagePresentation` becomes a tagged enum with payload:
+- `RenderMessagePresentation` becomes a discriminated object, **flattened**
+  (reviewer decision — kind and fields cannot desync, shallower wire):
 
-  ```rust
-  #[serde(tag = "kind", rename_all = "snake_case")]
-  pub enum RenderMessagePresentation {
-      TaskNotification(TaskNotificationPresentation),
-  }
-
-  pub struct TaskNotificationPresentation {
-      pub event: String,
-      pub status: String,
-      pub task_id: String,
-      pub title: String,
+  ```json
+  "presentation": {
+    "kind": "task_notification",
+    "event": "ready_for_review",
+    "status": "in_review",
+    "task_id": "#TASK-42",
+    "title": "..."
   }
   ```
 
-  Wire: `"presentation": {"kind": "task_notification", "event": …,
-  "status": …, "task_id": …, "title": …}` (flattened or nested — reviewer
-  picks one; must be a single discriminated object so identity and payload
-  cannot desync).
-- `render_message_presentation` reads the structured `task_notification`
-  metadata object. **No text parsing in the reducer.** A record whose
-  metadata object is missing/malformed gets no presentation and renders as
-  ordinary text (today's fallback semantics).
-- Payload is small fixed fields only. `final_message` is **not** copied into
-  render rows (projection-lightweight contract): clients derive the card body
-  from the message text they already cache, via the structural envelope strip
-  (3.4).
+  ```json
+  "presentation": { "kind": "restart_notice" }
+  ```
 
-### 3.4 Clients: delete the prose parsers
+  Rust: enum with struct variants, serde `tag = "kind"`, golden JSON tests
+  lock the exact wire shape.
+- `render_message_presentation` reads the structured durable objects
+  (`task_notification`, `restart_wake`). No text parsing in the reducer.
+  Missing/malformed object → no presentation → ordinary text (today's
+  fallback semantics).
+- Payload is small fixed fields only; `final_message` stays out of rows
+  (projection-lightweight contract). Card/expanded body derive from the
+  cached message text via structural envelope strip.
+- Impact closure for the type change:
+  - Desktop `transcript.ts` contract: string enum → discriminated object;
+    all string-comparison sites updated.
+  - iOS decoder: single-string → object decode; message signature hashes the
+    complete payload (not `rawValue`) so presentation-only updates rebuild
+    rows (`GaryxMobileToolTraceBuilder.swift:108`).
+  - Server `rows_hash` already hashes whole rows; add a test that a
+    title/status-only change produces a delta upsert.
+  - Storybook scenario becomes a real user render row with a real
+    presentation object (current fixture is assistant prose and proves
+    nothing).
 
-- Desktop: delete `parseTaskNotificationText` prose/regex logic and the
-  `detailCommand`/`reviewCommands` fields (already unrendered dead weight).
-  `TaskNotificationCard` reads `event/status/task_id/title` from the row's
-  presentation payload. Card body = message text with the XML envelope
-  stripped — a purely structural rule (first `>` of the opening tag … last
-  `</garyx_task_notification>`), independent of wording, tolerant of the
-  legacy body shape.
-- iOS: same. `GaryxTaskNotificationPresentation.parse` regexes are deleted;
-  keep only the envelope strip + `statusLabel` formatting. The mapper feeds
-  payload fields from the snapshot ref.
-- Both clients keep the existing "no presentation → ordinary text" path.
-  No client-side sniffing of `<garyx_task_notification` to resurrect cards.
+### 3.4 Clients: delete all four prose parsers, shared user-role layout
 
-#### Collapsed card + expand (product owner requirement, 2026-07-21)
+- Desktop deletes `parseTaskNotificationText` and `restart-notice.ts`; iOS
+  deletes `GaryxTaskNotificationPresentation.parse` regexes and
+  `GaryxRestartNoticePresentation` sniffing. Cards read presentation payload
+  fields; body = envelope strip (structural rule only: after the opening
+  tag's `>` … before the last close tag; tolerant of the legacy body shape).
+  `statusLabel`-style display formatting stays client-side.
+- No client-side sniffing to resurrect cards for unmarked records.
 
-Notification handoffs are often multi-KB review verdicts; a full-height card
-drowns the conversation. In-transcript cards are compact summaries with an
-expand affordance:
+#### Alignment and width: the user-role layout owner rules
 
-- **Collapsed (default, both platforms)**: header (task id, status, title)
-  plus the card body clamped to **at most 10 text lines**. When the body
-  exceeds the clamp, the card shows a clear expand affordance and the whole
-  card is activatable; when it fits, no affordance and no dead interaction.
-- **Alignment and width (product owner, 2026-07-21)**: the card is **not**
-  full-width. A task notification is a user-role row; the card aligns to the
-  user side (trailing) and follows the same width constraint as ordinary
-  user bubbles — ~70–80% of the content width. Reuse each platform's
-  existing user-bubble width rule (iOS already caps user rows at 0.77 ×
-  screen width; desktop uses its existing user-side max-width) instead of
-  inventing a notification-specific constant.
-- **Expanded view** renders the same header plus the full envelope-stripped
-  body as markdown — same data path as the card, no separate fetch or
-  re-parse:
-  - **Desktop**: a modal dialog, using the app's existing dialog pattern.
-  - **iOS**: a full-screen presentation, using the existing full-screen
-    cover pattern (route-level chrome rules unaffected — this is a modal
-    presentation, not a route push).
-- The "clamped?" decision lives in a testable layer (e.g. line/height
-  measurement adapter or Core-side estimation), not buried as an
-  untestable visual side effect; existing copy/share interactions on the
-  card keep working in both states.
+A task notification is a user-role row. The card aligns to the user side
+(trailing) under the **same layout owner** as ordinary user bubbles — not a
+copied constant:
 
-### 3.5 History: versioned transcript metadata backfill
+- **iOS**: extract the existing user-role container (trailing alignment,
+  Dynamic Type width policy `0.77 × screen` normal / `0.94` at
+  `xxxLarge+`, min leading spacer 60/12, trailing menu edge) into a shared
+  layout owner used by both the plain user body and the task card. The
+  current `taskNotificationRow` full-width leading branch is deleted; the
+  card's interaction menu switches to the trailing edge with the container.
+  Copying `0.77` or minting a notification-specific width constant is
+  forbidden.
+- **Desktop**: `.message-bubble.user { max-width: 77%; align-self: flex-end }`
+  is the owner. The task-card CSS overrides (`align-self`, 736px/full-width)
+  are deleted; the card may `width: 100%` within the shared cap but declares
+  no width/alignment constants of its own.
+- Role comes from the committed record/reducer (user-role rows only);
+  clients never infer user-side placement from the presentation kind. An
+  assistant-role record with forged notification metadata gets no user-side
+  card (reducer only marks user rows; see §5).
+- These width rules apply to the **collapsed transcript card only**; the
+  desktop expanded dialog uses standard large-dialog sizing and the iOS
+  expanded view is full-screen — the 77% cap never propagates into the
+  expanded body.
 
-One versioned one-shot migration (durable marker, same regime as
-`recent_task_thread_kind_v1`):
+#### Collapsed card + expand
 
-- Records with legacy scattered keys (`task_notification: true` +
-  `task_notification_event`) → rewrite metadata to the structured object,
-  extracting `task_id`/`title` from the legacy prose (regex against the
-  frozen legacy template is acceptable **inside a one-shot migration**; it is
-  not a runtime path).
-- The 73 dropped-marker records: identified by
-  `origin_run_id` prefix `task-notify-` **and** body shape; backfill the same
-  structured object.
-- Message text is history and is not rewritten. Legacy bodies will show the
-  headline + tutorial block inside the card body; acceptable, still far
-  better than raw XML.
-- Open question for review: is a transcript-jsonl metadata rewrite acceptable
-  under the committed-event identity rule `(seq, payload)`? Proposed answer:
-  the migration runs at boot before serving; connected clients reseed via
-  snapshot replay; `render_state` is derived, not stored. If the reviewer
-  finds a hard conflict, the fallback is: no backfill, history stays plain
-  text (bug only fixed forward). Decide explicitly.
+Notification handoffs are often multi-KB review verdicts; in-transcript cards
+are compact summaries:
+
+- **Collapsed (default)**: header (task id, status, title) + body viewport
+  clamped to **the height of 10 line-boxes at the current body font** (not
+  10 source lines — markdown blocks wrap and vary in height). Overflow
+  decision: `naturalRenderedHeight > clampHeight + ε`, measured **after** the
+  shared user-role width is applied, re-measured when content, width, font
+  scale, or Dynamic Type change.
+- The clamp decision lives in a testable layer: a measurement adapter feeds
+  actual width / font scale / natural height; a Core/pure function decides
+  `fits/overflows`. When it overflows, the card shows the expand affordance
+  and an expand accessibility action; when it fits, neither exists (no dead
+  interaction).
+- Expand activation excludes interactive descendants (links, copy/select/
+  share controls, long-press menus keep working in both states).
+- **Expanded view** renders header + the same envelope-stripped body (single
+  strip, shared string, no refetch):
+  - **Desktop**: controlled Radix `Dialog` with a stable owner; focus trap,
+    Escape, focus returns to the card on close.
+  - **iOS**: full-screen presentation owned by the stable conversation/route
+    occurrence owner (capsule-preview pattern): one always-attached
+    `.garyxFullScreenCover(item:)`; rows only send a selection action;
+    selection identity is the message seq/id (never `task_id` — one task can
+    notify repeatedly); selection clears on thread/gateway/occurrence change;
+    modifiers are never conditionally attached.
+
+### 3.5 History: boot-time migration via the range-rewrite protocol
+
+Silent same-seq rewrites violate the `(seq, payload)` committed-event
+identity: SSE replay only covers `seq > cursor`, so caught-up clients would
+keep stale committed caches. The migration therefore uses the repository's
+existing rewrite-marker protocol (`reconcile.rs` `range_rewrite`):
+
+1. Runs in the boot orchestrator that owns both the DB and
+   `ThreadTranscriptStore`, after legacy import, before listener bind — not
+   inside the SQL-only startup migration set.
+2. Per transcript, under the store lock: read all records; rewrite only
+   message metadata (legacy scattered keys → structured object; the 73
+   dropped-marker records identified by `origin_run_id` prefix
+   `task-notify-` + body shape get the object backfilled from attributes/
+   legacy prose — regex against the frozen legacy template is acceptable
+   inside a one-shot migration). `seq`/`thread_id`/`run_id`/`timestamp`
+   untouched. Message text is history and is not rewritten (legacy bodies
+   show the old headline/tutorial inside the card; acceptable).
+3. Each changed transcript gets, in the same atomic file replacement, an
+   appended new-seq `range_rewrite` control record with reason
+   `task_notification_metadata_v1` — desktop and iOS sync planners already
+   drop the window and refetch authoritatively on that marker.
+4. Fix thread-record transcript count/tail projections in the same pass;
+   migration must not bump user-facing activity ordering.
+5. A durable global marker keyed to the import generation is written last,
+   after all file and SQLite work. File-atomic per transcript, idempotent
+   end-to-end (already-converted metadata / existing markers are recognized,
+   no duplicate markers), any failure aborts startup and retries next boot.
+6. Fault-injection tests around the non-atomic seam (after file rename,
+   before SQL), plus a rehearsal against an isolated copy of the real
+   production data directory.
+
+### 3.6 Wire cutover: explicit schema boundary, no dual reading
+
+`presentation` changing from string to object is a breaking render-state
+change. No dual-read shim; an explicit protocol version instead:
+
+- Define `render_schema = 2` for the render-state wire.
+- Clients declare the schema on stream/history requests; every frame carries
+  it back.
+- The v2 gateway answers missing/older schema with an explicit
+  upgrade-required error — it never emits the legacy string wire.
+- v2 clients hitting an old gateway (no schema) fail fast with an upgrade
+  notice — no string fallback path.
+- Desktop ships atomically with the gateway (same repo, same release). iOS
+  sets a minimum supported build; the forced-upgrade window is accepted
+  (explicitly approved scope — iOS-26-only, no legacy compatibility policy).
 
 ## 4. Non-goals
 
-- Restart notices use the same client-side prose-sniffing pattern (both
-  clients regex the text, no server presentation at all). Same disease,
-  separate surgery: migrate it onto this presentation mechanism in a
-  follow-up, not in this change.
 - Bot-channel (Telegram/Discord) human-readable rendering of notifications.
-- Any change to task lifecycle, notification targets, or delivery routing.
+- Any change to task lifecycle semantics, notification targets, or delivery
+  routing.
+- (Restart notices are **in scope** — see §3.3/§3.4; leaving them on prose
+  parsing was rejected in review as a retained dual mechanism.)
 
 ## 5. Validation
 
-- **Bridge**: test that a `task_ready_for_review` dispatch queued into an
-  active run commits a user record whose metadata contains the structured
-  `task_notification` object and `internal_dispatch`, and does **not**
-  contain `garyx_mcp_auth_token` / `remote_mcp_servers`. Drive with the real
-  queue path (busy thread), not a direct-commit shortcut.
-- **Models**: reducer tests with captured record fixtures (both the new
-  structured shape and post-migration legacy shape) asserting the wire
-  presentation object; absence test for malformed metadata.
-- **Desktop/iOS**: headless mapper/render tests from real captured
-  render_state snapshots; card asserts fields from payload, body from
-  envelope strip; zero regex on template wording (grep-level check: the
-  "is ready for review" literal appears in no client source).
-- **Collapse/expand**: with a >10-line fixture body the card clamps and
-  exposes the expand affordance (desktop: component/storybook test; iOS:
-  the clamp decision asserted at the testable layer); with a short fixture
-  no affordance renders. Expanded surface shows the complete body.
-- **Migration**: fixture DB with all three historical shapes (legacy keys,
-  dropped-marker, already-new) → single boot migration → assert projected
-  presentation for all three; marker prevents re-run.
-- **End to end**: with gateway running, create a task with
-  `--notify current-thread` into a busy thread; observe the committed record
-  and the rendered card on desktop; confirm the same record renders on iOS
-  via SwiftPM mapper test against the captured frame.
+- **Metadata boundary (bridge)**: sentinel-secret tests for
+  `garyx_mcp_auth_token`, `remote_mcp_servers`, `provider_env`,
+  `garyx_mcp_headers`, `desktop_antigravity_env` proving absence from run
+  records and transcripts across **direct, Legacy queue, Durable exact
+  queue, and public `add_streaming_input`** paths; semantic-key retention
+  tests for all seven internal-dispatch sources through the busy-thread
+  queue path (real queue, no direct-commit shortcut).
+- **Forgery**: external chat requests carrying `task_notification` /
+  `restart_wake` metadata commit without those keys and get no presentation;
+  an assistant-role record with notification metadata gets no presentation.
+- **Models**: golden JSON for the flattened serde wire (both kinds);
+  reducer tests from captured fixtures (new shape + post-migration shape);
+  absence test for malformed objects; presentation-only change → row-hash
+  delta upsert test; delta roundtrip and same-seq reseed with object
+  presentations.
+- **Desktop/iOS mapping**: headless mapper tests from real captured v2
+  frames; grep-level guard that no client source matches the template
+  wording ("is ready for review") or `<garyx_restarted` sniffing; Storybook
+  scenario uses a real user render row with presentation object.
+- **Width/alignment**: real-layout tests (browser for desktop; both Dynamic
+  Type branches for iOS) that a long user message and a long notification
+  card share the same trailing edge and max width, across window resize;
+  architecture guard that task-card CSS/SwiftUI declares no width/alignment
+  constants (the shared owner does); the existing desktop test asserting
+  full-width is inverted.
+- **Clamp/expand**: fixtures at exactly-fits, one long wrapping line, 11
+  explicit lines, list/code/table/image bodies; overflow→fit on widening;
+  iOS Dynamic Type change re-measurement; expand affordance absent on short
+  bodies; gesture coexistence (copy/select/share + expand); desktop dialog
+  focus trap/Escape/focus return; iOS always-attached cover owner with
+  seq-based selection identity.
+- **Prompt**: provider-envelope test that base instructions include both
+  approve and reject/feedback lifecycle rules for every provider type.
+- **Migration**: fixture data dir with all three historical shapes; crash/
+  restart idempotence; fault injection at the rename/SQL seam; import-
+  generation marker; old-cursor client refetch driven by the range_rewrite
+  marker; rehearsal on a copied real data dir.
+- **Cutover**: v2 client × old gateway → explicit upgrade notice; old
+  client × v2 gateway → upgrade-required error; no frame ever emitted in
+  legacy shape by a v2 gateway.
+- **End to end**: task with `--notify current-thread` into a busy thread;
+  observe committed record shape, desktop card (collapsed → dialog), iOS
+  mapper output from the captured frame.
 
 ## 6. Rollout
 
-Single change set, all ends in one merge (desktop and gateway ship together;
-iOS targets the same wire). No compatibility shims, no dual-reading of the
-legacy scattered keys at runtime — the migration is the only consumer of the
-legacy shape.
+Single change set; desktop and gateway ship together; iOS follows via
+TestFlight under the standing release authorization with the v2 minimum
+build. The migration runs on first boot of the new gateway. The legacy
+scattered metadata shape and legacy string presentation wire have exactly
+one consumer each: the migration and the upgrade-required error path.
