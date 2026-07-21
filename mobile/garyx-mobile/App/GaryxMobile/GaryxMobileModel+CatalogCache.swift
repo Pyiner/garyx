@@ -3,6 +3,9 @@ import Foundation
 extension GaryxMobileModel {
     func resetWorkspaceCatalogState() {
         workspaceCatalogState.reset(to: .empty)
+        // Every reset is a new workspace universe; scope-bound sheets and
+        // dialogs key off this monotonic signal.
+        workspaceCatalogScopeEpoch += 1
     }
 
     func restoreWorkspaceCatalog(_ catalog: GaryxWorkspaceCatalog) {

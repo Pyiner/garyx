@@ -1746,14 +1746,12 @@ struct GaryxWorkspaceBotsView: View {
             }
             Button("Cancel", role: .cancel) { removeTarget = nil }
         }
-        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
-            // A gateway switch resets the catalog; workspace management UI
-            // from the previous universe must not survive it.
-            if phase == .idle {
-                showsAddWorkspace = false
-                renameTarget = nil
-                removeTarget = nil
-            }
+        .onChange(of: model.workspaceCatalogScopeEpoch) { _, _ in
+            // A gateway switch starts a new workspace universe; management
+            // UI from the previous one must not survive it.
+            showsAddWorkspace = false
+            renameTarget = nil
+            removeTarget = nil
         }
     }
 

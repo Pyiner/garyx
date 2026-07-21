@@ -4,8 +4,8 @@ import Foundation
 /// bare string: `path` is a chosen workspace, `none` is the explicit
 /// "No workspace" choice, and `unresolved` means the draft has not resolved a
 /// default yet. Resolution happens exactly once (`resolved(against:)`); after
-/// that the selection never drifts on catalog refreshes — the only sanctioned
-/// re-resolution is removal of the selected workspace from the catalog.
+/// that the selection never drifts — a resolved choice survives catalog
+/// refreshes and membership changes alike.
 public enum GaryxDraftWorkspaceSelection: Equatable, Sendable {
     case unresolved
     case none
@@ -43,8 +43,10 @@ public enum GaryxDraftWorkspaceSelection: Equatable, Sendable {
     ///   catalog is empty. A selection made before the catalog loads is
     ///   final; this only fills the default in.
     /// - `.none` is explicit and never overridden.
-    /// - `.path` re-resolves only when the selected workspace disappeared
-    ///   from a loaded catalog.
+    /// - `.path` is never auto-replaced. Catalog membership is not a
+    ///   validity test for an explicit path — agent default directories
+    ///   and freshly removed workspaces are legitimate selections that the
+    ///   picker presents as the "Current" row.
     public func resolved(against catalog: GaryxWorkspaceCatalog, catalogLoaded: Bool) -> GaryxDraftWorkspaceSelection {
         switch self {
         case .unresolved:
@@ -55,15 +57,8 @@ public enum GaryxDraftWorkspaceSelection: Equatable, Sendable {
             return .none
         case .none:
             return .none
-        case .path(let value):
-            guard catalogLoaded else { return self }
-            if catalog.summary(forPath: value) != nil {
-                return self
-            }
-            if let first = catalog.workspaces.first {
-                return .path(first.path)
-            }
-            return .none
+        case .path:
+            return self
         }
     }
 

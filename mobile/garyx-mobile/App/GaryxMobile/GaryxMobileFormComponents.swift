@@ -1000,12 +1000,10 @@ struct GaryxWorkspaceSelectSheet: View {
         .task {
             await model.refreshWorkspaces()
         }
-        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
-            // A gateway switch resets the catalog to idle; the picker belongs
-            // to the previous universe and must not survive it.
-            if phase == .idle {
-                dismiss()
-            }
+        .onChange(of: model.workspaceCatalogScopeEpoch) { _, _ in
+            // A gateway switch starts a new workspace universe; the picker
+            // belongs to the previous one and must not survive it.
+            dismiss()
         }
     }
 
@@ -1172,12 +1170,10 @@ struct GaryxWorkspacePathPickerSheet: View {
             .scrollIndicators(.hidden)
         }
         .garyxWorkspacePickerSheetStyle()
-        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
-            // A gateway switch resets the catalog to idle; this browser
-            // belongs to the previous universe and must not survive it.
-            if phase == .idle {
-                dismiss()
-            }
+        .onChange(of: model.workspaceCatalogScopeEpoch) { _, _ in
+            // A gateway switch starts a new workspace universe; this browser
+            // belongs to the previous one and must not survive it.
+            dismiss()
         }
     }
 }
@@ -1190,6 +1186,7 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
     let selectedPath: String
     let onSelect: (String) -> Void
     @State private var browser = GaryxWorkspaceDirectoryBrowserState()
+    @State private var navigationSequence = 0
     @State private var isEditingPath = false
     @State private var pathDraft = ""
     @FocusState private var pathFieldFocused: Bool
@@ -1406,13 +1403,19 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
     }
 
     private func load(path: String?) async {
+        // Last navigation wins: a slower earlier response must not overwrite
+        // the directory the user has already moved to.
+        navigationSequence += 1
+        let sequence = navigationSequence
         browser.beginLoad()
         do {
             let listing = try await model.listWorkspaceDirectories(path: path)
+            guard sequence == navigationSequence else { return }
             browser.apply(listing)
         } catch is CancellationError {
             // Superseded by a gateway switch; the sheet is on its way out.
         } catch {
+            guard sequence == navigationSequence else { return }
             browser.fail(error)
         }
     }

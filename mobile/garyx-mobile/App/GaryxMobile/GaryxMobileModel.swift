@@ -335,6 +335,11 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceCatalogState = GaryxMobileResourceState(value: GaryxWorkspaceCatalog.empty) {
         didSet { refreshNavigationDrawerSnapshot() }
     }
+    /// Monotonic gateway-scope generation for the workspace universe.
+    /// Transient phase values can be coalesced inside one MainActor turn
+    /// (loaded → idle → loaded), so scope-bound UI observes this counter —
+    /// which only ever moves forward — instead of sniffing for `.idle`.
+    @Published var workspaceCatalogScopeEpoch = 0
     @Published var lastAutomationRun: GaryxAutomationActivityEntry?
     @Published var selectedWorkspacePath = ""
     @Published var selectedWorkspaceDirectory = ""

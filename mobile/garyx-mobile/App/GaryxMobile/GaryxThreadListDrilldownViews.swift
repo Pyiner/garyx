@@ -73,13 +73,11 @@ struct GaryxWorkspaceThreadListDrilldown: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
-            // A gateway switch resets the catalog; management dialogs from
-            // the previous universe must not survive it.
-            if phase == .idle {
-                showsRenameDialog = false
-                showsRemoveConfirm = false
-            }
+        .onChange(of: model.workspaceCatalogScopeEpoch) { _, _ in
+            // A gateway switch starts a new workspace universe; management
+            // dialogs from the previous one must not survive it.
+            showsRenameDialog = false
+            showsRemoveConfirm = false
         }
     }
 

@@ -152,13 +152,13 @@ final class GaryxWorkspaceManagementCoreTests: XCTestCase {
         XCTAssertEqual(selection.resolved(against: catalog, catalogLoaded: true), selection)
     }
 
-    func testRemovalOfSelectedWorkspaceIsTheOnlySanctionedReResolution() {
-        let selection = GaryxDraftWorkspaceSelection.path("/w/gone")
-        XCTAssertEqual(
-            selection.resolved(against: catalog, catalogLoaded: true),
-            .path("/w/pinned")
-        )
-        // While the catalog has not loaded, nothing re-resolves.
+    func testChosenPathIsNeverAutoReplaced() {
+        // Catalog membership is not a validity test: an agent default
+        // directory or a freshly removed workspace stays selected and the
+        // picker presents it as the "Current" row.
+        let selection = GaryxDraftWorkspaceSelection.path("/w/not-in-catalog")
+        XCTAssertEqual(selection.resolved(against: catalog, catalogLoaded: true), selection)
+        XCTAssertEqual(selection.resolved(against: .empty, catalogLoaded: true), selection)
         XCTAssertEqual(selection.resolved(against: .empty, catalogLoaded: false), selection)
     }
 

@@ -135,8 +135,12 @@ thread-detail provenance already shipped.
   - Unresolved drafts resolve **once**: first row of the server-ordered
     catalog; empty catalog → `none`; a draft created before the catalog
     loads resolves once when it arrives. After resolution the draft never
-    drifts on refresh — the only sanctioned re-resolution is removal of
-    the selected workspace from the catalog.
+    drifts — catalog membership is not a validity test for an explicit
+    path (an agent default directory or a freshly removed workspace stays
+    selected; the picker presents it as the "Current" row). This
+    deliberately diverges from desktop's removal re-resolution: iOS has no
+    reliable "was in the catalog before" signal, and non-catalog explicit
+    paths are first-class.
   - Explicit `none` is never overridden. Entry points that carry a
     workspace ("New Thread" on a workspace row, agent `Chat` one-off
     target) seed `path(X)`.
@@ -202,8 +206,8 @@ One sheet, upgraded in place (`GaryxWorkspaceDirectoryBrowser`):
   to `rootWorkspacePath`; typed decoding of the directories 400 contract
   into a `GaryxWorkspaceDirectoryError` the UI can render per-code.
 - `GaryxDraftWorkspaceSelection` tri-state + the resolve-once policy
-  (catalog-arrival resolution, selected-row-removal re-resolution,
-  explicit-none precedence) as pure functions.
+  (catalog-arrival resolution, explicit-none precedence, chosen paths
+  never auto-replaced) as pure functions.
 - Path presentation: `gateway_home`-based `~` abbreviation helper replacing
   the local `Users/<x>` heuristic; picker search filtering; server-order
   passthrough presentation (the sorting/filtering half of
@@ -240,8 +244,8 @@ bare-string draft workspace state.
 - **Core (SwiftPM)**: full-field summary/page/directory decoding (camelCase
   `gitRepo`), typed-400 decoding, server-order passthrough (no client
   sorting — regression-pinned), tri-state resolve-once matrix (pre-catalog
-  draft, empty catalog, explicit none precedence, selected-row removal,
-  no drift on refresh), create-payload mapping, `gateway_home` abbreviation,
+  draft, empty catalog, explicit none precedence, chosen path never
+  auto-replaced), create-payload mapping, `gateway_home` abbreviation,
   browser reducer (segment jump, typed path, error stay-put, filter),
   catalog snapshot version bump restore behavior.
 - **App**: xcodegen + xcodebuild build; existing workspace drilldown UI

@@ -492,8 +492,8 @@ extension GaryxMobileModel {
     }
 
     /// Runs after every catalog replace: fills the once-only default for
-    /// unresolved drafts and re-resolves only when the selected workspace
-    /// disappeared from the catalog. Resolved selections never drift.
+    /// unresolved drafts. Resolved selections never drift — catalog
+    /// membership is not a validity test for an explicit path.
     func resolveDraftWorkspaceSelectionIfNeeded() {
         let resolved = newThreadWorkspaceSelection.resolved(
             against: workspaceCatalog,
@@ -617,6 +617,12 @@ extension GaryxMobileModel {
         case .none:
             return "No workspace"
         case .path(let workspace):
+            // The server-owned display name is the single naming source;
+            // basename only covers paths outside the catalog.
+            if let name = workspaceCatalog.summary(forPath: workspace)?.name,
+               !name.isEmpty {
+                return name
+            }
             let name = (workspace as NSString).lastPathComponent
             return name.isEmpty ? workspace : name
         }

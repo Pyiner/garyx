@@ -68,7 +68,10 @@ struct GaryxWorkspacesView: View {
     private var subtitle: String {
         let workspace = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !workspace.isEmpty else { return "\(model.userWorkspacePaths.count) workspaces" }
-        let name = workspace.garyxLastPathComponent.isEmpty ? workspace : workspace.garyxLastPathComponent
+        // Server-owned display name first; basename only covers paths
+        // outside the catalog.
+        let fallback = workspace.garyxLastPathComponent.isEmpty ? workspace : workspace.garyxLastPathComponent
+        let name = model.workspaceCatalog.summary(forPath: workspace)?.name ?? fallback
         let directory = model.selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         return directory.isEmpty ? name : "\(name) / \(directory)"
     }
@@ -132,13 +135,11 @@ struct GaryxWorkspacesContent: View {
                 }
             }
         }
-        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
-            // A gateway switch resets the catalog; management dialogs from
-            // the previous universe must not survive it.
-            if phase == .idle {
-                renameTarget = nil
-                removeTarget = nil
-            }
+        .onChange(of: model.workspaceCatalogScopeEpoch) { _, _ in
+            // A gateway switch starts a new workspace universe; management
+            // dialogs from the previous one must not survive it.
+            renameTarget = nil
+            removeTarget = nil
         }
         .alert(
             "Rename Workspace",
