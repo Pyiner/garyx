@@ -5,6 +5,33 @@ import XCTest
 
 @MainActor
 final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
+    func testComposerFallbackCannotExpandBeyondSteadyEmptyUIKitHeight() {
+        let layout = GaryxComposerTextLayout(
+            textContainerInsets: UIEdgeInsets(top: 15, left: 16, bottom: 8, right: 16),
+            minimumTextHeight: 29,
+            maximumLineCount: 4
+        )
+        let availableSize = CGSize(width: 378, height: 600)
+        let controller = UIHostingController(
+            rootView: GaryxComposerInputFallback(layout: layout)
+                .frame(width: availableSize.width)
+        )
+
+        let measured = controller.sizeThatFits(in: availableSize)
+
+        print(
+            "COMPOSER_FALLBACK_SIZE measured=\(measured) "
+                + "expectedHeight=\(layout.minimumControlHeight)"
+        )
+        XCTAssertEqual(measured.width, availableSize.width, accuracy: 0.001)
+        XCTAssertEqual(
+            measured.height,
+            layout.minimumControlHeight,
+            accuracy: 0.001,
+            "transient composer chrome must match the steady empty UIKit field"
+        )
+    }
+
     func testComposerUIKitFieldOwnsEntireVisibleInputRegion() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -159,6 +159,19 @@ struct GaryxConversationOpeningComposerChrome: View {
     }
 }
 
+/// Non-interactive input chrome used while durable payload activation catches
+/// up with a newly mounted route. Its geometry must remain identical to an
+/// empty live UIKit field so the route's first delivered frame is stable.
+struct GaryxComposerInputFallback: View {
+    let layout: GaryxComposerTextLayout
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: layout.minimumControlHeight)
+            .allowsHitTesting(false)
+    }
+}
 
 struct GaryxComposer: View {
     @EnvironmentObject private var model: GaryxMobileModel
@@ -578,12 +591,7 @@ struct GaryxComposer: View {
                 )
                 .font(GaryxFont.subheadline())
             } else {
-                Color.clear
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: layout.minimumControlHeight
-                    )
-                    .allowsHitTesting(false)
+                GaryxComposerInputFallback(layout: layout)
             }
 
             if routeText.isEmpty {
