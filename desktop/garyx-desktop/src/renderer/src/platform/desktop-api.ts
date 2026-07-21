@@ -25,8 +25,6 @@ const stateMethodNames = [
   'bindChannelEndpoint',
   'detachChannelEndpoint',
   'renameThread',
-  'archiveThread',
-  'deleteThread',
   'setThreadPinned',
   'setThreadPinOrder',
 ] as const satisfies readonly (keyof GaryxDesktopApi)[];
@@ -41,6 +39,18 @@ const stateResultMethodNames = [
 ] as const satisfies readonly (keyof GaryxDesktopApi)[];
 const stateResultMethods: ReadonlySet<PropertyKey> = new Set(
   stateResultMethodNames,
+);
+
+// Lifecycle mutations return DesktopGatewayMutationResult<DesktopState>:
+// the authoritative state is NESTED in the applied variant's `value`, so
+// they need their own stamping lane — treating the wrapper as a state (the
+// old stateMethods lane) stamps garbage and crashes identity reads.
+const mutationResultMethodNames = [
+  'archiveThread',
+  'deleteThread',
+] as const satisfies readonly (keyof GaryxDesktopApi)[];
+const mutationResultMethods: ReadonlySet<PropertyKey> = new Set(
+  mutationResultMethodNames,
 );
 
 type DesktopApiMethod = (...args: unknown[]) => unknown;
@@ -71,6 +81,15 @@ function createFacadeMethod(
     return (...args) => ingress.requestStateResult(
       () => invoke(args) as Promise<{ state: DesktopState }>,
       (result) => result.state,
+    );
+  }
+  if (mutationResultMethods.has(property)) {
+    return (...args) => ingress.requestStateResult(
+      () => invoke(args) as Promise<
+        { kind: string; value?: DesktopState }
+      >,
+      (result) =>
+        (result.kind === 'applied' ? result.value : null) as DesktopState,
     );
   }
   return (...args) => invoke(args);

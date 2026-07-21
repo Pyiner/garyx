@@ -155,6 +155,56 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     /gatewayMirror\.adoptAgentCatalog\(nextAgentCatalog\);/,
     'boot hydration adopts its catalog through the mirror owner',
   );
+  // The Agents hub is a SUBSCRIBER of the mirror catalog, never a second
+  // fetch/owner path.
+  const agentsHubSource = readFileSync(
+    new URL('./app-shell/components/AgentsHubPanel.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    agentsHubSource,
+    /const catalogSnapshot = useCatalog\(\);/,
+    'the agents hub consumes the mirror catalog snapshot',
+  );
+  assert.doesNotMatch(
+    agentsHubSource,
+    /window\.garyxDesktop\.listCustomAgents/,
+    'the agents hub never fetches the catalog directly',
+  );
+  // Every automation async handler settles through one operation owner.
+  const automationSource = readFileSync(
+    new URL('./app-shell/useAutomationController.ts', import.meta.url),
+    'utf8',
+  );
+  assert.ok(
+    (automationSource.match(/const operation = openAutomationOperation\(\);/g) || [])
+      .length >= 5,
+    'select, submit, toggle, delete, and run-now all open an operation owner',
+  );
+  assert.ok(
+    (automationSource.match(/operation\.isCurrent\(\)/g) || []).length >= 12,
+    'resolve/catch/finally/timer writes settle through the owner',
+  );
+  // The module ingress singleton is installed only for the COMMITTED
+  // component instance (a useState initializer can run twice and keep the
+  // first instance while the singleton points at the discarded second).
+  assert.match(
+    appShellSource,
+    /useLayoutEffect\(\(\) => \{\s*\n\s*installPinnedOrderIngress\(pinnedOrderIngress\);\s*\n\s*\}, \[pinnedOrderIngress\]\);/,
+    'the ingress singleton installs from a layout effect, not the initializer',
+  );
+  assert.doesNotMatch(
+    appShellSource,
+    /const ingress = new PinnedOrderIngress\(rendererSessionId\);\s*\n\s*installPinnedOrderIngress/,
+    'no render-time singleton installation remains',
+  );
+  // Lifecycle mutations stamp their NESTED authoritative state and commit
+  // the applied value as-is (a rebuild would strip delivery identity).
+  assert.match(
+    appShellSource,
+    /setDesktopState\(archivedResult\.value\);/,
+    'archive commits the authoritative value as-is',
+  );
   // No side effects hide inside the state updater anymore.
   assert.doesNotMatch(
     appShellSource,

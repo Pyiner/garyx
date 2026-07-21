@@ -90,3 +90,38 @@ test("facade routes only DesktopState methods through pinned-order ingress", asy
     { method: "listTasks", receiver: rawApi },
   ]);
 });
+
+test("lifecycle mutations stamp their NESTED authoritative state", async () => {
+  const appliedState = { pinnedThreadIds: [], pinsRevision: 7 };
+  const rawApi = Object.freeze({
+    async archiveThread() {
+      return { kind: "applied", value: appliedState };
+    },
+    async deleteThread() {
+      return { kind: "rejected", code: "wrong_incarnation" };
+    },
+  });
+  const selections = [];
+  const facade = createDesktopApiFacade(rawApi, {
+    async requestState() {
+      throw new Error(
+        "a mutation RESULT must never ride the plain-state lane: stamping " +
+          "the wrapper crashes identity reads and skips the nested state",
+      );
+    },
+    async requestStateResult(request, selectState) {
+      const result = await request();
+      selections.push(selectState(result));
+      return result;
+    },
+  });
+
+  const archived = await facade.archiveThread({ threadId: "thread-1" });
+  assert.equal(archived.kind, "applied");
+  assert.strictEqual(archived.value, appliedState);
+  const deleted = await facade.deleteThread({ threadId: "thread-1" });
+  assert.equal(deleted.kind, "rejected");
+  // The applied variant selects its nested state; the rejected variant
+  // selects null (nothing to stamp).
+  assert.deepEqual(selections, [appliedState, null]);
+});

@@ -468,6 +468,43 @@ test("a failed catalog refresh keeps the last-known catalog", async () => {
   );
 });
 
+test("an older catalog response cannot roll back a newer request's publish", async () => {
+  const first = deferred();
+  const second = deferred();
+  let calls = 0;
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: () => {
+      calls += 1;
+      return calls === 1 ? first.promise : second.promise;
+    },
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  const older = mirror.refreshAgentCatalog();
+  const newer = mirror.refreshAgentCatalog();
+  // The NEWER request answers first; the older answer arrives later and
+  // must not roll the catalog back (same epoch, so only the monotonic
+  // request order can protect this).
+  second.resolve({
+    agents: [{ id: "agent::new" }],
+    defaultAgentId: "agent::new",
+    effectiveDefaultAgentId: "agent::new",
+  });
+  await newer;
+  first.resolve({
+    agents: [{ id: "agent::old" }],
+    defaultAgentId: "agent::old",
+    effectiveDefaultAgentId: "agent::old",
+  });
+  await older;
+  assert.equal(
+    mirror.getCatalogSnapshot().agents[0]?.id,
+    "agent::new",
+    "the latest issued request owns the catalog",
+  );
+});
+
 test("a stale openability answer reports not-openable without vouching", async () => {
   const refresh = deferred();
   const mirror = new GatewayMirror({

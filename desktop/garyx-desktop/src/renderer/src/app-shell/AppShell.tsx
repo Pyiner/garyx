@@ -583,10 +583,18 @@ export function AppShell() {
       (typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `pins-renderer-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    const ingress = new PinnedOrderIngress(rendererSessionId);
-    installPinnedOrderIngress(ingress);
-    return ingress;
+    return new PinnedOrderIngress(rendererSessionId);
   });
+  // Install the ingress the component actually RETAINED. A useState
+  // initializer is not a commit boundary: StrictMode invokes it twice and
+  // keeps the FIRST instance, so installing there points the module
+  // singleton at a discarded second instance — module-level requests then
+  // settle on one ingress while React commits through another. The layout
+  // effect runs only for committed instances and before every passive
+  // effect that issues requests.
+  useLayoutEffect(() => {
+    installPinnedOrderIngress(pinnedOrderIngress);
+  }, [pinnedOrderIngress]);
   const [pinnedOrderMainSnapshot, setPinnedOrderMainSnapshot] =
     useState<DesktopThreadPinOrderSnapshot | null>(null);
   // Endgame architecture (docs/design/appshell-endgame-architecture.md):
@@ -4054,9 +4062,10 @@ export function AppShell() {
         }
         return;
       }
-      setDesktopState(
-        desktopStateWithoutThread(archivedResult.value, targetThreadId),
-      );
+      // The applied value is the authoritative post-removal state from the
+      // main process — commit it AS-IS (a rebuild would strip its
+      // delivery identity and be rejected by the ingress).
+      setDesktopState(archivedResult.value);
       if (settlement.requireFullReplacement) {
         recentThreadFeeds.forceReplacement();
         threadFavorites.refreshSnapshot();

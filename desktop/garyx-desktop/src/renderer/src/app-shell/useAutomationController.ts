@@ -144,8 +144,26 @@ export function useAutomationController({
     ? desktopState?.lastSeenRunAtByAutomation?.[activeAutomation.id] || null
     : null;
 
+  /**
+   * One owner per automation operation: capture the gateway domain
+   * generation at operation start; EVERY continuation write — resolve,
+   * catch, finally, route sync, timers, activity/pending-run folds —
+   * settles through isCurrent(), so nothing from a previous gateway
+   * connection can land after a switch.
+   */
+  function openAutomationOperation() {
+    const generation = currentPinnedOrderDomainGeneration();
+    return {
+      isCurrent: () => isCurrentPinnedOrderDomainGeneration(generation),
+    };
+  }
+
   async function loadAutomationActivity(automationId: string) {
+    const operation = openAutomationOperation();
     const feed = await window.garyxDesktop.getAutomationActivity(automationId);
+    if (!operation.isCurrent()) {
+      return feed;
+    }
     startTransition(() => {
       setAutomationActivityById((current) => ({
         ...current,
@@ -163,11 +181,12 @@ export function useAutomationController({
     // Async guard (6c-2a): a slow select must not clobber the state a
     // newer navigation installed while this one awaited the IPC.
     const routeVersion = getRouteVersion();
+    const operation = openAutomationOperation();
     try {
       const nextState = await requestDesktopState(() =>
         window.garyxDesktop.selectAutomation({ automationId }),
       );
-      if (getRouteVersion() !== routeVersion) {
+      if (getRouteVersion() !== routeVersion || !operation.isCurrent()) {
         return;
       }
       setDesktopState(nextState);
@@ -175,6 +194,9 @@ export function useAutomationController({
       // normalized) id so the hash converges even after the fold dies.
       syncAutomationRoute(nextState.selectedAutomationId ?? null);
     } catch (selectionError) {
+      if (!operation.isCurrent()) {
+        return;
+      }
       setError(
         selectionError instanceof Error
           ? selectionError.message
@@ -274,6 +296,7 @@ export function useAutomationController({
       : `edit:${automationDialog.automationId || ''}`;
     setAutomationMutation(mutationKey);
     setError(null);
+    const operation = openAutomationOperation();
 
     try {
       const result = automationDialog.mode === 'create'
@@ -294,6 +317,9 @@ export function useAutomationController({
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
           }), (response) => response.state);
+      if (!operation.isCurrent()) {
+        return;
+      }
       setDesktopState(result.state);
       setAutomationDialog(null);
       // Navigate to the SERVER-confirmed selection (create selects the
@@ -305,13 +331,18 @@ export function useAutomationController({
         automationId: result.state.selectedAutomationId ?? null,
       });
     } catch (automationError) {
+      if (!operation.isCurrent()) {
+        return;
+      }
       setError(
         automationError instanceof Error
           ? automationError.message
           : 'Failed to save the automation',
       );
     } finally {
-      setAutomationMutation((current) => (current === mutationKey ? null : current));
+      if (operation.isCurrent()) {
+        setAutomationMutation((current) => (current === mutationKey ? null : current));
+      }
     }
   }
 
@@ -322,6 +353,7 @@ export function useAutomationController({
     const mutationKey = `toggle:${automation.id}`;
     setAutomationMutation(mutationKey);
     setError(null);
+    const operation = openAutomationOperation();
     try {
       const result = await requestDesktopStateResult(
         () => window.garyxDesktop.updateAutomation({
@@ -330,15 +362,22 @@ export function useAutomationController({
         }),
         (response) => response.state,
       );
-      setDesktopState(result.state);
+      if (operation.isCurrent()) {
+        setDesktopState(result.state);
+      }
     } catch (automationError) {
+      if (!operation.isCurrent()) {
+        return;
+      }
       setError(
         automationError instanceof Error
           ? automationError.message
           : 'Failed to update the automation',
       );
     } finally {
-      setAutomationMutation((current) => (current === mutationKey ? null : current));
+      if (operation.isCurrent()) {
+        setAutomationMutation((current) => (current === mutationKey ? null : current));
+      }
     }
   }
 
@@ -350,12 +389,16 @@ export function useAutomationController({
     const mutationKey = `delete:${automation.id}`;
     setAutomationMutation(mutationKey);
     setError(null);
+    const operation = openAutomationOperation();
     try {
       const nextState = await requestDesktopState(() =>
         window.garyxDesktop.deleteAutomation({
           automationId: automation.id,
         }),
       );
+      if (!operation.isCurrent()) {
+        return;
+      }
       setDesktopState(nextState);
       setAutomationActivityById((current) => {
         const next = { ...current };
@@ -371,13 +414,18 @@ export function useAutomationController({
         syncAutomationRoute(nextState.selectedAutomationId ?? null);
       }
     } catch (automationError) {
+      if (!operation.isCurrent()) {
+        return;
+      }
       setError(
         automationError instanceof Error
           ? automationError.message
           : 'Failed to delete the automation',
       );
     } finally {
-      setAutomationMutation((current) => (current === mutationKey ? null : current));
+      if (operation.isCurrent()) {
+        setAutomationMutation((current) => (current === mutationKey ? null : current));
+      }
     }
   }
 
@@ -392,8 +440,9 @@ export function useAutomationController({
     setAutomationStatus(null);
     // The WHOLE run-now continuation is owned by the gateway domain
     // generation it started on: after a switch, neither the state fold nor
-    // the activity/pending-run/navigation/status side effects may land.
-    const generation = currentPinnedOrderDomainGeneration();
+    // the activity/pending-run/navigation/status side effects — nor the
+    // failure surface or busy-key cleanup — may land.
+    const operation = openAutomationOperation();
     try {
       const result = await requestDesktopStateResult(
         () => window.garyxDesktop.runAutomationNow({
@@ -401,7 +450,7 @@ export function useAutomationController({
         }),
         (response) => response.state,
       );
-      if (!isCurrentPinnedOrderDomainGeneration(generation)) {
+      if (!operation.isCurrent()) {
         return;
       }
       const latestThreadId = result.activity.threadId || automation.targetThreadId || automation.threadId;
@@ -454,16 +503,26 @@ export function useAutomationController({
       }
       setAutomationStatus(`Ran ${automation.label} just now.`);
       window.setTimeout(() => {
+        if (!operation.isCurrent()) {
+          return;
+        }
         void loadAutomationActivity(automation.id).catch(() => {});
       }, 350);
     } catch (automationError) {
+      if (!operation.isCurrent()) {
+        // A failure from the previous gateway connection surfaces nothing.
+        return;
+      }
       setError(
         automationError instanceof Error
           ? automationError.message
           : 'Failed to run the automation',
       );
     } finally {
-      setAutomationMutation((current) => (current === mutationKey ? null : current));
+      if (operation.isCurrent()) {
+        // A stale settle must not clear a successor generation's busy key.
+        setAutomationMutation((current) => (current === mutationKey ? null : current));
+      }
     }
   }
 

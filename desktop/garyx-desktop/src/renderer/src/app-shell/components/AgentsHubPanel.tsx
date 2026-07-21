@@ -36,6 +36,10 @@ import {
 } from '../../components/ui/table';
 import { Input } from '../../components/ui/input';
 import { Switch } from '../../components/ui/switch';
+import {
+  useCatalog,
+  useGatewayMirror,
+} from '../../gateway-mirror/react';
 import { useI18n } from '../../i18n';
 import { AgentAvatarEditor, AvatarStyleDialog } from './AgentAvatarEditor';
 import {
@@ -79,12 +83,6 @@ import type {
   ProviderType,
 } from './agents-hub-helpers';
 
-const EMPTY_AGENT_CATALOG: DesktopAgentCatalog = {
-  agents: [],
-  defaultAgentId: null,
-  effectiveDefaultAgentId: null,
-};
-
 type AgentsHubPanelProps = {
   gatewayScope?: string;
   workspaces?: DesktopWorkspace[];
@@ -105,9 +103,22 @@ export function AgentsHubPanel({
   onToast,
 }: AgentsHubPanelProps) {
   const { t } = useI18n();
+  const mirror = useGatewayMirror();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [catalog, setCatalog] = useState<DesktopAgentCatalog>(EMPTY_AGENT_CATALOG);
+  // The agent catalog has ONE owner (the GatewayMirror): this panel is a
+  // subscriber, never a second fetch path — a gateway switch resets and
+  // refetches through the mirror's connection-scope transition, so no
+  // per-panel scope bookkeeping is needed.
+  const catalogSnapshot = useCatalog();
+  const catalog = useMemo<DesktopAgentCatalog>(
+    () => ({
+      agents: sortedAgents([...catalogSnapshot.agents]),
+      defaultAgentId: catalogSnapshot.defaultAgentId,
+      effectiveDefaultAgentId: catalogSnapshot.effectiveDefaultAgentId,
+    }),
+    [catalogSnapshot],
+  );
   const agents = catalog.agents;
   const [availabilityMutationAgentId, setAvailabilityMutationAgentId] =
     useState<string | null>(null);
@@ -148,20 +159,14 @@ export function AgentsHubPanel({
       setLoading(true);
       setLoadError(null);
     }
-    try {
-      const nextCatalog = await window.garyxDesktop.listCustomAgents();
-      setCatalog({ ...nextCatalog, agents: sortedAgents(nextCatalog.agents) });
-    } catch (error) {
-      if (!silent) {
-        setCatalog(EMPTY_AGENT_CATALOG);
-        const message = error instanceof Error ? error.message : 'Failed to load agents.';
-        setLoadError(message);
-        onToast?.(message, 'error');
-      }
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
+    const refreshed = await mirror.refreshAgentCatalog();
+    if (!refreshed && !silent) {
+      const message = 'Failed to load agents.';
+      setLoadError(message);
+      onToast?.(message, 'error');
+    }
+    if (!silent) {
+      setLoading(false);
     }
   }
 

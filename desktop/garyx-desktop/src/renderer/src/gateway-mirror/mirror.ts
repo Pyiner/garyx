@@ -390,6 +390,7 @@ export class GatewayMirror {
       );
     }
     const epoch = this.connectionEpoch;
+    const catalogOrdinal = ++this.catalogRequestOrdinal;
     return Promise.all([
       Promise.resolve().then(() => services.getState()),
       Promise.resolve()
@@ -407,14 +408,19 @@ export class GatewayMirror {
       }
       this.desktopState = nextState;
       this.bumpRoot();
-      if (nextCatalog) {
-        // A failed catalog fetch keeps the last-known catalog: it must
-        // never be mapped to an empty one over good data.
+      if (nextCatalog && this.catalogRequestOrdinal === catalogOrdinal) {
+        // A failed catalog fetch keeps the last-known catalog, and an
+        // older response cannot overwrite a newer request's publish.
         this.publishAgentCatalog(nextCatalog);
       }
       return nextState;
     });
   }
+
+  /** Monotonic catalog request order: within one epoch, only the LATEST
+   *  issued fetch may publish, so an older response that returns after a
+   *  newer one cannot roll the catalog back. */
+  private catalogRequestOrdinal = 0;
 
   private publishAgentCatalog(catalog: DesktopAgentCatalog): void {
     this.agents = catalog.agents;
@@ -428,26 +434,34 @@ export class GatewayMirror {
    * Refetch the agent catalog from the current gateway; the publish is
    * epoch-fenced and a failure keeps the last-known catalog.
    */
-  refreshAgentCatalog(): Promise<void> {
+  refreshAgentCatalog(): Promise<boolean> {
     const services = this.services;
     if (!services) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
     const epoch = this.connectionEpoch;
+    const ordinal = ++this.catalogRequestOrdinal;
     return Promise.resolve()
       .then(() => services.listCustomAgents())
       .then((catalog) => {
-        if (this.connectionEpoch !== epoch) {
-          return;
+        if (
+          this.connectionEpoch !== epoch ||
+          this.catalogRequestOrdinal !== ordinal
+        ) {
+          return true;
         }
         this.publishAgentCatalog(catalog);
+        return true;
       })
-      .catch(() => {});
+      .catch(() => false);
   }
 
   /** Adopt a catalog the caller already fetched (boot hydration): the
    *  caller owns the staleness fence; consumers still read one owner. */
   adoptAgentCatalog(catalog: DesktopAgentCatalog): void {
+    // Adoption counts as the latest issued request: an older in-flight
+    // fetch must not overwrite it.
+    this.catalogRequestOrdinal += 1;
     this.publishAgentCatalog(catalog);
   }
 

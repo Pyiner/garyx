@@ -280,6 +280,11 @@ export class PinnedOrderIngress {
     );
     const result = await request();
     const state = selectState(result);
+    if (!state || typeof state !== "object") {
+      // Result variants without an authoritative state (e.g. rejected
+      // lifecycle mutations) carry nothing to stamp or settle.
+      return result;
+    }
     const envelope: DesktopStateDeliveryEnvelope = {
       state,
       capturedEpoch,
