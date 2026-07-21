@@ -14,7 +14,10 @@ pub(super) struct DataDirLock {
 }
 
 impl DataDirLock {
-    pub(super) fn acquire(database_path: &Path, wait: Duration) -> GaryxDbResult<Self> {
+    /// Private to `lock.rs`: the only production path to a held data-dir
+    /// lock is [`acquire_locked_database`], so the lock -> parent handoff ->
+    /// open sequence cannot be skipped by acquiring the lock directly.
+    fn acquire(database_path: &Path, wait: Duration) -> GaryxDbResult<Self> {
         let data_dir = database_path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -44,6 +47,16 @@ impl DataDirLock {
     #[cfg(any(test, feature = "test-seams"))]
     pub(super) fn close_on_exec(&self) -> GaryxDbResult<bool> {
         close_on_exec_is_set(&self.file)
+    }
+}
+
+#[cfg(test)]
+impl DataDirLock {
+    /// Test-only lock handle for the contention and fail-closed behavior
+    /// tests. Additive seam: production code cannot name it, so the
+    /// `acquire_locked_database` funnel stays the only production path.
+    pub(super) fn acquire_for_tests(database_path: &Path, wait: Duration) -> GaryxDbResult<Self> {
+        Self::acquire(database_path, wait)
     }
 }
 

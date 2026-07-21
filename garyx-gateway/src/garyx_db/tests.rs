@@ -179,7 +179,7 @@ fn data_dir_lock_precedes_schema_initialization_is_cloexec_and_times_out_bounded
         .execute("CREATE TABLE untouched(value INTEGER)", [])
         .expect("seed sentinel schema");
 
-    let owner = DataDirLock::acquire(&path, Duration::ZERO).expect("own data dir");
+    let owner = DataDirLock::acquire_for_tests(&path, Duration::ZERO).expect("own data dir");
     assert!(owner.close_on_exec().expect("CLOEXEC query"));
     let started = Instant::now();
     let error = GaryxDbService::open_with_lock_wait(&path, Duration::from_millis(80))
@@ -252,7 +252,7 @@ fn pre_r5_parent_handoff_has_continue_and_fail_closed_branches() {
     raw.execute("CREATE TABLE untouched(value INTEGER)", [])
         .unwrap();
     drop(raw);
-    let lock = DataDirLock::acquire(&path, Duration::ZERO).expect("new binary lock");
+    let lock = DataDirLock::acquire_for_tests(&path, Duration::ZERO).expect("new binary lock");
     let barrier = wait_for_parent_exit(4244, Duration::from_millis(60), || true);
     assert!(barrier.is_err());
     drop(lock);
@@ -263,7 +263,8 @@ fn pre_r5_parent_handoff_has_continue_and_fail_closed_branches() {
         "fail-closed parent timeout must precede destructive/schema initialization"
     );
     drop(raw);
-    DataDirLock::acquire(&path, Duration::ZERO).expect("failed child released the data-dir lock");
+    DataDirLock::acquire_for_tests(&path, Duration::ZERO)
+        .expect("failed child released the data-dir lock");
 }
 
 #[cfg(unix)]
