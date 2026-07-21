@@ -58,3 +58,14 @@ owner-loss fix:
   presentation is active and prove the stable owner remains attached.
 - Keep `GaryxPresentationLeaseSession` owner-loss recovery as a terminal safety
   property; anchor migration must not weaken or bypass it.
+
+## Non-content-bearing presenter gap (#TASK-2582 review observation)
+
+`garyxAlert`, `garyxConfirmationDialog`, `garyxFileImporter`, and
+`garyxPhotosPicker` present system surfaces without garyx-owned presented
+content, so they have no `onDisappear` hook and therefore no owner-loss
+recovery path. If iOS ever tears one down without a binding write-back, a
+row-local call site (for example
+`mobile/garyx-mobile/App/GaryxMobile/GaryxMobileAgentsViews.swift:1412`)
+could still leak its lease. The anchor migration above resolves this class at
+the source; until then this gap shares the same call-site inventory.
