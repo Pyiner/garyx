@@ -38,13 +38,45 @@ test('thread creation folds the authoritative summary into the persisted main st
   // seeds and remembered-only folds both die on the next full refresh).
   assert.match(
     storeSource,
-    /await writeState\(withSortedEntities\(stateWithCreatedThread\(local, thread\)\)\)/,
-    'createDesktopThread persists the folded state in the main process',
+    /await mutatePersistedState\(\(local\) => \{[\s\S]{0,400}?stateWithCreatedThread\(local, thread\)/,
+    'createDesktopThread persists the folded state through the mutation owner',
   );
   assert.match(
     storeSource,
     /rememberHydratedDesktopState\(stateWithCreatedThread\(state, thread\)\)/,
     'the returned snapshot carries the fold for immediate rendering',
+  );
+});
+
+test('persisted-state mutations are serialized and lifecycle removals clear the owner', () => {
+  // All persisted read-modify-writes flow through the single mutation
+  // owner (parallel creations must serialize, not race rename()).
+  assert.match(
+    storeSource,
+    /let persistedStateMutationChain: Promise<void> = Promise\.resolve\(\);/,
+    'the persisted-state mutation queue exists',
+  );
+  // The create fold validates the creating gateway scope inside the
+  // critical section (a late response from a previous gateway is a no-op).
+  assert.match(
+    storeSource,
+    /if \(localScope !== creatingGatewayScope\) \{\s*return null;/,
+    'a stale-gateway create never pollutes the new scope',
+  );
+  // Successful delete AND archive both drop the thread from the persisted
+  // owner, or a retained hidden session would resurrect on refresh.
+  assert.equal(
+    (storeSource.match(
+      /await mutatePersistedState\(\(local\) =>\s*withSortedEntities\(desktopStateWithoutThread\(local, input\.threadId\)\),\s*\);/g,
+    ) || []).length,
+    2,
+    'delete and archive clear the persisted owner',
+  );
+  // Unique temp names keep concurrent atomic writes from colliding.
+  assert.match(
+    storeSource,
+    /tmp-\$\{process\.pid\}-\$\{Date\.now\(\)\.toString\(36\)\}-\$\{randomUUID\(\)/,
+    'atomic writes use collision-free temp paths',
   );
 });
 

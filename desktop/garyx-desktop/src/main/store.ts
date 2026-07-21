@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, basename } from 'node:path';
 
@@ -552,6 +552,31 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
   };
 }
 
+/**
+ * The single mutation owner for the persisted desktop state. Every
+ * read-modify-write of the on-disk state flows through this queue: the
+ * mutator reads the LATEST persisted state inside the critical section, so
+ * concurrent mutations (parallel side-chat creations, lifecycle removals)
+ * serialize instead of racing rename() or dropping each other's writes.
+ * Returning null skips the write (e.g. a stale-gateway guard).
+ */
+let persistedStateMutationChain: Promise<void> = Promise.resolve();
+
+function mutatePersistedState(
+  mutate: (local: DesktopState) => DesktopState | null,
+): Promise<void> {
+  const run = persistedStateMutationChain.then(async () => {
+    const local = await getLocalDesktopState();
+    const next = mutate(local);
+    if (next) {
+      await writeState(next);
+    }
+  });
+  // The chain must survive a failed mutation; the caller still sees it.
+  persistedStateMutationChain = run.catch(() => {});
+  return run;
+}
+
 async function writeState(state: DesktopState): Promise<void> {
   const filePath = stateFilePath();
   await mkdir(dirname(filePath), { recursive: true });
@@ -559,7 +584,7 @@ async function writeState(state: DesktopState): Promise<void> {
   // truncate-and-write let concurrent readers see partial JSON, which
   // tripped the corruption recovery below and wiped settings and gateway
   // profiles to defaults.
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const persisted: PersistedDesktopState = persistedPinnedOrderOutbox
     ? {
         ...state,
@@ -1688,14 +1713,26 @@ export async function createDesktopThread(input?: {
   // Hidden session threads (side-chat children) never appear in the
   // fetched thread list, and hydration starts from the PERSISTED local
   // state — not the remembered snapshot — so the durable owner must be the
-  // persisted state: fold the authoritative create summary into it. Every
-  // later hydration then spreads localState.sessions and retains the child
-  // through mergeRetainedHiddenSessions (and it survives restarts).
+  // persisted state: fold the authoritative create summary into it through
+  // the serialized mutation owner. The fold is gated on the creating
+  // gateway scope: a late response from a previous gateway must not
+  // pollute the newly selected gateway's persisted state.
+  const creatingGatewayScope = normalizeGatewayUrl(current.settings.gatewayUrl || '');
   if (!state.threads.some((entry) => entry.id === thread.id)) {
-    const local = await getLocalDesktopState();
-    await writeState(withSortedEntities(stateWithCreatedThread(local, thread)));
+    await mutatePersistedState((local) => {
+      const localScope = normalizeGatewayUrl(local.settings.gatewayUrl || '');
+      if (localScope !== creatingGatewayScope) {
+        return null;
+      }
+      return withSortedEntities(stateWithCreatedThread(local, thread));
+    });
   }
-  state = rememberHydratedDesktopState(stateWithCreatedThread(state, thread));
+  const currentScope = normalizeGatewayUrl(
+    (await getDesktopState()).settings.gatewayUrl || '',
+  );
+  if (currentScope === creatingGatewayScope) {
+    state = rememberHydratedDesktopState(stateWithCreatedThread(state, thread));
+  }
 
   return {
     state,
@@ -1899,6 +1936,11 @@ export async function deleteDesktopThread(input: {
       ? { ...result, value: null }
       : result;
   }
+  // The persisted owner must drop the thread too, or a retained hidden
+  // session would resurrect on the next hydration.
+  await mutatePersistedState((local) =>
+    withSortedEntities(desktopStateWithoutThread(local, input.threadId)),
+  );
   return {
     ...result,
     value: withSortedEntities(
@@ -1926,6 +1968,11 @@ export async function archiveDesktopThread(input: {
       ? { ...result, value: null }
       : result;
   }
+  // The persisted owner must drop the thread too, or a retained hidden
+  // session would resurrect on the next hydration.
+  await mutatePersistedState((local) =>
+    withSortedEntities(desktopStateWithoutThread(local, input.threadId)),
+  );
   return {
     ...result,
     value: withSortedEntities(
