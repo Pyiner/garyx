@@ -156,6 +156,39 @@ test('startup pruning bounds records written before the current process', async 
   }
 });
 
+test('cache identity is the (gatewayScope, threadId) pair', async () => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'garyx-transcript-cache-scope-'));
+  try {
+    const cache = await importTranscriptCache(join(temporaryRoot, 'unused-user-data'), temporaryRoot);
+    const store = new cache.TranscriptCacheStore({
+      directory: () => join(temporaryRoot, 'cache'),
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxRecords: 10,
+    });
+
+    // Thread ids are only unique per gateway: the SAME id on another
+    // gateway must be a cache miss, never gateway A's transcript.
+    await store.save('http://gateway-a', transcript('thread-same-id'));
+    assert.ok(await store.load('http://gateway-a', 'thread-same-id'));
+    assert.equal(
+      await store.load('http://gateway-b', 'thread-same-id'),
+      null,
+      'a colliding id on another gateway misses instead of leaking',
+    );
+
+    // Clear is partition-local too.
+    await store.save('http://gateway-b', transcript('thread-same-id'));
+    await store.clear('http://gateway-b', 'thread-same-id');
+    assert.equal(await store.load('http://gateway-b', 'thread-same-id'), null);
+    assert.ok(
+      await store.load('http://gateway-a', 'thread-same-id'),
+      'clearing one gateway partition leaves the other intact',
+    );
+  } finally {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  }
+});
+
 test('serializes save and clear mutations with the latest call winning', async () => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'garyx-transcript-cache-order-'));
   try {
