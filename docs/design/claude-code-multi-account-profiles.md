@@ -109,7 +109,7 @@ The start request gains optional account-target fields:
 - `managed_account_name`: reserve a new account ID and owned directory and authenticate there;
 - `account_id`: reauthenticate that existing managed account.
 
-The response adds optional `account_id`. The auth session owns its target configuration directory and uses it for both `auth login` and `auth status`. Closing either client's login surface calls the DELETE endpoint, terminates the pending Claude process, and cleans an uncommitted managed directory after ownership validation. A newly reserved directory is also cleaned up after any terminal failure. On success, parsed auth metadata is committed and a newly added account becomes active.
+The response adds optional `account_id`. The auth session owns its target configuration directory and uses it for both `auth login` and `auth status`. Closing either client's login surface calls the DELETE endpoint, terminates the pending Claude process, and cleans an uncommitted managed directory after ownership validation. A newly reserved directory is also cleaned up after any terminal failure. On success, parsed auth metadata is committed; adding an account never changes the active selection, which only moves through the explicit select endpoint.
 
 ## Claude process runtime
 
