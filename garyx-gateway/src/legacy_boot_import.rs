@@ -829,8 +829,31 @@ mod tests {
         }
     }
 
+    impl garyx_router::ThreadStoreDomains for ArchiveDuringFirstSetStore {
+        fn run_coordinator(&self) -> Arc<garyx_router::ThreadRunCoordinator> {
+            self.inner.run_coordinator()
+        }
+
+        fn channel_endpoint_projection(
+            &self,
+        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+            self.inner.channel_endpoint_projection()
+        }
+
+        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+            self.inner.task_projection()
+        }
+    }
+
     #[async_trait]
     impl ThreadStore for ArchiveDuringFirstSetStore {
+        async fn terminal_state(
+            &self,
+            thread_id: &str,
+        ) -> Result<Option<garyx_router::ThreadTerminalState>, ThreadStoreError> {
+            self.inner.terminal_state(thread_id).await
+        }
+
         async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
             self.inner.get(thread_id).await
         }
@@ -865,20 +888,6 @@ mod tests {
         async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
             self.inner.exists(thread_id).await
         }
-
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
-        }
-
-        fn channel_endpoint_projection(
-            &self,
-        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
-            self.inner.channel_endpoint_projection()
-        }
-
-        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
-            self.inner.task_projection()
-        }
     }
 
     struct BlockingListStore {
@@ -911,8 +920,31 @@ mod tests {
         }
     }
 
+    impl garyx_router::ThreadStoreDomains for FailNthSetStore {
+        fn run_coordinator(&self) -> Arc<garyx_router::ThreadRunCoordinator> {
+            self.inner.run_coordinator()
+        }
+
+        fn channel_endpoint_projection(
+            &self,
+        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+            self.inner.channel_endpoint_projection()
+        }
+
+        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+            self.inner.task_projection()
+        }
+    }
+
     #[async_trait]
     impl ThreadStore for FailNthSetStore {
+        async fn terminal_state(
+            &self,
+            thread_id: &str,
+        ) -> Result<Option<garyx_router::ThreadTerminalState>, ThreadStoreError> {
+            self.inner.terminal_state(thread_id).await
+        }
+
         async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
             self.inner.get(thread_id).await
         }
@@ -935,20 +967,6 @@ mod tests {
 
         async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
             self.inner.exists(thread_id).await
-        }
-
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
-        }
-
-        fn channel_endpoint_projection(
-            &self,
-        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
-            self.inner.channel_endpoint_projection()
-        }
-
-        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
-            self.inner.task_projection()
         }
     }
 

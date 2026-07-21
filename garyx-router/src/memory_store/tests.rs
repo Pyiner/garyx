@@ -1,6 +1,21 @@
 use super::*;
 use serde_json::json;
 
+/// The reference in-memory backend runs the shared executable store
+/// contract published by the trait crate (the SQLite backend runs the
+/// same suite from garyx-gateway).
+#[tokio::test]
+async fn in_memory_store_satisfies_the_contract() {
+    let store = InMemoryThreadStore::new();
+    crate::store_contract::run_thread_store_contract(&store).await;
+}
+
+#[tokio::test]
+async fn in_memory_store_protects_endpoint_fields_and_applies_patches() {
+    let store = InMemoryThreadStore::new();
+    crate::store_contract::run_patch_and_protected_field_contract(&store).await;
+}
+
 #[tokio::test]
 async fn test_basic_crud() {
     let store = InMemoryThreadStore::new();
@@ -16,12 +31,6 @@ async fn test_basic_crud() {
     assert_eq!(store.size().await, 1);
     let v = store.get("k1").await.unwrap().unwrap();
     assert_eq!(v["hello"], "world");
-
-    // Update.
-    store.update("k1", json!({"foo": "bar"})).await.unwrap();
-    let v = store.get("k1").await.unwrap().unwrap();
-    assert_eq!(v["hello"], "world");
-    assert_eq!(v["foo"], "bar");
 
     // Delete.
     assert!(store.delete("k1").await.unwrap());
@@ -42,13 +51,6 @@ async fn test_list_keys_with_prefix() {
     let mut filtered = store.list_keys(Some("agent1::")).await.unwrap();
     filtered.sort();
     assert_eq!(filtered, vec!["agent1::main::u1", "agent1::main::u2"]);
-}
-
-#[tokio::test]
-async fn test_update_missing_key() {
-    let store = InMemoryThreadStore::new();
-    let result = store.update("missing", json!({})).await;
-    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -74,8 +76,20 @@ async fn default_update_many_atomic_refuses_with_zero_writes() {
         inner: InMemoryThreadStore,
     }
 
+    impl ThreadStoreDomains for NonAtomicStore {
+        fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+            self.inner.run_coordinator()
+        }
+    }
+
     #[async_trait::async_trait]
     impl ThreadStore for NonAtomicStore {
+        async fn terminal_state(
+            &self,
+            thread_id: &str,
+        ) -> Result<Option<ThreadTerminalState>, ThreadStoreError> {
+            self.inner.terminal_state(thread_id).await
+        }
         async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
             self.inner.get(thread_id).await
         }
@@ -90,9 +104,6 @@ async fn default_update_many_atomic_refuses_with_zero_writes() {
         }
         async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
             self.inner.exists(thread_id).await
-        }
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
         }
     }
 

@@ -38,8 +38,21 @@ impl NoScanThreadStore {
     }
 }
 
+impl crate::ThreadStoreDomains for NoScanThreadStore {
+    fn run_coordinator(&self) -> Arc<crate::ThreadRunCoordinator> {
+        self.inner.run_coordinator()
+    }
+}
+
 #[async_trait]
 impl ThreadStore for NoScanThreadStore {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<crate::ThreadTerminalState>, ThreadStoreError> {
+        self.inner.terminal_state(thread_id).await
+    }
+
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         self.inner.get(thread_id).await
     }
@@ -59,10 +72,6 @@ impl ThreadStore for NoScanThreadStore {
 
     async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         self.inner.exists(thread_id).await
-    }
-
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        self.inner.update(thread_id, updates).await
     }
 
     async fn patch(

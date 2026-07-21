@@ -33,7 +33,8 @@ pub mod storage {
         MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore,
     };
     pub use crate::store::{
-        ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError, ThreadTerminalState,
+        ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreDomains, ThreadStoreError,
+        ThreadTerminalState,
     };
     pub use crate::thread_history::{
         BackfillOutcome, DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
@@ -81,10 +82,11 @@ pub use run_admission::{
     RunAdmissionError, ThreadRunAborter, ThreadRunCoordinator, ThreadRunLease,
 };
 pub use runtime_context::build_runtime_context_metadata;
+pub use store::contract as store_contract;
 pub use store::{
-    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError,
-    ThreadStoreExt, ThreadTerminalState, ensure_channel_bindings_unchanged,
-    ensure_update_has_no_protected_fields, validate_channel_bindings,
+    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreDomains,
+    ThreadStoreError, ThreadStoreExt, ThreadTerminalState, ensure_channel_bindings_unchanged,
+    validate_channel_bindings,
 };
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{

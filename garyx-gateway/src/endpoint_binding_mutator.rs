@@ -823,8 +823,33 @@ mod tests {
         }
     }
 
+    impl garyx_router::ThreadStoreDomains for InstrumentedStore {
+        fn run_coordinator(&self) -> Arc<garyx_router::ThreadRunCoordinator> {
+            self.inner.run_coordinator()
+        }
+
+        fn channel_endpoint_projection(
+            &self,
+        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+            // A delegating wrapper shares its inner store's truth source,
+            // projections included.
+            self.inner.channel_endpoint_projection()
+        }
+
+        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+            self.inner.task_projection()
+        }
+    }
+
     #[async_trait]
     impl ThreadStore for InstrumentedStore {
+        async fn terminal_state(
+            &self,
+            thread_id: &str,
+        ) -> Result<Option<garyx_router::ThreadTerminalState>, ThreadStoreError> {
+            self.inner.terminal_state(thread_id).await
+        }
+
         async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
             if self.hidden_reads.lock().unwrap().contains(thread_id) {
                 return Ok(None);
@@ -849,31 +874,12 @@ mod tests {
             self.inner.exists(thread_id).await
         }
 
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            if self.failed_updates.lock().unwrap().contains(thread_id) {
-                return Err(ThreadStoreError::NotFound(thread_id.to_owned()));
-            }
-            self.inner.update(thread_id, updates).await
-        }
-
         async fn patch(
             &self,
             thread_id: &str,
             patch: garyx_router::ThreadRecordPatch,
         ) -> Result<garyx_router::ThreadPatchResult, ThreadStoreError> {
             self.inner.patch(thread_id, patch).await
-        }
-
-        fn channel_endpoint_projection(
-            &self,
-        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
-            // A delegating wrapper shares its inner store's truth source,
-            // projections included.
-            self.inner.channel_endpoint_projection()
-        }
-
-        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
-            self.inner.task_projection()
         }
 
         async fn update_many_atomic(
@@ -895,6 +901,15 @@ mod tests {
             }
             self.inner.update_many_atomic(entries).await
         }
+    }
+
+    /// A patch that touches only an unrelated field — the write shape tests
+    /// use to prove ordinary writes leave endpoint ownership alone.
+    fn unrelated_field_patch() -> garyx_router::ThreadRecordPatch {
+        let mut fields = serde_json::Map::new();
+        fields.insert("unrelated".to_owned(), json!(true));
+        garyx_router::ThreadRecordPatch::new(fields, std::collections::BTreeSet::new())
+            .expect("unrelated patch builds")
     }
 
     fn fixture() -> (
@@ -970,7 +985,7 @@ mod tests {
         assert_eq!(idempotent.previous_thread_id, None);
 
         store
-            .update("thread::old", json!({"unrelated": true}))
+            .patch("thread::old", unrelated_field_patch())
             .await
             .expect("unrelated old-owner update");
         let owner = db
@@ -1208,7 +1223,7 @@ mod tests {
 
         store.hidden_reads.lock().unwrap().clear();
         store
-            .update("thread::old", json!({"unrelated": true}))
+            .patch("thread::old", unrelated_field_patch())
             .await
             .expect("old owner remains writable");
         assert_eq!(

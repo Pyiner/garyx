@@ -199,8 +199,31 @@ impl RouteStoreProbe {
     }
 }
 
+impl garyx_router::ThreadStoreDomains for RouteStoreProbe {
+    fn run_coordinator(&self) -> Arc<garyx_router::ThreadRunCoordinator> {
+        self.inner.run_coordinator()
+    }
+
+    fn channel_endpoint_projection(
+        &self,
+    ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+        self.inner.channel_endpoint_projection()
+    }
+
+    fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+        self.inner.task_projection()
+    }
+}
+
 #[async_trait]
 impl ThreadStore for RouteStoreProbe {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<garyx_router::ThreadTerminalState>, ThreadStoreError> {
+        self.inner.terminal_state(thread_id).await
+    }
+
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         self.get_calls
             .lock()
@@ -226,8 +249,19 @@ impl ThreadStore for RouteStoreProbe {
         self.inner.exists(thread_id).await
     }
 
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        self.inner.update(thread_id, updates).await
+    async fn patch(
+        &self,
+        thread_id: &str,
+        patch: garyx_router::ThreadRecordPatch,
+    ) -> Result<garyx_router::ThreadPatchResult, ThreadStoreError> {
+        self.inner.patch(thread_id, patch).await
+    }
+
+    async fn update_many_atomic(
+        &self,
+        entries: Vec<garyx_router::AtomicRecordMerge>,
+    ) -> Result<(), ThreadStoreError> {
+        self.inner.update_many_atomic(entries).await
     }
 }
 
@@ -5650,8 +5684,18 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
 /// (#TASK-2099 root review finding 2).
 struct FailingThreadStore;
 
+impl garyx_router::ThreadStoreDomains for FailingThreadStore {}
+
 #[async_trait::async_trait]
 impl garyx_router::ThreadStore for FailingThreadStore {
+    async fn terminal_state(
+        &self,
+        _thread_id: &str,
+    ) -> Result<Option<garyx_router::ThreadTerminalState>, garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
     async fn get(&self, _thread_id: &str) -> Result<Option<Value>, garyx_router::ThreadStoreError> {
         Err(garyx_router::ThreadStoreError::Backend(
             "simulated backend failure".to_owned(),
@@ -5680,15 +5724,6 @@ impl garyx_router::ThreadStore for FailingThreadStore {
         ))
     }
     async fn exists(&self, _thread_id: &str) -> Result<bool, garyx_router::ThreadStoreError> {
-        Err(garyx_router::ThreadStoreError::Backend(
-            "simulated backend failure".to_owned(),
-        ))
-    }
-    async fn update(
-        &self,
-        _thread_id: &str,
-        _updates: Value,
-    ) -> Result<(), garyx_router::ThreadStoreError> {
         Err(garyx_router::ThreadStoreError::Backend(
             "simulated backend failure".to_owned(),
         ))
@@ -5782,8 +5817,21 @@ impl ToggleFailingThreadStore {
     }
 }
 
+impl garyx_router::ThreadStoreDomains for ToggleFailingThreadStore {
+    fn run_coordinator(&self) -> Arc<garyx_router::ThreadRunCoordinator> {
+        self.inner.run_coordinator()
+    }
+}
+
 #[async_trait::async_trait]
 impl garyx_router::ThreadStore for ToggleFailingThreadStore {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<garyx_router::ThreadTerminalState>, garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.terminal_state(thread_id).await
+    }
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, garyx_router::ThreadStoreError> {
         self.fail()?;
         if self.failing_gets.load(std::sync::atomic::Ordering::SeqCst) {
@@ -5815,14 +5863,6 @@ impl garyx_router::ThreadStore for ToggleFailingThreadStore {
     async fn exists(&self, thread_id: &str) -> Result<bool, garyx_router::ThreadStoreError> {
         self.fail()?;
         self.inner.exists(thread_id).await
-    }
-    async fn update(
-        &self,
-        thread_id: &str,
-        updates: Value,
-    ) -> Result<(), garyx_router::ThreadStoreError> {
-        self.fail()?;
-        self.inner.update(thread_id, updates).await
     }
 }
 

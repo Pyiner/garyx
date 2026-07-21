@@ -294,8 +294,21 @@ impl FailNthGetStore {
     }
 }
 
+impl crate::ThreadStoreDomains for FailNthGetStore {
+    fn run_coordinator(&self) -> Arc<crate::ThreadRunCoordinator> {
+        self.inner.run_coordinator()
+    }
+}
+
 #[async_trait]
 impl ThreadStore for FailNthGetStore {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<crate::ThreadTerminalState>, crate::ThreadStoreError> {
+        self.inner.terminal_state(thread_id).await
+    }
+
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, crate::ThreadStoreError> {
         let call = self.get_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_on_get.load(Ordering::SeqCst) == call {
@@ -325,9 +338,6 @@ impl ThreadStore for FailNthGetStore {
         self.inner.exists(thread_id).await
     }
 
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), crate::ThreadStoreError> {
-        self.inner.update(thread_id, updates).await
-    }
     async fn patch(
         &self,
         thread_id: &str,
@@ -337,8 +347,24 @@ impl ThreadStore for FailNthGetStore {
     }
 }
 
+impl crate::ThreadStoreDomains for StoreWithTaskProjection {
+    fn run_coordinator(&self) -> Arc<crate::ThreadRunCoordinator> {
+        self.inner.run_coordinator()
+    }
+
+    fn task_projection(&self) -> Option<Arc<dyn TaskProjectionReader>> {
+        Some(self.reader.clone())
+    }
+}
+
 #[async_trait]
 impl ThreadStore for StoreWithTaskProjection {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<crate::ThreadTerminalState>, crate::ThreadStoreError> {
+        self.inner.terminal_state(thread_id).await
+    }
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, crate::ThreadStoreError> {
         self.inner.get(thread_id).await
     }
@@ -357,18 +383,12 @@ impl ThreadStore for StoreWithTaskProjection {
     async fn exists(&self, thread_id: &str) -> Result<bool, crate::ThreadStoreError> {
         self.inner.exists(thread_id).await
     }
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), crate::ThreadStoreError> {
-        self.inner.update(thread_id, updates).await
-    }
     async fn patch(
         &self,
         thread_id: &str,
         patch: crate::ThreadRecordPatch,
     ) -> Result<crate::ThreadPatchResult, crate::ThreadStoreError> {
         self.inner.patch(thread_id, patch).await
-    }
-    fn task_projection(&self) -> Option<Arc<dyn TaskProjectionReader>> {
-        Some(self.reader.clone())
     }
 }
 

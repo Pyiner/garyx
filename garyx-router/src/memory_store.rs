@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 
 use crate::run_admission::ThreadRunCoordinator;
 use crate::store::{
-    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError,
-    ThreadTerminalState, ensure_channel_bindings_unchanged, ensure_update_has_no_protected_fields,
+    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreDomains,
+    ThreadStoreError, ThreadTerminalState, ensure_channel_bindings_unchanged,
 };
 
 #[derive(Default)]
@@ -57,12 +57,14 @@ impl Default for InMemoryThreadStore {
     }
 }
 
-#[async_trait]
-impl ThreadStore for InMemoryThreadStore {
+impl ThreadStoreDomains for InMemoryThreadStore {
     fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
         self.run_coordinator.clone()
     }
+}
 
+#[async_trait]
+impl ThreadStore for InMemoryThreadStore {
     async fn terminal_state(
         &self,
         thread_id: &str,
@@ -89,8 +91,6 @@ impl ThreadStore for InMemoryThreadStore {
             ensure_channel_bindings_unchanged(thread_id, current, &data)?;
         }
         state.records.insert(thread_id.to_owned(), data);
-        drop(state);
-        self.run_coordinator.record_written(thread_id);
         Ok(())
     }
 
@@ -139,25 +139,6 @@ impl ThreadStore for InMemoryThreadStore {
         Ok(self.store.read().await.records.contains_key(thread_id))
     }
 
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        ensure_update_has_no_protected_fields(thread_id, &updates)?;
-        let mut guard = self.store.write().await;
-        if guard.terminal_states.contains_key(thread_id) {
-            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
-        }
-        let entry = guard
-            .records
-            .get_mut(thread_id)
-            .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
-
-        if let (Some(existing), Some(new_fields)) = (entry.as_object_mut(), updates.as_object()) {
-            for (k, v) in new_fields {
-                existing.insert(k.clone(), v.clone());
-            }
-        }
-        Ok(())
-    }
-
     async fn patch(
         &self,
         thread_id: &str,
@@ -171,10 +152,7 @@ impl ThreadStore for InMemoryThreadStore {
             .records
             .get_mut(thread_id)
             .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
-        let changed = patch.apply_to(record)?;
-        drop(guard);
-        if changed {
-            self.run_coordinator.record_written(thread_id);
+        if patch.apply_to(record)? {
             Ok(ThreadPatchResult::Applied)
         } else {
             Ok(ThreadPatchResult::Unchanged)

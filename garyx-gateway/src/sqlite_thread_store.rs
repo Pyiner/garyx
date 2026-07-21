@@ -15,9 +15,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use garyx_router::{
-    ThreadPatchResult, ThreadRecordPatch, ThreadRunCoordinator, ThreadStore, ThreadStoreError,
-    ThreadTerminalState, ThreadTranscriptStore, ensure_channel_bindings_unchanged,
-    ensure_update_has_no_protected_fields, is_thread_key,
+    ThreadPatchResult, ThreadRecordPatch, ThreadRunCoordinator, ThreadStore, ThreadStoreDomains,
+    ThreadStoreError, ThreadTerminalState, ThreadTranscriptStore,
+    ensure_channel_bindings_unchanged, is_thread_key,
 };
 use serde_json::Value;
 
@@ -34,7 +34,7 @@ use crate::thread_record_normalization::strip_retired_recent_exclusion_fields;
 use garyx_router::is_hidden_thread_value;
 
 /// Remove fields that must never reach the truth table. This is the common
-/// set/update/atomic-merge choke point, so legacy clients cannot recreate
+/// set/patch/atomic-merge choke point, so legacy clients cannot recreate
 /// retired canonical state through a different write path.
 pub(crate) fn strip_retired_record_fields(data: &mut Value) {
     if let Some(object) = data.as_object_mut() {
@@ -407,12 +407,24 @@ impl SqliteThreadStore {
     }
 }
 
-#[async_trait]
-impl ThreadStore for SqliteThreadStore {
+impl ThreadStoreDomains for SqliteThreadStore {
     fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
         self.run_coordinator.clone()
     }
 
+    fn channel_endpoint_projection(
+        &self,
+    ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+        Some(self.endpoint_projection.clone())
+    }
+
+    fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+        Some(self.task_projection.clone())
+    }
+}
+
+#[async_trait]
+impl ThreadStore for SqliteThreadStore {
     async fn terminal_state(
         &self,
         thread_id: &str,
@@ -453,9 +465,7 @@ impl ThreadStore for SqliteThreadStore {
         // check runs inside the record-write transaction itself, so a
         // racing archive can never be overtaken (#TASK-2099; rejection
         // semantics from review #TASK-1901).
-        self.write_record(thread_id, data).await?;
-        self.run_coordinator.record_written(thread_id);
-        Ok(())
+        self.write_record(thread_id, data).await
     }
 
     async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
@@ -512,38 +522,6 @@ impl ThreadStore for SqliteThreadStore {
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
-    fn channel_endpoint_projection(
-        &self,
-    ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
-        Some(self.endpoint_projection.clone())
-    }
-
-    fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
-        Some(self.task_projection.clone())
-    }
-
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        ensure_update_has_no_protected_fields(thread_id, &updates)?;
-        let lock = self.key_lock(thread_id);
-        let _guard = lock.lock().await;
-        // Read-merge-write under the per-key lock: equivalent to an atomic
-        // top-level merge because no other writer for this key can
-        // interleave, and the write itself is a single transaction.
-        if self.terminal_state(thread_id).await?.is_some() {
-            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
-        }
-        let mut data = self
-            .get(thread_id)
-            .await?
-            .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
-        if let (Some(target), Some(updates)) = (data.as_object_mut(), updates.as_object()) {
-            for (key, value) in updates {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self.write_record(thread_id, data).await
-    }
-
     async fn patch(
         &self,
         thread_id: &str,
@@ -562,7 +540,6 @@ impl ThreadStore for SqliteThreadStore {
             return Ok(ThreadPatchResult::Unchanged);
         }
         self.write_record(thread_id, data).await?;
-        self.run_coordinator.record_written(thread_id);
         Ok(ThreadPatchResult::Applied)
     }
 
@@ -655,12 +632,13 @@ pub fn assemble_sqlite_thread_store(
     })
 }
 
-/// Contract suite run against every read/write ThreadStore implementation
-/// (InMemory / Sqlite on memory and file databases): get/set/update/delete/
-/// list_keys/exists must agree (#TASK-1864 batch 2).
+/// The SQLite backend runs the executable store contract published by
+/// garyx-router (the trait crate; the in-memory reference backend runs the
+/// same suite there), plus SQLite-specific truth-table behavior
+/// (#TASK-1864 batch 2).
 #[cfg(test)]
 mod contract_tests {
-    use garyx_router::InMemoryThreadStore;
+    use garyx_router::store_contract;
     use serde_json::json;
 
     use super::*;
@@ -674,200 +652,11 @@ mod contract_tests {
         )
     }
 
-    async fn run_contract(store: &dyn ThreadStore) {
-        // Missing key: absent, not an error.
-        assert_eq!(store.get("thread::missing").await.expect("get"), None);
-        assert!(!store.exists("thread::missing").await.expect("exists"));
-        assert!(!store.delete("thread::missing").await.expect("delete"));
-        assert!(
-            store
-                .update("thread::missing", json!({"label": "x"}))
-                .await
-                .is_err(),
-            "update of a missing thread must error"
-        );
-
-        // Round trip.
-        store
-            .set(
-                "thread::alpha",
-                json!({"thread_id": "thread::alpha", "label": "first"}),
-            )
-            .await
-            .expect("set");
-        let read = store
-            .get("thread::alpha")
-            .await
-            .expect("get")
-            .expect("read back");
-        assert_eq!(read["label"], "first");
-        assert!(store.exists("thread::alpha").await.expect("exists"));
-
-        // Overwrite replaces the whole value.
-        store
-            .set(
-                "thread::alpha",
-                json!({"thread_id": "thread::alpha", "generation": 2}),
-            )
-            .await
-            .expect("set v2");
-        let read = store
-            .get("thread::alpha")
-            .await
-            .expect("get")
-            .expect("read v2");
-        assert_eq!(read["generation"], 2);
-        assert!(read.get("label").is_none(), "set is a full replace");
-
-        // Update merges top-level keys.
-        store
-            .update("thread::alpha", json!({"label": "merged", "extra": true}))
-            .await
-            .expect("update");
-        let read = store
-            .get("thread::alpha")
-            .await
-            .expect("get")
-            .expect("read merged");
-        assert_eq!(read["generation"], 2);
-        assert_eq!(read["label"], "merged");
-        assert_eq!(read["extra"], true);
-
-        // Non-thread keys are ordinary records.
-        store
-            .set("meta::known_channel_endpoints", json!({"endpoints": []}))
-            .await
-            .expect("set registry");
-        store
-            .set("cron::job-1", json!({"schedule": "daily"}))
-            .await
-            .expect("set cron");
-
-        // list_keys: all + prefix.
-        let mut all = store.list_keys(None).await.expect("list");
-        all.sort();
-        assert_eq!(
-            all,
-            vec![
-                "cron::job-1".to_owned(),
-                "meta::known_channel_endpoints".to_owned(),
-                "thread::alpha".to_owned(),
-            ]
-        );
-        let mut threads = store
-            .list_keys(Some("thread::"))
-            .await
-            .expect("list prefix");
-        threads.sort();
-        assert_eq!(threads, vec!["thread::alpha".to_owned()]);
-
-        // Delete.
-        assert!(store.delete("thread::alpha").await.expect("delete"));
-        assert!(!store.delete("thread::alpha").await.expect("re-delete"));
-        assert_eq!(store.get("thread::alpha").await.expect("get"), None);
-        assert!(!store.exists("thread::alpha").await.expect("exists"));
-        assert_eq!(
-            store.terminal_state("thread::alpha").await.unwrap(),
-            Some(ThreadTerminalState::Deleted)
-        );
-        assert!(matches!(
-            store
-                .set("thread::alpha", json!({"thread_id": "thread::alpha"}))
-                .await,
-            Err(ThreadStoreError::Archived(_))
-        ));
-        assert!(matches!(
-            store
-                .update_many_atomic(vec![garyx_router::AtomicRecordMerge {
-                    thread_id: "thread::alpha".to_owned(),
-                    fields: json!({"label": "resurrected"}),
-                    create_if_missing: false,
-                }])
-                .await,
-            Err(ThreadStoreError::Archived(_))
-        ));
-    }
-
-    async fn run_patch_and_protected_field_contract(store: &dyn ThreadStore) {
-        let thread_id = "thread::patch-contract";
-        let binding = json!({
-            "channel": "telegram",
-            "account_id": "main",
-            "binding_key": "1000000001",
-            "chat_id": "1000000001",
-            "last_delivery_at": "2026-07-20T00:00:00Z"
-        });
-        store
-            .set(
-                thread_id,
-                json!({
-                    "thread_id": thread_id,
-                    "label": "before",
-                    "history": {"message_count": 1},
-                    "channel_bindings": [binding]
-                }),
-            )
-            .await
-            .unwrap();
-
-        let observed = store.get(thread_id).await.unwrap().unwrap();
-        let mut desired = observed.clone();
-        desired["label"] = json!("after");
-        let patch = ThreadRecordPatch::from_diff(&observed, &desired, &["label"]).unwrap();
-        assert_eq!(
-            store.patch(thread_id, patch).await.unwrap(),
-            ThreadPatchResult::Applied
-        );
-        let patched = store.get(thread_id).await.unwrap().unwrap();
-        assert_eq!(patched["label"], "after");
-        assert_eq!(patched["history"]["message_count"], 1);
-        assert_eq!(patched["channel_bindings"], observed["channel_bindings"]);
-
-        let unchanged = ThreadRecordPatch::from_diff(&patched, &patched, &["label"]).unwrap();
-        assert_eq!(
-            store.patch(thread_id, unchanged).await.unwrap(),
-            ThreadPatchResult::Unchanged
-        );
-        assert!(matches!(
-            store
-                .update(thread_id, json!({"channel_bindings": []}))
-                .await,
-            Err(ThreadStoreError::ProtectedFieldConflict { .. })
-        ));
-
-        let mut changed_binding = patched.clone();
-        changed_binding["channel_bindings"][0]["last_delivery_at"] = json!("2026-07-20T00:01:00Z");
-        assert!(matches!(
-            store.set(thread_id, changed_binding).await,
-            Err(ThreadStoreError::ProtectedFieldConflict { .. })
-        ));
-
-        let mut illegal_patch = serde_json::Map::new();
-        illegal_patch.insert("channel_bindings".to_owned(), json!([]));
-        assert!(matches!(
-            ThreadRecordPatch::new(illegal_patch, std::collections::BTreeSet::new()),
-            Err(ThreadStoreError::InvalidPatch(_))
-        ));
-
-        let mut unexpected = patched.clone();
-        unexpected["history"]["message_count"] = json!(2);
-        assert!(matches!(
-            ThreadRecordPatch::from_diff(&patched, &unexpected, &["label"]),
-            Err(ThreadStoreError::InvalidPatch(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn in_memory_store_satisfies_the_contract() {
-        let store = InMemoryThreadStore::new();
-        run_contract(&store).await;
-    }
-
     #[tokio::test]
     async fn sqlite_store_satisfies_the_contract_on_a_memory_database() {
         let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
         let store = sqlite_store(garyx_db);
-        run_contract(&store).await;
+        store_contract::run_thread_store_contract(&store).await;
     }
 
     #[tokio::test]
@@ -877,18 +666,13 @@ mod contract_tests {
         let garyx_db =
             Arc::new(GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"));
         let store = sqlite_store(garyx_db);
-        run_contract(&store).await;
-    }
-
-    #[tokio::test]
-    async fn in_memory_store_protects_endpoint_fields_and_applies_patches() {
-        run_patch_and_protected_field_contract(&InMemoryThreadStore::new()).await;
+        store_contract::run_thread_store_contract(&store).await;
     }
 
     #[tokio::test]
     async fn sqlite_store_protects_endpoint_fields_and_applies_patches() {
         let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
-        run_patch_and_protected_field_contract(&sqlite_store(garyx_db)).await;
+        store_contract::run_patch_and_protected_field_contract(&sqlite_store(garyx_db)).await;
     }
 
     #[tokio::test]
@@ -1000,21 +784,25 @@ mod contract_tests {
         let created = store.get(thread_id).await.unwrap().unwrap();
         assert_retired_recent_exclusion_paths_absent(&created);
 
+        let mut legacy_patch_fields = serde_json::Map::new();
+        legacy_patch_fields.insert("exclude_from_recent".to_owned(), json!(true));
+        legacy_patch_fields.insert("excludeFromRecent".to_owned(), json!(true));
+        legacy_patch_fields.insert(
+            "metadata".to_owned(),
+            json!({
+                "source": "legacy-client",
+                "exclude_from_recent": true,
+                "excludeFromRecent": true
+            }),
+        );
         store
-            .update(
+            .patch(
                 thread_id,
-                json!({
-                    "exclude_from_recent": true,
-                    "excludeFromRecent": true,
-                    "metadata": {
-                        "source": "legacy-client",
-                        "exclude_from_recent": true,
-                        "excludeFromRecent": true
-                    }
-                }),
+                ThreadRecordPatch::new(legacy_patch_fields, std::collections::BTreeSet::new())
+                    .expect("legacy patch builds"),
             )
             .await
-            .expect("legacy update payload");
+            .expect("legacy patch payload");
         let updated = store.get(thread_id).await.unwrap().unwrap();
         assert_retired_recent_exclusion_paths_absent(&updated);
         assert_eq!(updated["metadata"]["source"], "legacy-client");

@@ -14,10 +14,29 @@ struct MoveEndpointAfterReadStore {
     moved: AtomicBool,
 }
 
-#[async_trait]
-impl ThreadStore for MoveEndpointAfterReadStore {
+impl garyx_router::ThreadStoreDomains for MoveEndpointAfterReadStore {
     fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
         self.inner.run_coordinator()
+    }
+
+    fn channel_endpoint_projection(
+        &self,
+    ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+        self.inner.channel_endpoint_projection()
+    }
+
+    fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+        self.inner.task_projection()
+    }
+}
+
+#[async_trait]
+impl ThreadStore for MoveEndpointAfterReadStore {
+    async fn terminal_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<garyx_router::ThreadTerminalState>, ThreadStoreError> {
+        self.inner.terminal_state(thread_id).await
     }
 
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
@@ -49,10 +68,6 @@ impl ThreadStore for MoveEndpointAfterReadStore {
 
     async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         self.inner.exists(thread_id).await
-    }
-
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        self.inner.update(thread_id, updates).await
     }
 
     async fn patch(

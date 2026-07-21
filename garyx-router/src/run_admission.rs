@@ -574,11 +574,6 @@ impl ThreadRunCoordinator {
         matched
     }
 
-    /// A successful ordinary write cannot clear a durable terminal tombstone.
-    /// The hook remains during the step-1 migration so existing stores compile;
-    /// it intentionally performs no terminal-cache mutation.
-    pub fn record_written(&self, _thread_id: &str) {}
-
     #[cfg(test)]
     fn force_evict_for_test(&self, thread_id: &str) {
         self.entries
@@ -945,7 +940,7 @@ impl AdmittedRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AtomicRecordMerge, InMemoryThreadStore, ThreadStoreError};
+    use crate::{AtomicRecordMerge, InMemoryThreadStore, ThreadStoreDomains, ThreadStoreError};
     use garyx_models::provider::ProviderType;
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
@@ -1077,12 +1072,14 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl ThreadStore for SequencedTerminalStore {
+    impl ThreadStoreDomains for SequencedTerminalStore {
         fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
             self.inner.run_coordinator()
         }
+    }
 
+    #[async_trait]
+    impl ThreadStore for SequencedTerminalStore {
         async fn terminal_state(
             &self,
             _thread_id: &str,
@@ -1112,9 +1109,6 @@ mod tests {
         }
         async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
             self.inner.exists(thread_id).await
-        }
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
         }
         async fn update_many_atomic(
             &self,

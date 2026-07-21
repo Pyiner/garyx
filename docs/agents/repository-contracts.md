@@ -35,9 +35,17 @@ reinterpreted in feature code.
   backfill, prune, reconcile, or read-time repair layer, and none should
   be reintroduced. If a projection lacks the column a query needs, add the
   column and its write-path derivation.
-- `ThreadStore::get/set/update/delete/exists` are point operations on one
+- `ThreadStore::get/set/patch/delete/exists` are point operations on one
   known key; `list_keys` is a key listing. Do not build condition queries
   by listing keys and fetching bodies — that is a projection's job.
+- `ThreadStore` write shapes are exactly `set` (full replace), `patch`
+  (validated `ThreadRecordPatch` witness), and `update_many_atomic` (the
+  privileged all-or-nothing batch — the only shape allowed to change
+  `channel_bindings`). There is no raw top-level merge method; do not
+  reintroduce one. Store-owned runtime domains (run coordinator, projection
+  read seams) live on the `ThreadStoreDomains` supertrait, and
+  `garyx_router::store_contract` is the executable contract every backend
+  and delegating wrapper must run from its tests.
 - The only full walk over the legacy JSON archive is the one-shot boot
   import into `thread_records` (and it streams one record at a time). The
   archive is not written by any primary path. After a successful import its
