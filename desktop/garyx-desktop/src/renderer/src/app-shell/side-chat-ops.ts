@@ -95,18 +95,12 @@ export async function ensureSideChatThread(
         }),
         (response) => response.state,
       );
-      // `created.thread` is the authoritative summary (provenance included)
-      // for a hidden child that never appears in the regular thread list;
-      // seed it into the sessions cache so the side chat renders its
-      // inherited workspace from the first frame, not after history lands.
-      setDesktopState({
-        ...created.state,
-        sessions: created.state.sessions.some(
-          (session) => session.id === created.thread.id,
-        )
-          ? created.state.sessions
-          : [...created.state.sessions, created.thread],
-      });
+      // The main-process snapshot already carries every retained hidden
+      // session for the current scope (the dedicated hidden-session store
+      // folds them in), so it is committed AS-IS: spreading it would strip
+      // the ingress envelope and let a stale-gateway state slip past the
+      // identity checks.
+      setDesktopState(created.state);
       mirror.updateMessagesByThread((current: MessageMap) => ({
         ...current,
         [created.thread.id]: current[created.thread.id] || [],

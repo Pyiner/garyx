@@ -52,30 +52,40 @@ test("snapshot is cached by reference and rebuilt only after writes", () => {
 
 test("rememberThread persists to sessionStorage; restorePersisted reads through", () => {
   const store = new SideChatSessions();
+  store.gatewayScope = "http://gateway-a";
   store.rememberThread(SOURCE, SIDE);
+  // Bindings are gateway-partitioned: thread ids are only unique per
+  // gateway, so the storage key carries the scope.
   assert.equal(
-    storageBacking.get(`garyx.side-tools.side-chat-thread.${SOURCE}`),
+    storageBacking.get(`garyx.side-tools.side-chat-thread.http://gateway-a.${SOURCE}`),
     SIDE,
   );
 
-  // A fresh store (same app session) adopts the persisted binding.
+  // A fresh store on the SAME gateway adopts the persisted binding.
   const fresh = new SideChatSessions();
+  fresh.gatewayScope = "http://gateway-a";
   assert.equal(fresh.threadFor(SOURCE), null);
   assert.equal(fresh.restorePersisted(SOURCE), SIDE);
   assert.equal(fresh.threadFor(SOURCE), SIDE);
   // In-memory binding wins over storage on subsequent calls.
   assert.equal(fresh.restorePersisted(SOURCE), SIDE);
+
+  // A different gateway never adopts gateway A's binding.
+  const otherGateway = new SideChatSessions();
+  otherGateway.gatewayScope = "http://gateway-b";
+  assert.equal(otherGateway.restorePersisted(SOURCE), null);
 });
 
 test("forgetThread drops only the expected binding and keeps storage", () => {
   const store = new SideChatSessions();
+  store.gatewayScope = "http://gateway-a";
   store.rememberThread(SOURCE, SIDE);
   store.forgetThread(SOURCE, "thread::other");
   assert.equal(store.threadFor(SOURCE), SIDE, "mismatched id is a no-op");
   store.forgetThread(SOURCE, SIDE);
   assert.equal(store.threadFor(SOURCE), null);
   assert.equal(
-    storageBacking.get(`garyx.side-tools.side-chat-thread.${SOURCE}`),
+    storageBacking.get(`garyx.side-tools.side-chat-thread.http://gateway-a.${SOURCE}`),
     SIDE,
     "storage entry stays (legacy catch only cleared memory)",
   );

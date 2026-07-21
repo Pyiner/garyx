@@ -4,7 +4,13 @@ import { dirname, join, basename } from 'node:path';
 
 import { app } from 'electron';
 
-import { mergeRetainedHiddenSessions, stateWithCreatedThread } from '../shared/desktop-state';
+import { mergeRetainedHiddenSessions } from '../shared/desktop-state';
+import {
+  ensureHiddenSessionsLoaded,
+  forgetHiddenSession,
+  listHiddenSessions,
+  rememberHiddenSession,
+} from './hidden-session-store';
 import {
   DEFAULT_DESKTOP_SETTINGS,
   DEFAULT_SESSION_TITLE,
@@ -552,31 +558,6 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
   };
 }
 
-/**
- * The single mutation owner for the persisted desktop state. Every
- * read-modify-write of the on-disk state flows through this queue: the
- * mutator reads the LATEST persisted state inside the critical section, so
- * concurrent mutations (parallel side-chat creations, lifecycle removals)
- * serialize instead of racing rename() or dropping each other's writes.
- * Returning null skips the write (e.g. a stale-gateway guard).
- */
-let persistedStateMutationChain: Promise<void> = Promise.resolve();
-
-function mutatePersistedState(
-  mutate: (local: DesktopState) => DesktopState | null,
-): Promise<void> {
-  const run = persistedStateMutationChain.then(async () => {
-    const local = await getLocalDesktopState();
-    const next = mutate(local);
-    if (next) {
-      await writeState(next);
-    }
-  });
-  // The chain must survive a failed mutation; the caller still sees it.
-  persistedStateMutationChain = run.catch(() => {});
-  return run;
-}
-
 async function writeState(state: DesktopState): Promise<void> {
   const filePath = stateFilePath();
   await mkdir(dirname(filePath), { recursive: true });
@@ -1080,6 +1061,9 @@ async function mergeRemoteDesktopState(
 
   const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaceCatalog.workspaces);
   const gatewayHome = remoteWorkspaceCatalog.gatewayHome;
+  // Hidden session summaries come from their dedicated per-scope owner.
+  await ensureHiddenSessionsLoaded();
+  const hydrationScope = normalizeGatewayUrl(localState.settings.gatewayUrl || '');
 
   let threads = remoteThreads.map((thread) => ({
     ...thread,
@@ -1143,6 +1127,10 @@ async function mergeRemoteDesktopState(
     workspaces,
     gatewayHome: gatewayHome ?? localState.gatewayHome,
     threads,
+    sessions: mergeRetainedHiddenSessions(
+      threads,
+      listHiddenSessions(hydrationScope),
+    ),
     pinnedThreadIds,
     pinsRevision: pinOrder.state.highestObservedRevision,
     endpoints,
@@ -1711,27 +1699,29 @@ export async function createDesktopThread(input?: {
   }
 
   // Hidden session threads (side-chat children) never appear in the
-  // fetched thread list, and hydration starts from the PERSISTED local
-  // state — not the remembered snapshot — so the durable owner must be the
-  // persisted state: fold the authoritative create summary into it through
-  // the serialized mutation owner. The fold is gated on the creating
-  // gateway scope: a late response from a previous gateway must not
-  // pollute the newly selected gateway's persisted state.
+  // fetched thread list; the dedicated hidden-session store is their
+  // durable owner. Entries are partitioned by the CREATING gateway scope,
+  // so a late create response from a previous gateway lands in that
+  // gateway's partition and never pollutes the newly selected one.
   const creatingGatewayScope = normalizeGatewayUrl(current.settings.gatewayUrl || '');
   if (!state.threads.some((entry) => entry.id === thread.id)) {
-    await mutatePersistedState((local) => {
-      const localScope = normalizeGatewayUrl(local.settings.gatewayUrl || '');
-      if (localScope !== creatingGatewayScope) {
-        return null;
-      }
-      return withSortedEntities(stateWithCreatedThread(local, thread));
-    });
+    await rememberHiddenSession(creatingGatewayScope, thread);
   }
   const currentScope = normalizeGatewayUrl(
     (await getDesktopState()).settings.gatewayUrl || '',
   );
   if (currentScope === creatingGatewayScope) {
-    state = rememberHydratedDesktopState(stateWithCreatedThread(state, thread));
+    // The returned snapshot carries every retained hidden session for this
+    // scope (both children survive concurrent creations).
+    state = rememberHydratedDesktopState(
+      withSortedEntities({
+        ...state,
+        sessions: mergeRetainedHiddenSessions(
+          state.threads,
+          listHiddenSessions(creatingGatewayScope),
+        ),
+      }),
+    );
   }
 
   return {
@@ -1936,10 +1926,13 @@ export async function deleteDesktopThread(input: {
       ? { ...result, value: null }
       : result;
   }
-  // The persisted owner must drop the thread too, or a retained hidden
-  // session would resurrect on the next hydration.
-  await mutatePersistedState((local) =>
-    withSortedEntities(desktopStateWithoutThread(local, input.threadId)),
+  // The hidden-session owner must drop the thread too, or a retained
+  // hidden session would resurrect on the next hydration. Scoped to the
+  // gateway this operation ran against: a late lifecycle result from a
+  // previous gateway must not delete an equal-id thread on the new one.
+  await forgetHiddenSession(
+    normalizeGatewayUrl(current.settings.gatewayUrl || ''),
+    input.threadId,
   );
   return {
     ...result,
@@ -1968,10 +1961,13 @@ export async function archiveDesktopThread(input: {
       ? { ...result, value: null }
       : result;
   }
-  // The persisted owner must drop the thread too, or a retained hidden
-  // session would resurrect on the next hydration.
-  await mutatePersistedState((local) =>
-    withSortedEntities(desktopStateWithoutThread(local, input.threadId)),
+  // The hidden-session owner must drop the thread too, or a retained
+  // hidden session would resurrect on the next hydration. Scoped to the
+  // gateway this operation ran against: a late lifecycle result from a
+  // previous gateway must not delete an equal-id thread on the new one.
+  await forgetHiddenSession(
+    normalizeGatewayUrl(current.settings.gatewayUrl || ''),
+    input.threadId,
   );
   return {
     ...result,

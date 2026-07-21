@@ -36,31 +36,44 @@ export function emptySideComposerDraft(): SideComposerDraft {
   };
 }
 
-function sideChatThreadStorageKey(sourceThreadId: string): string {
-  return `garyx.side-tools.side-chat-thread.${sourceThreadId}`;
+function sideChatThreadStorageKey(
+  gatewayScope: string,
+  sourceThreadId: string,
+): string {
+  // Partitioned by gateway scope: thread ids are only unique per gateway,
+  // so a binding persisted under gateway A must never be adopted on B.
+  return `garyx.side-tools.side-chat-thread.${gatewayScope}.${sourceThreadId}`;
 }
 
-function readPersistedSideChatThreadId(sourceThreadId: string): string | null {
+function readPersistedSideChatThreadId(
+  gatewayScope: string,
+  sourceThreadId: string,
+): string | null {
   if (typeof window === "undefined") {
     return null;
   }
   try {
     return (
-      window.sessionStorage.getItem(sideChatThreadStorageKey(sourceThreadId)) ||
-      null
+      window.sessionStorage.getItem(
+        sideChatThreadStorageKey(gatewayScope, sourceThreadId),
+      ) || null
     );
   } catch {
     return null;
   }
 }
 
-function persistSideChatThreadId(sourceThreadId: string, sideThreadId: string) {
+function persistSideChatThreadId(
+  gatewayScope: string,
+  sourceThreadId: string,
+  sideThreadId: string,
+) {
   if (typeof window === "undefined") {
     return;
   }
   try {
     window.sessionStorage.setItem(
-      sideChatThreadStorageKey(sourceThreadId),
+      sideChatThreadStorageKey(gatewayScope, sourceThreadId),
       sideThreadId,
     );
   } catch {
@@ -80,6 +93,8 @@ export interface SideChatSessionsSnapshot {
 }
 
 export class SideChatSessions {
+  /** Normalized gateway URL partitioning the persisted bindings. */
+  gatewayScope = "";
   private threadBySource: Record<string, string> = {};
   private composerBySource: Record<string, SideComposerDraft> = {};
   private creatingBySource: Record<string, boolean> = {};
@@ -171,7 +186,7 @@ export class SideChatSessions {
       ...this.threadBySource,
       [sourceThreadId]: sideThreadId,
     };
-    persistSideChatThreadId(sourceThreadId, sideThreadId);
+    persistSideChatThreadId(this.gatewayScope, sourceThreadId, sideThreadId);
     this.syncShadows();
     this.commit();
   }
@@ -185,7 +200,10 @@ export class SideChatSessions {
     if (existing) {
       return existing;
     }
-    const persisted = readPersistedSideChatThreadId(sourceThreadId);
+    const persisted = readPersistedSideChatThreadId(
+      this.gatewayScope,
+      sourceThreadId,
+    );
     if (!persisted) {
       return null;
     }

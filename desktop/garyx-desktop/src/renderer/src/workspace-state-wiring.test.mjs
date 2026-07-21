@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 // Production-wiring contracts for the workspace state machine. The pure
 // helpers have their own behavior tests; these assertions make the PRODUCTION
-// call sites load-bearing — reverting a write point to the old behavior
+// call sites load-bearing -- reverting a write point to the old behavior
 // fails here even though the helper tests stay green.
 
 const storeSource = readFileSync(
@@ -15,14 +15,21 @@ const appShellSource = readFileSync(
   new URL('./app-shell/AppShell.tsx', import.meta.url),
   'utf8',
 );
+const hiddenStoreSource = readFileSync(
+  new URL('../../main/hidden-session-store.ts', import.meta.url),
+  'utf8',
+);
+const sideChatOpsSource = readFileSync(
+  new URL('./app-shell/side-chat-ops.ts', import.meta.url),
+  'utf8',
+);
 
 test('hidden-session retention is wired at every sessions write point', () => {
-  // Both production writers of `sessions` go through the retaining merge;
-  // the old blind mirror (`sessions: threads`) must not come back.
-  assert.equal(
-    (storeSource.match(/sessions: mergeRetainedHiddenSessions\(/g) || []).length,
-    2,
-    'withSortedEntities and normalizeState both retain hidden sessions',
+  // Production writers of `sessions` go through the retaining merge; the
+  // old blind mirror (`sessions: threads`) must not come back.
+  assert.ok(
+    (storeSource.match(/sessions: mergeRetainedHiddenSessions\(/g) || []).length >= 2,
+    'sessions write points retain hidden sessions',
   );
   assert.doesNotMatch(
     storeSource,
@@ -31,52 +38,59 @@ test('hidden-session retention is wired at every sessions write point', () => {
   );
 });
 
-test('thread creation folds the authoritative summary into the persisted main state', () => {
-  // Hydration starts from the PERSISTED local state, so the durable
-  // cross-process owner is the persisted state — the fold must be written
-  // through writeState, not merely remembered or returned (renderer-only
-  // seeds and remembered-only folds both die on the next full refresh).
+test('hidden sessions have one dedicated scoped owner', () => {
+  // Its own file + serialized mutations: the main state file's many
+  // independent writers can never race this domain.
+  assert.match(hiddenStoreSource, /garyx-hidden-sessions\.json/);
+  assert.match(
+    hiddenStoreSource,
+    /let mutationChain: Promise<void> = Promise\.resolve\(\);/,
+  );
+  assert.match(
+    hiddenStoreSource,
+    /tmp-\$\{process\.pid\}-\$\{Date\.now\(\)\.toString\(36\)\}-\$\{randomUUID\(\)/,
+    'atomic writes use collision-free temp paths',
+  );
+
+  // Creation folds into the CREATING gateway partition; the returned
+  // snapshot carries every retained hidden session for that scope.
   assert.match(
     storeSource,
-    /await mutatePersistedState\(\(local\) => \{[\s\S]{0,400}?stateWithCreatedThread\(local, thread\)/,
-    'createDesktopThread persists the folded state through the mutation owner',
+    /await rememberHiddenSession\(creatingGatewayScope, thread\)/,
+    'createDesktopThread persists through the scoped owner',
   );
   assert.match(
     storeSource,
-    /rememberHydratedDesktopState\(stateWithCreatedThread\(state, thread\)\)/,
-    'the returned snapshot carries the fold for immediate rendering',
+    /listHiddenSessions\(creatingGatewayScope\)/,
+    'the returned snapshot merges the whole partition',
+  );
+  // Hydration reads the same owner.
+  assert.match(
+    storeSource,
+    /listHiddenSessions\(hydrationScope\)/,
+    'hydration merges retained hidden sessions from the owner',
+  );
+  // Lifecycle removals target the OPERATION gateway partition only --
+  // equal thread ids on another gateway stay untouched.
+  assert.equal(
+    (storeSource.match(
+      /await forgetHiddenSession\(\s*normalizeGatewayUrl\(current\.settings\.gatewayUrl \|\| ''\),\s*input\.threadId,\s*\);/g,
+    ) || []).length,
+    2,
+    'delete and archive clear their own gateway partition',
   );
 });
 
-test('persisted-state mutations are serialized and lifecycle removals clear the owner', () => {
-  // All persisted read-modify-writes flow through the single mutation
-  // owner (parallel creations must serialize, not race rename()).
+test('the renderer commits the created state without stripping its envelope', () => {
   assert.match(
-    storeSource,
-    /let persistedStateMutationChain: Promise<void> = Promise\.resolve\(\);/,
-    'the persisted-state mutation queue exists',
+    sideChatOpsSource,
+    /setDesktopState\(created\.state\);/,
+    'the main snapshot is committed as-is',
   );
-  // The create fold validates the creating gateway scope inside the
-  // critical section (a late response from a previous gateway is a no-op).
-  assert.match(
-    storeSource,
-    /if \(localScope !== creatingGatewayScope\) \{\s*return null;/,
-    'a stale-gateway create never pollutes the new scope',
-  );
-  // Successful delete AND archive both drop the thread from the persisted
-  // owner, or a retained hidden session would resurrect on refresh.
-  assert.equal(
-    (storeSource.match(
-      /await mutatePersistedState\(\(local\) =>\s*withSortedEntities\(desktopStateWithoutThread\(local, input\.threadId\)\),\s*\);/g,
-    ) || []).length,
-    2,
-    'delete and archive clear the persisted owner',
-  );
-  // Unique temp names keep concurrent atomic writes from colliding.
-  assert.match(
-    storeSource,
-    /tmp-\$\{process\.pid\}-\$\{Date\.now\(\)\.toString\(36\)\}-\$\{randomUUID\(\)/,
-    'atomic writes use collision-free temp paths',
+  assert.doesNotMatch(
+    sideChatOpsSource,
+    /setDesktopState\(\{\s*\.\.\.created\.state/,
+    'no spread re-wrap that would strip the ingress envelope',
   );
 });
 
