@@ -658,6 +658,11 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         presentationLeaseMayHaveReleased()
     }
 
+    func ownerPresentationEnded(_ token: GaryxPresentationLeaseToken) {
+        presentationLeases.ownerPresentationEnded(token)
+        presentationLeaseMayHaveReleased()
+    }
+
     func forceDismissPresentationSubtree(_ token: GaryxPresentationLeaseToken) {
         presentationLeases.forceDismissSubtree(token)
         presentationLeaseMayHaveReleased()
@@ -670,6 +675,38 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
     ) -> GaryxPresentationLeaseRecord? {
         presentationLeases.records[token]
     }
+
+    /// Returns whether a controller captured from presented SwiftUI content is
+    /// still owned by any UIKit presentation rooted in this route container.
+    /// Ordinary route-host children do not count as presentation liveness.
+    func containsControllerInPresentedHierarchy(_ target: UIViewController) -> Bool {
+        var visited: Set<ObjectIdentifier> = []
+
+        func contains(_ controller: UIViewController, insidePresentation: Bool) -> Bool {
+            guard visited.insert(ObjectIdentifier(controller)).inserted else { return false }
+            if insidePresentation, controller === target { return true }
+            for child in controller.children {
+                if contains(child, insidePresentation: insidePresentation) { return true }
+            }
+            if let presented = controller.presentedViewController,
+               contains(presented, insidePresentation: true) {
+                return true
+            }
+            return false
+        }
+
+        return contains(self, insidePresentation: false)
+    }
+
+    #if DEBUG
+    /// Read-only hosted-test probe for lifecycle reproductions that must
+    /// identify leases after their presenting SwiftUI identity disappears.
+    var presentationLeaseRecordsForTesting: [
+        GaryxPresentationLeaseToken: GaryxPresentationLeaseRecord
+    ] {
+        presentationLeases.records
+    }
+    #endif
 
     @discardableResult
     func requestHardSnap(to replacement: [GaryxRouteEntry]) -> Bool {

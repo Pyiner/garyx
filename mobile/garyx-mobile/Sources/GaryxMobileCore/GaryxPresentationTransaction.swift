@@ -400,6 +400,12 @@ public enum GaryxPresentationResultDisposition: Equatable, Sendable {
     case explicitNoResult
 }
 
+public enum GaryxPresentationLeaseTerminalCause: Equatable, Sendable {
+    case normalDismissal
+    case ownerLoss
+    case presentationFailure
+}
+
 public struct GaryxPresentationLeaseRecord: Equatable, Sendable {
     public let token: GaryxPresentationLeaseToken
     public let parent: GaryxPresentationLeaseToken?
@@ -409,6 +415,7 @@ public struct GaryxPresentationLeaseRecord: Equatable, Sendable {
     public fileprivate(set) var dismissing: Bool
     public fileprivate(set) var dismissalCompleted: Bool
     public fileprivate(set) var result: GaryxPresentationResultDisposition
+    public fileprivate(set) var terminalCause: GaryxPresentationLeaseTerminalCause?
     public fileprivate(set) var released: Bool
     public fileprivate(set) var releaseCount: Int
 
@@ -425,6 +432,7 @@ public struct GaryxPresentationLeaseRecord: Equatable, Sendable {
         dismissing = false
         dismissalCompleted = false
         result = resultBearing ? .pending : .notRequired
+        terminalCause = nil
         released = false
         releaseCount = 0
     }
@@ -509,6 +517,7 @@ public struct GaryxPresentationLeaseTree: Equatable, Sendable {
         for member in subtree {
             guard var record = records[member], !record.released else { continue }
             record.dismissalCompleted = true
+            record.terminalCause = record.terminalCause ?? .normalDismissal
             records[member] = record
             if member != token, record.resultBearing, record.result == .pending {
                 // Dismissing an ancestor is an explicit no-result terminal for
@@ -522,15 +531,30 @@ public struct GaryxPresentationLeaseTree: Equatable, Sendable {
     }
 
     public mutating func presentationFailed(_ token: GaryxPresentationLeaseToken) {
-        forceDismissSubtree(token)
+        settleSubtree(token, cause: .presentationFailure)
+    }
+
+    /// The presentation host disappeared without delivering a normal terminal
+    /// callback. Owner loss is terminal UIKit evidence, so it settles both
+    /// dismissal and any pending result in one explicit state-machine edge.
+    public mutating func ownerPresentationEnded(_ token: GaryxPresentationLeaseToken) {
+        settleSubtree(token, cause: .ownerLoss)
     }
 
     public mutating func forceDismissSubtree(_ token: GaryxPresentationLeaseToken) {
+        settleSubtree(token, cause: .normalDismissal)
+    }
+
+    private mutating func settleSubtree(
+        _ token: GaryxPresentationLeaseToken,
+        cause: GaryxPresentationLeaseTerminalCause
+    ) {
         let subtree = subtreeTokens(root: token)
         for member in subtree {
             guard var record = records[member], !record.released else { continue }
             record.dismissing = true
             record.dismissalCompleted = true
+            record.terminalCause = record.terminalCause ?? cause
             if record.resultBearing, record.result == .pending {
                 record.result = .explicitNoResult
             }

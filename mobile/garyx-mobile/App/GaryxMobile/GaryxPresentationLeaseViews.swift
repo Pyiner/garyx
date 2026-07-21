@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 @MainActor
@@ -71,6 +72,18 @@ final class GaryxPresentationLeaseCoordinator {
         routeStore?.presentationBarrierDidChange()
     }
 
+    func ownerPresentationEnded(_ token: GaryxPresentationLeaseToken) {
+        container?.ownerPresentationEnded(token)
+        synchronizeBarrier()
+        routeStore?.presentationBarrierDidChange()
+    }
+
+    func presentationHasEnded(_ witness: GaryxPresentationControllerWitness) -> Bool {
+        guard witness.didResolveController, let container else { return false }
+        guard let controller = witness.controller else { return true }
+        return !container.containsControllerInPresentedHierarchy(controller)
+    }
+
     func record(for token: GaryxPresentationLeaseToken) -> GaryxPresentationLeaseRecord? {
         container?.presentationLeaseRecord(token)
     }
@@ -82,14 +95,77 @@ final class GaryxPresentationLeaseCoordinator {
     }
 }
 
+/// Stable, imperative UIKit identity captured by presented content. This state
+/// is intentionally not observable: representable hierarchy callbacks may
+/// update it without publishing into the active SwiftUI graph.
+@MainActor
+final class GaryxPresentationControllerWitness {
+    private(set) weak var controller: UIViewController?
+    private(set) var didResolveController = false
+
+    func resolve(from view: UIView) {
+        var responder: UIResponder? = view
+        while let next = responder?.next {
+            if let controller = next as? UIViewController {
+                self.controller = controller
+                didResolveController = true
+                return
+            }
+            responder = next
+        }
+    }
+
+    func reset() {
+        controller = nil
+        didResolveController = false
+    }
+}
+
+private struct GaryxPresentationControllerWitnessReader: UIViewRepresentable {
+    let witness: GaryxPresentationControllerWitness
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.witness = witness
+        return view
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.witness = witness
+    }
+
+    final class ProbeView: UIView {
+        weak var witness: GaryxPresentationControllerWitness?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            witness?.resolve(from: self)
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            witness?.resolve(from: self)
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            witness?.resolve(from: self)
+        }
+    }
+}
+
 @MainActor
 final class GaryxPresentationLeaseSession: ObservableObject {
     private let resultBearing: Bool
     private var coordinator: GaryxPresentationLeaseCoordinator?
-    private(set) var token: GaryxPresentationLeaseToken?
+    @Published private(set) var token: GaryxPresentationLeaseToken?
     private(set) var operationContext: GaryxPresentationOperationContext?
+    let presentationControllerWitness = GaryxPresentationControllerWitness()
     private var appeared = false
     private var didCompleteDismissal = false
+    private var receivedTerminalCallback = false
     private var cycleFinished = false
 
     init(resultBearing: Bool = false) {
@@ -152,9 +228,35 @@ final class GaryxPresentationLeaseSession: ObservableObject {
 
     func completeDismissal() {
         guard !didCompleteDismissal, let token else { return }
+        receivedTerminalCallback = true
         didCompleteDismissal = true
         coordinator?.dismissalCompleted(token)
         updateFinishedState()
+    }
+
+    /// SwiftUI can tear down presented content with no binding write-back and
+    /// no onDismiss callback when its presenting owner disappears. Defer long
+    /// enough for ordinary callbacks in the same lifecycle turn to win, then
+    /// settle only from precise UIKit controller-chain evidence.
+    func presentedContentDisappeared() {
+        guard let token else { return }
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            await Task.yield()
+            guard let self,
+                  self.token == token,
+                  !self.receivedTerminalCallback,
+                  let record = self.coordinator?.record(for: token),
+                  !record.released,
+                  self.coordinator?.presentationHasEnded(
+                      self.presentationControllerWitness
+                  ) == true else {
+                return
+            }
+            self.didCompleteDismissal = true
+            self.coordinator?.ownerPresentationEnded(token)
+            self.updateFinishedState()
+        }
     }
 
     /// Picker frameworks do not all expose an explicit cancellation callback.
@@ -176,10 +278,17 @@ final class GaryxPresentationLeaseSession: ObservableObject {
 
     func bindingBecameFalse(completesDismissal: Bool) {
         guard token != nil, !didCompleteDismissal else { return }
+        receivedTerminalCallback = true
         markDismissing()
         if completesDismissal || !appeared {
             completeDismissal()
         }
+    }
+
+    func bindingSetterBecameFalse() {
+        guard token != nil, !didCompleteDismissal else { return }
+        receivedTerminalCallback = true
+        markDismissing()
     }
 
     private func resetForNextCycle() {
@@ -187,8 +296,10 @@ final class GaryxPresentationLeaseSession: ObservableObject {
         coordinator = nil
         token = nil
         operationContext = nil
+        presentationControllerWitness.reset()
         appeared = false
         didCompleteDismissal = false
+        receivedTerminalCallback = false
         cycleFinished = false
     }
 
@@ -278,7 +389,7 @@ private extension GaryxPresentationLeaseModifierSupport {
                 if presented {
                     prepare()
                 } else {
-                    session.markDismissing()
+                    session.bindingSetterBecameFalse()
                 }
                 binding.wrappedValue = presented
                 if !presented, completesDismissalOnFalse {
@@ -298,7 +409,7 @@ private extension GaryxPresentationLeaseModifierSupport {
                 if item != nil {
                     prepare()
                 } else {
-                    session.markDismissing()
+                    session.bindingSetterBecameFalse()
                 }
                 binding.wrappedValue = item
                 if item == nil, completesDismissalOnFalse {
@@ -331,7 +442,15 @@ private extension GaryxPresentationLeaseModifierSupport {
     func presented<Content: View>(_ content: Content) -> some View {
         content
             .environment(\.garyxPresentationParentLease, session.token)
+            .background {
+                GaryxPresentationControllerWitnessReader(
+                    witness: session.presentationControllerWitness
+                )
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+            }
             .onAppear { session.markPresented() }
+            .onDisappear { session.presentedContentDisappeared() }
     }
 
     var resultActions: GaryxPresentationResultActions {

@@ -172,12 +172,14 @@ final class GaryxPresentationTransactionTests: XCTestCase {
 
         tree.dismissalCompleted(child)
         XCTAssertEqual(tree.records[child]?.joinState, .released)
+        XCTAssertEqual(tree.records[child]?.terminalCause, .normalDismissal)
         XCTAssertTrue(tree.hasBarrier, "parent still owns the barrier")
         XCTAssertEqual(tree.records[parent]?.releaseCount, 0)
 
         tree.dismissalCompleted(parent)
         XCTAssertFalse(tree.hasBarrier)
         XCTAssertEqual(tree.records[parent]?.releaseCount, 1)
+        XCTAssertEqual(tree.records[parent]?.terminalCause, .normalDismissal)
     }
 
     func testParentForcedDismissReleasesWholeTreeExactlyOnce() {
@@ -199,6 +201,11 @@ final class GaryxPresentationTransactionTests: XCTestCase {
             XCTAssertEqual(tree.records[member]?.releaseCount, 1)
         }
         XCTAssertEqual(tree.records[child]?.result, .explicitNoResult)
+        XCTAssertTrue(
+            [parent, child, grandchild].allSatisfy {
+                tree.records[$0]?.terminalCause == .normalDismissal
+            }
+        )
     }
 
     func testResultBearingLeaseJoinsDismissalAndResultInBothOrders() {
@@ -238,7 +245,47 @@ final class GaryxPresentationTransactionTests: XCTestCase {
         XCTAssertTrue(failed.acquire(sheet, resultBearing: true))
         failed.presentationFailed(sheet)
         XCTAssertEqual(failed.records[sheet]?.result, .explicitNoResult)
+        XCTAssertEqual(failed.records[sheet]?.terminalCause, .presentationFailure)
         XCTAssertFalse(failed.hasBarrier)
+    }
+
+    func testNormalDismissalWinsAuditRaceAgainstLateOwnerLoss() {
+        var tree = GaryxPresentationLeaseTree()
+        let cover = token("ordinary-cover")
+        XCTAssertTrue(tree.acquire(cover))
+        tree.markPresented(cover)
+
+        tree.dismissalCompleted(cover)
+        tree.ownerPresentationEnded(cover)
+
+        XCTAssertEqual(tree.records[cover]?.joinState, .released)
+        XCTAssertEqual(tree.records[cover]?.releaseCount, 1)
+        XCTAssertEqual(tree.records[cover]?.terminalCause, .normalDismissal)
+        XCTAssertFalse(tree.hasBarrier)
+    }
+
+    func testOwnerLossReleasesWholeTreeAndSettlesPendingResultsExactlyOnce() {
+        var tree = GaryxPresentationLeaseTree()
+        let cover = token("ownerless-cover")
+        let picker = token("ownerless-picker")
+        let nested = token("ownerless-nested")
+        XCTAssertTrue(tree.acquire(cover))
+        XCTAssertTrue(tree.acquire(picker, parent: cover, resultBearing: true))
+        XCTAssertTrue(tree.acquire(nested, parent: picker))
+        [cover, picker, nested].forEach { tree.markPresented($0) }
+
+        tree.ownerPresentationEnded(cover)
+        tree.ownerPresentationEnded(cover)
+
+        XCTAssertTrue(
+            [cover, picker, nested].allSatisfy {
+                tree.records[$0]?.joinState == .released
+                    && tree.records[$0]?.releaseCount == 1
+                    && tree.records[$0]?.terminalCause == .ownerLoss
+            }
+        )
+        XCTAssertEqual(tree.records[picker]?.result, .explicitNoResult)
+        XCTAssertFalse(tree.hasBarrier)
     }
 
     func testProgrammaticAndInteractiveDismissCallbacksDeduplicateRelease() {
