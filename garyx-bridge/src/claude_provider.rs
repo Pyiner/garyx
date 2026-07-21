@@ -592,8 +592,9 @@ fn extract_claude_ai_title_line(line: &str, session_id: &str) -> Option<String> 
         .filter(|value| !value.is_empty())
 }
 
-fn claude_config_dir() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
+fn claude_config_dir(launch_env: &HashMap<String, String>) -> Option<PathBuf> {
+    launch_env
+        .get("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
 }
@@ -638,13 +639,17 @@ async fn read_claude_ai_title_from_transcript_path(
         .find_map(|line| extract_claude_ai_title_line(line, session_id))
 }
 
-async fn read_claude_ai_title_from_transcript(cwd: &Path, session_id: &str) -> Option<String> {
+async fn read_claude_ai_title_from_transcript(
+    cwd: &Path,
+    session_id: &str,
+    config_dir: Option<&Path>,
+) -> Option<String> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         return None;
     }
     let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let transcript_path = claude_transcript_path(&claude_config_dir()?, &cwd, session_id);
+    let transcript_path = claude_transcript_path(config_dir?, &cwd, session_id);
     read_claude_ai_title_from_transcript_path(&transcript_path, session_id).await
 }
 
@@ -668,6 +673,7 @@ async fn count_claude_transcript_history_messages(
     config: &ClaudeCodeConfig,
     options: &ProviderRunOptions,
     session_id: Option<&str>,
+    config_dir: Option<&Path>,
 ) -> Option<usize> {
     let session_id = session_id?.trim();
     if session_id.is_empty() {
@@ -675,7 +681,7 @@ async fn count_claude_transcript_history_messages(
     }
     let cwd = resolve_claude_cwd(config, options)?;
     let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
-    let transcript_path = claude_transcript_path(&claude_config_dir()?, &cwd, session_id);
+    let transcript_path = claude_transcript_path(config_dir?, &cwd, session_id);
     count_claude_transcript_history_messages_at_path(&transcript_path).await
 }
 
@@ -1102,6 +1108,10 @@ pub struct ClaudeCliProvider {
     /// thread affinity stable), so default-model resolution must read these
     /// instead of the frozen `config` fields.
     model_defaults: std::sync::RwLock<ProviderModelDefaults>,
+    /// Hot-reloadable process environment. A top-level run clones this once;
+    /// selection changes cannot move its retries or transcript lookup to a
+    /// different Claude profile.
+    launch_env: std::sync::RwLock<HashMap<String, String>>,
     /// Maps Garyx thread IDs to Claude CLI session IDs.
     session_map: Mutex<HashMap<String, String>>,
     /// Tracks thread failure counts for auto-recovery.
@@ -1134,9 +1144,11 @@ impl ClaudeCliProvider {
             model_reasoning_effort: config.model_reasoning_effort.clone(),
             model_service_tier: String::new(),
         });
+        let launch_env = std::sync::RwLock::new(config.env.clone());
         Self {
             config,
             model_defaults,
+            launch_env,
             session_map: Mutex::new(HashMap::new()),
             session_failure_counts: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
@@ -1168,11 +1180,12 @@ impl ClaudeCliProvider {
     }
 
     /// Build `ClaudeAgentOptions` from our config and run options.
-    fn build_sdk_options(
+    fn build_sdk_options_with_launch_env(
         &self,
         options: &ProviderRunOptions,
         session_id: Option<&str>,
         run_id: &str,
+        launch_env: &HashMap<String, String>,
     ) -> ClaudeAgentOptions {
         // Reserve `garyx` for the built-in control-plane MCP server so a
         // stale runtime override cannot shadow the local gateway endpoint.
@@ -1252,7 +1265,13 @@ impl ClaudeCliProvider {
                 let merged_instructions = compose_gary_instructions(runtime_system_prompt);
                 (None, HashMap::new(), Some(merged_instructions), None)
             };
-        let env = runtime_env_overlay(&self.config.env, &options.metadata, "provider_env");
+        let mut env = runtime_env_overlay(launch_env, &options.metadata, "provider_env");
+        // Account selection owns Claude identity even if stale thread metadata
+        // still carries an older provider_env value.
+        env.remove("CLAUDE_CONFIG_DIR");
+        if let Some(config_dir) = launch_env.get("CLAUDE_CONFIG_DIR") {
+            env.insert("CLAUDE_CONFIG_DIR".to_owned(), config_dir.clone());
+        }
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
         let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
 
@@ -1300,6 +1319,21 @@ impl ClaudeCliProvider {
             stop_hook_observer: true,
             ..Default::default()
         }
+    }
+
+    #[cfg(test)]
+    fn build_sdk_options(
+        &self,
+        options: &ProviderRunOptions,
+        session_id: Option<&str>,
+        run_id: &str,
+    ) -> ClaudeAgentOptions {
+        let launch_env = self
+            .launch_env
+            .read()
+            .expect("claude launch environment lock poisoned")
+            .clone();
+        self.build_sdk_options_with_launch_env(options, session_id, run_id, &launch_env)
     }
 
     /// Record a thread failure and return whether we should clear the provider session.
@@ -1499,12 +1533,13 @@ impl ClaudeCliProvider {
     /// When `session_id` is `Some`, the run uses `--resume` and enforces a
     /// timeout on the first message (the CLI may hang on stale sessions).
     /// Returns `None` if the run produced no result message but had some text.
-    async fn execute_sdk_run(
+    async fn execute_sdk_run_with_launch_env(
         &self,
         options: &ProviderRunOptions,
         session_id: Option<&str>,
         run_id: &str,
         on_chunk: &StreamCallback,
+        launch_env: &HashMap<String, String>,
     ) -> Result<Option<SdkRunOutcome>, BridgeError> {
         // Drop any quota stash left by a prior attempt on this thread FIRST —
         // before connect/send can fail — so a stale entry from an earlier
@@ -1524,7 +1559,9 @@ impl ClaudeCliProvider {
             }
         }
 
-        let connect_future = sdk_run_streaming(self.build_sdk_options(options, session_id, run_id));
+        let connect_future = sdk_run_streaming(
+            self.build_sdk_options_with_launch_env(options, session_id, run_id, launch_env),
+        );
         let mut run = connect_future
             .await
             .map_err(|e| BridgeError::RunFailed(format!("failed to connect to claude: {e}")))?;
@@ -1572,7 +1609,12 @@ impl ClaudeCliProvider {
             let transcript_thread_title = if result.thread_title.is_none() {
                 match resolve_claude_cwd(&self.config, options) {
                     Some(cwd) => {
-                        read_claude_ai_title_from_transcript(&cwd, &result.session_id).await
+                        read_claude_ai_title_from_transcript(
+                            &cwd,
+                            &result.session_id,
+                            claude_config_dir(launch_env).as_deref(),
+                        )
+                        .await
                     }
                     None => None,
                 }
@@ -1624,6 +1666,23 @@ impl ClaudeCliProvider {
                 thread_title: None,
             }))
         }
+    }
+
+    #[cfg(test)]
+    async fn execute_sdk_run(
+        &self,
+        options: &ProviderRunOptions,
+        session_id: Option<&str>,
+        run_id: &str,
+        on_chunk: &StreamCallback,
+    ) -> Result<Option<SdkRunOutcome>, BridgeError> {
+        let launch_env = self
+            .launch_env
+            .read()
+            .expect("claude launch environment lock poisoned")
+            .clone();
+        self.execute_sdk_run_with_launch_env(options, session_id, run_id, on_chunk, &launch_env)
+            .await
     }
 
     /// Core message processing loop with optional streaming callback.
@@ -2249,6 +2308,13 @@ impl ProviderRuntime for ClaudeCliProvider {
         model_defaults.model_reasoning_effort = defaults.model_reasoning_effort.clone();
     }
 
+    fn update_launch_environment(&self, env: &HashMap<String, String>) {
+        *self
+            .launch_env
+            .write()
+            .expect("claude launch environment lock poisoned") = env.clone();
+    }
+
     async fn initialize(&mut self) -> Result<(), BridgeError> {
         let cli_mode = claude_sdk_cli_mode_label(&self.config);
         if let Some(path) = resolve_claude_sdk_cli_path(&self.config) {
@@ -2346,6 +2412,11 @@ impl ProviderRuntime for ClaudeCliProvider {
         self.pending_rate_limits.clear(&options.thread_id).await;
 
         let run_id = resolve_run_id(&options.metadata);
+        let launch_env = self
+            .launch_env
+            .read()
+            .expect("claude launch environment lock poisoned")
+            .clone();
         // Capture the requested model before the run starts so a concurrent
         // defaults reload cannot relabel this run's fallback actual_model.
         let requested_model = resolve_requested_model(&self.effective_config(), &options.metadata);
@@ -2368,7 +2439,13 @@ impl ProviderRuntime for ClaudeCliProvider {
         // Try with resume first; if it fails, times out, or returns is_error
         // (e.g. "No conversation found"), retry without resume.
         let attempt_result = self
-            .execute_sdk_run(options, session_id.as_deref(), &run_id, &on_chunk)
+            .execute_sdk_run_with_launch_env(
+                options,
+                session_id.as_deref(),
+                &run_id,
+                &on_chunk,
+                &launch_env,
+            )
             .await;
 
         let should_retry = session_id.is_some()
@@ -2396,6 +2473,7 @@ impl ProviderRuntime for ClaudeCliProvider {
                 &self.config,
                 options,
                 session_id.as_deref(),
+                claude_config_dir(&launch_env).as_deref(),
             )
             .await;
             // Log the original failure reason
@@ -2421,7 +2499,7 @@ impl ProviderRuntime for ClaudeCliProvider {
             }
             self.session_map.lock().await.remove(&options.thread_id);
             self.reset_failure_count(&options.thread_id).await;
-            self.execute_sdk_run(options, None, &run_id, &on_chunk)
+            self.execute_sdk_run_with_launch_env(options, None, &run_id, &on_chunk, &launch_env)
                 .await?
         } else if should_retry_same_session {
             tracing::warn!(
@@ -2429,8 +2507,14 @@ impl ProviderRuntime for ClaudeCliProvider {
                 sdk_session_id = session_id.as_deref().unwrap_or(""),
                 "resumed run produced no response; retrying once on the same session"
             );
-            self.execute_sdk_run(options, session_id.as_deref(), &run_id, &on_chunk)
-                .await?
+            self.execute_sdk_run_with_launch_env(
+                options,
+                session_id.as_deref(),
+                &run_id,
+                &on_chunk,
+                &launch_env,
+            )
+            .await?
         } else {
             attempt_result?
         };

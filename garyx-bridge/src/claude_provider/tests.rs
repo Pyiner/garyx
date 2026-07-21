@@ -972,6 +972,55 @@ fn test_build_sdk_options_merges_config_env_and_metadata_env() {
 }
 
 #[test]
+fn claude_account_environment_is_provider_owned_and_snapshot_stable() {
+    let provider = make_provider();
+    provider.update_launch_environment(&HashMap::from([
+        ("CLAUDE_CONFIG_DIR".to_owned(), "/profiles/work".to_owned()),
+        ("ACCOUNT_MARKER".to_owned(), "work".to_owned()),
+    ]));
+    let options = ProviderRunOptions {
+        thread_id: "thread::account-env".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([(
+            "provider_env".to_owned(),
+            json!({
+                "CLAUDE_CONFIG_DIR": "/profiles/stale-thread",
+                "PER_RUN": "yes"
+            }),
+        )]),
+    };
+    let run_snapshot = provider.launch_env.read().expect("launch env").clone();
+
+    provider.update_launch_environment(&HashMap::from([(
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        "/profiles/personal".to_owned(),
+    )]));
+
+    let in_flight = provider.build_sdk_options_with_launch_env(
+        &options,
+        None,
+        "run-account-env",
+        &run_snapshot,
+    );
+    assert_eq!(
+        in_flight.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+        Some("/profiles/work")
+    );
+    assert_eq!(
+        in_flight.env.get("PER_RUN").map(String::as_str),
+        Some("yes")
+    );
+
+    let next_run = provider.build_sdk_options(&options, None, "run-account-env-next");
+    assert_eq!(
+        next_run.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+        Some("/profiles/personal")
+    );
+}
+
+#[test]
 fn test_build_sdk_options_with_system_prompt() {
     let config = ClaudeCodeConfig {
         system_prompt: Some("You are a helpful bot.".to_string()),

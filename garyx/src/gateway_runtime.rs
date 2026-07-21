@@ -557,6 +557,9 @@ async fn initialize_bridge_runtime(
     bridge: &Arc<MultiProviderBridge>,
     config: &GaryxConfig,
 ) -> Result<(), String> {
+    state
+        .apply_provider_account_selection_to_bridge(config)
+        .await;
     bridge
         .replace_agent_profiles(state.ops.custom_agents.snapshot().await)
         .await;

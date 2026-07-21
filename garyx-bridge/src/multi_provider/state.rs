@@ -31,6 +31,10 @@ pub(super) struct Inner {
     pub(super) agent_profiles: Arc<RwLock<AgentProfileState>>,
     /// Current runtime config for built-in/default providers.
     pub(super) default_provider_configs: Arc<RwLock<HashMap<ProviderType, AgentProviderConfig>>>,
+    /// Provider-owned Claude identity for future process launches. `None`
+    /// means Claude's ordinary system profile and therefore no injected
+    /// `CLAUDE_CONFIG_DIR`.
+    pub(super) claude_config_dir: Arc<RwLock<Option<String>>>,
     /// Run lifecycle indexes.
     pub(super) run_index: Arc<RwLock<BridgeRunIndex>>,
     /// `run_id -> JoinHandle`
@@ -64,6 +68,7 @@ impl Inner {
             thread_workspace_bindings: Arc::new(RwLock::new(HashMap::new())),
             agent_profiles: Arc::new(RwLock::new(AgentProfileState::default())),
             default_provider_configs: Arc::new(RwLock::new(HashMap::new())),
+            claude_config_dir: Arc::new(RwLock::new(None)),
             run_index: Arc::new(RwLock::new(BridgeRunIndex::default())),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             thread_dispatch_guards: Arc::new(Mutex::new(HashMap::new())),

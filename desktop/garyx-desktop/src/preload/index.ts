@@ -150,6 +150,22 @@ const api: GaryxDesktopApi = {
   listProviderModels: (providerType) =>
     ipcRenderer.invoke("garyx:list-provider-models", providerType),
   getCodingUsage: () => ipcRenderer.invoke("garyx:get-coding-usage"),
+  listClaudeCodeAccounts: () =>
+    ipcRenderer.invoke("garyx:list-claude-code-accounts"),
+  selectClaudeCodeAccount: (input) =>
+    ipcRenderer.invoke("garyx:select-claude-code-account", input),
+  renameClaudeCodeAccount: (input) =>
+    ipcRenderer.invoke("garyx:rename-claude-code-account", input),
+  deleteClaudeCodeAccount: (input) =>
+    ipcRenderer.invoke("garyx:delete-claude-code-account", input),
+  startClaudeCodeAuth: (input) =>
+    ipcRenderer.invoke("garyx:start-claude-code-auth", input),
+  submitClaudeCodeAuth: (input) =>
+    ipcRenderer.invoke("garyx:submit-claude-code-auth", input),
+  getClaudeCodeAuth: (input) =>
+    ipcRenderer.invoke("garyx:get-claude-code-auth", input),
+  cancelClaudeCodeAuth: (input) =>
+    ipcRenderer.invoke("garyx:cancel-claude-code-auth", input),
   createCustomAgent: (input) =>
     ipcRenderer.invoke("garyx:create-custom-agent", input),
   updateCustomAgent: (input) =>

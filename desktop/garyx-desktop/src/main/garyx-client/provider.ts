@@ -1,5 +1,9 @@
 import type {
   DesktopApiProviderType,
+  DesktopClaudeAuthSession,
+  DesktopClaudeAuthStatus,
+  DesktopClaudeCodeAccount,
+  DesktopClaudeCodeAccounts,
   DesktopCodingUsage,
   DesktopModelUsage,
   DesktopProviderModelOption,
@@ -10,6 +14,7 @@ import type {
   DesktopSettings,
   DesktopUsageWindow,
   ListProviderRecentSessionsInput,
+  StartDesktopClaudeAuthInput,
 } from "@shared/contracts";
 import {
   GatewayContractError,
@@ -46,6 +51,33 @@ interface ProviderModelsPayload {
 interface CodingUsagePayload {
   providers?: unknown;
   refreshed_at?: unknown;
+}
+
+interface ClaudeCodeAccountsPayload {
+  active_account_id?: unknown;
+  accounts?: unknown;
+  refreshed_at?: unknown;
+}
+
+interface ClaudeAuthPayload {
+  login_id?: unknown;
+  account_id?: unknown;
+  status?: unknown;
+  url?: unknown;
+  auth_status?: unknown;
+  error?: unknown;
+  exit_code?: unknown;
+}
+
+function optionalContractString(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  if (!hasContractField(record, field) || record[field] === null) {
+    return null;
+  }
+  return requireContractString(record[field], `${path}.${field}`);
 }
 
 export function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
@@ -403,6 +435,211 @@ export async function getCodingUsage(
   );
 
   return mapCodingUsage(payload);
+}
+
+function mapClaudeCodeAccount(value: unknown, index: number): DesktopClaudeCodeAccount {
+  const path = `Claude Code accounts.accounts[${index}]`;
+  const record = requireContractRecord(value, path);
+  return {
+    id: optionalContractString(record, "id", path),
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    systemDefault: requireContractBoolean(
+      requireContractField(record, "system_default", path),
+      `${path}.system_default`,
+    ),
+    selected: requireContractBoolean(
+      requireContractField(record, "selected", path),
+      `${path}.selected`,
+    ),
+    email: optionalContractString(record, "email", path),
+    organization: optionalContractString(record, "organization", path),
+    plan: optionalContractString(record, "plan", path),
+    authMethod: optionalContractString(record, "auth_method", path),
+    usage: mapProviderUsage(
+      requireContractField(record, "usage", path),
+      `${path}.usage`,
+    ),
+  };
+}
+
+function mapClaudeCodeAccounts(value: unknown): DesktopClaudeCodeAccounts {
+  const path = "Claude Code accounts";
+  const record = requireContractRecord(value, path);
+  return {
+    activeAccountId: optionalContractString(record, "active_account_id", path),
+    accounts: requireContractArray(
+      requireContractField(record, "accounts", path),
+      `${path}.accounts`,
+    ).map(mapClaudeCodeAccount),
+    refreshedAt: requireContractNonEmptyString(
+      requireContractField(record, "refreshed_at", path),
+      `${path}.refreshed_at`,
+    ),
+  };
+}
+
+function mapClaudeAuthSession(value: unknown): DesktopClaudeAuthSession {
+  const path = "Claude Code auth session";
+  const record = requireContractRecord(value, path);
+  const rawStatus = requireContractNonEmptyString(
+    requireContractField(record, "status", path),
+    `${path}.status`,
+  );
+  const statuses: DesktopClaudeAuthStatus[] = [
+    "starting",
+    "waiting_for_code",
+    "submitted",
+    "succeeded",
+    "failed",
+  ];
+  if (!statuses.includes(rawStatus as DesktopClaudeAuthStatus)) {
+    throw new GatewayContractError(`${path}.status`, "must be a known auth status");
+  }
+  const authStatus = hasContractField(record, "auth_status") && record.auth_status !== null
+    ? requireContractRecord(record.auth_status, `${path}.auth_status`)
+    : null;
+  return {
+    loginId: requireContractNonEmptyString(
+      requireContractField(record, "login_id", path),
+      `${path}.login_id`,
+    ),
+    accountId: optionalContractString(record, "account_id", path),
+    status: rawStatus as DesktopClaudeAuthStatus,
+    authorizationUrl: optionalContractString(record, "url", path),
+    authStatus,
+    error: optionalContractString(record, "error", path),
+    exitCode:
+      hasContractField(record, "exit_code") && record.exit_code !== null
+        ? requireContractInteger(record.exit_code, `${path}.exit_code`)
+        : null,
+  };
+}
+
+export async function listClaudeCodeAccounts(
+  settings: DesktopSettings,
+): Promise<DesktopClaudeCodeAccounts> {
+  const payload = await requestJson<ClaudeCodeAccountsPayload>(
+    settings,
+    "/api/providers/claude_code/accounts",
+    "readRetryable",
+    { signal: AbortSignal.timeout(30000) },
+  );
+  return mapClaudeCodeAccounts(payload);
+}
+
+export async function selectClaudeCodeAccount(
+  settings: DesktopSettings,
+  accountId: string | null,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    "/api/providers/claude_code/accounts/active",
+    "mutationSingleAttempt",
+    {
+      method: "PUT",
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ account_id: accountId }),
+    },
+  );
+}
+
+export async function renameClaudeCodeAccount(
+  settings: DesktopSettings,
+  accountId: string,
+  name: string,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/providers/claude_code/accounts/${encodeURIComponent(accountId)}`,
+    "mutationSingleAttempt",
+    {
+      method: "PATCH",
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+export async function deleteClaudeCodeAccount(
+  settings: DesktopSettings,
+  accountId: string,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/providers/claude_code/accounts/${encodeURIComponent(accountId)}`,
+    "mutationSingleAttempt",
+    { method: "DELETE", signal: AbortSignal.timeout(15000) },
+  );
+}
+
+export async function startClaudeCodeAuth(
+  settings: DesktopSettings,
+  input: StartDesktopClaudeAuthInput,
+): Promise<DesktopClaudeAuthSession> {
+  const payload = await requestJson<ClaudeAuthPayload>(
+    settings,
+    "/api/providers/claude_code/auth/start",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({
+        mode: input.mode || "claudeai",
+        sso: input.sso || false,
+        email: input.email || null,
+        managed_account_name: input.managedAccountName || null,
+        account_id: input.accountId || null,
+      }),
+    },
+  );
+  return mapClaudeAuthSession(payload);
+}
+
+export async function submitClaudeCodeAuth(
+  settings: DesktopSettings,
+  loginId: string,
+  code: string,
+): Promise<DesktopClaudeAuthSession> {
+  const payload = await requestJson<ClaudeAuthPayload>(
+    settings,
+    `/api/providers/claude_code/auth/${encodeURIComponent(loginId)}/submit`,
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ code }),
+    },
+  );
+  return mapClaudeAuthSession(payload);
+}
+
+export async function getClaudeCodeAuth(
+  settings: DesktopSettings,
+  loginId: string,
+): Promise<DesktopClaudeAuthSession> {
+  const payload = await requestJson<ClaudeAuthPayload>(
+    settings,
+    `/api/providers/claude_code/auth/${encodeURIComponent(loginId)}`,
+    "readRetryable",
+    { signal: AbortSignal.timeout(15000) },
+  );
+  return mapClaudeAuthSession(payload);
+}
+
+export async function cancelClaudeCodeAuth(
+  settings: DesktopSettings,
+  loginId: string,
+): Promise<DesktopClaudeAuthSession> {
+  const payload = await requestJson<ClaudeAuthPayload>(
+    settings,
+    `/api/providers/claude_code/auth/${encodeURIComponent(loginId)}`,
+    "mutationSingleAttempt",
+    { method: "DELETE", signal: AbortSignal.timeout(15000) },
+  );
+  return mapClaudeAuthSession(payload);
 }
 
 function mapProviderRecentSession(

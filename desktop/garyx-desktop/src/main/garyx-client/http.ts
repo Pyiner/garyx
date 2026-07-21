@@ -181,6 +181,16 @@ function errorMessageFromPayload(payload: unknown): string | undefined {
   if (typeof message === "string" && message.trim()) {
     return message;
   }
+  if (
+    maybeRecord.error &&
+    typeof maybeRecord.error === "object" &&
+    !Array.isArray(maybeRecord.error)
+  ) {
+    const nestedMessage = (maybeRecord.error as Record<string, unknown>).message;
+    if (typeof nestedMessage === "string" && nestedMessage.trim()) {
+      return nestedMessage;
+    }
+  }
   const errors = maybeRecord.errors;
   if (Array.isArray(errors)) {
     const messages = errors

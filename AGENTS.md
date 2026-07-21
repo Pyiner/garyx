@@ -106,6 +106,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   when it is outside the task scope.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
+- Provider default model and reasoning labels should use the row's available
+  control width. Do not impose percentage caps that truncate short names when
+  the row has room to show them in full.
 - Electron `contextBridge` exposes `window.garyxDesktop` as a frozen
   cross-context object. Never target it directly with a Proxy that substitutes
   property values; materialize intercepting methods on a separate facade.
@@ -175,6 +178,13 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 
 ## Release And Runtime Boundaries
 
+- Claude Code account selection is provider-owned runtime state. Do not persist
+  `CLAUDE_CONFIG_DIR` in thread or agent metadata; snapshot the provider's
+  selected environment only when a new top-level run starts.
+- Anthropic OAuth usage can return a valid Fable `weekly_scoped` allowance with
+  `is_active: false`; that flag means the bucket is not currently consuming,
+  not that its quota is unavailable. Preserve scoped limits that have a usable
+  model scope and percentage.
 - Gateway code changes do not affect the running gateway until the binary is
   built, installed, and the managed gateway is restarted.
 - For local macOS gateway development, use `scripts/build-local-cli.sh` to

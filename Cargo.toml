@@ -48,7 +48,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 antigravity-sdk = { path = "antigravity-sdk" }
 claude-agent-sdk = { path = "claude-agent-sdk" }
 codex-sdk = { path = "codex-sdk" }
-cctty = { git = "https://github.com/Pyiner/cctty.git", rev = "221537fe35e1b9ae8d0cdc2494f992cbad8ae13d" }
+cctty = { git = "https://github.com/Pyiner/cctty.git", rev = "5401243975ddc61cdf9a774754df7619f4062eb5" }
 garyx-models = { path = "garyx-models" }
 garyx-core = { path = "garyx-core" }
 garyx-router = { path = "garyx-router" }

@@ -11,12 +11,16 @@ This change is desktop-first. The existing iOS Settings navigation and manual Cl
 ## Product contract
 
 - Providers is the first Mac Settings item and the default destination when Settings opens.
-- Provider cards are fully expanded; there is no disclosure/folding state.
+- Every provider is a fully expanded native Settings section; there is no disclosure/folding state.
+- Provider content uses one flat list surface with row separators. The selected account is a row, not a nested summary card.
+- Surfaces, meters, selection, and status treatments stay within Garyx's black / white / neutral-gray visual language.
 - Quota is represented with horizontal linear meters.
-- The Claude Code card shows the selected account, its identity/plan, default model controls, and Session / Weekly / Fable quota.
+- The Claude Code section shows the selected account, its identity/plan, default model controls, and Session / Weekly / Fable quota.
+- Default model and reasoning labels consume the row's available control width and remain fully visible whenever they fit; the chips do not impose percentage caps that truncate short model names.
 - The account switcher shows quota for every account so a user can compare before selecting.
 - Add, rename, reauthenticate, switch, and delete are provider-level account actions.
 - Account dialogs are centered in the entire desktop application window.
+- The multi-step Claude login dialog keeps one `640 x 300` viewport-safe geometry across every step. Its header and footer stay anchored while only the body content changes or scrolls.
 - A managed login begins with one explicit `Sign in with Claude` action. Once the Gateway returns an authorization URL, desktop opens it in the default browser once per `login_id`, immediately shows and focuses the code input, and leaves the URL visible as a clickable fallback. There is no separate Open/Open Again button.
 - The system-default account can be reauthenticated but cannot be renamed or deleted.
 - Deleting the active managed account switches Claude Code back to System default atomically before removing the directory.
@@ -52,9 +56,10 @@ Production therefore resolves to `~/.garyx/provider-accounts/claude-code/<accoun
 
 1. the account exists in config;
 2. the candidate has the exact managed-root/account-id shape;
-3. neither candidate nor marker is a symlink;
-4. the canonical candidate remains strictly below the canonical managed root;
-5. the marker is a regular file and contains the expected account ID.
+3. neither managed-root component, candidate, nor marker is a symlink;
+4. the canonical `provider-accounts/claude-code` chain remains directly below the canonical Garyx config parent;
+5. the canonical candidate remains a direct child of the canonical managed root;
+6. the marker is a regular file and contains the expected account ID.
 
 Config changes use the Gateway's serialized `mutate_config` transaction so runtime reload and atomic persistence either both succeed or roll back.
 
@@ -84,6 +89,7 @@ The existing state machine remains:
 - `POST /api/providers/claude_code/auth/start`
 - `POST /api/providers/claude_code/auth/{login_id}/submit`
 - `GET /api/providers/claude_code/auth/{login_id}`
+- `DELETE /api/providers/claude_code/auth/{login_id}`
 
 The start request gains optional desktop fields:
 
@@ -99,7 +105,7 @@ The start request gains optional desktop fields:
 - `managed_account_name`: reserve a new account ID and owned directory and authenticate there;
 - `account_id`: reauthenticate that existing managed account.
 
-The response adds optional `account_id`. Unknown response fields remain harmless to iOS decoders. The auth session owns its target configuration directory and uses it for both `auth login` and `auth status`. A newly reserved directory is cleaned up after a terminal failure when ownership validation succeeds. On success, parsed auth metadata is committed and a newly added account becomes active.
+The response adds optional `account_id`. Unknown response fields remain harmless to iOS decoders. The auth session owns its target configuration directory and uses it for both `auth login` and `auth status`. Closing desktop's login dialog calls the DELETE endpoint, terminates the pending Claude process, and cleans an uncommitted managed directory after ownership validation. A newly reserved directory is also cleaned up after any terminal failure. On success, parsed auth metadata is committed and a newly added account becomes active.
 
 ## Claude process runtime
 
@@ -133,13 +139,13 @@ Claude quota fetch accepts an optional configuration directory:
 
 ## Desktop structure
 
-The Providers page replaces the separate quota hero plus configuration table with one expanded card per provider. The Claude card owns its account selector and actions; the other providers keep their existing model configuration behavior in the same visual card grammar.
+The Providers page replaces the separate quota hero plus configuration table with one native Settings section per provider. Each section has a single flat list surface with separated rows. Claude Code owns its account selector, quota rows, and actions; the other providers keep their existing model configuration behavior in the same Settings grammar. There are no nested account cards, colored quota surfaces, or dashboard-style hero treatments.
 
 Desktop calls the account/auth APIs through typed main-process IPC methods. External authorization URLs are validated as HTTP(S) before using Electron's external URL opener. The renderer tracks opened `login_id` values in component state so React rerenders and polling cannot open duplicate browser tabs.
 
 ## Failure behavior
 
-- Unknown/stale selected account: runtime safely falls back to System default and the accounts endpoint marks the selection invalid; a subsequent explicit selection repairs config.
+- Unknown/stale selected account: runtime quarantines launches in an isolated invalid-selection directory instead of silently using System default; the accounts endpoint returns no selected account and a subsequent explicit selection repairs config.
 - Account quota unavailable: keep the account selectable and show an inline unavailable state.
 - Browser opener failure: keep the URL visible and show a non-blocking error.
 - Auth status metadata unavailable after successful login: keep the successful account and surface the status warning; quota/auth refresh can repair metadata later.
@@ -153,6 +159,5 @@ Desktop calls the account/auth APIs through typed main-process IPC methods. Exte
 3. Auth API tests for system default, managed add, managed reauth, failure cleanup, and config-dir propagation.
 4. Credential/keychain service and per-account cache-key unit tests.
 5. Bridge tests proving selection hot reload affects the next run, not an active run, and no account value enters thread metadata.
-6. Desktop tests for Providers-first navigation, expanded linear-meter cards, one browser open per login ID, immediate code field, account switching, and Fable rendering.
+6. Desktop tests for Providers-first navigation, flat expanded linear-meter sections, fixed login-dialog geometry, one browser open per login ID, immediate code field, account switching, and Fable rendering.
 7. Focused Rust tests, desktop typecheck/unit tests, then a packaged-app end-to-end pass with screenshots of the card, switcher, and centered login dialog.
-

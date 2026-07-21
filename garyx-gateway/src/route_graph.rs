@@ -7,8 +7,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::server::AppState;
 use crate::{
     automation, capsules, chat, coding_usage, commands, create_dispatch, dashboard, gateway_auth,
-    mcp, mcp_config, meetings, provider_auth, restart_wake, routes, tasks, tool_image,
-    workspace_files, workspaces,
+    mcp, mcp_config, meetings, provider_accounts, provider_auth, restart_wake, routes, tasks,
+    tool_image, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -420,11 +420,25 @@ fn operations_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/providers/claude_code/auth/{login_id}",
-            axum::routing::get(provider_auth::get_claude_code_auth),
+            axum::routing::get(provider_auth::get_claude_code_auth)
+                .delete(provider_auth::cancel_claude_code_auth),
         )
         .route(
             "/api/providers/claude_code/auth/{login_id}/submit",
             axum::routing::post(provider_auth::submit_claude_code_auth),
+        )
+        .route(
+            "/api/providers/claude_code/accounts",
+            axum::routing::get(provider_accounts::list_claude_code_accounts),
+        )
+        .route(
+            "/api/providers/claude_code/accounts/active",
+            axum::routing::put(provider_accounts::select_claude_code_account),
+        )
+        .route(
+            "/api/providers/claude_code/accounts/{account_id}",
+            axum::routing::patch(provider_accounts::rename_claude_code_account)
+                .delete(provider_accounts::delete_claude_code_account),
         )
         .route("/api/restart", axum::routing::post(routes::restart))
         .route("/api/send", axum::routing::post(routes::send_message))

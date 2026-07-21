@@ -15,8 +15,10 @@ use cctty::auth::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, oneshot};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::provider_accounts::{self, AccountsApiError, ClaudeAuthTarget};
 use crate::server::AppState;
 
 const AUTH_START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,6 +42,10 @@ impl ClaudeAuthSessionStore {
         self.sessions.lock().await.get(login_id).cloned()
     }
 
+    async fn remove(&self, login_id: &str) -> Option<Arc<ClaudeAuthSession>> {
+        self.sessions.lock().await.remove(login_id)
+    }
+
     #[cfg(test)]
     async fn claude_path_override(&self) -> Option<PathBuf> {
         self.claude_path_override.lock().await.clone()
@@ -58,14 +64,17 @@ impl ClaudeAuthSessionStore {
 
 struct ClaudeAuthSession {
     login_id: String,
+    target: ClaudeAuthTarget,
     state: Mutex<ClaudeAuthSessionState>,
     input: Mutex<Option<AuthLoginInput>>,
+    cancellation: CancellationToken,
 }
 
 impl ClaudeAuthSession {
-    fn new(login_id: String, input: AuthLoginInput) -> Self {
+    fn new(login_id: String, input: AuthLoginInput, target: ClaudeAuthTarget) -> Self {
         Self {
             login_id,
+            target,
             state: Mutex::new(ClaudeAuthSessionState {
                 status: ClaudeAuthLoginStatus::Starting,
                 url: None,
@@ -74,6 +83,7 @@ impl ClaudeAuthSession {
                 exit_code: None,
             }),
             input: Mutex::new(Some(input)),
+            cancellation: CancellationToken::new(),
         }
     }
 
@@ -82,7 +92,10 @@ impl ClaudeAuthSession {
     }
 
     async fn snapshot(&self) -> ClaudeAuthLoginResponse {
-        self.state.lock().await.to_response(&self.login_id)
+        self.state
+            .lock()
+            .await
+            .to_response(&self.login_id, self.target.account_id.clone())
     }
 
     async fn update(&self, update: impl FnOnce(&mut ClaudeAuthSessionState)) {
@@ -119,6 +132,19 @@ impl ClaudeAuthSession {
             input.close();
         }
     }
+
+    async fn cancel(&self) -> ClaudeAuthLoginResponse {
+        self.update(|state| {
+            if !state.status.is_terminal() {
+                state.status = ClaudeAuthLoginStatus::Failed;
+                state.error = Some("Claude Code sign-in was cancelled.".to_owned());
+            }
+        })
+        .await;
+        self.close_input().await;
+        self.cancellation.cancel();
+        self.snapshot().await
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,9 +157,10 @@ struct ClaudeAuthSessionState {
 }
 
 impl ClaudeAuthSessionState {
-    fn to_response(&self, login_id: &str) -> ClaudeAuthLoginResponse {
+    fn to_response(&self, login_id: &str, account_id: Option<String>) -> ClaudeAuthLoginResponse {
         ClaudeAuthLoginResponse {
             login_id: login_id.to_owned(),
+            account_id,
             status: self.status,
             url: self.url.clone(),
             auth_status: self.auth_status.clone(),
@@ -179,6 +206,10 @@ pub struct StartClaudeAuthRequest {
     #[serde(default)]
     sso: bool,
     email: Option<String>,
+    /// Present only when desktop is creating a new isolated profile.
+    managed_account_name: Option<String>,
+    /// Present only when desktop is reauthenticating an existing profile.
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +221,8 @@ pub struct SubmitClaudeAuthRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClaudeAuthLoginResponse {
     pub login_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
     pub status: ClaudeAuthLoginStatus,
     pub url: Option<String>,
     pub auth_status: Option<Value>,
@@ -202,27 +235,39 @@ pub async fn start_claude_code_auth(
     Json(request): Json<StartClaudeAuthRequest>,
 ) -> Result<(StatusCode, Json<ClaudeAuthLoginResponse>), ApiError> {
     let login_id = Uuid::new_v4().to_string();
+    let target = provider_accounts::prepare_auth_target(
+        &state,
+        request.managed_account_name.as_deref(),
+        request.account_id.as_deref(),
+    )
+    .await
+    .map_err(map_accounts_error)?;
     let login_args = build_login_args(&request);
     let claude_path = state
         .ops
         .provider_auth_sessions
         .claude_path_override()
         .await;
-    let mut auth_session = AuthLoginSession::start(AuthLoginOptions {
+    let auth_options = AuthLoginOptions {
         passthrough_args: login_args,
         claude_path: claude_path.clone(),
+        env: target.environment(),
         ..AuthLoginOptions::default()
-    })
-    .map_err(|error| {
-        ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "spawn_claude_auth_failed",
-            error.to_string(),
-        )
-    })?;
+    };
+    let mut auth_session = match AuthLoginSession::start(auth_options) {
+        Ok(session) => session,
+        Err(error) => {
+            provider_accounts::cleanup_failed_auth_target(&state, &target).await;
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "spawn_claude_auth_failed",
+                error.to_string(),
+            ));
+        }
+    };
     let input = auth_session.input();
     let events = auth_session.take_events();
-    let session = Arc::new(ClaudeAuthSession::new(login_id.clone(), input));
+    let session = Arc::new(ClaudeAuthSession::new(login_id.clone(), input, target));
     state
         .ops
         .provider_auth_sessions
@@ -233,6 +278,7 @@ pub async fn start_claude_code_auth(
         session.clone(),
         events,
         auth_session,
+        state,
         claude_path,
         started_tx,
     ));
@@ -252,6 +298,7 @@ pub async fn start_claude_code_auth(
                     state.error = Some("Timed out waiting for Claude Code login URL.".to_owned());
                 })
                 .await;
+            session.cancel().await;
             Err(ApiError::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "claude_auth_start_timeout",
@@ -300,32 +347,59 @@ pub async fn get_claude_code_auth(
     Ok(Json(session.snapshot().await))
 }
 
+pub async fn cancel_claude_code_auth(
+    State(state): State<Arc<AppState>>,
+    AxumPath(login_id): AxumPath<String>,
+) -> Result<Json<ClaudeAuthLoginResponse>, ApiError> {
+    let session = state
+        .ops
+        .provider_auth_sessions
+        .remove(&login_id)
+        .await
+        .ok_or_else(|| unknown_session_error(&login_id))?;
+    Ok(Json(session.cancel().await))
+}
+
 async fn read_auth_events(
     session: Arc<ClaudeAuthSession>,
     mut events: tokio::sync::mpsc::Receiver<AuthLoginEvent>,
     auth_session: AuthLoginSession,
+    app_state: Arc<AppState>,
     claude_path: Option<PathBuf>,
     started_tx: oneshot::Sender<Result<ClaudeAuthLoginResponse, ApiError>>,
 ) {
     let mut started_tx = Some(started_tx);
-    while let Some(event) = events.recv().await {
-        handle_auth_event(&session, claude_path.clone(), event, &mut started_tx).await;
+    loop {
+        tokio::select! {
+            _ = session.cancellation.cancelled() => {
+                session.close_input().await;
+                drop(events);
+                drop(auth_session);
+                tokio::task::yield_now().await;
+                provider_accounts::cleanup_failed_auth_target(&app_state, &session.target).await;
+                return;
+            }
+            event = events.recv() => {
+                let Some(event) = event else {
+                    break;
+                };
+                handle_auth_event(&session, event, &mut started_tx).await;
+            }
+        }
     }
 
     session.close_input().await;
     match auth_session.wait().await {
         Ok(code) => {
             let code = Some(code);
-            let mut should_fetch_status = false;
+            let mut should_finalize = false;
             session
                 .update(|state| {
                     state.exit_code = code;
-                    if state.status == ClaudeAuthLoginStatus::Succeeded {
-                        should_fetch_status = code.unwrap_or(0) == 0;
-                    } else if !state.status.is_terminal() {
+                    if !state.status.is_terminal() {
                         state.status = if code.unwrap_or(1) == 0 {
-                            should_fetch_status = true;
-                            ClaudeAuthLoginStatus::Succeeded
+                            should_finalize = true;
+                            ClaudeAuthLoginStatus::Submitted
                         } else {
                             ClaudeAuthLoginStatus::Failed
                         };
@@ -339,18 +413,26 @@ async fn read_auth_events(
                     }
                 })
                 .await;
-            if should_fetch_status {
-                let auth_status = fetch_auth_status(claude_path).await;
+            if should_finalize {
+                let auth_status =
+                    fetch_auth_status(claude_path, session.target.environment()).await;
+                let (value, warning) = match auth_status {
+                    Ok(value) => (value, None),
+                    Err(error) => (json!({}), Some(error)),
+                };
+                let completion =
+                    provider_accounts::complete_auth_target(&app_state, &session.target, &value)
+                        .await;
                 session
-                    .update(|state| match auth_status {
-                        Ok(value) => {
+                    .update(|state| match completion {
+                        Ok(()) => {
                             state.status = ClaudeAuthLoginStatus::Succeeded;
                             state.auth_status = Some(value);
-                            state.error = None;
+                            state.error = warning;
                         }
                         Err(error) => {
-                            state.status = ClaudeAuthLoginStatus::Succeeded;
-                            state.error = Some(error);
+                            state.status = ClaudeAuthLoginStatus::Failed;
+                            state.error = Some(error.to_string());
                         }
                     })
                     .await;
@@ -368,6 +450,7 @@ async fn read_auth_events(
 
     let final_snapshot = session.snapshot().await;
     if final_snapshot.status == ClaudeAuthLoginStatus::Failed {
+        provider_accounts::cleanup_failed_auth_target(&app_state, &session.target).await;
         send_start_error_once(
             &mut started_tx,
             ApiError::new(
@@ -383,7 +466,6 @@ async fn read_auth_events(
 
 async fn handle_auth_event(
     session: &Arc<ClaudeAuthSession>,
-    claude_path: Option<PathBuf>,
     event: AuthLoginEvent,
     started_tx: &mut Option<oneshot::Sender<Result<ClaudeAuthLoginResponse, ApiError>>>,
 ) {
@@ -427,18 +509,13 @@ async fn handle_auth_event(
                 .await;
         }
         AuthLoginEvent::Success { .. } => {
-            let auth_status = fetch_auth_status(claude_path).await;
             session
                 .update(|state| {
-                    state.status = ClaudeAuthLoginStatus::Succeeded;
-                    match auth_status {
-                        Ok(value) => {
-                            state.auth_status = Some(value);
-                            state.error = None;
-                        }
-                        Err(error) => {
-                            state.error = Some(error);
-                        }
+                    if !state.status.is_terminal() {
+                        // The process can still fail after printing the success
+                        // line. Finalize credentials/config only after exit 0.
+                        state.status = ClaudeAuthLoginStatus::Submitted;
+                        state.error = None;
                     }
                 })
                 .await;
@@ -475,13 +552,22 @@ async fn handle_auth_event(
     }
 }
 
-async fn fetch_auth_status(claude_path: Option<PathBuf>) -> Result<Value, String> {
+async fn fetch_auth_status(
+    claude_path: Option<PathBuf>,
+    env: HashMap<String, String>,
+) -> Result<Value, String> {
     auth_status_json(AuthStatusOptions {
         claude_path,
+        env,
         ..AuthStatusOptions::default()
     })
     .await
     .map_err(|error| format!("Failed to run Claude Code auth status: {error}"))
+}
+
+fn map_accounts_error(error: AccountsApiError) -> ApiError {
+    let (status, code, message) = error.into_parts();
+    ApiError::new(status, code, message)
 }
 
 fn map_submit_code_error(error: CcttyError) -> ApiError {
@@ -719,6 +805,232 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_managed_auth_closes_process_and_removes_uncommitted_profile() {
+        let dir = tempdir().unwrap();
+        let fake_claude = write_fake_claude(dir.path());
+        let config = crate::test_support::with_gateway_auth(GaryxConfig::default());
+        let state = crate::server::AppStateBuilder::new(config)
+            .with_config_path(dir.path().join("config.yaml"))
+            .build();
+        state
+            .ops
+            .provider_auth_sessions
+            .set_claude_path_override_for_test(fake_claude)
+            .await;
+        let router = crate::route_graph::build_router(state.clone());
+
+        let start_response = router
+            .clone()
+            .oneshot(
+                crate::test_support::authed_request()
+                    .method("POST")
+                    .uri("/api/providers/claude_code/auth/start")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"claudeai","managed_account_name":"Cancelled"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(start_response.status(), StatusCode::CREATED);
+        let start: ClaudeAuthLoginResponse = serde_json::from_slice(
+            &to_bytes(start_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let account_id = start.account_id.as_deref().expect("managed account id");
+        let account_dir = dir
+            .path()
+            .join("provider-accounts/claude-code")
+            .join(account_id);
+        assert!(account_dir.is_dir());
+
+        let auth_uri = format!("/api/providers/claude_code/auth/{}", start.login_id);
+        let cancel_response = router
+            .clone()
+            .oneshot(
+                crate::test_support::authed_request()
+                    .method("DELETE")
+                    .uri(&auth_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cancel_response.status(), StatusCode::OK);
+        let cancelled: ClaudeAuthLoginResponse = serde_json::from_slice(
+            &to_bytes(cancel_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cancelled.status, ClaudeAuthLoginStatus::Failed);
+        assert_eq!(
+            cancelled.error.as_deref(),
+            Some("Claude Code sign-in was cancelled.")
+        );
+
+        for _ in 0..100 {
+            if !account_dir.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!account_dir.exists(), "cancelled profile should be removed");
+        assert!(
+            state
+                .config_snapshot()
+                .provider_accounts
+                .claude_code
+                .accounts
+                .is_empty()
+        );
+
+        let status_response = router
+            .oneshot(
+                crate::test_support::authed_request()
+                    .method("GET")
+                    .uri(auth_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn managed_auth_uses_isolated_config_dir_and_commits_account() {
+        let dir = tempdir().unwrap();
+        let fake_claude = write_fake_claude(dir.path());
+        let mut config = crate::test_support::with_gateway_auth(GaryxConfig::default());
+        config.agents.insert(
+            "claude".to_owned(),
+            serde_json::to_value(AgentProviderConfig {
+                provider_id: "claude".to_owned(),
+                provider_type: garyx_models::ProviderType::ClaudeCode.as_slug().to_owned(),
+                claude_cli_mode: "native".to_owned(),
+                claude_cli_path: fake_claude.to_string_lossy().into_owned(),
+                ..AgentProviderConfig::default()
+            })
+            .unwrap(),
+        );
+        let state = crate::server::AppStateBuilder::new(config)
+            .with_config_path(dir.path().join("config.yaml"))
+            .build();
+        state
+            .ops
+            .provider_auth_sessions
+            .set_claude_path_override_for_test(fake_claude)
+            .await;
+        let router = crate::route_graph::build_router(state.clone());
+
+        let start_response = router
+            .clone()
+            .oneshot(
+                crate::test_support::authed_request()
+                    .method("POST")
+                    .uri("/api/providers/claude_code/auth/start")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"claudeai","managed_account_name":"Work"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(start_response.status(), StatusCode::CREATED);
+        let start: ClaudeAuthLoginResponse = serde_json::from_slice(
+            &to_bytes(start_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let account_id = start.account_id.clone().expect("managed account id");
+
+        let submit_response = router
+            .clone()
+            .oneshot(
+                crate::test_support::authed_request()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/providers/claude_code/auth/{}/submit",
+                        start.login_id
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"code":"TEST-CODE"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(submit_response.status(), StatusCode::OK);
+
+        let status_uri = format!("/api/providers/claude_code/auth/{}", start.login_id);
+        let mut final_snapshot = None;
+        let mut last_snapshot = None;
+        for _ in 0..500 {
+            let response = router
+                .clone()
+                .oneshot(
+                    crate::test_support::authed_request()
+                        .method("GET")
+                        .uri(&status_uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let snapshot: ClaudeAuthLoginResponse =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            if snapshot.status == ClaudeAuthLoginStatus::Succeeded {
+                final_snapshot = Some(snapshot);
+                break;
+            }
+            if snapshot.status == ClaudeAuthLoginStatus::Failed {
+                final_snapshot = Some(snapshot);
+                break;
+            }
+            last_snapshot = Some(snapshot);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let final_snapshot = final_snapshot.unwrap_or_else(|| {
+            panic!("managed auth should finish; last snapshot: {last_snapshot:?}")
+        });
+        assert_eq!(
+            final_snapshot.status,
+            ClaudeAuthLoginStatus::Succeeded,
+            "managed auth failed: {:?}",
+            final_snapshot.error
+        );
+
+        let config = state.config_snapshot();
+        assert_eq!(
+            config
+                .provider_accounts
+                .claude_code
+                .active_account_id
+                .as_deref(),
+            Some(account_id.as_str())
+        );
+        let account = config
+            .provider_accounts
+            .claude_code
+            .account(&account_id)
+            .expect("committed account");
+        assert_eq!(account.name, "Work");
+        assert_eq!(account.organization.as_deref(), Some("Test Org"));
+        let account_dir = dir
+            .path()
+            .join("provider-accounts/claude-code")
+            .join(account_id);
+        assert!(account_dir.join("login-env-seen").is_file());
+        assert!(account_dir.join("status-env-seen").is_file());
+    }
+
+    #[tokio::test]
     async fn claude_auth_ignores_cctty_config_and_native_mode() {
         let dir = tempdir().unwrap();
         let fake_claude = write_fake_claude(dir.path());
@@ -780,10 +1092,15 @@ mod tests {
             &path,
             r#"#!/usr/bin/env python3
 import json
+import os
 import sys
+from pathlib import Path
 
 args = sys.argv[1:]
+config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
 if args == ["auth", "status", "--json"]:
+    if config_dir:
+        Path(config_dir, "status-env-seen").write_text(config_dir, encoding="utf-8")
     print(json.dumps({
         "authMethod": "claude.ai",
         "orgName": "Test Org",
@@ -792,6 +1109,8 @@ if args == ["auth", "status", "--json"]:
     sys.exit(0)
 
 if args[:2] == ["auth", "login"]:
+    if config_dir:
+        Path(config_dir, "login-env-seen").write_text(config_dir, encoding="utf-8")
     print("Opening browser to sign in...", flush=True)
     print("If the browser did not open, visit: https://claude.ai/oauth/authorize?state=test", flush=True)
     sys.stdout.write("Paste code here if prompted > ")

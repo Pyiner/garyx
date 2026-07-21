@@ -3,16 +3,19 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  cancelClaudeCodeAuth,
   fetchAutomationActivity,
   fetchBotConsoles,
   fetchConfiguredBots,
   fetchThreadLogs,
   fetchThreadPins,
   fetchWorkspaces,
+  deleteClaudeCodeAccount,
   getCodingUsage,
   getSkillEditor,
   interruptThread,
   listCapsules,
+  listClaudeCodeAccounts,
   listCustomAgents,
   listMcpServers,
   listProviderRecentSessions,
@@ -26,6 +29,7 @@ import {
   sendStreamingInput,
   setDefaultCustomAgent,
   setGatewayFetch,
+  startClaudeCodeAuth,
   toggleCustomAgent,
 } from "./gary-client.ts";
 
@@ -523,6 +527,84 @@ test("coding usage accepts the signed i64 reset interval emitted by Rust", async
           resetAfterSeconds: 86400,
         },
       }]);
+    },
+  );
+});
+
+test("Claude account list keeps per-account Fable quota and auth session fields", async () => {
+  await withGatewayFetch(
+    async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/auth/start")) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          mode: "claudeai",
+          sso: false,
+          email: null,
+          managed_account_name: "Work",
+          account_id: null,
+        });
+        return jsonResponse({
+          login_id: "login-1",
+          account_id: "account-1",
+          status: "waiting_for_code",
+          url: "https://claude.ai/oauth/authorize?state=test",
+          auth_status: null,
+          error: null,
+          exit_code: null,
+        }, 201);
+      }
+      if (path.endsWith("/auth/login-1")) {
+        assert.equal(init?.method, "DELETE");
+        return jsonResponse({
+          login_id: "login-1",
+          account_id: "account-1",
+          status: "failed",
+          url: "https://claude.ai/oauth/authorize?state=test",
+          auth_status: null,
+          error: "Claude Code sign-in was cancelled.",
+          exit_code: null,
+        });
+      }
+      if (path.endsWith("/accounts/account-1")) {
+        assert.equal(init?.method, "DELETE");
+        return jsonResponse({ deleted_account_id: "account-1" });
+      }
+      return jsonResponse({
+        active_account_id: "account-1",
+        refreshed_at: "2026-07-21T12:00:00Z",
+        accounts: [{
+          id: "account-1",
+          name: "Work",
+          system_default: false,
+          selected: true,
+          email: "user@example.com",
+          plan: "max",
+          usage: {
+            id: "claude_code",
+            name: "Claude Code",
+            available: true,
+            scoped_limits: [{
+              id: "weekly_scoped:fable",
+              name: "Fable",
+              kind: "weekly_scoped",
+              window: { used_percent: 25, remaining_percent: 75 },
+            }],
+          },
+        }],
+      });
+    },
+    async () => {
+      const accounts = await listClaudeCodeAccounts(settings);
+      assert.equal(accounts.activeAccountId, "account-1");
+      assert.equal(accounts.accounts[0].usage.scopedLimits[0].name, "Fable");
+      assert.equal(accounts.accounts[0].usage.scopedLimits[0].window.remainingPercent, 75);
+      const auth = await startClaudeCodeAuth(settings, { managedAccountName: "Work" });
+      assert.equal(auth.loginId, "login-1");
+      assert.equal(auth.authorizationUrl, "https://claude.ai/oauth/authorize?state=test");
+      const cancelled = await cancelClaudeCodeAuth(settings, auth.loginId);
+      assert.equal(cancelled.status, "failed");
+      assert.equal(cancelled.error, "Claude Code sign-in was cancelled.");
+      await deleteClaudeCodeAccount(settings, "account-1");
     },
   );
 });

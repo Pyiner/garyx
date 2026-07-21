@@ -177,4 +177,47 @@ test('settings colors and provider labels remain on shared presentation paths', 
     /label: providerLabel\("claude_code"\)/,
     'an empty agent catalog must not materialize Claude',
   );
+  assert.match(
+    appShellSource,
+    /function openSettingsView\(\)[\s\S]*?\{ kind: "settings", tabId: "provider" \}/,
+    'the Mac Settings button must always enter Providers first',
+  );
+
+  const settingsTabsSource = read('settings-tabs.ts');
+  assert.ok(
+    settingsTabsSource.indexOf("id: 'provider'") < settingsTabsSource.indexOf("id: 'labs'"),
+    'Providers must be the first settings destination',
+  );
+});
+
+test('provider accounts stay flat and multi-step sign-in keeps stable geometry', () => {
+  const providerSource = read('settings/ProviderSettingsPanel.tsx');
+  const providerRules = parseRules(read('styles/providers.css'));
+
+  assert.match(providerSource, /className="codex-list-card provider-section-rows"/);
+  assert.doesNotMatch(providerSource, /provider-account-(?:avatar|current)/);
+  assert.match(
+    providerSource,
+    /className="provider-login-dialog"[\s\S]*?scroll="content"/,
+    'the sign-in flow must keep its header and footer anchored while the step body changes',
+  );
+  expectRule(providerRules, '.provider-login-dialog[data-slot="dialog-content"]', [
+    'width: min(640px, calc(100vw - 40px))',
+    'height: min(300px, calc(100dvh - 40px))',
+    'min-height: min(300px, calc(100dvh - 40px))',
+    'max-height: min(300px, calc(100dvh - 40px))',
+  ]);
+  expectRule(providerRules, '.provider-default-row .provider-config-default-cell', [
+    'width: 100%',
+    'justify-content: flex-end',
+  ]);
+  expectRule(providerRules, '.provider-config-default-chip', [
+    'flex: 0 1 auto',
+    'max-width: 100%',
+  ]);
+  for (const level of ['healthy', 'warning', 'critical']) {
+    expectRule(providerRules, `.provider-usage-meter[data-level="${level}"]`, [
+      '--provider-usage-color: var(--color-token-text-primary)',
+    ]);
+  }
 });

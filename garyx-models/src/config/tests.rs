@@ -8,6 +8,49 @@ fn test_default_config_roundtrip() {
 }
 
 #[test]
+fn provider_accounts_default_to_system_claude_profile() {
+    let cfg: GaryxConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(
+        cfg.provider_accounts
+            .claude_code
+            .active_account_id
+            .is_none()
+    );
+    assert!(cfg.provider_accounts.claude_code.accounts.is_empty());
+}
+
+#[test]
+fn provider_accounts_roundtrip_without_persisting_paths() {
+    let cfg: GaryxConfig = serde_json::from_value(serde_json::json!({
+        "provider_accounts": {
+            "claude_code": {
+                "active_account_id": "work",
+                "accounts": [{
+                    "id": "work",
+                    "name": "Work",
+                    "email": "user@example.com",
+                    "organization": "Example",
+                    "plan": "max",
+                    "auth_method": "claude.ai",
+                    "created_at": "2026-07-21T12:00:00Z",
+                    "updated_at": "2026-07-21T12:00:00Z"
+                }]
+            }
+        }
+    }))
+    .unwrap();
+    let active = cfg
+        .provider_accounts
+        .claude_code
+        .active_account()
+        .expect("active account");
+    assert_eq!(active.name, "Work");
+    let value = serde_json::to_value(cfg).unwrap();
+    assert!(value.to_string().contains("active_account_id"));
+    assert!(!value.to_string().contains("config_dir"));
+}
+
+#[test]
 fn test_gateway_defaults() {
     let gw = GatewayConfig::default();
     assert_eq!(gw.port, 31337);
