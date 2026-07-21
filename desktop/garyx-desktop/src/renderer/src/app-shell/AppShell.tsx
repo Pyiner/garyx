@@ -3,6 +3,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -636,25 +637,32 @@ export function AppShell() {
     React.Dispatch<React.SetStateAction<DesktopState | null>>
   >(
     (action) => {
-      setDesktopStateRaw((current) => {
-        const next = pinnedOrderIngress.commitState(current, action);
-        // Connection-scope transition AT the state-commit boundary: by the
-        // time React renders a new gateway's frame, the mirror and the
-        // side-chat domain are already the new (empty) universe — no frame
-        // can paint the previous gateway's data and no effect ordering is
-        // load-bearing. The ingress identity checks above already rejected
-        // cross-gateway deliveries, so `next` carries the accepted
-        // universe; same-key adoption is a no-op, which keeps updater
-        // re-runs (StrictMode, replays) safe. commitState sets the
-        // precedent for idempotent ingress bookkeeping inside the updater.
-        const nextGatewayKey = next?.entitiesGatewayUrl || "";
-        gatewayMirror.beginConnectionScope(nextGatewayKey);
-        sideChatSessions.setGatewayScope(nextGatewayKey);
-        return next;
-      });
+      setDesktopStateRaw((current) =>
+        pinnedOrderIngress.commitState(current, action),
+      );
     },
-    [pinnedOrderIngress, gatewayMirror, sideChatSessions],
+    [pinnedOrderIngress],
   );
+  // Connection-scope transition at the REAL commit boundary. A functional
+  // updater is not one: React may execute, replay, or abandon it without
+  // committing (Suspense/transitions), which would flip the mirror universe
+  // while the old gateway's UI is still on screen. useLayoutEffect runs
+  // only for COMMITTED renders, synchronously BEFORE paint — the
+  // scope-mismatched frame that was just committed re-renders from the
+  // empty new universe before anything is painted — and before every
+  // passive effect, so new-universe loaders always start after the reset
+  // regardless of declaration order. Same-key adoption is a no-op, which
+  // keeps StrictMode's double-invoke safe. The committed state is adopted
+  // as the mirror's new root, so root consumers (e.g. the side-chat
+  // panel's scope key) can never keep serving the previous gateway's root.
+  const committedGatewayKey = desktopState?.entitiesGatewayUrl || "";
+  useLayoutEffect(() => {
+    gatewayMirror.beginConnectionScope(committedGatewayKey, {
+      desktopState,
+    });
+    sideChatSessions.setGatewayScope(committedGatewayKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gatewayMirror, sideChatSessions, committedGatewayKey]);
   const [desktopAgentCatalog, setDesktopAgentCatalog] =
     useState<DesktopAgentCatalog>(EMPTY_DESKTOP_AGENT_CATALOG);
   const desktopAgents = desktopAgentCatalog.agents;
@@ -2720,19 +2728,26 @@ export function AppShell() {
     entrySource: ThreadEntrySelectionSource | null = null,
   ): Promise<boolean> {
     const requestSequence = ++selectThreadRequestSequenceRef.current;
+    // The open command is owned by the universe it started on: an answer
+    // (or failure) that lands after a gateway switch is discarded like a
+    // superseded request — the id means a different thread there.
+    const epoch = gatewayMirror.currentConnectionEpoch;
+    const superseded = () =>
+      requestSequence !== selectThreadRequestSequenceRef.current ||
+      !gatewayMirror.isCurrentConnectionEpoch(epoch);
     setError(null);
     setNewThreadDraftActive(false);
 
     try {
       if (!(await ensureThreadOpenable(threadId))) {
-        if (requestSequence !== selectThreadRequestSequenceRef.current) {
+        if (superseded()) {
           return true;
         }
         setError(`Thread not found: ${threadId}`);
         return false;
       }
     } catch (error) {
-      if (requestSequence !== selectThreadRequestSequenceRef.current) {
+      if (superseded()) {
         return true;
       }
       setError(
@@ -2743,7 +2758,7 @@ export function AppShell() {
       return false;
     }
 
-    if (requestSequence !== selectThreadRequestSequenceRef.current) {
+    if (superseded()) {
       return true;
     }
     setSelectedThreadId(threadId);
@@ -4214,6 +4229,7 @@ export function AppShell() {
   const sideChatPanel = (
     <SideChatPanel
       sessions={sideChatSessions}
+      gatewayKey={workspaceGatewayKey}
       activeThread={activeThread}
       composerAgentOptions={composerAgentOptions}
       availableWorkspaceCount={availableWorkspaceCount}

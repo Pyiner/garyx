@@ -1541,8 +1541,10 @@ export class TranscriptLifecycle {
         });
       }
     } catch (historyError) {
-      pendingMessagesPrependAnchorRef.current = null;
       if (this.connectionEpoch === epoch) {
+        // Anchor and error surface belong to the operation's own universe:
+        // a stale rejection must not wipe a successor's prepend anchor.
+        pendingMessagesPrependAnchorRef.current = null;
         setError(
           historyError instanceof Error
             ? historyError.message
@@ -1568,8 +1570,23 @@ export class TranscriptLifecycle {
       return true;
     }
 
+    // The WHOLE operation is epoch-owned, first await included: a refresh
+    // answer (resolve OR reject) from the previous gateway universe must
+    // neither vouch for the id, surface an error, nor fall through to the
+    // history probe with stale context.
     const epoch = this.connectionEpoch;
-    const refreshedState = await refreshDesktopState();
+    let refreshedState: DesktopState;
+    try {
+      refreshedState = await refreshDesktopState();
+    } catch (refreshError) {
+      if (this.connectionEpoch !== epoch) {
+        return false;
+      }
+      throw refreshError;
+    }
+    if (this.connectionEpoch !== epoch) {
+      return false;
+    }
     if (isKnownThreadId(refreshedState, threadId)) {
       return true;
     }

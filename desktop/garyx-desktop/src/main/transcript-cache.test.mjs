@@ -189,6 +189,31 @@ test('cache identity is the (gatewayScope, threadId) pair', async () => {
   }
 });
 
+test('long gateway scopes still produce fixed-length legal file names', async () => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'garyx-transcript-cache-long-'));
+  try {
+    const cache = await importTranscriptCache(join(temporaryRoot, 'unused-user-data'), temporaryRoot);
+    const store = new cache.TranscriptCacheStore({
+      directory: () => join(temporaryRoot, 'cache'),
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxRecords: 10,
+    });
+    const longScope = `https://${'a'.repeat(160)}.example.com:8443/gateway`;
+    // Raw-encoding this composite key would blow the 255-byte file-name
+    // limit (ENAMETOOLONG) once the atomic-write temp suffix lands on top.
+    await store.save(longScope, transcript('thread-under-long-gateway-url'));
+    assert.ok(
+      await store.load(longScope, 'thread-under-long-gateway-url'),
+      'the digest file name round-trips',
+    );
+    const names = await cacheRecordNames(join(temporaryRoot, 'cache'));
+    assert.equal(names.length, 1);
+    assert.ok(names[0].length <= 70, 'file names are fixed-length digests');
+  } finally {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  }
+});
+
 test('serializes save and clear mutations with the latest call winning', async () => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'garyx-transcript-cache-order-'));
   try {

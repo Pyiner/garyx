@@ -388,12 +388,19 @@ export class GatewayMirror {
         new Error("GatewayMirror constructed without services"),
       );
     }
+    const epoch = this.connectionEpoch;
     return Promise.all([
       Promise.resolve().then(() => services.getState()),
       Promise.resolve()
         .then(() => services.listCustomAgents())
         .catch(() => EMPTY_AGENT_CATALOG),
     ]).then(([nextState, nextCatalog]) => {
+      if (this.connectionEpoch !== epoch) {
+        // The answer came from the previous gateway universe: hand it to
+        // the awaiting caller (whose own writes are epoch-fenced) without
+        // publishing it as the new universe's root or catalog.
+        return nextState;
+      }
       this.desktopState = nextState;
       this.bumpRoot();
       this.agents = nextCatalog.agents;
@@ -516,13 +523,34 @@ export class GatewayMirror {
     return this.connectionEpoch === epoch;
   }
 
-  beginConnectionScope(key: string): void {
+  beginConnectionScope(
+    key: string,
+    options?: { desktopState?: DesktopState | null },
+  ): void {
     const previous = this.connectionScopeKey;
     this.connectionScopeKey = key;
     if (previous === null || previous === key || previous === "") {
       return;
     }
     this.connectionEpoch += 1;
+    // The mirror ROOT belongs to the universe too: adopt the committed
+    // new-gateway state (when the caller has it) instead of keeping the
+    // previous gateway's root, drop any in-flight root refresh (its answer
+    // is epoch-fenced in executeDesktopStateRefresh), and clear the agent
+    // catalog — a late A catalog must never republish under B.
+    this.desktopState = options?.desktopState ?? null;
+    this.desktopStateRefreshInFlight = null;
+    this.desktopStateRefreshTrailing = null;
+    this.desktopStateRefreshTailRequested = false;
+    this.bumpRoot();
+    this.agents = [];
+    this.defaultAgentId = null;
+    this.effectiveDefaultAgentId = null;
+    this.bumpCatalog();
+    if (this.services) {
+      // Repopulate root + catalog from the NEW gateway.
+      void this.refreshDesktopState().catch(() => {});
+    }
     this.transcriptLifecycle.beginConnectionEpoch();
     this.dispatchOrchestrator.beginConnectionEpoch();
     for (const entry of this.threads.values()) {
@@ -706,11 +734,13 @@ export class GatewayMirror {
     // The disk cache is partitioned by gateway scope: a persist carries the
     // universe it belongs to, so even a leaked late save can only ever
     // write into its OWN gateway's partition.
-    void this.services?.saveThreadTranscriptCache?.(
-      this.connectionScopeKey ?? "",
-      transcript,
-      renderState,
-    );
+    void this.services
+      ?.saveThreadTranscriptCache?.(
+        this.connectionScopeKey ?? "",
+        transcript,
+        renderState,
+      )
+      .catch(() => {});
   }
 
   // Slice 6b-2c MirrorPort accessors: the lifecycle's transport IPC,

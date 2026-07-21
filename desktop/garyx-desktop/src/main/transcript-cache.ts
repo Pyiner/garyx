@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdir,
   readFile,
@@ -23,13 +24,16 @@ export type { CachedThreadTranscript };
 // Not bumped when `renderState` was added: it's an optional field, so existing
 // v1 caches still load (with `renderState` undefined → graceful degradation to
 // an empty render until the first live frame).
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 export const MAX_TRANSCRIPT_CACHE_BYTES = 48 * 1024 * 1024;
 export const MAX_TRANSCRIPT_CACHE_RECORDS = 240;
 
 interface CachedThreadTranscriptFile {
   version: number;
   savedAt: string;
+  /** The owning gateway scope: validated on load, so even a (theoretical)
+   *  digest collision can never serve another gateway's transcript. */
+  scope: string;
   transcript: ThreadTranscript;
   // Optional offline render snapshot so a cold/offline thread open can render
   // its folded history without a gateway round-trip.
@@ -61,7 +65,11 @@ function cacheKey(scope: string, threadId: string): string {
 }
 
 function cacheFileName(scope: string, threadId: string): string {
-  return `${Buffer.from(cacheKey(scope, threadId), "utf8").toString("base64url")}.json`;
+  // Fixed-length digest: gateway URLs plus thread ids (plus the atomic-write
+  // temp suffix) can exceed the 255-byte file-name limit if encoded raw.
+  // Collisions are guarded by the scope/threadId fields validated inside
+  // the payload on load.
+  return `${createHash("sha256").update(cacheKey(scope, threadId), "utf8").digest("hex")}.json`;
 }
 
 function validTranscript(value: unknown): value is ThreadTranscript {
@@ -106,6 +114,7 @@ export class TranscriptCacheStore {
         const parsed = JSON.parse(raw) as Partial<CachedThreadTranscriptFile>;
         if (
           parsed.version !== CACHE_VERSION ||
+          parsed.scope !== scope ||
           !validTranscript(parsed.transcript) ||
           parsed.transcript.threadId !== normalizedThreadId
         ) {
@@ -141,6 +150,7 @@ export class TranscriptCacheStore {
       const payload: CachedThreadTranscriptFile = {
         version: CACHE_VERSION,
         savedAt: savedAt.toISOString(),
+        scope,
         transcript,
         renderState: renderState ?? null,
       };
@@ -148,6 +158,11 @@ export class TranscriptCacheStore {
         await writeFile(temp, JSON.stringify(payload), "utf8");
         await rename(temp, target);
         await utimes(target, savedAt, savedAt).catch(() => undefined);
+      } catch {
+        // Best-effort cache: a failed write (disk pressure, permissions)
+        // must never surface — the authoritative transcript path does not
+        // depend on this cache.
+        return;
       } finally {
         await rm(temp, { force: true }).catch(() => undefined);
       }

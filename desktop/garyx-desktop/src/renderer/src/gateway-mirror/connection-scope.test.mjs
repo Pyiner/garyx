@@ -297,6 +297,111 @@ test("a stale connection-status answer cannot overwrite the new universe's", asy
   );
 });
 
+test("the mirror root and catalog belong to the universe too", async () => {
+  // First getState call = A's in-flight refresh; later calls (the
+  // transition's own repopulation against B) stay pending forever so the
+  // assertion isolates A's late answer.
+  const rootRefresh = deferred();
+  let stateCalls = 0;
+  const mirror = new GatewayMirror({
+    getState: () => {
+      stateCalls += 1;
+      return stateCalls === 1 ? rootRefresh.promise : new Promise(() => {});
+    },
+    listCustomAgents: async () => ({
+      agents: [{ id: "agent::from-a" }],
+      defaultAgentId: "agent::from-a",
+      effectiveDefaultAgentId: "agent::from-a",
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+
+  // A's root refresh is in flight when the switch lands.
+  const pending = mirror.refreshDesktopState();
+  const bState = {
+    entitiesGatewayUrl: "http://gateway-b",
+    threads: [],
+    sessions: [],
+    automations: [],
+  };
+  mirror.beginConnectionScope("http://gateway-b", { desktopState: bState });
+
+  // The transition ADOPTS the committed B state as the root immediately —
+  // scope-key consumers (e.g. the side-chat panel) can never read A's root
+  // under B.
+  assert.equal(mirror.getRootSnapshot().desktopState, bState);
+  assert.deepEqual(
+    mirror.getCatalogSnapshot().agents,
+    [],
+    "A's agent catalog does not survive into B",
+  );
+
+  const aState = {
+    entitiesGatewayUrl: "http://gateway-a",
+    threads: [],
+    sessions: [],
+    automations: [],
+  };
+  rootRefresh.resolve(aState);
+  await pending.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    mirror.getRootSnapshot().desktopState,
+    bState,
+    "A's late root refresh does not republish under B",
+  );
+});
+
+test("a stale openability answer reports not-openable without vouching", async () => {
+  const refresh = deferred();
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: async () => ({
+      agents: [],
+      defaultAgentId: null,
+      effectiveDefaultAgentId: null,
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  const errors = [];
+  mirror.setTranscriptLifecycleDeps({
+    desktopState: { threads: [], sessions: [], automations: [] },
+    refreshDesktopState: () => refresh.promise,
+    setError: (error) => {
+      errors.push(error);
+    },
+  });
+
+  // A's refresh resolves AFTER the switch with a state that contains the
+  // colliding thread id: it must not vouch for the id in universe B.
+  const pending = mirror.ensureThreadOpenable(THREAD);
+  mirror.beginConnectionScope("http://gateway-b");
+  refresh.resolve({
+    threads: [{ id: THREAD, title: "A thread" }],
+    sessions: [{ id: THREAD, title: "A thread" }],
+    automations: [],
+  });
+  assert.equal(await pending, false, "no stale vouch across the boundary");
+
+  // And a stale rejection is silent (no error escapes into B).
+  const rejected = deferred();
+  mirror.beginConnectionScope("http://gateway-c");
+  mirror.setTranscriptLifecycleDeps({
+    desktopState: { threads: [], sessions: [], automations: [] },
+    refreshDesktopState: () => rejected.promise,
+    setError: (error) => {
+      errors.push(error);
+    },
+  });
+  const pendingFailure = mirror.ensureThreadOpenable(THREAD);
+  mirror.beginConnectionScope("http://gateway-d");
+  rejected.reject(new Error("gateway c went away"));
+  assert.equal(await pendingFailure, false, "a stale failure is a quiet no");
+  assert.deepEqual(errors, [], "nothing surfaced through setError");
+});
+
 test("a stale older-history page cannot prepend into the new universe", async () => {
   const history = deferred();
   const mirror = new GatewayMirror({

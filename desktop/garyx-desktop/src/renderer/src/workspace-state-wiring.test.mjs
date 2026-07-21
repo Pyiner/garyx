@@ -112,27 +112,43 @@ test('the renderer commits the created state without stripping its envelope', ()
 });
 
 test('side-chat scope ownership is wired at every production boundary', () => {
-  // 1. The connection-scope transition happens synchronously AT the
-  //    state-commit boundary (inside the setDesktopState wrapper): mirror
-  //    universe first, then the side-chat domain. No frame can render the
-  //    previous gateway's data and no effect ordering is load-bearing.
+  // 1. The connection-scope transition lives in a LAYOUT effect: it runs
+  //    only for COMMITTED renders (a functional updater can be replayed or
+  //    abandoned without committing), synchronously before paint, and
+  //    before every passive effect — so no painted frame and no loader can
+  //    observe the previous gateway's universe. The committed state is
+  //    adopted as the mirror's new root in the same call.
   const transitionIdx = appShellSource.indexOf(
-    'gatewayMirror.beginConnectionScope(nextGatewayKey);',
+    'gatewayMirror.beginConnectionScope(committedGatewayKey, {',
   );
   assert.ok(transitionIdx > 0, 'the mirror transition call exists');
-  const commitIdx = appShellSource.indexOf(
-    'pinnedOrderIngress.commitState(current, action)',
+  const layoutIdx = appShellSource.lastIndexOf(
+    'useLayoutEffect(() => {',
+    transitionIdx,
   );
   assert.ok(
-    commitIdx > 0 && transitionIdx > commitIdx && transitionIdx - commitIdx < 1200,
-    'the transition is co-located with the ingress state commit',
+    layoutIdx > 0 && transitionIdx - layoutIdx < 200,
+    'the transition runs inside a layout effect (real commit boundary)',
   );
   const domainTransitionIdx = appShellSource.indexOf(
-    'sideChatSessions.setGatewayScope(nextGatewayKey);',
+    'sideChatSessions.setGatewayScope(committedGatewayKey);',
   );
   assert.ok(
     domainTransitionIdx > transitionIdx,
     'the mirror universe resets before the side-chat domain republishes',
+  );
+  // No side effects hide inside the state updater anymore.
+  assert.doesNotMatch(
+    appShellSource,
+    /commitState\(current, action\);[\s\S]{0,400}beginConnectionScope/,
+    'the functional updater stays pure',
+  );
+  // The panel derives its scope from the shell-truth prop, never the
+  // (possibly lagging) mirror root.
+  assert.match(
+    sideChatPanelSource,
+    /const scopedView = scopedSideChatView\(\s*sessionsSnapshot,\s*gatewayKey,/,
+    'the panel scope key is the shell-truth prop',
   );
   // The persisted binding is re-adopted in the scope-keyed effect AFTER the
   // commit-boundary transition cleared the domain.

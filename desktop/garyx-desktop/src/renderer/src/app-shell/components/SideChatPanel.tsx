@@ -100,6 +100,10 @@ type ThreadPageProps = ComponentProps<typeof ThreadPage>;
 
 export interface SideChatPanelProps {
   sessions: SideChatSessions;
+  /** Shell-truth gateway scope key (the same render-time value AppShell
+   *  derives its own projections from). The panel must NOT read this from
+   *  the mirror root, which can lag the committed state by a refresh. */
+  gatewayKey: string;
   activeThread: DesktopThreadSummary | null;
   /** Shell-truth chrome shared with the main ThreadPage instance. */
   composerAgentOptions: ThreadPageProps["composerAgentOptions"];
@@ -191,6 +195,7 @@ export function SideChatPanel({
   onReorderQueuedIntent,
   syncThreadBotBinding,
   t,
+  gatewayKey,
 }: SideChatPanelProps) {
   const mirror = useGatewayMirror();
   const root = useGatewayRoot();
@@ -223,7 +228,7 @@ export function SideChatPanel({
   // draft, or transcript.
   const scopedView = scopedSideChatView(
     sessionsSnapshot,
-    desktopState?.entitiesGatewayUrl || "",
+    gatewayKey,
     sideChatSourceThreadId,
   );
   const sideChatThreadId = scopedView.threadId;
