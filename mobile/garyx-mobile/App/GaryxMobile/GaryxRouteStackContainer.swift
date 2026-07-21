@@ -671,6 +671,16 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         presentationLeases.records[token]
     }
 
+    #if DEBUG
+    /// Read-only hosted-test probe for lifecycle reproductions that must
+    /// identify a lease after its presenting SwiftUI view identity disappears.
+    var presentationLeaseRecordsForTesting: [
+        GaryxPresentationLeaseToken: GaryxPresentationLeaseRecord
+    ] {
+        presentationLeases.records
+    }
+    #endif
+
     @discardableResult
     func requestHardSnap(to replacement: [GaryxRouteEntry]) -> Bool {
         loadViewIfNeeded()
