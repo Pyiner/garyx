@@ -179,11 +179,16 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
 - Keep custom SwiftUI presentation `Binding` getters pure. Acquire and settle
   modal leases from always-attached lifecycle callbacks, binding setters, or
   dismissal callbacks, and make repeated dismissal observation idempotent.
-- `UIViewRepresentable` make/update callbacks run inside SwiftUI graph updates.
-  Never synchronously publish from those callbacks into SwiftUI-observed
-  storage. Keep imperative UIKit lifecycle controllers in stable,
-  non-observable reference state, attach UIKit observation from UIKit hierarchy
-  callbacks, and return business outcomes through explicit callbacks.
+- `UIViewRepresentable` and `UIViewControllerRepresentable` lifecycle
+  callbacks — make, update, and dismantle — run inside SwiftUI graph updates;
+  dismantle can run inside graph teardown while a window or scene deallocates.
+  Never synchronously publish from any of these callbacks into SwiftUI-observed
+  storage: a `@Published` write there can re-enter the graph and abort with a
+  Swift exclusivity violation. Keep imperative UIKit lifecycle controllers in
+  stable, non-observable reference state, attach UIKit observation from UIKit
+  hierarchy callbacks, and return business outcomes through explicit callbacks.
+  Detach/teardown bookkeeping that must settle observable state defers that
+  publish outside the current graph update.
 - Occurrence-scoped async route preparation must release waiters immediately
   when an occurrence is superseded. A stale completion may clean up its own
   waiters, but must never mutate the current occurrence bookkeeping.
