@@ -2,48 +2,41 @@ import Foundation
 import XCTest
 @testable import GaryxMobileCore
 
-/// Deterministic red reproductions for #TASK-2571. They are opt-in so the
-/// intentionally failing desired-contract assertions do not poison normal CI:
-///
-///     TASK_2571_REPRO=1 swift test --filter GaryxThreadSubtitleReproTests
+/// Permanent regressions distilled from the deterministic #TASK-2571 route
+/// capture. Rust covers the live write/route contract; these tests drive the
+/// captured wire rows through the production Core decoder, cache, and subtitle
+/// presenter.
 @MainActor
 final class GaryxThreadSubtitleReproTests: XCTestCase {
-    func testNewPrivateWorkspaceThreadDisplaysThreadIdInsteadOfAcceptedUserMessage() throws {
-        try requireTask2571ReproMode()
+    func testNewPrivateWorkspaceSubtitleShowsAcceptedUserMessageWithoutImplicitPrefix() throws {
         let capture = try loadTask2571Capture()
-        let active = try XCTUnwrap(capture.activeRecent.threads.first)
+        var active = try XCTUnwrap(capture.activeRecent.threads.first)
         let completed = try XCTUnwrap(capture.completedRecent.threads.first)
 
         XCTAssertEqual(active.lastMessagePreview, "")
         XCTAssertEqual(completed.lastMessagePreview, "Latest user sentence")
-
-        let activeSubtitle = subtitle(for: active)
-        let completedSubtitle = subtitle(for: completed)
-        XCTAssertEqual(
-            activeSubtitle,
-            "thread--00000000-0000-4000-8000-000000002571"
-        )
-        XCTAssertEqual(
-            completedSubtitle,
-            "thread--00000000-0000-4000-8000-000000002571 · Latest user sentence"
+        XCTAssertNil(
+            subtitle(for: active),
+            "an empty preview must not reveal the implicit workspace basename"
         )
 
-        // Desired contract: the accepted user sentence, rather than the
-        // basename of the implicit private workspace, owns the subtitle.
-        // This assertion is intentionally red.
-        XCTAssertEqual(activeSubtitle, "Latest user sentence")
+        // D2 makes this the live gateway value as soon as chat/start commits
+        // the user row; D3 then renders only that preview.
+        active.lastMessagePreview = "Latest user sentence"
+        XCTAssertEqual(subtitle(for: active), "Latest user sentence")
+        XCTAssertEqual(subtitle(for: completed), "Latest user sentence")
     }
 
-    func testSharedSummaryCacheMakesSubtitleJumpBetweenTwoGatewaySources() throws {
-        try requireTask2571ReproMode()
+    func testSharedSummaryCacheRejectsStaleRouteResponseWithoutSubtitleRegression() throws {
         let capture = try loadTask2571Capture()
         let recent = try XCTUnwrap(capture.completedRecent.threads.first)
-        let summary = try XCTUnwrap(capture.completedSummaries.threads.first)
+        var staleSummary = try XCTUnwrap(capture.completedSummaries.threads.first)
+        staleSummary.updatedAt = "2026-07-21T18:50:53.974042+00:00"
         let cache = GaryxThreadSummaryCache()
 
         cache.writeThrough([recent])
         let afterRecent = try XCTUnwrap(cache.summary(for: recent.id))
-        cache.writeThrough([summary])
+        cache.writeThrough([staleSummary])
         let afterSummary = try XCTUnwrap(cache.summary(for: recent.id))
         cache.writeThrough([recent])
         let afterNextRecent = try XCTUnwrap(cache.summary(for: recent.id))
@@ -51,16 +44,8 @@ final class GaryxThreadSubtitleReproTests: XCTestCase {
         let observedSubtitles = [afterRecent, afterSummary, afterNextRecent].map(subtitle)
         XCTAssertEqual(
             observedSubtitles,
-            [
-                "thread--00000000-0000-4000-8000-000000002571 · Latest user sentence",
-                "thread--00000000-0000-4000-8000-000000002571 · Assistant answer",
-                "thread--00000000-0000-4000-8000-000000002571 · Latest user sentence",
-            ]
+            Array(repeating: "Latest user sentence", count: 3)
         )
-
-        // Desired contract: arrival order of two list sources must not change
-        // the row's visible subtitle. This assertion is intentionally red.
-        XCTAssertEqual(observedSubtitles, Array(repeating: observedSubtitles[0], count: 3))
     }
 
     private func subtitle(for thread: GaryxThreadSummary) -> String? {
@@ -84,12 +69,6 @@ private struct Task2571ThreadSubtitleCapture: Decodable {
         case activeSummaries = "active_summaries"
         case completedRecent = "completed_recent"
         case completedSummaries = "completed_summaries"
-    }
-}
-
-private func requireTask2571ReproMode() throws {
-    guard ProcessInfo.processInfo.environment["TASK_2571_REPRO"] == "1" else {
-        throw XCTSkip("Set TASK_2571_REPRO=1 to run the intentional red reproduction")
     }
 }
 

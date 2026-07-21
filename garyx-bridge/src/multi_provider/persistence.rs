@@ -1229,6 +1229,10 @@ pub(super) async fn save_streaming_partial(
                 != Some(true)
         })
         .collect();
+    let committed_user_preview = garyx_models::message_preview::last_message_preview_for_role(
+        authoritative_content.iter(),
+        "user",
+    );
     let content_count = authoritative_content.len();
     let authoritative = build_run_record_drafts(
         authoritative_content,
@@ -1302,6 +1306,18 @@ pub(super) async fn save_streaming_partial(
     );
 
     if let Some(obj) = session_data.as_object_mut() {
+        // The synthesized user row is part of the first streaming transcript
+        // append. Once that append has committed, publish its preview in this
+        // same canonical-record patch so the SQLite list projections derive it
+        // atomically instead of waiting for terminal persistence.
+        if appended > 0
+            && let Some(preview) = committed_user_preview
+        {
+            obj.insert(
+                garyx_models::message_preview::LAST_USER_PREVIEW_FIELD.to_owned(),
+                Value::String(preview),
+            );
+        }
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
         let sdk_session_update = match run.sdk_session_id {
             Some(sid) => SdkSessionUpdate::Set(sid),

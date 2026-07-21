@@ -710,7 +710,7 @@ async fn task_2571_capture_thread_subtitle_payloads() -> Task2571ThreadSubtitleC
                 let recent = task_2571_thread_row(&recent_page, &thread_id);
                 let summary = task_2571_thread_row(&summary_page, &thread_id);
                 if recent["last_message_preview"] == prompt
-                    && summary["last_message_preview"] == reply
+                    && summary["last_message_preview"] == prompt
                     && summary["active_run_id"].is_null()
                 {
                     break (recent, summary);
@@ -732,8 +732,7 @@ async fn task_2571_capture_thread_subtitle_payloads() -> Task2571ThreadSubtitleC
 }
 
 #[tokio::test]
-#[ignore = "#TASK-2571 deterministic red reproduction; run explicitly"]
-async fn task_2571_new_thread_preview_is_missing_while_first_run_is_active() {
+async fn task_2571_new_thread_preview_is_present_while_first_run_is_active() {
     let capture = task_2571_capture_thread_subtitle_payloads().await;
     eprintln!(
         "TASK2571_NEW_THREAD_CAPTURE={}",
@@ -747,21 +746,23 @@ async fn task_2571_new_thread_preview_is_missing_while_first_run_is_active() {
         })
     );
 
-    // Desired contract: once chat/start has accepted the user message, a list
-    // refresh must expose that sentence as the subtitle preview even while the
-    // provider is still running. This assertion is intentionally red.
+    // Once chat/start has accepted the user message, both list projections
+    // expose that sentence even while the provider is still running.
     assert_eq!(
         capture.active_recent["last_message_preview"],
+        "Latest user sentence"
+    );
+    assert_eq!(
+        capture.active_summary["last_message_preview"],
         "Latest user sentence"
     );
 }
 
 #[tokio::test]
-#[ignore = "#TASK-2571 deterministic red reproduction; run explicitly"]
-async fn task_2571_recent_and_summary_routes_disagree_after_completed_run() {
+async fn task_2571_recent_and_summary_routes_agree_after_completed_run() {
     let capture = task_2571_capture_thread_subtitle_payloads().await;
     eprintln!(
-        "TASK2571_SOURCE_DIVERGENCE={}",
+        "TASK2571_SOURCE_CONSISTENCY={}",
         json!({
             "recent": capture.completed_recent,
             "summary": capture.completed_summary,
@@ -769,9 +770,7 @@ async fn task_2571_recent_and_summary_routes_disagree_after_completed_run() {
     );
 
     // Both endpoints feed the same iOS summary cache, so the visible subtitle
-    // must not depend on which request completes last. This assertion is
-    // intentionally red: Recent selects the user preview while Summary selects
-    // the assistant preview for the same committed record.
+    // must not depend on which request completes last.
     assert_eq!(
         capture.completed_recent["last_message_preview"],
         capture.completed_summary["last_message_preview"]

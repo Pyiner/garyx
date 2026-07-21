@@ -4270,7 +4270,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
     assert_eq!(first["threads"][0]["title"], "Task summary");
     assert_eq!(first["threads"][0]["last_user_message"], "question");
     assert_eq!(first["threads"][0]["last_assistant_message"], "answer");
-    assert_eq!(first["threads"][0]["last_message_preview"], "answer");
+    assert_eq!(first["threads"][0]["last_message_preview"], "question");
     assert_eq!(first["threads"][0]["worktree"]["path"], "/workspace/alpha");
 
     let cursor = first["next_cursor"].as_str().unwrap();
@@ -6204,7 +6204,7 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
     );
     assert_eq!(
         payload["threads"][0]["last_message_preview"],
-        "active answer"
+        "hello projection"
     );
     assert_eq!(
         payload["threads"][0]["recent_run_id"],

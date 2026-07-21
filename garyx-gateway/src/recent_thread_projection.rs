@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::sync::{Arc, Weak};
 
 use crate::garyx_db::RecentThreadDraft;
+use crate::thread_preview_projection::thread_message_previews;
 use crate::thread_type::thread_summary_type_from_record;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
@@ -143,7 +144,9 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
         provider_type,
         agent_id,
         message_count,
-        last_message_preview: last_message_preview(data).unwrap_or_default(),
+        last_message_preview: thread_message_previews(data)
+            .user_first()
+            .unwrap_or_default(),
         recent_run_id,
         active_run_id,
         run_state,
@@ -166,22 +169,6 @@ fn recent_thread_run_state(active_run_id: Option<&str>, recent_run_id: Option<&s
         return "completed".to_owned();
     }
     "idle".to_owned()
-}
-
-fn last_message_preview(data: &Value) -> Option<String> {
-    last_message_preview_for_role(data, "user")
-        .or_else(|| last_message_preview_for_role(data, "assistant"))
-}
-
-fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
-    // Write-time preview fields are the source (#TASK-1864 batch 1).
-    if let Some(preview) = garyx_models::message_preview::preview_field_for_role(role)
-        .and_then(|field| data.get(field))
-        .and_then(Value::as_str)
-    {
-        return Some(preview.to_owned());
-    }
-    None
 }
 
 #[cfg(test)]

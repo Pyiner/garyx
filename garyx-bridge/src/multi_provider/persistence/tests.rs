@@ -1209,6 +1209,10 @@ async fn test_save_streaming_partial_commits_user_row_without_inflight_content_t
         "streaming partials still update committed history metadata"
     );
     assert_eq!(stored["history"]["message_count"], 1);
+    assert_eq!(
+        stored["last_user_preview"], "hello",
+        "the record write paired with the committed user row must expose its preview"
+    );
 }
 
 /// #TASK-1715 guard: a result-time `AssistantSegment` boundary finalizes and

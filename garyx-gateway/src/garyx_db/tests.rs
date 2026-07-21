@@ -4771,6 +4771,84 @@ fn thread_meta_summary_cutover_backfills_all_columns_once_and_is_idempotent() {
 }
 
 #[test]
+fn thread_preview_user_first_cutover_repairs_both_stored_routes_once() {
+    let db = GaryxDbService::memory().expect("db opens");
+    let thread_id = "thread::preview-user-first-cutover";
+    {
+        let conn = db.conn().expect("writer");
+        conn.execute(
+            "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+                 VALUES (?1, ?2, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')",
+            params![
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": "Preview cutover",
+                    "updated_at": "2026-07-21T00:00:00Z",
+                    "last_user_preview": "Latest user sentence",
+                    "last_assistant_preview": "Assistant answer",
+                })
+                .to_string(),
+            ],
+        )
+        .expect("seed canonical record");
+        conn.execute(
+            "INSERT INTO thread_meta (
+                    thread_id, thread_label, last_user_message,
+                    last_assistant_message, last_message_preview, search_text, projected_at
+                 ) VALUES (?1, 'Preview cutover', 'Latest user sentence',
+                           'Assistant answer', 'Assistant answer', 'assistant answer',
+                           '2026-07-21T00:00:00Z')",
+            params![thread_id],
+        )
+        .expect("seed assistant-first summary projection");
+        conn.execute(
+            "INSERT INTO recent_threads (
+                    thread_id, title, thread_type, last_message_preview,
+                    run_state, last_active_at, recorded_at
+                 ) VALUES (?1, 'Preview cutover', 'chat', 'stale recent',
+                           'idle', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')",
+            params![thread_id],
+        )
+        .expect("seed stale recent projection");
+    }
+
+    let first = db
+        .migrate_thread_preview_user_first_v1()
+        .expect("preview cutover");
+    assert_eq!(first.source_row_count, 1);
+    assert_eq!(first.updated_row_count, 1);
+    assert!(!first.already_completed);
+
+    let meta = db
+        .list_thread_meta()
+        .expect("meta read")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("meta row");
+    let recent = db
+        .list_recent_threads(100, 0)
+        .expect("recent read")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("recent row");
+    assert_eq!(
+        meta.last_message_preview.as_deref(),
+        Some("Latest user sentence")
+    );
+    assert_eq!(recent.last_message_preview, "Latest user sentence");
+    assert!(meta.search_text.contains("latest user sentence"));
+    assert!(!meta.search_text.contains("assistant answer"));
+
+    let second = db
+        .migrate_thread_preview_user_first_v1()
+        .expect("idempotent preview cutover");
+    assert_eq!(second.source_row_count, 1);
+    assert_eq!(second.updated_row_count, 0);
+    assert!(second.already_completed);
+}
+
+#[test]
 fn thread_meta_schema_v2_rebuilds_real_legacy_shape_without_reusing_cutover_markers() {
     let db = GaryxDbService::memory().expect("db opens");
     {

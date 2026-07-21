@@ -44,6 +44,12 @@ fn app_state_builder_without_boot_import_uses_generation_zero_cutover_gate() {
     );
     assert!(
         garyx_db
+            .migrate_thread_preview_user_first_v1()
+            .unwrap()
+            .already_completed
+    );
+    assert!(
+        garyx_db
             .migrate_endpoint_holder_dedup_v1()
             .unwrap()
             .already_completed

@@ -218,6 +218,94 @@ final class GaryxThreadSummaryCacheTests: XCTestCase {
         XCTAssertNotEqual(pager, copy)
     }
 
+    func testWriteThroughRejectsOlderTimestampAndAcceptsNewerTimestamp() throws {
+        let cache = GaryxThreadSummaryCache()
+        var current = thread(30)
+        current.updatedAt = "2026-07-22T00:00:02Z"
+        current.lastMessagePreview = "current"
+        var older = current
+        older.updatedAt = "2026-07-22T00:00:01Z"
+        older.lastMessagePreview = "older"
+        var newer = current
+        newer.updatedAt = "2026-07-22T00:00:03Z"
+        newer.lastMessagePreview = "newer"
+
+        cache.writeThrough([current])
+        cache.writeThrough([older])
+        XCTAssertEqual(try XCTUnwrap(cache.summary(for: current.id)).lastMessagePreview, "current")
+
+        cache.writeThrough([newer])
+        XCTAssertEqual(try XCTUnwrap(cache.summary(for: current.id)).lastMessagePreview, "newer")
+    }
+
+    func testActivitySequencePreventsSameRouteRegressionEvenWhenClockMovesForward() throws {
+        let cache = GaryxThreadSummaryCache()
+        var current = thread(31)
+        current.updatedAt = "2026-07-22T00:00:02Z"
+        current.activitySeq = 10
+        current.lastMessagePreview = "seq ten"
+        var stale = current
+        stale.updatedAt = "2026-07-22T00:00:03Z"
+        stale.activitySeq = 9
+        stale.lastMessagePreview = "seq nine"
+        var fresh = current
+        fresh.updatedAt = "2026-07-22T00:00:01Z"
+        fresh.activitySeq = 11
+        fresh.lastMessagePreview = "seq eleven"
+
+        cache.writeThrough([current])
+        cache.writeThrough([stale])
+        XCTAssertEqual(try XCTUnwrap(cache.summary(for: current.id)).lastMessagePreview, "seq ten")
+
+        cache.writeThrough([fresh])
+        XCTAssertEqual(try XCTUnwrap(cache.summary(for: current.id)).lastMessagePreview, "seq eleven")
+    }
+
+    func testCrossRouteWriteRetainsSequenceAndTimestampFreshnessWatermarks() throws {
+        let cache = GaryxThreadSummaryCache()
+        var recent = thread(32)
+        recent.updatedAt = "2026-07-22T00:00:02Z"
+        recent.activitySeq = 10
+        recent.lastMessagePreview = "recent ten"
+        var sameSnapshotSummary = recent
+        sameSnapshotSummary.activitySeq = nil
+        sameSnapshotSummary.lastMessagePreview = "same snapshot summary"
+        var staleRecent = recent
+        staleRecent.updatedAt = "2026-07-22T00:00:03Z"
+        staleRecent.activitySeq = 9
+        staleRecent.lastMessagePreview = "stale recent nine"
+        var advancedRecent = recent
+        advancedRecent.updatedAt = "2026-07-22T00:00:01Z"
+        advancedRecent.activitySeq = 11
+        advancedRecent.lastMessagePreview = "advanced recent eleven"
+        var staleSummary = sameSnapshotSummary
+        staleSummary.updatedAt = "2026-07-22T00:00:01.500Z"
+        staleSummary.lastMessagePreview = "stale summary"
+
+        cache.writeThrough([recent])
+        cache.writeThrough([sameSnapshotSummary])
+        XCTAssertEqual(
+            try XCTUnwrap(cache.summary(for: recent.id)).lastMessagePreview,
+            "same snapshot summary",
+            "an equally fresh route may still supply the cached row"
+        )
+
+        cache.writeThrough([staleRecent])
+        XCTAssertEqual(
+            try XCTUnwrap(cache.summary(for: recent.id)).lastMessagePreview,
+            "same snapshot summary",
+            "a Summary write must not erase the retained activity sequence"
+        )
+
+        cache.writeThrough([advancedRecent])
+        cache.writeThrough([staleSummary])
+        XCTAssertEqual(
+            try XCTUnwrap(cache.summary(for: recent.id)).lastMessagePreview,
+            "advanced recent eleven",
+            "a sequence advance must not erase the retained timestamp floor"
+        )
+    }
+
     private func thread(_ index: Int) -> GaryxThreadSummary {
         GaryxThreadSummary(
             id: "thread::\(index)",

@@ -10,6 +10,10 @@ pub(crate) const THREAD_META_SCHEMA_MIGRATION_NAME: &str = "thread_meta_schema_v
 
 pub(super) const THREAD_META_SCHEMA_MIGRATION_VERSION: i64 = 2;
 
+pub(crate) const THREAD_PREVIEW_USER_FIRST_MIGRATION_NAME: &str = "thread_preview_user_first_v1";
+
+pub(super) const THREAD_PREVIEW_USER_FIRST_MIGRATION_VERSION: i64 = 1;
+
 pub(crate) const THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_NAME: &str =
     "thread_meta_workspace_membership_v1";
 
@@ -671,6 +675,7 @@ impl GaryxDbService {
         self.migrate_recent_membership_v2()?;
         self.migrate_canonical_exclusion_strip_v3()?;
         self.migrate_thread_meta_schema_v2()?;
+        self.migrate_thread_preview_user_first_v1()?;
         self.migrate_thread_meta_workspace_membership_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         self.migrate_dispatch_admission_ledger_v1()?;
@@ -1899,6 +1904,110 @@ impl GaryxDbService {
             &tx,
             THREAD_META_SUMMARY_MIGRATION_NAME,
             THREAD_META_SUMMARY_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
+    }
+
+    /// Re-derive both stored list previews with the gateway's canonical
+    /// user-first policy. The projection rewrite and durable marker commit in
+    /// one transaction and intentionally preserve recent activity ordering.
+    pub(crate) fn migrate_thread_preview_user_first_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            THREAD_PREVIEW_USER_FIRST_MIGRATION_NAME,
+            THREAD_PREVIEW_USER_FIRST_MIGRATION_VERSION,
+        )?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_rows = {
+            let mut stmt = tx.prepare(
+                "SELECT meta.thread_id, record.body
+                   FROM thread_meta AS meta
+                   LEFT JOIN thread_records AS record ON record.key = meta.thread_id
+                  ORDER BY meta.thread_id ASC",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let source_row_count = i64::try_from(source_rows.len()).unwrap_or(i64::MAX);
+
+        let mut updated_row_count = 0usize;
+        for (thread_id, body) in source_rows {
+            let body = body.ok_or_else(|| {
+                GaryxDbError::Configuration(
+                    "thread preview cutover found a projection without a canonical record"
+                        .to_owned(),
+                )
+            })?;
+            let data: Value = serde_json::from_str(&body).map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "thread preview cutover could not decode {thread_id}: {error}"
+                ))
+            })?;
+            let projected = crate::thread_meta_projection::
+                thread_meta_projection_from_thread_data_with_active_run(&thread_id, &data, None)
+                .ok_or_else(|| {
+                    GaryxDbError::Configuration(format!(
+                        "thread preview cutover rejected canonical id {thread_id}"
+                    ))
+                })?
+                .thread_meta;
+            let recent_preview = projected.last_message_preview.clone().unwrap_or_default();
+            let meta_updates = tx.execute(
+                "UPDATE thread_meta
+                    SET last_user_message = ?1,
+                        last_assistant_message = ?2,
+                        last_message_preview = ?3,
+                        search_text = ?4
+                  WHERE thread_id = ?5
+                    AND (
+                        last_user_message IS NOT ?1
+                        OR last_assistant_message IS NOT ?2
+                        OR last_message_preview IS NOT ?3
+                        OR search_text IS NOT ?4
+                    )",
+                params![
+                    projected.last_user_message.as_deref(),
+                    projected.last_assistant_message.as_deref(),
+                    projected.last_message_preview.as_deref(),
+                    projected.search_text,
+                    thread_id,
+                ],
+            )?;
+            let recent_updates = tx.execute(
+                "UPDATE recent_threads
+                    SET last_message_preview = ?1
+                  WHERE thread_id = ?2
+                    AND last_message_preview IS NOT ?1",
+                params![recent_preview, thread_id],
+            )?;
+            updated_row_count += usize::from(meta_updates > 0 || recent_updates > 0);
+        }
+        record_projection_state_tx(
+            &tx,
+            THREAD_PREVIEW_USER_FIRST_MIGRATION_NAME,
+            THREAD_PREVIEW_USER_FIRST_MIGRATION_VERSION,
             source_row_count,
             Some(import_generation),
         )?;

@@ -1,5 +1,68 @@
 import Foundation
 
+/// Pure freshness ordering for cache writes. The cache retains the strongest
+/// sequence and timestamp it has observed independently from the winning row,
+/// because Summary rows do not carry Recent's `activity_seq`.
+struct GaryxThreadSummaryFreshness: Equatable, Sendable {
+    private let activitySeq: Int64?
+    private let updatedAt: Date?
+
+    init(_ summary: GaryxThreadSummary) {
+        activitySeq = summary.activitySeq
+        updatedAt = summary.updatedAt.flatMap(garyxThreadDate)
+    }
+
+    private init(activitySeq: Int64?, updatedAt: Date?) {
+        self.activitySeq = activitySeq
+        self.updatedAt = updatedAt
+    }
+
+    func shouldAccept(_ candidate: GaryxThreadSummary) -> Bool {
+        let candidateFreshness = Self(candidate)
+        if let candidateSeq = candidateFreshness.activitySeq,
+           let currentSeq = activitySeq,
+           candidateSeq != currentSeq {
+            return candidateSeq > currentSeq
+        }
+
+        switch (candidateFreshness.updatedAt, updatedAt) {
+        case let (candidate?, current?) where candidate != current:
+            return candidate > current
+        case (_?, _?):
+            return true
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            break
+        }
+
+        if candidateFreshness.activitySeq != nil { return true }
+        if activitySeq != nil { return false }
+        // Legacy/point-read rows without either monotonic field remain
+        // replaceable; there is no evidence that the candidate is older.
+        return true
+    }
+
+    func accepting(_ candidate: GaryxThreadSummary) -> Self {
+        let candidateFreshness = Self(candidate)
+        return Self(
+            activitySeq: maxOptional(activitySeq, candidateFreshness.activitySeq),
+            updatedAt: maxOptional(updatedAt, candidateFreshness.updatedAt)
+        )
+    }
+
+    private func maxOptional<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Value? {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?): max(lhs, rhs)
+        case let (lhs?, nil): lhs
+        case let (nil, rhs?): rhs
+        case (nil, nil): nil
+        }
+    }
+}
+
 /// Gateway-scoped, main-actor summary truth. Membership state machines retain
 /// only ids; every row lookup comes through this cache.
 @MainActor
@@ -8,6 +71,7 @@ public final class GaryxThreadSummaryCache {
 
     private struct Entry {
         var summary: GaryxThreadSummary
+        var freshness: GaryxThreadSummaryFreshness
         var pinCount: Int
         var lastAccess: UInt64
     }
@@ -123,9 +187,21 @@ public final class GaryxThreadSummaryCache {
     private func writeWithoutPruning(_ summaries: [GaryxThreadSummary]) {
         for summary in summaries {
             guard let threadId = Self.normalizedId(summary.id) else { continue }
+            let freshness: GaryxThreadSummaryFreshness
+            if var current = entries[threadId] {
+                guard current.freshness.shouldAccept(summary) else {
+                    current.lastAccess = tick()
+                    entries[threadId] = current
+                    continue
+                }
+                freshness = current.freshness.accepting(summary)
+            } else {
+                freshness = GaryxThreadSummaryFreshness(summary)
+            }
             let pinCount = entries[threadId]?.pinCount ?? 0
             entries[threadId] = Entry(
                 summary: summary,
+                freshness: freshness,
                 pinCount: pinCount,
                 lastAccess: tick()
             )

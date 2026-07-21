@@ -387,7 +387,9 @@ enum GaryxHomeListFixture {
                 recentRunId: "run-\(i)",
                 activeRunId: isRunning ? "run-\(i)" : nil,
                 runState: isRunning ? "running" : "idle",
-                worktreePath: nil
+                worktreePath: nil,
+                rootWorkspacePath: "/Users/test/workspaces/project-\(i % 12)",
+                workspaceOrigin: "explicit"
             )
         }
 
