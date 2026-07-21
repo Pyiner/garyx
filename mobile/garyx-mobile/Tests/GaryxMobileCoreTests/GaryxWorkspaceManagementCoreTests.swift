@@ -277,7 +277,7 @@ final class GaryxWorkspaceManagementCoreTests: XCTestCase {
 
     func testBrowserAppliesListingAndResetsFilter() {
         var state = GaryxWorkspaceDirectoryBrowserState()
-        state.beginLoad()
+        let ticket = state.beginLoad()
         XCTAssertTrue(state.isLoading)
         state.apply(listing(
             path: "/Users/test",
@@ -286,7 +286,7 @@ final class GaryxWorkspaceManagementCoreTests: XCTestCase {
                 GaryxWorkspaceDirectoryEntry(name: "repos", path: "/Users/test/repos"),
                 GaryxWorkspaceDirectoryEntry(name: "garyx", path: "/Users/test/garyx", gitRepo: true),
             ]
-        ))
+        ), ticket: ticket)
         XCTAssertFalse(state.isLoading)
         XCTAssertEqual(state.currentPath, "/Users/test")
         XCTAssertEqual(state.filteredEntries.count, 2)
@@ -295,20 +295,22 @@ final class GaryxWorkspaceManagementCoreTests: XCTestCase {
         XCTAssertEqual(state.filteredEntries.map(\.name), ["garyx"])
 
         // Navigating away replaces the listing and clears the filter.
-        state.apply(listing(path: "/Users/test/garyx", parent: "/Users/test", entries: []))
+        let next = state.beginLoad()
+        state.apply(listing(path: "/Users/test/garyx", parent: "/Users/test", entries: []), ticket: next)
         XCTAssertEqual(state.filterText, "")
     }
 
     func testBrowserFailureStaysPutWithInlineError() {
         var state = GaryxWorkspaceDirectoryBrowserState()
+        let first = state.beginLoad()
         state.apply(listing(
             path: "/Users/test",
             parent: "/Users",
             entries: [GaryxWorkspaceDirectoryEntry(name: "repos", path: "/Users/test/repos")]
-        ))
+        ), ticket: first)
 
-        state.beginLoad()
-        state.fail(GaryxWorkspaceDirectoryError(code: .notFound, message: "missing"))
+        let second = state.beginLoad()
+        state.fail(GaryxWorkspaceDirectoryError(code: .notFound, message: "missing"), ticket: second)
         // Stay-put: the previous listing is still on screen.
         XCTAssertEqual(state.currentPath, "/Users/test")
         XCTAssertEqual(state.filteredEntries.count, 1)
@@ -318,13 +320,56 @@ final class GaryxWorkspaceManagementCoreTests: XCTestCase {
         )
 
         // The next successful navigation clears the error.
-        state.beginLoad()
+        _ = state.beginLoad()
         XCTAssertNil(state.inlineError)
+    }
+
+    func testBrowserLastNavigationWinsAcrossTickets() {
+        var state = GaryxWorkspaceDirectoryBrowserState()
+        let root = state.beginLoad()
+        state.apply(listing(path: "/root", parent: "/", entries: []), ticket: root)
+
+        // Slow A then fast B: A's late response must not replace B.
+        let slowA = state.beginLoad()
+        let fastB = state.beginLoad()
+        state.apply(listing(path: "/root/B", parent: "/root", entries: []), ticket: fastB)
+        state.apply(listing(path: "/root/A", parent: "/root", entries: []), ticket: slowA)
+        XCTAssertEqual(state.currentPath, "/root/B")
+
+        // A superseded failure is dropped too.
+        let slowFail = state.beginLoad()
+        let winner = state.beginLoad()
+        state.apply(listing(path: "/root/C", parent: "/root", entries: []), ticket: winner)
+        state.fail(GaryxWorkspaceDirectoryError(code: .notFound, message: "late"), ticket: slowFail)
+        XCTAssertEqual(state.currentPath, "/root/C")
+        XCTAssertNil(state.inlineError)
+    }
+
+    func testLocallyRejectedTypedPathSupersedesInFlightNavigation() {
+        var state = GaryxWorkspaceDirectoryBrowserState()
+        let root = state.beginLoad()
+        state.apply(listing(path: "/root", parent: "/", entries: []), ticket: root)
+
+        // Slow navigation to A is in flight when the user submits a locally
+        // rejected relative path.
+        let slowA = state.beginLoad()
+        XCTAssertTrue(state.isLoading)
+        XCTAssertNil(state.normalizeTypedPath("relative/child"))
+        XCTAssertEqual(state.inlineError?.message, GaryxWorkspaceDirectoryErrorCode.invalidPath.userMessage)
+        XCTAssertFalse(state.isLoading)
+
+        // A's late response is superseded: the browser stays put and the
+        // local error survives.
+        state.apply(listing(path: "/root/A", parent: "/root", entries: []), ticket: slowA)
+        XCTAssertEqual(state.currentPath, "/root")
+        XCTAssertEqual(state.inlineError?.message, GaryxWorkspaceDirectoryErrorCode.invalidPath.userMessage)
+        XCTAssertFalse(state.isLoading)
     }
 
     func testBrowserPathSegmentsJumpTargets() {
         var state = GaryxWorkspaceDirectoryBrowserState()
-        state.apply(listing(path: "/Users/test/repos", parent: "/Users/test", entries: []))
+        let ticket = state.beginLoad()
+        state.apply(listing(path: "/Users/test/repos", parent: "/Users/test", entries: []), ticket: ticket)
         XCTAssertEqual(
             state.pathSegments.map(\.path),
             ["/", "/Users", "/Users/test", "/Users/test/repos"]

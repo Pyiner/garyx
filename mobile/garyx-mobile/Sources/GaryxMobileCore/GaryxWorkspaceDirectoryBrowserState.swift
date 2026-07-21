@@ -22,6 +22,11 @@ public struct GaryxWorkspaceDirectoryBrowserState: Equatable, Sendable {
     public private(set) var isLoading = false
     public private(set) var inlineError: InlineError?
     public var filterText = ""
+    /// Monotonic ticket for the newest navigation intent. Every user intent
+    /// — a directory tap, a typed path, or even a locally rejected typed
+    /// path — supersedes whatever is in flight; responses must present the
+    /// ticket they were issued and stale ones are dropped.
+    public private(set) var navigationTicket = 0
 
     public init() {}
 
@@ -61,14 +66,20 @@ public struct GaryxWorkspaceDirectoryBrowserState: Equatable, Sendable {
 
     // MARK: - Transitions
 
-    public mutating func beginLoad() {
+    /// Starts a navigation and issues its ticket. Last intent wins: issuing
+    /// a new ticket invalidates every response still in flight.
+    public mutating func beginLoad() -> Int {
+        navigationTicket += 1
         isLoading = true
         inlineError = nil
+        return navigationTicket
     }
 
     /// A landed listing replaces the view and resets the local filter — the
-    /// filter narrows one directory, not a navigation session.
-    public mutating func apply(_ listing: GaryxWorkspaceDirectoryListing) {
+    /// filter narrows one directory, not a navigation session. Responses
+    /// carrying a superseded ticket are dropped.
+    public mutating func apply(_ listing: GaryxWorkspaceDirectoryListing, ticket: Int) {
+        guard ticket == navigationTicket else { return }
         self.listing = listing
         isLoading = false
         inlineError = nil
@@ -76,7 +87,9 @@ public struct GaryxWorkspaceDirectoryBrowserState: Equatable, Sendable {
     }
 
     /// Any failure renders inline and keeps the previous listing in place.
-    public mutating func fail(_ error: Error) {
+    /// Responses carrying a superseded ticket are dropped.
+    public mutating func fail(_ error: Error, ticket: Int) {
+        guard ticket == navigationTicket else { return }
         isLoading = false
         if let typed = error as? GaryxWorkspaceDirectoryError {
             inlineError = .typed(typed)
@@ -88,11 +101,15 @@ public struct GaryxWorkspaceDirectoryBrowserState: Equatable, Sendable {
     /// Normalizes a typed/pasted path-bar submission. Empty input is a no-op
     /// (nil); anything else must be absolute — a relative path short-circuits
     /// to the same inline error the server would return, without a round
-    /// trip.
+    /// trip. The local rejection is still a navigation intent: it supersedes
+    /// any in-flight load so a stale response cannot replace the error or
+    /// move the browser.
     public mutating func normalizeTypedPath(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard trimmed.hasPrefix("/") else {
+            navigationTicket += 1
+            isLoading = false
             inlineError = .typed(
                 GaryxWorkspaceDirectoryError(
                     code: .invalidPath,

@@ -1186,7 +1186,6 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
     let selectedPath: String
     let onSelect: (String) -> Void
     @State private var browser = GaryxWorkspaceDirectoryBrowserState()
-    @State private var navigationSequence = 0
     @State private var isEditingPath = false
     @State private var pathDraft = ""
     @FocusState private var pathFieldFocused: Bool
@@ -1403,20 +1402,16 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
     }
 
     private func load(path: String?) async {
-        // Last navigation wins: a slower earlier response must not overwrite
-        // the directory the user has already moved to.
-        navigationSequence += 1
-        let sequence = navigationSequence
-        browser.beginLoad()
+        // Last navigation wins: the reducer issues a ticket per intent and
+        // drops responses whose ticket has been superseded.
+        let ticket = browser.beginLoad()
         do {
             let listing = try await model.listWorkspaceDirectories(path: path)
-            guard sequence == navigationSequence else { return }
-            browser.apply(listing)
+            browser.apply(listing, ticket: ticket)
         } catch is CancellationError {
             // Superseded by a gateway switch; the sheet is on its way out.
         } catch {
-            guard sequence == navigationSequence else { return }
-            browser.fail(error)
+            browser.fail(error, ticket: ticket)
         }
     }
 
