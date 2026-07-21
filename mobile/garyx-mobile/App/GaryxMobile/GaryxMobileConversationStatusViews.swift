@@ -89,21 +89,79 @@ struct GaryxEarlierHistoryLoadingIndicator: View {
 
 struct GaryxEmptyConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var showsWorkspacePicker = false
 
-    // The workspace selection lives in the composer workspace chip; the empty
-    // state carries no selection affordance of its own.
     var body: some View {
         VStack(spacing: 18) {
             Text("New Thread")
                 .font(GaryxFont.title3(weight: .semibold))
                 .foregroundStyle(.primary)
+
+            workspacePicker
         }
         .frame(maxWidth: 300)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 28)
+        .garyxSheet(isPresented: $showsWorkspacePicker) {
+            GaryxWorkspaceSelectSheet(
+                title: "Workspace",
+                path: draftWorkspaceBinding,
+                placeholder: "No workspace",
+                allowsEmpty: true
+            )
+        }
         // Prefetch the catalog so the agent picker's override section is ready.
         .task(id: model.newThreadAgentTarget?.id) {
             await model.ensureNewThreadProviderModelsLoaded()
+        }
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                showsWorkspacePicker = false
+            }
+        }
+        .onChange(of: model.selectedThread?.id) { _, threadId in
+            if threadId != nil {
+                showsWorkspacePicker = false
+            }
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            if panel != .chat {
+                showsWorkspacePicker = false
+            }
+        }
+    }
+
+    private var workspacePicker: some View {
+        Button {
+            showsWorkspacePicker = true
+        } label: {
+            HStack(spacing: 10) {
+                Text(model.newThreadWorkspaceLabel)
+                    .font(GaryxFont.body(weight: .semibold))
+                    .garyxReadingLineLimit()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(GaryxFont.fixedSystem(size: 10, weight: .bold))
+            }
+            .foregroundStyle(Color(.systemBackground))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .frame(minHeight: 46)
+            .background(Color(.label), in: Capsule())
+        }
+        .buttonStyle(GaryxPressableRowStyle())
+    }
+
+    /// The picker writes "" only from the explicit "No workspace" row, so an
+    /// empty set maps to the explicit `none` tri-state, never to unresolved.
+    private var draftWorkspaceBinding: Binding<String> {
+        Binding {
+            model.newThreadWorkspaceSelection.workspacePath ?? ""
+        } set: { value in
+            if value.isEmpty {
+                model.selectDraftNoWorkspace()
+            } else {
+                model.selectDraftWorkspace(value)
+            }
         }
     }
 }

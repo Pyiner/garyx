@@ -205,11 +205,14 @@ struct GaryxConversationView: View {
                 messageScroll(proxy: proxy)
 
                 // The new-thread empty state lives outside the transcript
-                // scroll so it stays centered between the header and the
-                // composer.
+                // scroll so it stays anchored between the header and the
+                // composer. The bottom padding lifts the visual center above
+                // the true midpoint (by half the padding) so the title and
+                // workspace picker sit slightly high on the page.
                 if showsNewThreadEmptyState {
                     GaryxEmptyConversationView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .padding(.bottom, 100)
                 }
             }
             // Floating long-press menus render here, outside the transcript

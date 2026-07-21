@@ -172,7 +172,6 @@ struct GaryxComposer: View {
     @State private var isPickingCamera = false
     @State private var cameraAlert: GaryxComposerCameraAlert?
     @State private var showsWorkspaceModeSheet = false
-    @State private var showsWorkspacePickerSheet = false
     @State private var showsAddPanel = false
     @State private var isAddingAttachments = false
 
@@ -224,19 +223,15 @@ struct GaryxComposer: View {
         composerPresentation.showsSendButton
     }
 
-    private var canEditDraftWorkspace: Bool {
+    private var canChangeWorkspaceMode: Bool {
         model.selectedThread == nil
             && !model.isSending
             && model.activeRunThreadId == nil
-    }
-
-    private var canChangeWorkspaceMode: Bool {
-        canEditDraftWorkspace
             && model.newThreadWorkspaceSelection.workspacePath != nil
     }
 
     private var showsWorkspaceModeStrip: Bool {
-        canEditDraftWorkspace
+        canChangeWorkspaceMode
     }
 
     var body: some View {
@@ -252,14 +247,6 @@ struct GaryxComposer: View {
             motion.spatialAnimation(.composerPayload),
             value: routePayloadItems
         )
-        .garyxSheet(isPresented: $showsWorkspacePickerSheet) {
-            GaryxWorkspaceSelectSheet(
-                title: "Workspace",
-                path: draftWorkspaceBinding,
-                placeholder: "No workspace",
-                allowsEmpty: true
-            )
-        }
         .garyxSheet(isPresented: $showsWorkspaceModeSheet) {
             GaryxComposerWorkspaceModeSheet(
                 selectedMode: model.newThreadUsesWorktree ? "worktree" : "local",
@@ -344,28 +331,24 @@ struct GaryxComposer: View {
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
                 showsWorkspaceModeSheet = false
-                showsWorkspacePickerSheet = false
                 showsAddPanel = false
             }
         }
         .onChange(of: model.selectedThread?.id) { _, threadId in
             if threadId != nil {
                 showsWorkspaceModeSheet = false
-                showsWorkspacePickerSheet = false
             }
             showsAddPanel = false
         }
         .onChange(of: model.activePanel) { _, panel in
             if panel != .chat {
                 showsWorkspaceModeSheet = false
-                showsWorkspacePickerSheet = false
                 showsAddPanel = false
             }
         }
         .onChange(of: showsWorkspaceModeStrip) { _, visible in
             if !visible {
                 showsWorkspaceModeSheet = false
-                showsWorkspacePickerSheet = false
             }
         }
         .onChange(of: isAddingAttachments) { _, isAdding in
@@ -457,37 +440,12 @@ struct GaryxComposer: View {
     }
 
     private var workspaceModeStrip: some View {
-        // The gray apron is a non-interactive backdrop; only the leading
-        // workspace chip and the mode select control are tappable, not the
-        // whole strip.
-        HStack(spacing: 14) {
-            Button {
-                guard canEditDraftWorkspace else { return }
-                showsWorkspacePickerSheet = true
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: workspaceChipIcon)
-                        .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
-                        .frame(width: 19, height: 19)
-
-                    Text(model.newThreadWorkspaceLabel)
-                        .font(GaryxFont.footnote(weight: .regular))
-                        .garyxReadingLineLimit()
-
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(GaryxFont.fixedSystem(size: 9, weight: .semibold))
-                }
-                .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
-                .contentShape(Rectangle())
-            }
-            .garyxTypographyBoundary(.composerAccessoryChrome)
-            .buttonStyle(GaryxPressableRowStyle())
-            .disabled(!canEditDraftWorkspace)
-            .accessibilityLabel("Workspace")
-
-            if canChangeWorkspaceMode {
-                workspaceModeButton
-            }
+        // The gray apron is a non-interactive backdrop; only the leading mode
+        // select control (icon + label + chevron) is tappable, not the whole
+        // strip. Workspace selection itself lives in the new-thread empty
+        // state's centered picker, not here.
+        HStack(spacing: 0) {
+            workspaceModeButton
 
             Spacer(minLength: 0)
         }
@@ -520,26 +478,6 @@ struct GaryxComposer: View {
             .allowsHitTesting(false)
         }
         .shadow(color: Color.black.opacity(0.07), radius: 28, x: 0, y: 10)
-    }
-
-    private var workspaceChipIcon: String {
-        model.newThreadWorkspaceSelection.workspacePath == nil
-            ? "folder.badge.minus"
-            : "folder"
-    }
-
-    /// The picker writes "" only from the explicit "No workspace" row, so an
-    /// empty set maps to the explicit `none` tri-state, never to unresolved.
-    private var draftWorkspaceBinding: Binding<String> {
-        Binding {
-            model.newThreadWorkspaceSelection.workspacePath ?? ""
-        } set: { value in
-            if value.isEmpty {
-                model.selectDraftNoWorkspace()
-            } else {
-                model.selectDraftWorkspace(value)
-            }
-        }
     }
 
     private var workspaceModeButton: some View {
