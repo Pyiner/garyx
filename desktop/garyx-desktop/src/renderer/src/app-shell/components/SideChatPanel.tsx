@@ -72,7 +72,7 @@ import {
   composePromptWithBrowserAnnotations,
 } from "../useMessageDispatchController";
 import {
-  emptySideComposerDraft,
+  scopedSideChatView,
   type SideChatSessions,
   type SideComposerDraft,
 } from "../side-chat-sessions";
@@ -211,28 +211,26 @@ export function SideChatPanel({
   const sideIsComposingRef = useRef(false);
   const sideIgnoreComposerSubmitUntilRef = useRef(0);
 
-  const sideComposerBySource = sessionsSnapshot.composerBySource;
   const sideComposerAttachmentUploadPending =
     sessionsSnapshot.attachmentUploadCount > 0;
-  const sideChatThreadBySource = sessionsSnapshot.threadBySource;
-  const sideChatCreatingBySource = sessionsSnapshot.creatingBySource;
-  const sideChatErrorBySource = sessionsSnapshot.errorBySource;
   const sideChatHistoryLoading = sessionsSnapshot.historyLoading;
 
   const sideChatSourceThreadId = activeThread?.id?.trim() || null;
-  const sideChatThreadId = sideChatSourceThreadId
-    ? sideChatThreadBySource[sideChatSourceThreadId] || null
-    : null;
+  // Scope-current projection (shared with AppShell's shell-owned effects):
+  // the panel must not bypass the snapshot's owning-scope identity — a
+  // switch frame that precedes the store transition renders the EMPTY
+  // side-chat universe, never one frame of the previous gateway's binding,
+  // draft, or transcript.
+  const scopedView = scopedSideChatView(
+    sessionsSnapshot,
+    desktopState?.entitiesGatewayUrl || "",
+    sideChatSourceThreadId,
+  );
+  const sideChatThreadId = scopedView.threadId;
   const sideChatMirror = useThreadMirror(sideChatThreadId);
-  const sideChatCreating = sideChatSourceThreadId
-    ? Boolean(sideChatCreatingBySource[sideChatSourceThreadId])
-    : false;
-  const sideChatError = sideChatSourceThreadId
-    ? sideChatErrorBySource[sideChatSourceThreadId] || null
-    : null;
-  const sideComposerDraft = sideChatSourceThreadId
-    ? sideComposerBySource[sideChatSourceThreadId] || emptySideComposerDraft()
-    : emptySideComposerDraft();
+  const sideChatCreating = scopedView.creating;
+  const sideChatError = scopedView.error;
+  const sideComposerDraft = scopedView.draft;
 
   const sideChatThreadSummary = sideChatThreadId
     ? threadSummaryById.get(sideChatThreadId) || null

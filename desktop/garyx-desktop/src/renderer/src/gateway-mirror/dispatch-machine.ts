@@ -108,6 +108,14 @@ export class DispatchMachine {
     );
   }
 
+  /**
+   * Gateway-switch reset: the whole machine (intents, queues, runtimes)
+   * belongs to one gateway connection universe. Publishes one commit.
+   */
+  resetAll(): MessageMachineState {
+    return this.commit(initialMessageMachineState);
+  }
+
   private commit(next: MessageMachineState): MessageMachineState {
     if (next === this.state) {
       return next;

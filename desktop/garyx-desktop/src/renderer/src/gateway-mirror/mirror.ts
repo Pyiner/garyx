@@ -268,6 +268,13 @@ export class GatewayMirror {
 
   // Dispatch-machine domain (batch 3a): message-machine state storage.
   private machine = new DispatchMachine();
+  /** Gateway connection scope: the mirror's ENTIRE per-thread data universe
+   *  (transcripts, dispatch machine, live streams, in-flight loads) belongs
+   *  to one gateway connection. The key tracks the adopted universe; the
+   *  epoch invalidates this module's in-flight continuations (lifecycle and
+   *  orchestrator own their own epochs, advanced from the same transition). */
+  private connectionScopeKey: string | null = null;
+  private connectionEpoch = 0;
 
   // Dispatch-orchestration domain (batch 3c-2): send/steer/interrupt and
   // the queued-batch drain. Deps are attached by the UI layer on every
@@ -487,6 +494,43 @@ export class GatewayMirror {
       );
     }
     return this.machine.dispatch(action);
+  }
+
+  /**
+   * Adopt a gateway connection scope (normalized gateway key). The first
+   * adoption (cold start) and same-key calls are no-ops. A KEY CHANGE is a
+   * universe switch: every in-flight continuation is invalidated by epoch,
+   * committed streams stop, pending transcript persists are cancelled (they
+   * belong to the old universe), and every machine resets — while observed
+   * thread entries reset IN PLACE so live subscriptions re-read the empty
+   * new-universe snapshot instead of the previous gateway's data (thread
+   * ids are only unique per gateway).
+   */
+  beginConnectionScope(key: string): void {
+    const previous = this.connectionScopeKey;
+    this.connectionScopeKey = key;
+    if (previous === null || previous === key || previous === "") {
+      return;
+    }
+    this.connectionEpoch += 1;
+    this.transcriptLifecycle.beginConnectionEpoch();
+    this.dispatchOrchestrator.beginConnectionEpoch();
+    for (const entry of this.threads.values()) {
+      entry.cache = new ThreadTranscriptCache();
+      entry.frontier = new ThreadFrontier();
+      entry.liveStream = null;
+      entry.retainCount = 0;
+      this.commitThread(entry, false);
+    }
+    this.liveStreamMap = {};
+    for (const listener of [...this.liveStreamListeners]) {
+      listener();
+    }
+    this.transcriptMapsSnapshot = null;
+    for (const listener of [...this.transcriptMapsListeners]) {
+      listener();
+    }
+    this.machine.resetAll();
   }
 
   private retainedIntentIdsForThread(threadId: string): Set<string> {
@@ -1090,6 +1134,7 @@ export class GatewayMirror {
       });
       this.commitThread(entry);
 
+      const epoch = this.connectionEpoch;
       try {
         const transcript = await this.services.getThreadHistory({
           threadId,
@@ -1097,6 +1142,11 @@ export class GatewayMirror {
           limit: THREAD_HISTORY_PAGE_SIZE,
           userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
         });
+        if (this.connectionEpoch !== epoch) {
+          // The page belongs to the previous gateway universe; the entry
+          // now holds the NEW universe's transcript for this thread id.
+          return false;
+        }
         options?.onPageFetched?.(transcript);
         entry.cache.applyOlderPage(transcript);
         return true;

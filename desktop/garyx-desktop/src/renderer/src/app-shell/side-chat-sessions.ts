@@ -82,6 +82,47 @@ function persistSideChatThreadId(
   }
 }
 
+/**
+ * The scope-current projection of one source thread's side-chat state.
+ * EVERY consumer (AppShell's shell-owned effects AND the panel's own
+ * subscription) must derive through {@link scopedSideChatView}: when the
+ * snapshot's owning scope does not match the current render's gateway key
+ * (a switch frame before the store transition effect), the view is the
+ * EMPTY universe — no binding, no draft, no transient — never the previous
+ * gateway's state (thread ids are only unique per gateway).
+ */
+export interface ScopedSideChatView {
+  readonly scopeCurrent: boolean;
+  readonly threadId: string | null;
+  readonly draft: SideComposerDraft;
+  readonly creating: boolean;
+  readonly error: string | null;
+}
+
+export function scopedSideChatView(
+  snapshot: SideChatSessionsSnapshot,
+  gatewayKey: string,
+  sourceThreadId: string | null,
+): ScopedSideChatView {
+  const scopeCurrent = snapshot.gatewayScope === gatewayKey;
+  if (!scopeCurrent || !sourceThreadId) {
+    return {
+      scopeCurrent,
+      threadId: null,
+      draft: emptySideComposerDraft(),
+      creating: false,
+      error: null,
+    };
+  }
+  return {
+    scopeCurrent,
+    threadId: snapshot.threadBySource[sourceThreadId] || null,
+    draft: snapshot.composerBySource[sourceThreadId] || emptySideComposerDraft(),
+    creating: Boolean(snapshot.creatingBySource[sourceThreadId]),
+    error: snapshot.errorBySource[sourceThreadId] || null,
+  };
+}
+
 export interface SideChatSessionsSnapshot {
   readonly version: number;
   /** The gateway scope that OWNS every binding in this snapshot. Render

@@ -129,18 +129,49 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     'the transition effect restores the persisted binding after clearing',
   );
 
-  // 2. Render derivation requires the snapshot's owning scope to match the
-  //    current gateway key: a mismatched frame derives an EMPTY side-chat
-  //    universe instead of the previous gateway's binding.
+  // 2. EVERY consumer of the sessions snapshot derives through the shared
+  //    scope-current projection: a mismatched frame is the EMPTY side-chat
+  //    universe for AppShell's shell-owned effects AND the panel's own
+  //    subscription alike.
   assert.match(
     appShellSource,
-    /sideChatSessionsSnapshot\.gatewayScope === workspaceGatewayKey/,
-    'the derivation gates on snapshot scope identity',
+    /const sideChatThreadId = scopedSideChatView\(/,
+    'AppShell derives the side thread through the shared scoped view',
+  );
+  assert.match(
+    sideChatPanelSource,
+    /const scopedView = scopedSideChatView\(/,
+    'the panel derives through the shared scoped view',
+  );
+  assert.doesNotMatch(
+    sideChatPanelSource,
+    /sessionsSnapshot\.threadBySource/,
+    'the panel never reads raw bindings past the scope identity',
+  );
+
+  // 2b. The connection-scope transition owns the WHOLE renderer data
+  //     universe: the mirror machine resets alongside the side-chat domain,
+  //     and the universe-scoped drain bookkeeping is cleared with it.
+  const mirrorTransitionIdx = appShellSource.indexOf(
+    'gatewayMirror.beginConnectionScope(workspaceGatewayKey);',
+  );
+  assert.ok(mirrorTransitionIdx > 0, 'the mirror transition call exists');
+  assert.ok(
+    mirrorTransitionIdx < transitionIdx,
+    'the mirror universe resets before the side-chat domain republishes',
+  );
+  const historyEffectIdx = appShellSource.indexOf(
+    'void loadThreadHistory({',
+  );
+  assert.ok(
+    mirrorTransitionIdx < historyEffectIdx,
+    'the transition effect is declared before the transcript effects, so a ' +
+      'switch commit resets the universe before new-universe loads start',
   );
   assert.match(
     appShellSource,
-    /sideChatSourceThreadId && sideChatScopeCurrent\s*\?/,
-    'sideChatThreadId derives only from a scope-current snapshot',
+    /deferredQueueDrainByThreadRef\.current = \{\};/,
+    'the deferred drain bookkeeping resets on the transition',
   );
 
   // 3. The history/stream effect is keyed on the scope generation, so a

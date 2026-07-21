@@ -174,7 +174,10 @@ import {
   scrollMessagesToLatest,
   type TranscriptScrollIntent,
 } from "./components/thread-transcript-scroll";
-import { SideChatSessions } from "./side-chat-sessions";
+import {
+  scopedSideChatView,
+  SideChatSessions,
+} from "./side-chat-sessions";
 import {
   beginPinnedOrderGatewaySwitch,
   PinnedOrderIngress,
@@ -2153,20 +2156,16 @@ export function AppShell() {
     sideChatSessions.getSnapshot,
   );
   const workspaceGatewayKey = desktopState?.entitiesGatewayUrl || "";
-  // The snapshot's bindings are owned by the scope stamped INTO it. When a
-  // gateway switch has rendered but the store transition effect has not run
-  // yet, the mismatched frame derives an EMPTY side-chat universe — the
-  // previous gateway's binding must not drive one frame of transcript,
-  // mirror subscription, or history load under the new gateway (thread ids
-  // are only unique per gateway).
-  const sideChatScopeCurrent =
-    sideChatSessionsSnapshot.gatewayScope === workspaceGatewayKey;
   const sideChatScopeGeneration = sideChatSessionsSnapshot.scopeGeneration;
   const sideChatSourceThreadId = activeThread?.id?.trim() || null;
-  const sideChatThreadId =
-    sideChatSourceThreadId && sideChatScopeCurrent
-      ? sideChatSessionsSnapshot.threadBySource[sideChatSourceThreadId] || null
-      : null;
+  // Scope-current projection (shared with the panel's own subscription): a
+  // switch frame that precedes the store transition derives the EMPTY
+  // side-chat universe, never the previous gateway's binding.
+  const sideChatThreadId = scopedSideChatView(
+    sideChatSessionsSnapshot,
+    workspaceGatewayKey,
+    sideChatSourceThreadId,
+  ).threadId;
   // Side-chat stream/queue orchestration remains shell-owned while the dock
   // is hidden, so this is the shell's second and only other thread listener.
   const shellSideChatMirror = useGatewayThreadMirror(
@@ -2191,6 +2190,28 @@ export function AppShell() {
     // inside the store.
     sideChatSessions.setActiveSource(sideChatSourceThreadId);
   }, [sideChatSourceThreadId]);
+
+  // Connection-scope transition: ONE owner for the renderer's per-gateway
+  // data universe. Declared BEFORE the transcript/history effects so a
+  // switch commit resets the mirror (transcripts, dispatch machine, live
+  // streams, in-flight continuations) and the side-chat domain before any
+  // new-universe load starts in the same commit. Cold start adopts the
+  // first universe without a reset.
+  useEffect(() => {
+    gatewayMirror.beginConnectionScope(workspaceGatewayKey);
+    sideChatSessions.setGatewayScope(workspaceGatewayKey);
+    // The deferred queue-drain bookkeeping is universe-scoped.
+    deferredQueueDrainByThreadRef.current = {};
+    queueDrainInFlightByThreadRef.current = {};
+    // Restore runs AFTER the transition clears the domain (the
+    // source-keyed restore effect above fires earlier in the same commit,
+    // against the previous scope). Cold start lands here too: the scope
+    // becoming non-empty is what makes the persisted binding adoptable.
+    if (sideChatSourceThreadId && workspaceGatewayKey) {
+      sideChatSessions.restorePersisted(sideChatSourceThreadId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gatewayMirror, sideChatSessions, workspaceGatewayKey]);
 
   // Load the side thread transcript once per side thread (after state
   // hydration). Depending on `desktopState` identity here is unsafe: applying
@@ -2883,19 +2904,9 @@ export function AppShell() {
   // switch closes the transient workspace surfaces and resets mutation
   // busy state (a stale mutation's own cleanup is epoch-guarded and must
   // not touch the new epoch's state).
-  // Side-chat state is gateway-scoped: the formal transition clears the
-  // in-memory domain and republishes when the gateway changes.
-  useEffect(() => {
-    sideChatSessions.setGatewayScope(workspaceGatewayKey);
-    // Restore runs AFTER the transition clears the domain (the
-    // source-keyed restore effect above fires earlier in the same commit,
-    // against the previous scope). Cold start lands here too: the scope
-    // becoming non-empty is what makes the persisted binding adoptable.
-    if (sideChatSourceThreadId && workspaceGatewayKey) {
-      sideChatSessions.restorePersisted(sideChatSourceThreadId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sideChatSessions, workspaceGatewayKey]);
+  // (The side-chat/mirror connection-scope transition itself lives earlier
+  // in this component, before the transcript effects, so a switch commit
+  // resets the data universe before any new-universe load starts.)
   const workspaceGatewayKeyRef = useRef(workspaceGatewayKey);
   const workspaceEpochCounterRef = useRef(0);
   const [workspaceEpoch, setWorkspaceEpoch] = useState("g0");

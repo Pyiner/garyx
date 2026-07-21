@@ -211,9 +211,19 @@ export function presentProviderReadyError(
 export class DispatchOrchestrator {
   private port: DispatchOrchestratorMirrorPort;
   private deps: DispatchOrchestratorDeps | null = null;
+  /** Connection epoch owned by this module (advanced by the mirror's
+   *  connection-scope transition): every async dispatch continuation
+   *  captures it at operation start and becomes a complete no-op — no
+   *  machine writes, no state merges, no error surface — after a gateway
+   *  universe switch. */
+  private connectionEpoch = 0;
 
   constructor(port: DispatchOrchestratorMirrorPort) {
     this.port = port;
+  }
+
+  beginConnectionEpoch(): void {
+    this.connectionEpoch += 1;
   }
 
   setDeps(deps: DispatchOrchestratorDeps): void {
@@ -333,6 +343,7 @@ export class DispatchOrchestrator {
     if (!intent) {
       return false;
     }
+    const epoch = this.connectionEpoch;
 
     const { assistantEntryId, legacyPendingAssistantId } =
       options?.seededTurn || this.appendSeededTurn(threadId, intent, options);
@@ -367,6 +378,11 @@ export class DispatchOrchestrator {
         images: intent.images,
         files: intent.files,
       });
+      if (this.connectionEpoch !== epoch) {
+        // The dispatch answer belongs to the previous gateway universe: no
+        // acceptance, no state merge, no live-stream write may land here.
+        return false;
+      }
       const resultThreadId = result.threadId || result.sessionId || threadId;
       if (result.status === "accepted") {
         this.port.updateThreadLiveStream(resultThreadId, (current) =>
@@ -503,6 +519,9 @@ export class DispatchOrchestrator {
 
       const transcript =
         await deps.getThreadHistory(resultThreadId);
+      if (this.connectionEpoch !== epoch) {
+        return false;
+      }
       const intentSnapshot = this.intentForId(intent.intentId) || {
         ...intent,
         responseText: result.response,
@@ -544,6 +563,10 @@ export class DispatchOrchestrator {
 
       return true;
     } catch (sendError) {
+      if (this.connectionEpoch !== epoch) {
+        // A failure from the previous universe surfaces nothing here.
+        return false;
+      }
       const rawMessage =
         sendError instanceof Error
           ? sendError.message
@@ -687,6 +710,7 @@ export class DispatchOrchestrator {
     if (!firstIntentId && this.queueIntentIdsForThread(threadId).length === 0) {
       return;
     }
+    const epoch = this.connectionEpoch;
 
     setError(null);
 
@@ -720,6 +744,9 @@ export class DispatchOrchestrator {
         const didSucceed = await this.sendIntentOnce(threadId, nextIntentId, {
           seededTurn,
         });
+        if (this.connectionEpoch !== epoch) {
+          return;
+        }
         if (!didSucceed) {
           if (dispatchedFromQueue) {
             this.dispatchMessageState({
@@ -739,14 +766,16 @@ export class DispatchOrchestrator {
         nextIntentId = "";
       }
     } finally {
-      if (!this.port.hasPendingHistoryIntents(threadId)) {
-        this.dispatchMessageState({
-          type: "thread/clear",
-          threadId,
-        });
+      if (this.connectionEpoch === epoch) {
+        if (!this.port.hasPendingHistoryIntents(threadId)) {
+          this.dispatchMessageState({
+            type: "thread/clear",
+            threadId,
+          });
+        }
+        const status = await deps.checkConnection();
+        setConnection(status);
       }
-      const status = await deps.checkConnection();
-      setConnection(status);
     }
   }
 
@@ -767,6 +796,7 @@ export class DispatchOrchestrator {
     if (latestIntent.state !== "queued_local") {
       return;
     }
+    const epoch = this.connectionEpoch;
 
     this.dispatchMessageState({
       type: "intent/request-dispatch",
@@ -809,6 +839,9 @@ export class DispatchOrchestrator {
         images: latestIntent.images,
         files: latestIntent.files,
       });
+      if (this.connectionEpoch !== epoch) {
+        return;
+      }
       const resultThreadId = result.threadId || result.sessionId || threadId;
       if (result.status === "queued") {
         const activeRunId =
@@ -870,6 +903,9 @@ export class DispatchOrchestrator {
       const didSucceed = await this.sendIntentOnce(threadId, latestIntent.intentId, {
         seedUserBubble: true,
       });
+      if (this.connectionEpoch !== epoch) {
+        return;
+      }
       if (!didSucceed) {
         this.dispatchMessageState({
           type: "intent/requeue-front",
@@ -880,6 +916,9 @@ export class DispatchOrchestrator {
         });
       }
     } catch (steerError) {
+      if (this.connectionEpoch !== epoch) {
+        return;
+      }
       this.port.updateThreadLiveStream(threadId, (current) =>
         current
           ? {
@@ -965,6 +1004,7 @@ export class DispatchOrchestrator {
       return;
     }
 
+    const epoch = this.connectionEpoch;
     const runtime = selectThreadRuntime(this.port.getMachineState(), threadId);
     const hasLocalBusyRuntime = Boolean(
       runtime && isRuntimeBusy(runtime.state),
@@ -997,6 +1037,9 @@ export class DispatchOrchestrator {
     }
 
     await deps.interruptThread(threadId);
+    if (this.connectionEpoch !== epoch) {
+      return;
+    }
     if (hasLocalBusyRuntime) {
       this.clearLiveStreamState(threadId);
       this.dispatchMessageState({

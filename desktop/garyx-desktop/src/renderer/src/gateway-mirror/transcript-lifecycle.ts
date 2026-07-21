@@ -237,6 +237,9 @@ export class TranscriptLifecycle {
   private deps: TranscriptLifecycleDeps | null = null;
   // Module-internal orchestration state (plain maps, not React refs).
   private runStateByThread = new Map<string, TranscriptRunState>();
+  /** Connection epoch owned by this module; in-flight continuations capture
+   *  it and no-op after a gateway universe switch. */
+  private connectionEpoch = 0;
   private titleOverridesByThread: Record<string, string> = {};
   // Slice 2c: per-thread operation tokens for the selected-thread load
   // (generation counters; cancel invalidates by bumping) and the in-flight
@@ -259,6 +262,35 @@ export class TranscriptLifecycle {
 
   setDeps(deps: TranscriptLifecycleDeps): void {
     this.deps = deps;
+  }
+
+  /**
+   * Gateway universe switch (advanced by the mirror's connection-scope
+   * transition). Every in-flight continuation in this module becomes a
+   * no-op, committed streams stop, and pending transcript persists are
+   * CANCELLED — flushing them would write the previous gateway's
+   * transcripts into the new universe's cache under colliding thread ids.
+   */
+  beginConnectionEpoch(): void {
+    this.connectionEpoch += 1;
+    for (const threadId of [...this.runStateByThread.keys()]) {
+      this.cancelTranscriptPersistence(threadId);
+    }
+    this.runStateByThread.clear();
+    this.titleOverridesByThread = {};
+    this.refetchInFlightByThread.clear();
+    for (const state of this.renderWindowStateByThread.values()) {
+      state.consumers.clear();
+      state.pendingExpansion = null;
+      state.retryCount = 0;
+      state.activeRequestId = null;
+    }
+    this.renderWindowStateByThread.clear();
+    try {
+      void this.port.stopThreadStream({ threadId: "" }).catch(() => {});
+    } catch {
+      // Service-less mirrors (pure contract tests) have no stream transport.
+    }
   }
 
   private requireDeps(): TranscriptLifecycleDeps {
@@ -385,7 +417,13 @@ export class TranscriptLifecycle {
     mustEstablishStream: boolean;
     demandTrigger: boolean;
     afterSeq?: number;
+    /** The connection epoch the calling OPERATION started on; a stale
+     *  continuation must not mutate window state or open a stream. */
+    epoch?: number;
   }): Promise<boolean> {
+    if (input.epoch !== undefined && input.epoch !== this.connectionEpoch) {
+      return false;
+    }
     const state = this.renderWindowState(input.threadId);
     this.seedEffectiveFloorIfCold(input.threadId, state);
     if (input.demandTrigger) {
@@ -1311,9 +1349,15 @@ export class TranscriptLifecycle {
     if (inFlight) {
       return inFlight;
     }
+    let runHandle: Promise<void> | null = null;
     const run = this.runAuthoritativeRefetch(threadId).finally(() => {
-      this.refetchInFlightByThread.delete(threadId);
+      // Only release the slot this run still owns: an epoch transition may
+      // have cleared the map and a successor registered since.
+      if (this.refetchInFlightByThread.get(threadId) === runHandle) {
+        this.refetchInFlightByThread.delete(threadId);
+      }
     });
+    runHandle = run;
     this.refetchInFlightByThread.set(threadId, run);
     return run;
   }
@@ -1334,10 +1378,19 @@ export class TranscriptLifecycle {
       sideChatStreamConsumerId,
     } = this.requireDeps();
     const startSelectionGeneration = selectedThreadGenerationRef.current;
+    const epoch = this.connectionEpoch;
     try {
       this.cancelTranscriptPersistence(threadId);
       await this.port.clearThreadTranscriptCache(threadId);
+      if (this.connectionEpoch !== epoch) {
+        return;
+      }
       const transcript = await this.port.getThreadHistoryFull(threadId);
+      if (this.connectionEpoch !== epoch) {
+        // The transcript came from the previous gateway universe: neither
+        // accept it nor restart streams against the new universe.
+        return;
+      }
       if (selectedThreadIdRef.current === threadId) {
         requestSelectedThreadMessagesBottomSnap(threadId, true);
       }
@@ -1354,6 +1407,7 @@ export class TranscriptLifecycle {
           threadId,
           transcript,
           SELECTED_THREAD_STREAM_CONSUMER_ID,
+          epoch,
         );
       }
       if (sideChatThreadIdRef.current === threadId) {
@@ -1361,10 +1415,13 @@ export class TranscriptLifecycle {
           threadId,
           transcript,
           sideChatStreamConsumerId(threadId),
+          epoch,
         );
       }
     } catch {
-      scheduleHistoryRefresh(threadId, 3, 500, true);
+      if (this.connectionEpoch === epoch) {
+        scheduleHistoryRefresh(threadId, 3, 500, true);
+      }
     }
   }
 
@@ -1372,6 +1429,7 @@ export class TranscriptLifecycle {
     threadId: string,
     transcript: ThreadTranscript,
     consumerId: string,
+    epoch?: number,
   ): Promise<void> {
     await this.startThreadStreamThroughGate({
       threadId,
@@ -1382,6 +1440,7 @@ export class TranscriptLifecycle {
       }),
       mustEstablishStream: true,
       demandTrigger: true,
+      epoch,
     });
   }
 
@@ -1427,6 +1486,7 @@ export class TranscriptLifecycle {
       selectedThreadIdRef,
       setError,
     } = this.requireDeps();
+    const epoch = this.connectionEpoch;
     try {
       const pageApplied = await this.port.fetchOlderThreadHistoryPage(threadId, {
         onPageFetched: (transcript) => {
@@ -1454,15 +1514,18 @@ export class TranscriptLifecycle {
           consumerId,
           mustEstablishStream: false,
           demandTrigger: true,
+          epoch,
         });
       }
     } catch (historyError) {
       pendingMessagesPrependAnchorRef.current = null;
-      setError(
-        historyError instanceof Error
-          ? historyError.message
-          : "Failed to load earlier thread history",
-      );
+      if (this.connectionEpoch === epoch) {
+        setError(
+          historyError instanceof Error
+            ? historyError.message
+            : "Failed to load earlier thread history",
+        );
+      }
     } finally {
       if (selectedThreadIdRef.current !== threadId) {
         pendingMessagesPrependAnchorRef.current = null;
@@ -1482,12 +1545,18 @@ export class TranscriptLifecycle {
       return true;
     }
 
+    const epoch = this.connectionEpoch;
     const refreshedState = await refreshDesktopState();
     if (isKnownThreadId(refreshedState, threadId)) {
       return true;
     }
 
     const transcript = await this.port.getThreadHistoryFull(threadId);
+    if (this.connectionEpoch !== epoch) {
+      // Cross-universe answer: report not-openable without accepting the
+      // stale transcript; the caller's own scope fence discards the result.
+      return false;
+    }
     if (isMissingThreadTranscript(transcript)) {
       return false;
     }
@@ -1505,8 +1574,10 @@ export class TranscriptLifecycle {
     const generation =
       (this.selectedLoadGenerationByThread.get(threadId) ?? 0) + 1;
     this.selectedLoadGenerationByThread.set(threadId, generation);
+    const epoch = this.connectionEpoch;
     const isCancelled = () =>
-      this.selectedLoadGenerationByThread.get(threadId) !== generation;
+      this.selectedLoadGenerationByThread.get(threadId) !== generation ||
+      this.connectionEpoch !== epoch;
     return this.loadSelectedThreadTranscriptFromSingleSource(
       threadId,
       isCancelled,
