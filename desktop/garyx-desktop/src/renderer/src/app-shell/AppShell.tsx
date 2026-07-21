@@ -656,11 +656,22 @@ export function AppShell() {
   // as the mirror's new root, so root consumers (e.g. the side-chat
   // panel's scope key) can never keep serving the previous gateway's root.
   const committedGatewayKey = desktopState?.entitiesGatewayUrl || "";
+  const renderedGatewayKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
+    const previousKey = renderedGatewayKeyRef.current;
+    renderedGatewayKeyRef.current = committedGatewayKey;
     gatewayMirror.beginConnectionScope(committedGatewayKey, {
       desktopState,
     });
     sideChatSessions.setGatewayScope(committedGatewayKey);
+    if (previousKey !== null && previousKey !== "" && previousKey !== committedGatewayKey) {
+      // The RENDERED agent catalog (AppShell state, not the mirror's) is
+      // universe-scoped too: gateway A's agents must not drive new
+      // threads, automations, or sends under gateway B. Clear and refetch
+      // from the new gateway; the refetch continuation is epoch-owned.
+      setDesktopAgentCatalog(EMPTY_DESKTOP_AGENT_CATALOG);
+      void refreshAgentTargets();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gatewayMirror, sideChatSessions, committedGatewayKey]);
   const [desktopAgentCatalog, setDesktopAgentCatalog] =
@@ -2666,9 +2677,14 @@ export function AppShell() {
   }
 
   async function refreshAgentTargets() {
+    const epoch = gatewayMirror.currentConnectionEpoch;
     const nextCatalog = await window.garyxDesktop
       .listCustomAgents()
       .catch(() => EMPTY_DESKTOP_AGENT_CATALOG);
+    if (!gatewayMirror.isCurrentConnectionEpoch(epoch)) {
+      // The catalog answer belongs to the previous gateway universe.
+      return;
+    }
     startTransition(() => {
       setDesktopAgentCatalog(nextCatalog);
     });
@@ -2986,6 +3002,7 @@ export function AppShell() {
 
           // Fast hydration: the threads slice is a recent page (pinned ids
           // repaired by id). The full set follows below, off the paint path.
+          const hydrationEpoch = gatewayMirror.currentConnectionEpoch;
           const [nextState, nextStatus, nextAgentCatalog] =
             await Promise.all([
               requestDesktopState(() => window.garyxDesktop.getStateFast()),
@@ -3012,7 +3029,9 @@ export function AppShell() {
             if (pinOrderSnapshot) {
               setPinnedOrderMainSnapshot(pinOrderSnapshot);
             }
-            setDesktopAgentCatalog(nextAgentCatalog);
+            if (gatewayMirror.isCurrentConnectionEpoch(hydrationEpoch)) {
+              setDesktopAgentCatalog(nextAgentCatalog);
+            }
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
           });

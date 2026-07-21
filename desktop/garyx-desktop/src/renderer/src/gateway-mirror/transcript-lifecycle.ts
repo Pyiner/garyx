@@ -1552,7 +1552,12 @@ export class TranscriptLifecycle {
         );
       }
     } finally {
-      if (selectedThreadIdRef.current !== threadId) {
+      // Owner check first: a stale operation from a previous universe must
+      // not clear a successor's prepend anchor.
+      if (
+        this.connectionEpoch === epoch &&
+        selectedThreadIdRef.current !== threadId
+      ) {
         pendingMessagesPrependAnchorRef.current = null;
       }
     }

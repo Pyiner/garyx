@@ -148,6 +148,30 @@ test("round-4 V4-1 request issued pre-drop is rejected after drop and settle", a
   assert.deepEqual(committed.pinnedThreadIds, ["b", "a"]);
 });
 
+test("bookkeeping advances at delivery, never inside the commit decision", async () => {
+  const ingress = new PinnedOrderIngress("renderer-session-a");
+  const initial = state(["a"], 10);
+  ingress.initializeFromState(initial);
+
+  const delivered = await ingress.requestState(
+    async () => state(["b", "a"], 11, undefined, "next"),
+  );
+  // Delivery already observed the revision — even if React never commits
+  // the updater (abandoned render), the floor holds.
+  assert.equal(ingress.highestObservedRevision, 11);
+
+  // The commit decision is PURE: replaying it (StrictMode double-invoke,
+  // interrupted renders) changes nothing and returns the same value.
+  const once = ingress.commitState(initial, delivered);
+  const floorAfterOnce = ingress.highestObservedRevision;
+  const epochAfterOnce = ingress.currentEpoch;
+  const twice = ingress.commitState(initial, delivered);
+  assert.equal(twice, once, "replayed commit returns the same state");
+  assert.equal(ingress.highestObservedRevision, floorAfterOnce);
+  assert.equal(ingress.currentEpoch, epochAfterOnce);
+  assert.deepEqual(once.pinnedThreadIds, ["b", "a"]);
+});
+
 test("renderer reload drops a previous-session delivery envelope", async () => {
   const initial = state(["a", "b"], 10);
   const previous = new PinnedOrderIngress("renderer-session-old");

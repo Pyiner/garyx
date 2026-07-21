@@ -259,6 +259,12 @@ export class GatewayMirror {
   private desktopStateRefreshInFlight: Promise<DesktopState> | null = null;
   private desktopStateRefreshTailRequested = false;
   private desktopStateRefreshTrailing: Promise<DesktopState> | null = null;
+  /** Settles (rejects) the pending trailing refresh when the connection
+   *  scope changes: dropping the reference alone would leave awaiting
+   *  callers hanging forever. */
+  private cancelDesktopStateRefreshTrailing:
+    | ((reason: Error) => void)
+    | null = null;
 
   // Catalog domain: agents.
   private agents: readonly DesktopCustomAgent[] = [];
@@ -395,10 +401,13 @@ export class GatewayMirror {
         .then(() => services.listCustomAgents())
         .catch(() => EMPTY_AGENT_CATALOG),
     ]).then(([nextState, nextCatalog]) => {
-      if (this.connectionEpoch !== epoch) {
-        // The answer came from the previous gateway universe: hand it to
-        // the awaiting caller (whose own writes are epoch-fenced) without
-        // publishing it as the new universe's root or catalog.
+      const responseKey = nextState?.entitiesGatewayUrl || "";
+      const scopeKey = this.connectionScopeKey ?? "";
+      if (this.connectionEpoch !== epoch || responseKey !== scopeKey) {
+        // Epoch AND identity must both hold: an answer from the previous
+        // gateway universe — or a response whose own gateway identity does
+        // not match the adopted scope — goes to the awaiting caller (whose
+        // writes are epoch-fenced) without ever publishing as root/catalog.
         return nextState;
       }
       this.desktopState = nextState;
@@ -451,6 +460,7 @@ export class GatewayMirror {
       rejectTrailing = reject;
     });
     this.desktopStateRefreshTrailing = trailing;
+    this.cancelDesktopStateRefreshTrailing = rejectTrailing;
     // A trailing refresh can be scheduled only because callers joined the
     // prior flight, so nobody necessarily awaits this second round.
     void trailing.catch(() => undefined);
@@ -459,6 +469,7 @@ export class GatewayMirror {
         return;
       }
       this.desktopStateRefreshTrailing = null;
+      this.cancelDesktopStateRefreshTrailing = null;
       this.desktopStateRefreshInFlight = trailing;
       this.executeDesktopStateRefresh().then(resolveTrailing, rejectTrailing);
     }, DESKTOP_STATE_REFRESH_TRAILING_MS);
@@ -530,6 +541,14 @@ export class GatewayMirror {
     const previous = this.connectionScopeKey;
     this.connectionScopeKey = key;
     if (previous === null || previous === key || previous === "") {
+      if (previous !== key && options?.desktopState) {
+        // First landing on a real key: adopt the committed root so root
+        // consumers have the same universe as React from frame one. No
+        // destructive reset — nothing meaningful loaded under the cold
+        // scope.
+        this.desktopState = options.desktopState;
+        this.bumpRoot();
+      }
       return;
     }
     this.connectionEpoch += 1;
@@ -540,6 +559,10 @@ export class GatewayMirror {
     // catalog — a late A catalog must never republish under B.
     this.desktopState = options?.desktopState ?? null;
     this.desktopStateRefreshInFlight = null;
+    this.cancelDesktopStateRefreshTrailing?.(
+      new Error("gateway connection scope changed"),
+    );
+    this.cancelDesktopStateRefreshTrailing = null;
     this.desktopStateRefreshTrailing = null;
     this.desktopStateRefreshTailRequested = false;
     this.bumpRoot();

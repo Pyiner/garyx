@@ -353,6 +353,83 @@ test("the mirror root and catalog belong to the universe too", async () => {
   );
 });
 
+test("a cancelled trailing refresh settles instead of hanging forever", async () => {
+  const first = deferred();
+  let stateCalls = 0;
+  const mirror = new GatewayMirror({
+    getState: () => {
+      stateCalls += 1;
+      return stateCalls === 1 ? first.promise : new Promise(() => {});
+    },
+    listCustomAgents: async () => ({
+      agents: [],
+      defaultAgentId: null,
+      effectiveDefaultAgentId: null,
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+
+  const flightOne = mirror.refreshDesktopState();
+  const joined = mirror.refreshDesktopState(); // requests the trailing round
+  first.resolve({ entitiesGatewayUrl: "http://gateway-a" });
+  await flightOne;
+  await joined;
+  // The trailing round is now scheduled (timer pending); a third caller
+  // holds its promise.
+  const trailing = mirror.refreshDesktopState();
+  assert.notEqual(trailing, flightOne, "a trailing round was scheduled");
+
+  mirror.beginConnectionScope("http://gateway-b");
+  await assert.rejects(
+    trailing,
+    /connection scope changed/,
+    "the abandoned trailing promise settles with a cancellation",
+  );
+});
+
+test("a refresh answer with a foreign gateway identity is never published", async () => {
+  const answer = deferred();
+  let stateCalls = 0;
+  const mirror = new GatewayMirror({
+    getState: () => {
+      stateCalls += 1;
+      return stateCalls === 1 ? answer.promise : new Promise(() => {});
+    },
+    listCustomAgents: async () => ({
+      agents: [],
+      defaultAgentId: null,
+      effectiveDefaultAgentId: null,
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  const aState = {
+    entitiesGatewayUrl: "http://gateway-a",
+    threads: [],
+    sessions: [],
+    automations: [],
+  };
+  mirror.beginConnectionScope("");
+  mirror.beginConnectionScope("http://gateway-a", { desktopState: aState });
+  // First landing adopted the committed root without any reset.
+  assert.equal(
+    mirror.getRootSnapshot().desktopState,
+    aState,
+    "cold start adopts the committed root",
+  );
+
+  const pending = mirror.refreshDesktopState();
+  // Same epoch, but the ANSWER identifies as another gateway: the ingress
+  // rejects it for React; the mirror must apply the same discipline.
+  answer.resolve({ entitiesGatewayUrl: "http://gateway-b", threads: [] });
+  await pending;
+  assert.equal(
+    mirror.getRootSnapshot().desktopState,
+    aState,
+    "a foreign-identity answer is handed to the caller but never published",
+  );
+});
+
 test("a stale openability answer reports not-openable without vouching", async () => {
   const refresh = deferred();
   const mirror = new GatewayMirror({

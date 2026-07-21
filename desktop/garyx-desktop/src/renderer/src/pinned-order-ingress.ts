@@ -257,43 +257,28 @@ export class PinnedOrderIngress {
     );
     const result = await request();
     const state = selectState(result);
-    deliveryEnvelopes.set(state, {
+    const envelope: DesktopStateDeliveryEnvelope = {
       state,
       capturedEpoch,
       rendererSessionId,
       gatewayIdentity,
-    });
+    };
+    // Bookkeeping advances NOW, in the delivery continuation — the single
+    // place ingress state may mutate. The later commitState call re-runs
+    // only the PURE checks (session/identity against the instance at commit
+    // time) and rebases read-only.
+    this.settleDelivery(envelope);
+    deliveryEnvelopes.set(state, envelope);
     return result;
   }
 
-  deliveryEnvelope(state: DesktopState): DesktopStateDeliveryEnvelope | null {
-    return deliveryEnvelopes.get(state) ?? null;
-  }
-
-  commitState(
-    current: DesktopState | null,
-    action: DesktopStateAction,
-  ): DesktopState | null {
-    const candidate = typeof action === "function" ? action(current) : action;
-    if (!candidate) {
-      return candidate;
-    }
-    if (!this.initialized) {
-      this.initializeFromState(candidate);
-    }
-    const envelope = deliveryEnvelopes.get(candidate);
-    if (!envelope) {
-      return this.rebaseUnstampedCandidate(current, candidate);
-    }
-    return this.commitEnvelope(current, envelope);
-  }
-
-  private commitEnvelope(
-    current: DesktopState | null,
+  /** Pure acceptance checks shared by delivery settlement (mutation gate)
+   *  and the commit decision. */
+  private envelopeAcceptable(
     envelope: DesktopStateDeliveryEnvelope,
-  ): DesktopState | null {
+  ): boolean {
     if (envelope.rendererSessionId !== this.rendererSessionId) {
-      return current;
+      return false;
     }
     const responseIdentity = stateGatewayIdentity(envelope.state);
     const bootstrapIdentity = !envelope.gatewayIdentity && this.epoch === 0;
@@ -302,18 +287,31 @@ export class PinnedOrderIngress {
       (envelope.gatewayIdentity !== this.gatewayIdentity ||
         responseIdentity !== this.gatewayIdentity)
     ) {
-      return current;
+      return false;
     }
     if (bootstrapIdentity && responseIdentity !== this.gatewayIdentity) {
-      return current;
+      return false;
     }
+    return true;
+  }
 
+  /** Advance the pinned-order bookkeeping for one delivered state. Runs
+   *  exactly once per delivery, in plain async code — never inside a React
+   *  updater (which can be replayed or abandoned without committing). */
+  private settleDelivery(envelope: DesktopStateDeliveryEnvelope): void {
+    if (!this.initialized) {
+      this.initializeFromState(envelope.state);
+    }
+    if (!this.envelopeAcceptable(envelope)) {
+      return;
+    }
     const revision = normalizeRevision(envelope.state.pinsRevision);
     if (
       envelope.capturedEpoch < this.epoch ||
       revision < this.revisionFloor
     ) {
-      return this.rebasePinnedFields(envelope.state);
+      // Stale stamp: partial acceptance at commit time, no floor advance.
+      return;
     }
 
     this.revisionFloor = Math.max(this.revisionFloor, revision);
@@ -329,6 +327,35 @@ export class PinnedOrderIngress {
       }
     } else {
       this.committedOrder = incomingOrder;
+    }
+  }
+
+  deliveryEnvelope(state: DesktopState): DesktopStateDeliveryEnvelope | null {
+    return deliveryEnvelopes.get(state) ?? null;
+  }
+
+  /**
+   * PURE commit decision for a React functional updater. React may execute,
+   * replay, or abandon this without committing, so nothing here may write:
+   * a stamped delivery was already settled (and its bookkeeping advanced)
+   * in the delivery continuation; here its recorded disposition is applied
+   * against the bookkeeping as of THIS invocation, and unstamped candidates
+   * rebase read-only.
+   */
+  commitState(
+    current: DesktopState | null,
+    action: DesktopStateAction,
+  ): DesktopState | null {
+    const candidate = typeof action === "function" ? action(current) : action;
+    if (!candidate) {
+      return candidate;
+    }
+    const envelope = deliveryEnvelopes.get(candidate);
+    if (!envelope) {
+      return this.rebaseUnstampedCandidate(current, candidate);
+    }
+    if (!this.envelopeAcceptable(envelope)) {
+      return current;
     }
     return this.rebasePinnedFields(envelope.state);
   }

@@ -137,6 +137,18 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     domainTransitionIdx > transitionIdx,
     'the mirror universe resets before the side-chat domain republishes',
   );
+  // The RENDERED agent catalog joins the universe: the transition clears
+  // it and refetches, and the refetch continuation is epoch-owned.
+  assert.match(
+    appShellSource,
+    /setDesktopAgentCatalog\(EMPTY_DESKTOP_AGENT_CATALOG\);\s*\n\s*void refreshAgentTargets\(\);/,
+    'the transition clears and refetches the rendered agent catalog',
+  );
+  assert.match(
+    appShellSource,
+    /async function refreshAgentTargets\(\) \{\s*\n\s*const epoch = gatewayMirror\.currentConnectionEpoch;/,
+    'the catalog refetch captures its owning epoch',
+  );
   // No side effects hide inside the state updater anymore.
   assert.doesNotMatch(
     appShellSource,
