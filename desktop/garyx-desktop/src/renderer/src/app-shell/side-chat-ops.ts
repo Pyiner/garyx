@@ -54,19 +54,38 @@ export async function ensureSideChatThread(
     return null;
   }
 
+  // The WHOLE operation — existing-binding adoption and creation alike — is
+  // owned by the connection generation it started on, captured BEFORE the
+  // first await (URL comparison alone would re-match after A -> B -> A). A
+  // late continuation from a previous generation must not adopt, forget,
+  // create, error, or clean up anything in the new scope: it returns null.
+  const opGeneration = sessions.scopeGeneration;
+  const sameGeneration = () => sessions.scopeGeneration === opGeneration;
+
   const existingThreadId =
     sessions.threadFor(sourceThreadId) ||
     sessions.restorePersisted(sourceThreadId);
   if (existingThreadId) {
+    let openable = false;
     try {
-      if (await mirror.ensureThreadOpenable(existingThreadId)) {
-        sessions.rememberSideThreadId(existingThreadId);
-        sessions.rememberThread(sourceThreadId, existingThreadId);
-        sessions.setError(sourceThreadId, null);
-        return existingThreadId;
-      }
+      openable = await mirror.ensureThreadOpenable(existingThreadId);
     } catch {
+      if (!sameGeneration()) {
+        return null;
+      }
       sessions.forgetThread(sourceThreadId, existingThreadId);
+    }
+    if (!sameGeneration()) {
+      // The openability answer came from a previous gateway; neither the
+      // adoption nor the fall-through creation may run with this call's
+      // stale context.
+      return null;
+    }
+    if (openable) {
+      sessions.rememberSideThreadId(existingThreadId);
+      sessions.rememberThread(sourceThreadId, existingThreadId);
+      sessions.setError(sourceThreadId, null);
+      return existingThreadId;
     }
   }
 
@@ -75,12 +94,6 @@ export async function ensureSideChatThread(
     return inFlight;
   }
 
-  // Everything below is owned by the CONNECTION GENERATION this creation
-  // started on (URL comparison alone would re-match after A -> B -> A): a
-  // late completion — success, failure, or cleanup — from a previous
-  // generation is a complete no-op in the new scope.
-  const creationGeneration = sessions.scopeGeneration;
-  const sameGeneration = () => sessions.scopeGeneration === creationGeneration;
   let creationHandle: Promise<string | null> | null = null;
   const creation = (async () => {
     sessions.setCreating(sourceThreadId, true);

@@ -152,19 +152,56 @@ test("draft CRUD survives across snapshots (the dock-toggle oracle)", () => {
   assert.equal(cleared.resetKey, 1, "clear bumps the composer reset key");
 });
 
-test("attachment upload counter locks and unlocks", () => {
+test("attachment upload counter locks and unlocks through releases", () => {
   const store = new SideChatSessions();
-  store.beginAttachmentUpload();
-  store.beginAttachmentUpload();
+  const releaseA = store.beginAttachmentUpload();
+  const releaseB = store.beginAttachmentUpload();
   assert.equal(store.getSnapshot().attachmentUploadCount, 2);
-  store.endAttachmentUpload();
-  store.endAttachmentUpload();
-  store.endAttachmentUpload();
+  releaseA();
+  releaseB();
+  releaseB(); // Idempotent: a double release never dips below zero.
+  assert.equal(store.getSnapshot().attachmentUploadCount, 0);
+});
+
+test("an upload release is bound to its acquiring scope generation", () => {
+  const store = new SideChatSessions();
+  store.setGatewayScope("http://gateway-a");
+  const staleRelease = store.beginAttachmentUpload();
+  assert.equal(store.getSnapshot().attachmentUploadCount, 1);
+
+  // Gateway switch: the transition zeroes the counter; B starts its own
+  // upload; A's late release must not unlock B's composer.
+  store.setGatewayScope("http://gateway-b");
+  store.beginAttachmentUpload();
+  staleRelease();
   assert.equal(
     store.getSnapshot().attachmentUploadCount,
-    0,
-    "never below zero",
+    1,
+    "a stale release cannot decrement the new scope's lock",
   );
+});
+
+test("stream consumer identity embeds the scope generation", () => {
+  const store = new SideChatSessions();
+  store.setGatewayScope("http://gateway-a");
+  const first = store.streamConsumerId("thread::same-child");
+  store.setGatewayScope("http://gateway-b");
+  const second = store.streamConsumerId("thread::same-child");
+  store.setGatewayScope("http://gateway-a");
+  const third = store.streamConsumerId("thread::same-child");
+  // A -> B -> A over the SAME thread id yields three distinct stream
+  // consumers: an old generation's teardown can never target a successor.
+  assert.equal(new Set([first, second, third]).size, 3);
+});
+
+test("the snapshot carries its owning scope identity", () => {
+  const store = new SideChatSessions();
+  assert.equal(store.getSnapshot().gatewayScope, "");
+  assert.equal(store.getSnapshot().scopeGeneration, 0);
+  store.setGatewayScope("http://gateway-a");
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.gatewayScope, "http://gateway-a");
+  assert.equal(snapshot.scopeGeneration, 1);
 });
 
 test("creating/error transients and the creation promise de-dupe", async () => {

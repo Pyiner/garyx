@@ -84,6 +84,14 @@ function persistSideChatThreadId(
 
 export interface SideChatSessionsSnapshot {
   readonly version: number;
+  /** The gateway scope that OWNS every binding in this snapshot. Render
+   *  derivations must require it to match the current gateway key: a
+   *  mismatched frame (scope transition not yet applied) renders an empty
+   *  side-chat universe instead of the previous gateway's bindings. */
+  readonly gatewayScope: string;
+  /** Connection generation of {@link gatewayScope}; effect/subscription
+   *  identities include it so A -> B -> A re-keys everything. */
+  readonly scopeGeneration: number;
   readonly threadBySource: Readonly<Record<string, string>>;
   readonly composerBySource: Readonly<Record<string, SideComposerDraft>>;
   readonly creatingBySource: Readonly<Record<string, boolean>>;
@@ -133,6 +141,8 @@ export class SideChatSessions {
     if (!this.snapshot) {
       this.snapshot = {
         version: this.version,
+        gatewayScope: this.gatewayScopeValue,
+        scopeGeneration: this.scopeGenerationValue,
         threadBySource: this.threadBySource,
         composerBySource: this.composerBySource,
         creatingBySource: this.creatingBySource,
@@ -161,9 +171,12 @@ export class SideChatSessions {
       : null;
   }
 
-  /** Pure: the per-thread committed-stream consumer identity. */
+  /** The per-thread committed-stream consumer identity. Includes the
+   *  CURRENT scope generation: a stream started on generation N is stopped
+   *  by the exact same id, and a post-transition start can never collide
+   *  with (or be torn down by) a previous generation's lifecycle. */
   streamConsumerId(threadId: string): string {
-    return `side-chat:${threadId}`;
+    return `side-chat:g${this.scopeGenerationValue}:${threadId}`;
   }
 
   setActiveSource(sourceThreadId: string | null): void {
@@ -316,14 +329,29 @@ export class SideChatSessions {
     this.commit();
   }
 
-  beginAttachmentUpload(): void {
+  /**
+   * Acquire the composer upload lock and get back its ONLY release: an
+   * idempotent closure bound to the acquiring scope generation. There is
+   * deliberately no public decrement — a late release from a previous
+   * generation is structurally a no-op (the transition already zeroed the
+   * counter), so stale uploads can never unlock a newer scope's composer.
+   */
+  beginAttachmentUpload(): () => void {
+    const generation = this.scopeGenerationValue;
     this.attachmentUploadCount += 1;
     this.commit();
-  }
-
-  endAttachmentUpload(): void {
-    this.attachmentUploadCount = Math.max(0, this.attachmentUploadCount - 1);
-    this.commit();
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (this.scopeGenerationValue !== generation) {
+        return;
+      }
+      this.attachmentUploadCount = Math.max(0, this.attachmentUploadCount - 1);
+      this.commit();
+    };
   }
 
   setCreating(sourceThreadId: string, creating: boolean): void {

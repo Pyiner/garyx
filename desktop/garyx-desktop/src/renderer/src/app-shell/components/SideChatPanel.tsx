@@ -470,9 +470,18 @@ export function SideChatPanel({
       return;
     }
 
-    sessions.beginAttachmentUpload();
+    // The upload is owned by the scope generation it started on: a late
+    // completion after a gateway switch must not touch the new scope's
+    // draft, error surface, or upload lock (the release closure below is
+    // itself generation-bound and idempotent).
+    const uploadGeneration = sessions.scopeGeneration;
+    const sameGeneration = () => sessions.scopeGeneration === uploadGeneration;
+    const releaseUpload = sessions.beginAttachmentUpload();
     try {
       const prepared = await prepareAttachmentUploads(files);
+      if (!sameGeneration()) {
+        return;
+      }
       if (!prepared.length) {
         setError("No attachments could be loaded.");
         return;
@@ -485,6 +494,9 @@ export function SideChatPanel({
           dataBase64: file.dataBase64,
         })),
       });
+      if (!sameGeneration()) {
+        return;
+      }
       if (uploaded.files.length !== prepared.length) {
         throw new Error("Gateway returned an incomplete attachment upload result.");
       }
@@ -524,13 +536,16 @@ export function SideChatPanel({
       }));
       setError(null);
     } catch (attachmentError) {
+      if (!sameGeneration()) {
+        return;
+      }
       setError(
         attachmentError instanceof Error
           ? attachmentError.message
           : "Failed to load attachment",
       );
     } finally {
-      sessions.endAttachmentUpload();
+      releaseUpload();
       resetSideComposerAttachmentPicker();
     }
   }

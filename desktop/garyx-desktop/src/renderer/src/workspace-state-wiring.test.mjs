@@ -27,6 +27,10 @@ const sideChatOpsSource = readFileSync(
   new URL('./app-shell/side-chat-ops.ts', import.meta.url),
   'utf8',
 );
+const sideChatPanelSource = readFileSync(
+  new URL('./app-shell/components/SideChatPanel.tsx', import.meta.url),
+  'utf8',
+);
 
 test('hidden-session retention is wired at every sessions write point', () => {
   // Production writers of `sessions` go through the retaining merge; the
@@ -104,6 +108,71 @@ test('the renderer commits the created state without stripping its envelope', ()
     sideChatOpsSource,
     /setDesktopState\(\{\s*\.\.\.created\.state/,
     'no spread re-wrap that would strip the ingress envelope',
+  );
+});
+
+test('side-chat scope ownership is wired at every production boundary', () => {
+  // 1. The scope transition effect owns the post-transition restore: the
+  //    persisted binding is re-adopted AFTER setGatewayScope clears the
+  //    domain (cold-start scope landing and gateway switches alike).
+  const transitionIdx = appShellSource.indexOf(
+    'sideChatSessions.setGatewayScope(workspaceGatewayKey);',
+  );
+  assert.ok(transitionIdx > 0, 'the scope transition call exists');
+  const transitionWindow = appShellSource.slice(
+    transitionIdx,
+    transitionIdx + 900,
+  );
+  assert.match(
+    transitionWindow,
+    /restorePersisted\(sideChatSourceThreadId\)/,
+    'the transition effect restores the persisted binding after clearing',
+  );
+
+  // 2. Render derivation requires the snapshot's owning scope to match the
+  //    current gateway key: a mismatched frame derives an EMPTY side-chat
+  //    universe instead of the previous gateway's binding.
+  assert.match(
+    appShellSource,
+    /sideChatSessionsSnapshot\.gatewayScope === workspaceGatewayKey/,
+    'the derivation gates on snapshot scope identity',
+  );
+  assert.match(
+    appShellSource,
+    /sideChatSourceThreadId && sideChatScopeCurrent\s*\?/,
+    'sideChatThreadId derives only from a scope-current snapshot',
+  );
+
+  // 3. The history/stream effect is keyed on the scope generation, so a
+  //    same-thread-id gateway switch still tears down and re-keys.
+  assert.match(
+    appShellSource,
+    /\}, \[desktopStateHydrated, sideChatThreadId, sideChatScopeGeneration\]\);/,
+    'the history effect identity includes the scope generation',
+  );
+
+  // 4. ensureSideChatThread captures its owning generation BEFORE the first
+  //    await: the existing-binding adoption path is inside the same fence.
+  const generationIdx = sideChatOpsSource.indexOf(
+    'const opGeneration = sessions.scopeGeneration;',
+  );
+  const openableIdx = sideChatOpsSource.indexOf('ensureThreadOpenable');
+  assert.ok(
+    generationIdx > 0 && openableIdx > generationIdx,
+    'the ops generation fence precedes the openability await',
+  );
+
+  // 5. The composer upload lock is released only through the
+  //    generation-bound release closure (no raw decrement API exists).
+  assert.match(
+    sideChatPanelSource,
+    /const releaseUpload = sessions\.beginAttachmentUpload\(\);/,
+    'the panel acquires the upload lock through the release-closure API',
+  );
+  assert.doesNotMatch(
+    sideChatPanelSource,
+    /endAttachmentUpload/,
+    'no raw upload decrement call remains',
   );
 });
 

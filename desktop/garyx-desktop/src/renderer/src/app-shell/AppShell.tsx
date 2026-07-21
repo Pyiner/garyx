@@ -2152,10 +2152,21 @@ export function AppShell() {
     sideChatSessions.subscribe,
     sideChatSessions.getSnapshot,
   );
+  const workspaceGatewayKey = desktopState?.entitiesGatewayUrl || "";
+  // The snapshot's bindings are owned by the scope stamped INTO it. When a
+  // gateway switch has rendered but the store transition effect has not run
+  // yet, the mismatched frame derives an EMPTY side-chat universe — the
+  // previous gateway's binding must not drive one frame of transcript,
+  // mirror subscription, or history load under the new gateway (thread ids
+  // are only unique per gateway).
+  const sideChatScopeCurrent =
+    sideChatSessionsSnapshot.gatewayScope === workspaceGatewayKey;
+  const sideChatScopeGeneration = sideChatSessionsSnapshot.scopeGeneration;
   const sideChatSourceThreadId = activeThread?.id?.trim() || null;
-  const sideChatThreadId = sideChatSourceThreadId
-    ? sideChatSessionsSnapshot.threadBySource[sideChatSourceThreadId] || null
-    : null;
+  const sideChatThreadId =
+    sideChatSourceThreadId && sideChatScopeCurrent
+      ? sideChatSessionsSnapshot.threadBySource[sideChatSourceThreadId] || null
+      : null;
   // Side-chat stream/queue orchestration remains shell-owned while the dock
   // is hidden, so this is the shell's second and only other thread listener.
   const shellSideChatMirror = useGatewayThreadMirror(
@@ -2194,6 +2205,12 @@ export function AppShell() {
       return;
     }
 
+    // This effect's lifetime IS the owner of every write below: `cancelled`
+    // gates the loading flag, error surface, and automation ack, so a load
+    // that outlives its effect (thread switch OR scope generation change —
+    // both are dependencies) settles as a complete no-op. The stream
+    // consumer id embeds the generation, so teardown always targets exactly
+    // the stream this effect started, never a successor's.
     let cancelled = false;
     let latestTranscript: ThreadTranscript | null = null;
     const consumerId = sideChatSessions.streamConsumerId(sideChatThreadId);
@@ -2213,11 +2230,21 @@ export function AppShell() {
         applyRemoteTranscript(threadId, transcript);
       },
       onAutomationResponseDetected: (threadId) => {
-        setPendingAutomationRun(threadId, null);
+        if (!cancelled) {
+          setPendingAutomationRun(threadId, null);
+        }
       },
       hasAutomationResponse: transcriptHasAutomationResponse,
-      setHistoryLoading: (loading) => sideChatSessions.setHistoryLoading(loading),
-      setError,
+      setHistoryLoading: (loading) => {
+        if (!cancelled) {
+          sideChatSessions.setHistoryLoading(loading);
+        }
+      },
+      setError: (message) => {
+        if (!cancelled) {
+          setError(message);
+        }
+      },
     }).then(() => {
       if (cancelled || !latestTranscript) {
         return;
@@ -2231,12 +2258,14 @@ export function AppShell() {
 
     return () => {
       cancelled = true;
+      // An abandoned in-flight load can no longer clear the flag itself.
+      sideChatSessions.setHistoryLoading(false);
       void gatewayMirror.stopCommittedThreadStream({
         threadId: sideChatThreadId,
         consumerId,
       });
     };
-  }, [desktopStateHydrated, sideChatThreadId]);
+  }, [desktopStateHydrated, sideChatThreadId, sideChatScopeGeneration]);
 
   // Deferred queue drain for the side thread (always-on: legacy drained
   // with the dock hidden because the controller stayed mounted). The
@@ -2854,7 +2883,6 @@ export function AppShell() {
   // switch closes the transient workspace surfaces and resets mutation
   // busy state (a stale mutation's own cleanup is epoch-guarded and must
   // not touch the new epoch's state).
-  const workspaceGatewayKey = desktopState?.entitiesGatewayUrl || "";
   // Side-chat state is gateway-scoped: the formal transition clears the
   // in-memory domain and republishes when the gateway changes.
   useEffect(() => {
