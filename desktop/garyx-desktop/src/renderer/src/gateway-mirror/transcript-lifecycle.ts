@@ -353,7 +353,13 @@ export class TranscriptLifecycle {
 
   private freshStreamRequestId(): string {
     this.nextStreamRequestOrdinal += 1;
-    return `desktop-stream-request-e${this.connectionEpoch}-${this.nextStreamRequestOrdinal}`;
+    // The request id carries the FULL dual connection identity (epoch AND
+    // ingress domain generation). The main-process stream hub restarts
+    // forwarders on a gateway save while KEEPING the old request id; the
+    // new connection already reads the new gateway's settings before the
+    // renderer commits — so an id minted under the old generation must
+    // structurally fail ingest once the switch is requested.
+    return `desktop-stream-request-e${this.connectionEpoch}-g${currentPinnedOrderDomainGeneration()}-${this.nextStreamRequestOrdinal}`;
   }
 
   /**
@@ -367,11 +373,14 @@ export class TranscriptLifecycle {
    */
   private streamEventEpochCurrent(event: DesktopChatStreamEvent): boolean {
     const requestId = event.requestId?.trim() || "";
-    const match = /^desktop-stream-request-e(\d+)-/.exec(requestId);
+    const match = /^desktop-stream-request-e(\d+)-g(\d+)-/.exec(requestId);
     if (!match) {
       return true;
     }
-    return Number(match[1]) === this.connectionEpoch;
+    return (
+      Number(match[1]) === this.connectionEpoch &&
+      isCurrentPinnedOrderDomainGeneration(Number(match[2]))
+    );
   }
 
   private seedEffectiveFloorIfCold(

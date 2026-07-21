@@ -240,7 +240,7 @@ test("a previous universe's stream event is dropped whole at the listener", () =
   const mirror = new GatewayMirror();
   mirror.beginConnectionScope("http://gateway-a");
   // A stream opened under universe A embeds its epoch in the request id.
-  const staleRequestId = "desktop-stream-request-e0-7";
+  const staleRequestId = "desktop-stream-request-e0-g0-7";
 
   mirror.beginConnectionScope("http://gateway-b");
   mirror.applyRemoteTranscript(THREAD, transcriptWith("B recent"), {
@@ -628,6 +628,45 @@ test("a background failure after ready keeps content; success publishes", async 
   mode = "ok";
   await mirror.refreshAgentCatalog({ background: true });
   assert.equal(mirror.getCatalogSnapshot().phase, "ready");
+});
+
+test("a switch REQUEST already fences inbound stream events (hub reconnect window)", async () => {
+  // R25 BLOCKER: the main-process hub restarts forwarders on a gateway
+  // save KEEPING the old request id, while the new connection already
+  // reads gateway B's settings — before the renderer commits (mirror
+  // epoch still A). The old id was minted under the old ingress
+  // generation, so ingest must reject it on the generation half.
+  const { PinnedOrderIngress, installPinnedOrderIngress } = await import(
+    "../pinned-order-ingress.ts"
+  );
+  const ingress = new PinnedOrderIngress("renderer-sse-probe");
+  installPinnedOrderIngress(ingress);
+  ingress.beginGatewaySwitch("https://gateway-a.test");
+
+  const mirror = new GatewayMirror();
+  mirror.beginConnectionScope("http://gateway-a");
+  mirror.setTranscriptLifecycleDeps({
+    scheduleDesktopStateRefresh: () => {},
+  });
+  // Mint a request id under the CURRENT (A) identity, as a live stream
+  // subscription would.
+  const requestId = mirror.mintStreamRequestIdForTest?.()
+    ?? `desktop-stream-request-e${mirror.currentConnectionEpoch}-g1-1`;
+
+  // Switch REQUEST: generation advances, NO commit (epoch unchanged).
+  ingress.beginGatewaySwitch("https://gateway-b.test");
+  mirror.notifyStreamEvent({
+    type: "committed_message",
+    threadId: THREAD,
+    requestId,
+    seq: 7,
+    message: { role: "assistant", content: "B secret from reconnect" },
+  });
+  assert.equal(
+    mirror.getThreadSnapshot(THREAD).messages.length,
+    0,
+    "the reconnect-window event does not enter the still-A mirror",
+  );
 });
 
 test("a switch REQUEST already fences the selected-thread load (pre-commit window)", async () => {
