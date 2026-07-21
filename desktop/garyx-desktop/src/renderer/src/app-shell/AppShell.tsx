@@ -2166,7 +2166,11 @@ export function AppShell() {
 
   useEffect(() => {
     // sessionStorage read-through for a source with no in-memory binding.
-    if (sideChatSourceThreadId) {
+    // Keyed on the gateway scope too: at cold start this effect fires
+    // before the scope is established (and the scope transition clears the
+    // domain), so it must re-run once the scope lands — and again after a
+    // gateway switch — to adopt the CURRENT partition's binding.
+    if (sideChatSourceThreadId && sideChatSessions.gatewayScope) {
       sideChatSessions.restorePersisted(sideChatSourceThreadId);
     }
   }, [sideChatSourceThreadId]);
@@ -2855,6 +2859,14 @@ export function AppShell() {
   // in-memory domain and republishes when the gateway changes.
   useEffect(() => {
     sideChatSessions.setGatewayScope(workspaceGatewayKey);
+    // Restore runs AFTER the transition clears the domain (the
+    // source-keyed restore effect above fires earlier in the same commit,
+    // against the previous scope). Cold start lands here too: the scope
+    // becoming non-empty is what makes the persisted binding adoptable.
+    if (sideChatSourceThreadId && workspaceGatewayKey) {
+      sideChatSessions.restorePersisted(sideChatSourceThreadId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sideChatSessions, workspaceGatewayKey]);
   const workspaceGatewayKeyRef = useRef(workspaceGatewayKey);
   const workspaceEpochCounterRef = useRef(0);

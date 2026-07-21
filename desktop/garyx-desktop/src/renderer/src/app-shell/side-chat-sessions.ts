@@ -96,6 +96,11 @@ export class SideChatSessions {
   /** Normalized gateway URL partitioning the persisted bindings. Written
    *  only through {@link setGatewayScope}. */
   private gatewayScopeValue = "";
+  /** Connection generation: increments on EVERY scope transition, so
+   *  A -> B -> A yields three distinct values — a late async completion
+   *  from the first A can never pass a generation gate after returning
+   *  to A. */
+  private scopeGenerationValue = 0;
   private threadBySource: Record<string, string> = {};
   private composerBySource: Record<string, SideComposerDraft> = {};
   private creatingBySource: Record<string, boolean> = {};
@@ -182,6 +187,10 @@ export class SideChatSessions {
     return this.gatewayScopeValue;
   }
 
+  get scopeGeneration(): number {
+    return this.scopeGenerationValue;
+  }
+
   /**
    * Formal scope transition. In-memory bindings, drafts, in-flight
    * creation promises, errors, and the shadow refs are all owned by ONE
@@ -195,11 +204,14 @@ export class SideChatSessions {
       return;
     }
     this.gatewayScopeValue = scope;
+    this.scopeGenerationValue += 1;
     this.threadBySource = {};
     this.composerBySource = {};
     this.creatingBySource = {};
     this.errorBySource = {};
     this.creationPromiseBySource = {};
+    this.attachmentUploadCount = 0;
+    this.historyLoading = false;
     this.sideChatThreadIdRef.current = null;
     this.sideChatThreadIdsRef.current = new Set();
     this.commit();

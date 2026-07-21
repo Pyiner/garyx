@@ -75,6 +75,13 @@ export async function ensureSideChatThread(
     return inFlight;
   }
 
+  // Everything below is owned by the CONNECTION GENERATION this creation
+  // started on (URL comparison alone would re-match after A -> B -> A): a
+  // late completion — success, failure, or cleanup — from a previous
+  // generation is a complete no-op in the new scope.
+  const creationGeneration = sessions.scopeGeneration;
+  const sameGeneration = () => sessions.scopeGeneration === creationGeneration;
+  let creationHandle: Promise<string | null> | null = null;
   const creation = (async () => {
     sessions.setCreating(sourceThreadId, true);
     sessions.setError(sourceThreadId, null);
@@ -82,10 +89,6 @@ export async function ensureSideChatThread(
     try {
       const sourceThread =
         threadSummaryById.get(sourceThreadId) || activeThread || null;
-      // Everything below is scoped to the gateway this creation started
-      // on; if the gateway changed while the request was in flight, every
-      // side effect (state commit, mirror seed, bindings) is skipped.
-      const creationScope = sessions.gatewayScope;
       const created = await requestDesktopStateResult(
         () => window.garyxDesktop.createThread({
           title: "Side chat",
@@ -99,10 +102,10 @@ export async function ensureSideChatThread(
         }),
         (response) => response.state,
       );
-      if (sessions.gatewayScope !== creationScope) {
-        // A late completion from a previous gateway: the child exists on
-        // that gateway (its hidden-session partition retains it), but no
-        // side effect may leak into the newly selected gateway's scope.
+      if (!sameGeneration()) {
+        // A late completion from a previous connection generation: the
+        // child exists on that gateway (its hidden-session partition
+        // retains it), but no side effect may leak into the current scope.
         return null;
       }
       // The main-process snapshot already carries every retained hidden
@@ -119,6 +122,11 @@ export async function ensureSideChatThread(
       sessions.rememberThread(sourceThreadId, created.thread.id);
       return created.thread.id;
     } catch (createError) {
+      if (!sameGeneration()) {
+        // A late failure from a previous generation must not surface as
+        // an error in the new scope.
+        return null;
+      }
       const message =
         createError instanceof Error
           ? createError.message
@@ -127,11 +135,19 @@ export async function ensureSideChatThread(
       setError(message);
       return null;
     } finally {
-      sessions.setCreating(sourceThreadId, false);
-      sessions.setCreationPromise(sourceThreadId, null);
+      // Cleanup is double-guarded: same generation AND still the owner of
+      // this source's slot (a same-scope rebuild must not be clobbered).
+      if (
+        sameGeneration() &&
+        sessions.creationPromiseFor(sourceThreadId) === creationHandle
+      ) {
+        sessions.setCreating(sourceThreadId, false);
+        sessions.setCreationPromise(sourceThreadId, null);
+      }
     }
   })();
 
+  creationHandle = creation;
   sessions.setCreationPromise(sourceThreadId, creation);
   return creation;
 }

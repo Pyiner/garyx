@@ -16,50 +16,114 @@ function summary(id) {
   return { id, title: `Side chat ${id}` };
 }
 
-test('a late duplicate load can never clobber a cache mutations advanced', async (t) => {
-  const { dir, file } = tempStorePath();
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const store = createHiddenSessionStore(() => file);
+/**
+ * In-memory IO harness. Reads block on a caller-controlled gate so tests can
+ * hold a load in flight; writes track overlap so tests can assert the
+ * serialization invariant instead of only inspecting the final file.
+ */
+function createGatedIo({ initialContent }) {
+  let releaseRead;
+  const readGate = new Promise((resolve) => {
+    releaseRead = resolve;
+  });
+  const state = {
+    readCalls: 0,
+    activeWrites: 0,
+    maxActiveWrites: 0,
+    files: new Map(),
+    releaseRead: () => releaseRead(),
+  };
+  const io = {
+    async readFile() {
+      state.readCalls += 1;
+      await readGate;
+      if (initialContent === undefined) {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+      return initialContent;
+    },
+    async writeFile(filePath, data) {
+      state.activeWrites += 1;
+      state.maxActiveWrites = Math.max(
+        state.maxActiveWrites,
+        state.activeWrites,
+      );
+      // Yield twice so an overlapping (non-serialized) writer would be
+      // observed mid-flight rather than completing atomically in one tick.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      state.files.set(filePath, data);
+      state.activeWrites -= 1;
+    },
+    async rename(fromPath, toPath) {
+      state.files.set(toPath, state.files.get(fromPath));
+      state.files.delete(fromPath);
+    },
+    async mkdir() {},
+  };
+  return { io, state };
+}
 
-  // The reviewer's exact race: two loads start concurrently, a mutation
-  // lands between them. Single-flight initialization means both loads share
-  // one read and the cache is installed exactly once.
+test('a mutation queued behind an in-flight load lands on the shared cache', async () => {
+  // The reviewer's race, reproduced for real: load-1 is HELD in flight,
+  // load-2 starts while it is paused, and a mutation is queued behind them.
+  // Correctness requires all of it to converge on one cache: exactly one
+  // read, the persisted baseline preserved, the mutation applied on top.
+  const { io, state } = createGatedIo({
+    initialContent: JSON.stringify({
+      'http://gateway-a': {
+        'thread::pre-existing': summary('thread::pre-existing'),
+      },
+    }),
+  });
+  const store = createHiddenSessionStore(() => '/store/hidden.json', io);
+
   const loadOne = store.ensureLoaded();
   const loadTwo = store.ensureLoaded();
-  await Promise.all([loadOne, loadTwo]);
-  await store.remember('http://gateway-a', summary('thread::child-1'));
-  // A third load after the mutation must not reset the cache either.
-  await store.ensureLoaded();
-  await store.remember('http://gateway-a', summary('thread::child-2'));
+  // Queue the mutation while BOTH loads are still paused inside the read.
+  const mutation = store.remember('http://gateway-a', summary('thread::child-1'));
+  assert.equal(state.readCalls, 1, 'concurrent loads share one read');
 
-  const ids = store
-    .list('http://gateway-a')
-    .map((entry) => entry.id)
-    .sort();
-  assert.deepEqual(ids, ['thread::child-1', 'thread::child-2']);
-  const persisted = JSON.parse(await readFile(file, 'utf8'));
+  state.releaseRead();
+  await Promise.all([loadOne, loadTwo, mutation]);
+  // A later load must be a cache hit, not a second read that could install
+  // a stale snapshot over the mutated cache.
+  await store.ensureLoaded();
+  assert.equal(state.readCalls, 1, 'no duplicate read after the cache exists');
+
+  assert.deepEqual(
+    store.list('http://gateway-a').map((entry) => entry.id).sort(),
+    ['thread::child-1', 'thread::pre-existing'],
+    'baseline and mutation both survive in memory',
+  );
+  const persisted = JSON.parse(state.files.get('/store/hidden.json'));
   assert.deepEqual(
     Object.keys(persisted['http://gateway-a']).sort(),
-    ['thread::child-1', 'thread::child-2'],
-    'both children survive on disk',
+    ['thread::child-1', 'thread::pre-existing'],
+    'baseline and mutation both survive on disk',
   );
 });
 
-test('concurrent remembers on one store merge instead of overwriting', async (t) => {
-  const { dir, file } = tempStorePath();
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const store = createHiddenSessionStore(() => file);
+test('concurrent mutations serialize: persists never overlap', async () => {
+  // Kills the detached-promise mutant: if enqueue() ran on Promise.resolve()
+  // instead of the shared chain, these persists would overlap and
+  // maxActiveWrites would exceed 1 (writeFile yields mid-flight).
+  const { io, state } = createGatedIo({ initialContent: undefined });
+  const store = createHiddenSessionStore(() => '/store/hidden.json', io);
+  state.releaseRead();
 
-  await Promise.all([
-    store.remember('http://gateway-a', summary('thread::child-a')),
-    store.remember('http://gateway-a', summary('thread::child-b')),
-  ]);
-  assert.deepEqual(
-    store.list('http://gateway-a').map((entry) => entry.id).sort(),
-    ['thread::child-a', 'thread::child-b'],
+  const ids = ['a', 'b', 'c', 'd', 'e'].map((tag) => `thread::child-${tag}`);
+  await Promise.all(
+    ids.map((id) => store.remember('http://gateway-a', summary(id))),
   );
-  const persisted = JSON.parse(await readFile(file, 'utf8'));
-  assert.equal(Object.keys(persisted['http://gateway-a']).length, 2);
+
+  assert.equal(state.maxActiveWrites, 1, 'persists are strictly serialized');
+  const persisted = JSON.parse(state.files.get('/store/hidden.json'));
+  assert.deepEqual(
+    Object.keys(persisted['http://gateway-a']).sort(),
+    [...ids].sort(),
+    'every concurrent remember survives the merge',
+  );
 });
 
 test('forget clears only the named partition entry', async (t) => {
@@ -84,7 +148,7 @@ test('a second store instance reads back the persisted partitions', async (t) =>
   const first = createHiddenSessionStore(() => file);
   await first.remember('http://gateway-a', summary('thread::child-1'));
 
-  // Restart shape: a fresh instance over the same file.
+  // Restart shape: a fresh instance over the same file (real fs IO).
   const second = createHiddenSessionStore(() => file);
   await second.ensureLoaded();
   assert.deepEqual(

@@ -23,14 +23,32 @@ import type { DesktopThreadSummary } from '@shared/contracts';
  *   previous gateway mutates only that gateway's partition; equal thread
  *   ids across gateways cannot collide.
  *
- * The factory takes the storage path lazily so tests exercise the real
- * concurrency behavior against a temp directory.
+ * The factory takes the storage path lazily and accepts injectable IO so
+ * tests can gate reads/writes and exercise the real interleavings (paused
+ * load with a mutation queued behind it, overlapping persists) instead of
+ * only the happy path.
  */
 
 type HiddenSessionPartitions = Record<
   string,
   Record<string, DesktopThreadSummary>
 >;
+
+export interface HiddenSessionStoreIo {
+  readFile(filePath: string): Promise<string>;
+  writeFile(filePath: string, data: string): Promise<void>;
+  rename(fromPath: string, toPath: string): Promise<void>;
+  mkdir(dirPath: string): Promise<void>;
+}
+
+const defaultIo: HiddenSessionStoreIo = {
+  readFile: (filePath) => readFile(filePath, 'utf8'),
+  writeFile: (filePath, data) => writeFile(filePath, data, 'utf8'),
+  rename: (fromPath, toPath) => rename(fromPath, toPath),
+  mkdir: async (dirPath) => {
+    await mkdir(dirPath, { recursive: true });
+  },
+};
 
 export interface HiddenSessionStore {
   /** Load the store into memory (single-flight, idempotent). */
@@ -53,6 +71,7 @@ function normalizedScope(scope: string | null | undefined): string {
 
 export function createHiddenSessionStore(
   filePathProvider: () => string,
+  io: HiddenSessionStoreIo = defaultIo,
 ): HiddenSessionStore {
   let cachedPartitions: HiddenSessionPartitions | null = null;
   let loadPromise: Promise<HiddenSessionPartitions> | null = null;
@@ -60,7 +79,7 @@ export function createHiddenSessionStore(
 
   async function readPartitionsOnce(): Promise<HiddenSessionPartitions> {
     try {
-      const raw = await readFile(filePathProvider(), 'utf8');
+      const raw = await io.readFile(filePathProvider());
       const parsed = JSON.parse(raw) as HiddenSessionPartitions;
       return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? parsed
@@ -90,10 +109,10 @@ export function createHiddenSessionStore(
     partitions: HiddenSessionPartitions,
   ): Promise<void> {
     const filePath = filePathProvider();
-    await mkdir(dirname(filePath), { recursive: true });
+    await io.mkdir(dirname(filePath));
     const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-    await writeFile(tempPath, JSON.stringify(partitions, null, 2), 'utf8');
-    await rename(tempPath, filePath);
+    await io.writeFile(tempPath, JSON.stringify(partitions, null, 2));
+    await io.rename(tempPath, filePath);
   }
 
   function enqueue(
@@ -147,4 +166,3 @@ export function createHiddenSessionStore(
     },
   };
 }
-
