@@ -10,6 +10,9 @@ import type {
 
 import { selectedAutomation } from '../thread-model';
 import {
+  currentPinnedOrderDomainGeneration,
+  deriveStampedDesktopState,
+  isCurrentPinnedOrderDomainGeneration,
   requestDesktopState,
   requestDesktopStateResult,
 } from '../pinned-order-ingress';
@@ -387,6 +390,10 @@ export function useAutomationController({
     setAutomationMutation(mutationKey);
     setError(null);
     setAutomationStatus(null);
+    // The WHOLE run-now continuation is owned by the gateway domain
+    // generation it started on: after a switch, neither the state fold nor
+    // the activity/pending-run/navigation/status side effects may land.
+    const generation = currentPinnedOrderDomainGeneration();
     try {
       const result = await requestDesktopStateResult(
         () => window.garyxDesktop.runAutomationNow({
@@ -394,8 +401,13 @@ export function useAutomationController({
         }),
         (response) => response.state,
       );
+      if (!isCurrentPinnedOrderDomainGeneration(generation)) {
+        return;
+      }
       const latestThreadId = result.activity.threadId || automation.targetThreadId || automation.threadId;
-      setDesktopState({
+      // The derived state keeps the delivery's identity (a bare spread
+      // would strip it and the ingress would reject the commit).
+      setDesktopState(deriveStampedDesktopState(result.state, {
         ...result.state,
         automations: result.state.automations.map((entry) => {
           if (entry.id !== automation.id) {
@@ -410,7 +422,7 @@ export function useAutomationController({
             threadId: latestThreadId || entry.threadId,
           };
         }),
-      });
+      }));
       setAutomationActivityById((current) => {
         const existing = current[automation.id];
         return {

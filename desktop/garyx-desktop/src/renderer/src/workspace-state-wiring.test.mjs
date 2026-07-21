@@ -127,7 +127,7 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     transitionIdx,
   );
   assert.ok(
-    layoutIdx > 0 && transitionIdx - layoutIdx < 200,
+    layoutIdx > 0 && transitionIdx - layoutIdx < 600,
     'the transition runs inside a layout effect (real commit boundary)',
   );
   const domainTransitionIdx = appShellSource.indexOf(
@@ -137,17 +137,23 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     domainTransitionIdx > transitionIdx,
     'the mirror universe resets before the side-chat domain republishes',
   );
-  // The RENDERED agent catalog joins the universe: the transition clears
-  // it and refetches, and the refetch continuation is epoch-owned.
+  // The agent catalog has ONE owner: the mirror fetches, fences, and
+  // publishes; AppShell's refresh delegates and never fetches directly, and
+  // no second write path bypasses the subscription mirror.
   assert.match(
     appShellSource,
-    /setDesktopAgentCatalog\(EMPTY_DESKTOP_AGENT_CATALOG\);\s*\n\s*void refreshAgentTargets\(\);/,
-    'the transition clears and refetches the rendered agent catalog',
+    /async function refreshAgentTargets\(\) \{[\s\S]{0,300}?await gatewayMirror\.refreshAgentCatalog\(\);/,
+    'the catalog refresh delegates to the single mirror owner',
+  );
+  assert.doesNotMatch(
+    appShellSource,
+    /listCustomAgents\(\)\s*\n?\s*\.catch\(\(\) => EMPTY_DESKTOP_AGENT_CATALOG\)[\s\S]{0,400}?setDesktopAgentCatalog/,
+    'no direct fetch-and-write catalog path remains in AppShell',
   );
   assert.match(
     appShellSource,
-    /async function refreshAgentTargets\(\) \{\s*\n\s*const epoch = gatewayMirror\.currentConnectionEpoch;/,
-    'the catalog refetch captures its owning epoch',
+    /gatewayMirror\.adoptAgentCatalog\(nextAgentCatalog\);/,
+    'boot hydration adopts its catalog through the mirror owner',
   );
   // No side effects hide inside the state updater anymore.
   assert.doesNotMatch(

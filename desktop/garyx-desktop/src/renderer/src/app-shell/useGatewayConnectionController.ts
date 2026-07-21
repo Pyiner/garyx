@@ -381,18 +381,10 @@ export function useGatewayConnectionController({
     // state is synchronized from the mirror's snapshots until consumers
     // migrate to useGatewayRoot/useCatalog subscriptions.
     const nextState = await mirror.refreshDesktopState();
-    const catalog = mirror.getCatalogSnapshot();
     startTransition(() => {
+      // The catalog flows exclusively through the mirror-subscription
+      // effect above; a second write path here would race it.
       setDesktopState(nextState);
-      setDesktopAgentCatalog((current) =>
-        agentCatalogReferencesEqual(current, catalog)
-          ? current
-          : {
-              agents: [...catalog.agents],
-              defaultAgentId: catalog.defaultAgentId,
-              effectiveDefaultAgentId: catalog.effectiveDefaultAgentId,
-            },
-      );
     });
     return nextState;
   }

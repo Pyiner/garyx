@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { PinnedOrderIngress } from "./pinned-order-ingress.ts";
+import {
+  deriveStampedDesktopState,
+  PinnedOrderIngress,
+} from "./pinned-order-ingress.ts";
 
 function state(order, revision, gateway = "https://gateway.example.test", label = "state") {
   return {
@@ -172,6 +175,31 @@ test("bookkeeping advances at delivery, never inside the commit decision", async
   assert.deepEqual(once.pinnedThreadIds, ["b", "a"]);
 });
 
+test("an unstamped direct object commit is rejected (spread strips identity)", async () => {
+  const ingress = new PinnedOrderIngress("renderer-session-a");
+  const initial = state(["a"], 10);
+  ingress.initializeFromState(initial);
+  const delivered = await ingress.requestState(
+    async () => state(["b", "a"], 11, undefined, "delivered"),
+  );
+  const committed = ingress.commitState(initial, delivered);
+  assert.deepEqual(committed.pinnedThreadIds, ["b", "a"]);
+
+  // A rebuilt copy of a delivery has no envelope: it is indistinguishable
+  // from a stale generation's answer, so a DIRECT commit keeps current...
+  const rebuilt = { ...delivered, threads: [] };
+  assert.equal(ingress.commitState(committed, rebuilt), committed);
+
+  // ...while an explicitly derived state keeps the delivery's identity.
+  const derived = deriveStampedDesktopState(delivered, {
+    ...delivered,
+    threads: [],
+  });
+  const acceptedDerived = ingress.commitState(committed, derived);
+  assert.notEqual(acceptedDerived, committed);
+  assert.deepEqual(acceptedDerived.threads, []);
+});
+
 test("a delivery cannot resurrect across A->B->A generations", async () => {
   const ingress = new PinnedOrderIngress("renderer-session-a");
   const initial = state(["a"], 10, "https://gateway-a.test");
@@ -306,10 +334,10 @@ test("accepted pages are frozen during drag and cancel publishes the newest page
 
   const epochBeforeCancel = ingress.currentEpoch;
   const afterCancel = ingress.cancelDrag();
-  committed = ingress.commitState(committed, {
-    ...committed,
+  committed = ingress.commitState(committed, (liveCurrent) => ({
+    ...liveCurrent,
     pinnedThreadIds: afterCancel,
-  });
+  }));
   assert.equal(ingress.currentEpoch, epochBeforeCancel);
   assert.deepEqual(committed.pinnedThreadIds, ["c", "b", "a"]);
 });
@@ -327,10 +355,10 @@ test("drop reduces its preview against membership accepted during the freeze", a
   assert.deepEqual(committed.pinnedThreadIds, ["a", "b"]);
 
   const dropped = ingress.commitDragOrder(["b", "a"]);
-  committed = ingress.commitState(committed, {
-    ...committed,
+  committed = ingress.commitState(committed, (liveCurrent) => ({
+    ...liveCurrent,
     pinnedThreadIds: dropped,
-  });
+  }));
 
   assert.deepEqual(dropped, ["c", "b", "a"]);
   assert.deepEqual(committed.pinnedThreadIds, ["c", "b", "a"]);
@@ -343,10 +371,10 @@ test("same-revision current-epoch page can settle an already-equal drop", async 
   ingress.initializeFromState(committed);
   ingress.beginDrag();
   const dropped = ingress.commitDragOrder(["b", "a"]);
-  committed = ingress.commitState(committed, {
-    ...committed,
+  committed = ingress.commitState(committed, (liveCurrent) => ({
+    ...liveCurrent,
     pinnedThreadIds: dropped,
-  });
+  }));
 
   const alreadyEqual = await ingress.requestState(
     async () => state(["b", "a"], 10, undefined, "already-equal"),

@@ -656,22 +656,14 @@ export function AppShell() {
   // as the mirror's new root, so root consumers (e.g. the side-chat
   // panel's scope key) can never keep serving the previous gateway's root.
   const committedGatewayKey = desktopState?.entitiesGatewayUrl || "";
-  const renderedGatewayKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
-    const previousKey = renderedGatewayKeyRef.current;
-    renderedGatewayKeyRef.current = committedGatewayKey;
+    // The mirror's transition also resets and refetches the agent catalog
+    // (single owner, single request source); the React catalog state is a
+    // pure subscription mirror of it.
     gatewayMirror.beginConnectionScope(committedGatewayKey, {
       desktopState,
     });
     sideChatSessions.setGatewayScope(committedGatewayKey);
-    if (previousKey !== null && previousKey !== "" && previousKey !== committedGatewayKey) {
-      // The RENDERED agent catalog (AppShell state, not the mirror's) is
-      // universe-scoped too: gateway A's agents must not drive new
-      // threads, automations, or sends under gateway B. Clear and refetch
-      // from the new gateway; the refetch continuation is epoch-owned.
-      setDesktopAgentCatalog(EMPTY_DESKTOP_AGENT_CATALOG);
-      void refreshAgentTargets();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gatewayMirror, sideChatSessions, committedGatewayKey]);
   const [desktopAgentCatalog, setDesktopAgentCatalog] =
@@ -2677,17 +2669,9 @@ export function AppShell() {
   }
 
   async function refreshAgentTargets() {
-    const epoch = gatewayMirror.currentConnectionEpoch;
-    const nextCatalog = await window.garyxDesktop
-      .listCustomAgents()
-      .catch(() => EMPTY_DESKTOP_AGENT_CATALOG);
-    if (!gatewayMirror.isCurrentConnectionEpoch(epoch)) {
-      // The catalog answer belongs to the previous gateway universe.
-      return;
-    }
-    startTransition(() => {
-      setDesktopAgentCatalog(nextCatalog);
-    });
+    // Single owner: the mirror fetches, fences, and publishes; the React
+    // catalog state updates through its subscription mirror.
+    await gatewayMirror.refreshAgentCatalog();
   }
 
   async function openAddBotDialog() {
@@ -3030,7 +3014,7 @@ export function AppShell() {
               setPinnedOrderMainSnapshot(pinOrderSnapshot);
             }
             if (gatewayMirror.isCurrentConnectionEpoch(hydrationEpoch)) {
-              setDesktopAgentCatalog(nextAgentCatalog);
+              gatewayMirror.adoptAgentCatalog(nextAgentCatalog);
             }
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
@@ -3803,16 +3787,25 @@ export function AppShell() {
       return (workspace.path || "").trim().toLowerCase() === workspaceKey;
     }) || null;
     if (previousState && removedWorkspace) {
-      setDesktopState({
-        ...previousState,
-        workspaces: previousState.workspaces.filter((workspace) => {
-          return (workspace.path || "").trim().toLowerCase() !== workspaceKey;
-        }),
-        selectedWorkspacePath:
-          (previousState.selectedWorkspacePath || "").trim().toLowerCase() === workspaceKey
-            ? null
-            : previousState.selectedWorkspacePath,
-      });
+      // Functional derivation of the LIVE committed state: a rebuilt object
+      // would lose its delivery identity and be rejected by the ingress.
+      setDesktopState((current) =>
+        current
+          ? {
+              ...current,
+              workspaces: current.workspaces.filter((workspace) => {
+                return (
+                  (workspace.path || "").trim().toLowerCase() !== workspaceKey
+                );
+              }),
+              selectedWorkspacePath:
+                (current.selectedWorkspacePath || "").trim().toLowerCase() ===
+                workspaceKey
+                  ? null
+                  : current.selectedWorkspacePath,
+            }
+          : current,
+      );
     }
     try {
       const nextState = await requestDesktopState(() =>

@@ -108,6 +108,17 @@ export class PinnedOrderIngress {
     return this.epoch;
   }
 
+  /** The gateway domain generation (advances on every switch/rollback):
+   *  async continuations capture it to fence their non-state side effects
+   *  (navigation, local caches) the same way deliveries are fenced. */
+  get currentDomainGeneration(): number {
+    return this.domainGeneration;
+  }
+
+  isCurrentDomainGeneration(generation: number): boolean {
+    return this.domainGeneration === generation;
+  }
+
   get highestObservedRevision(): number {
     return this.revisionFloor;
   }
@@ -364,18 +375,30 @@ export class PinnedOrderIngress {
     current: DesktopState | null,
     action: DesktopStateAction,
   ): DesktopState | null {
-    const candidate = typeof action === "function" ? action(current) : action;
+    const functional = typeof action === "function";
+    const candidate = functional ? action(current) : action;
     if (!candidate) {
       return candidate;
     }
     const envelope = deliveryEnvelopes.get(candidate);
-    if (!envelope) {
+    if (envelope) {
+      if (!this.envelopeAcceptable(envelope)) {
+        return current;
+      }
+      return this.rebasePinnedFields(envelope.state);
+    }
+    if (functional) {
+      // A functional updater derives from the LIVE committed state React
+      // hands it, so an unstamped result is current-generation by
+      // construction.
       return this.rebaseUnstampedCandidate(current, candidate);
     }
-    if (!this.envelopeAcceptable(envelope)) {
-      return current;
-    }
-    return this.rebasePinnedFields(envelope.state);
+    // An unstamped DIRECT object is indistinguishable from a rebuilt stale
+    // delivery (a spread strips the WeakMap identity, and after A -> B -> A
+    // the URL matches again). Reject it: deliveries commit as-is, derived
+    // versions go through deriveStampedDesktopState, and local mutations
+    // use functional updaters.
+    return current;
   }
 
   private rebaseUnstampedCandidate(
@@ -420,6 +443,38 @@ export class PinnedOrderIngress {
       unsettledBaseRevision: this.unsettledBaseRevision,
     };
   }
+}
+
+/**
+ * Preserve delivery identity across a transformation. Production code that
+ * needs to commit a DERIVED version of a delivered state (e.g. folding an
+ * activity result into `state.automations`) must go through this helper:
+ * the envelope — session, gateway identity, and domain generation — carries
+ * over to the derived object, so the ingress can still judge which
+ * connection the underlying answer came from. A bare spread would strip the
+ * identity, and an unstamped direct commit is rejected outright.
+ */
+export function deriveStampedDesktopState(
+  base: DesktopState,
+  next: DesktopState,
+): DesktopState {
+  const envelope = deliveryEnvelopes.get(base);
+  if (envelope) {
+    deliveryEnvelopes.set(next, { ...envelope, state: next });
+  }
+  return next;
+}
+
+/** Module-level access to the installed ingress's domain generation, for
+ *  async continuations that fence non-state side effects. */
+export function currentPinnedOrderDomainGeneration(): number {
+  return installedIngress?.currentDomainGeneration ?? 0;
+}
+
+export function isCurrentPinnedOrderDomainGeneration(
+  generation: number,
+): boolean {
+  return currentPinnedOrderDomainGeneration() === generation;
 }
 
 export function installPinnedOrderIngress(ingress: PinnedOrderIngress): void {

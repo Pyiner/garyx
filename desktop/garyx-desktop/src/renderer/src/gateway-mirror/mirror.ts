@@ -65,11 +65,6 @@ export const GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT = 32;
 const EMPTY_COMMITTED_RECORDS: readonly CommittedMessageEvent[] = [];
 const EMPTY_UI_MESSAGES: readonly UiTranscriptMessage[] = [];
 const EMPTY_PENDING_REMOTE_INPUTS: readonly PendingThreadInput[] = [];
-const EMPTY_AGENT_CATALOG: DesktopAgentCatalog = {
-  agents: [],
-  defaultAgentId: null,
-  effectiveDefaultAgentId: null,
-};
 const EMPTY_THREAD_FRONTIER: ThreadFrontierSnapshot = {
   committedSeq: 0,
   renderBasedOnSeq: 0,
@@ -399,7 +394,7 @@ export class GatewayMirror {
       Promise.resolve().then(() => services.getState()),
       Promise.resolve()
         .then(() => services.listCustomAgents())
-        .catch(() => EMPTY_AGENT_CATALOG),
+        .catch(() => null),
     ]).then(([nextState, nextCatalog]) => {
       const responseKey = nextState?.entitiesGatewayUrl || "";
       const scopeKey = this.connectionScopeKey ?? "";
@@ -412,12 +407,48 @@ export class GatewayMirror {
       }
       this.desktopState = nextState;
       this.bumpRoot();
-      this.agents = nextCatalog.agents;
-      this.defaultAgentId = nextCatalog.defaultAgentId;
-      this.effectiveDefaultAgentId = nextCatalog.effectiveDefaultAgentId;
-      this.bumpCatalog();
+      if (nextCatalog) {
+        // A failed catalog fetch keeps the last-known catalog: it must
+        // never be mapped to an empty one over good data.
+        this.publishAgentCatalog(nextCatalog);
+      }
       return nextState;
     });
+  }
+
+  private publishAgentCatalog(catalog: DesktopAgentCatalog): void {
+    this.agents = catalog.agents;
+    this.defaultAgentId = catalog.defaultAgentId;
+    this.effectiveDefaultAgentId = catalog.effectiveDefaultAgentId;
+    this.bumpCatalog();
+  }
+
+  /**
+   * The mirror is the ONLY catalog owner and the only request source.
+   * Refetch the agent catalog from the current gateway; the publish is
+   * epoch-fenced and a failure keeps the last-known catalog.
+   */
+  refreshAgentCatalog(): Promise<void> {
+    const services = this.services;
+    if (!services) {
+      return Promise.resolve();
+    }
+    const epoch = this.connectionEpoch;
+    return Promise.resolve()
+      .then(() => services.listCustomAgents())
+      .then((catalog) => {
+        if (this.connectionEpoch !== epoch) {
+          return;
+        }
+        this.publishAgentCatalog(catalog);
+      })
+      .catch(() => {});
+  }
+
+  /** Adopt a catalog the caller already fetched (boot hydration): the
+   *  caller owns the staleness fence; consumers still read one owner. */
+  adoptAgentCatalog(catalog: DesktopAgentCatalog): void {
+    this.publishAgentCatalog(catalog);
   }
 
   private startDesktopStateRefresh(): Promise<DesktopState> {
