@@ -33,27 +33,23 @@ struct GaryxConversationLiveStore {
     }
 
     func messages(in model: GaryxMobileModel) -> [GaryxMobileMessage] {
-        threadID.map { model.cachedMessages(for: $0) } ?? []
+        renderInput(in: model).messages
     }
 
     func turnRows(in model: GaryxMobileModel, isCanonicalTop: Bool) -> [GaryxMobileTurnRow] {
-        guard let threadID else { return [] }
-        if isCanonicalTop, model.selectedThread?.id == threadID {
+        if let threadID, isCanonicalTop, model.selectedThread?.id == threadID {
             return model.selectedThreadTurnRows()
         }
-        let snapshot = model.renderSnapshot(for: threadID)
-        let localMessages = model.cachedMessages(for: threadID)
-        let transcriptMessages = model.transcriptMirror.snapshot(for: threadID)?.messages ?? []
+        let input = renderInput(in: model)
         return GaryxMobileRenderStateMapper.rows(
-            snapshot: snapshot,
-            messages: localMessages,
-            transcriptMessages: transcriptMessages
+            snapshot: input.snapshot,
+            messages: input.messages,
+            transcriptMessages: input.transcriptMessages
         )
     }
 
     func isThinking(in model: GaryxMobileModel) -> Bool {
-        guard let threadID else { return false }
-        return model.renderSnapshot(for: threadID)?.tailActivity == .thinking
+        renderInput(in: model).showsTailThinking
     }
 
     func rateLimit(in model: GaryxMobileModel) -> GaryxRenderRateLimit? {
@@ -78,5 +74,20 @@ struct GaryxConversationLiveStore {
     func isLoadingInitialHistory(in model: GaryxMobileModel, isCanonicalTop: Bool) -> Bool {
         isCanonicalTop && model.selectedThread?.id == threadID
             && model.isSelectedThreadLoadingInitialHistory
+    }
+
+    private func renderInput(in model: GaryxMobileModel) -> GaryxConversationRouteRenderInput {
+        let threadMessages = threadID.map { model.cachedMessages(for: $0) } ?? []
+        let snapshot = threadID.flatMap { model.renderSnapshot(for: $0) }
+        let transcriptMessages = threadID
+            .flatMap { model.transcriptMirror.snapshot(for: $0)?.messages }
+            ?? []
+        return GaryxConversationRouteRenderInputResolver.resolve(
+            destination: destination,
+            draftMessages: model.messages,
+            threadMessages: threadMessages,
+            threadSnapshot: snapshot,
+            threadTranscriptMessages: transcriptMessages
+        )
     }
 }

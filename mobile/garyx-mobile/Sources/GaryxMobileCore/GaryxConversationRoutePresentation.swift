@@ -80,6 +80,63 @@ public enum GaryxConversationOpeningTranscriptPolicy {
     }
 }
 
+/// Render inputs owned by one mounted conversation route occurrence.
+///
+/// The route chooses the local body pool; `GaryxMobileRenderStateMapper`
+/// remains the dumb adapter from the server snapshot plus that pool into
+/// mobile rows. Keeping this selection in Core makes draft/thread promotion
+/// testable without mounting SwiftUI.
+struct GaryxConversationRouteRenderInput: Equatable {
+    let messages: [GaryxMobileMessage]
+    let snapshot: GaryxRenderSnapshot?
+    let transcriptMessages: [GaryxTranscriptMessage]
+
+    /// Client-owned pending-ack chrome for a user row that has not appeared
+    /// in committed history yet. This is deliberately separate from the
+    /// server-owned `snapshot.tailActivity` value.
+    var showsPendingAcknowledgement: Bool {
+        messages.contains { message in
+            message.role == .user
+                && message.localState == .optimistic
+                && message.statusText == nil
+        }
+    }
+
+    /// The existing transcript bubble is shared by server thinking and the
+    /// explicitly permitted optimistic pending-ack window. No transport or
+    /// run-projection state participates in this decision.
+    var showsTailThinking: Bool {
+        snapshot?.tailActivity == .thinking || showsPendingAcknowledgement
+    }
+}
+
+enum GaryxConversationRouteRenderInputResolver {
+    static func resolve(
+        destination: GaryxRouteDestination,
+        draftMessages: [GaryxMobileMessage],
+        threadMessages: [GaryxMobileMessage],
+        threadSnapshot: GaryxRenderSnapshot?,
+        threadTranscriptMessages: [GaryxTranscriptMessage]
+    ) -> GaryxConversationRouteRenderInput {
+        switch destination {
+        case .conversation:
+            return GaryxConversationRouteRenderInput(
+                messages: threadMessages,
+                snapshot: threadSnapshot,
+                transcriptMessages: threadTranscriptMessages
+            )
+        case .conversationDraft:
+            return GaryxConversationRouteRenderInput(
+                messages: draftMessages,
+                snapshot: nil,
+                transcriptMessages: []
+            )
+        case .panel, .settingsDetail, .workspaceDrilldown:
+            preconditionFailure("conversation render input requires a conversation destination")
+        }
+    }
+}
+
 /// Core-owned lifecycle and delivered-frame policy for a staged gateway thread.
 ///
 /// The route page is visible from mount. Once terminal, the first delivered
