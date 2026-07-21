@@ -246,9 +246,10 @@ async fn update_thread_record_preserves_workspace_when_not_provided() {
         .await
         .unwrap();
 
-    let updated = update_thread_record(&store, "thread::keep", Some("After".to_owned()), None, None)
-        .await
-        .unwrap();
+    let updated =
+        update_thread_record(&store, "thread::keep", Some("After".to_owned()), None, None)
+            .await
+            .unwrap();
 
     assert_eq!(label_from_value(&updated).as_deref(), Some("After"));
     assert_eq!(updated["thread_title_source"], "explicit");
