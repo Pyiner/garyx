@@ -634,8 +634,13 @@ test("a switch REQUEST already fences inbound stream events (hub reconnect windo
   // R25 BLOCKER: the main-process hub restarts forwarders on a gateway
   // save KEEPING the old request id, while the new connection already
   // reads gateway B's settings — before the renderer commits (mirror
-  // epoch still A). The old id was minted under the old ingress
-  // generation, so ingest must reject it on the generation half.
+  // epoch still A). The id must be minted by PRODUCTION code and both
+  // halves are load-bearing: a generation-less mint or an epoch-only
+  // verifier must fail below.
+  //
+  // Observation anchor: a REJECTED event returns before the lifecycle
+  // ever touches its deps; an ACCEPTED event reads them immediately. The
+  // Proxy counts deps access, which is merge-semantics-independent.
   const { PinnedOrderIngress, installPinnedOrderIngress } = await import(
     "../pinned-order-ingress.ts"
   );
@@ -643,10 +648,6 @@ test("a switch REQUEST already fences inbound stream events (hub reconnect windo
   installPinnedOrderIngress(ingress);
   ingress.beginGatewaySwitch("https://gateway-a.test");
 
-  // The request id comes from the PRODUCTION mint: start a real committed
-  // stream and capture what the lifecycle hands the transport. Both halves
-  // are load-bearing — reverting the mint to a generation-less format OR
-  // weakening the ingest verifier must fail below.
   let capturedRequestId = null;
   const mirror = new GatewayMirror({
     getState: () => Promise.reject(new Error("unused")),
@@ -662,7 +663,8 @@ test("a switch REQUEST already fences inbound stream events (hub reconnect windo
     stopThreadStream: async () => {},
   });
   mirror.beginConnectionScope("http://gateway-a");
-  mirror.setTranscriptLifecycleDeps({
+  let depsReads = 0;
+  const rawDeps = {
     scheduleDesktopStateRefresh: () => {},
     setDesktopState: () => {},
     setError: () => {},
@@ -670,48 +672,62 @@ test("a switch REQUEST already fences inbound stream events (hub reconnect windo
     transcriptHasAutomationResponse: () => false,
     scheduleHistoryRefresh: () => {},
     requestSelectedThreadMessagesBottomSnap: () => {},
-    selectedThreadIdRef: { current: THREAD },
+    selectedThreadIdRef: { current: null },
     sideChatThreadIdRef: { current: null },
     sideChatStreamConsumerId: (id) => `side-chat:${id}`,
     lastRenderedMessageThreadRef: { current: null },
     messagesRef: { current: null },
     pendingMessagesPrependAnchorRef: { current: null },
+  };
+  mirror.setTranscriptLifecycleDeps(
+    new Proxy(rawDeps, {
+      get(target, property, receiver) {
+        depsReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    }),
+  );
+  mirror.applyRemoteTranscript(THREAD, transcriptWith("A baseline"), {
+    persist: false,
   });
   await mirror.startCommittedThreadStream(
     THREAD,
-    transcriptWith("A baseline"),
+    mirror.getThreadSnapshotTranscript(THREAD),
     "probe-consumer",
   );
-  assert.ok(
+  assert.match(
     capturedRequestId,
-    "the production mint issued a request id to the transport",
+    /^desktop-stream-request-e\d+-g\d+-\d+$/,
+    "the production mint embeds BOTH identities",
   );
 
-  // Sanity: under the SAME identity, an event carrying the production id
-  // is accepted (mint and verifier agree). A generation-less mint mutation
-  // turns the id request-less-shaped and this half's pairing breaks.
-  mirror.notifyStreamEvent({
-    type: "committed_message",
-    threadId: THREAD,
-    requestId: capturedRequestId,
-    seq: 6,
-    message: { role: "assistant", content: "A live tail" },
-  });
-  const acceptedBefore = mirror.getThreadSnapshot(THREAD).messages.length;
+  const inject = (seq, text) =>
+    mirror.notifyStreamEvent({
+      type: "committed_message",
+      threadId: THREAD,
+      requestId: capturedRequestId,
+      seq,
+      message: { id: `msg:${seq}`, role: "assistant", text },
+    });
+
+  // Sanity: under its own identity, the production-minted id is ACCEPTED
+  // (the lifecycle reads its deps). Mint and verifier agree.
+  const readsBefore = depsReads;
+  inject(6, "A live tail");
+  assert.ok(
+    depsReads > readsBefore,
+    "sanity: a production-minted id is accepted under its own identity",
+  );
 
   // Switch REQUEST: generation advances, NO commit (epoch unchanged).
+  // The same id must now be rejected WHOLE — before deps are ever read.
   ingress.beginGatewaySwitch("https://gateway-b.test");
-  mirror.notifyStreamEvent({
-    type: "committed_message",
-    threadId: THREAD,
-    requestId: capturedRequestId,
-    seq: 7,
-    message: { role: "assistant", content: "B secret from reconnect" },
-  });
+  const readsAfterSwitch = depsReads;
+  inject(7, "B secret from reconnect");
   assert.equal(
-    mirror.getThreadSnapshot(THREAD).messages.length,
-    acceptedBefore,
-    "the reconnect-window event does not enter the still-A mirror",
+    depsReads,
+    readsAfterSwitch,
+    "the reconnect-window event is dropped before any side effect",
   );
 });
 
