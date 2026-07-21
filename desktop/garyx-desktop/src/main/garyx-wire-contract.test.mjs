@@ -599,11 +599,28 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
             id: "claude_code",
             name: "Claude Code",
             available: true,
+            session: {
+              used_percent: 12,
+              remaining_percent: 88,
+              resets_at: "2030-01-01T05:00:00Z",
+              reset_after_seconds: 18000,
+            },
+            weekly: {
+              used_percent: 23,
+              remaining_percent: 77,
+              resets_at: "2030-01-07T11:00:00Z",
+              reset_after_seconds: 558000,
+            },
             scoped_limits: [{
               id: "weekly_scoped:fable",
               name: "Fable",
               kind: "weekly_scoped",
-              window: { used_percent: 25, remaining_percent: 75 },
+              window: {
+                used_percent: 25,
+                remaining_percent: 75,
+                resets_at: "2030-01-07T11:00:00Z",
+                reset_after_seconds: 558000,
+              },
             }],
           },
         }],
@@ -612,8 +629,19 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
     async () => {
       const accounts = await listClaudeCodeAccounts(settings);
       assert.equal(accounts.activeAccountId, "account-1");
+      assert.equal(accounts.accounts[0].usage.session.resetsAt, "2030-01-01T05:00:00Z");
+      assert.equal(accounts.accounts[0].usage.session.resetAfterSeconds, 18000);
+      assert.equal(accounts.accounts[0].usage.weekly.resetsAt, "2030-01-07T11:00:00Z");
       assert.equal(accounts.accounts[0].usage.scopedLimits[0].name, "Fable");
       assert.equal(accounts.accounts[0].usage.scopedLimits[0].window.remainingPercent, 75);
+      assert.equal(
+        accounts.accounts[0].usage.scopedLimits[0].window.resetsAt,
+        "2030-01-07T11:00:00Z",
+      );
+      assert.equal(
+        accounts.accounts[0].usage.scopedLimits[0].window.resetAfterSeconds,
+        558000,
+      );
       const auth = await startClaudeCodeAuth(settings, { managedAccountName: "Work" });
       assert.equal(auth.loginId, "login-1");
       assert.equal(auth.authorizationUrl, "https://claude.ai/oauth/authorize?state=test");

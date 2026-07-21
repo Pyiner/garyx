@@ -94,7 +94,8 @@ public struct GaryxClaudeCodeAccountPresentation: Equatable, Identifiable, Senda
 
     public static func make(
         account: GaryxClaudeCodeAccount,
-        refreshedAt: String?
+        refreshedAt: String?,
+        now: Date = Date()
     ) -> GaryxClaudeCodeAccountPresentation {
         let detail: String
         if let email = account.email {
@@ -116,7 +117,8 @@ public struct GaryxClaudeCodeAccountPresentation: Equatable, Identifiable, Senda
             selected: account.selected,
             usage: GaryxProviderUsageDisplayModel.make(
                 from: account.usage,
-                refreshedAt: refreshedAt
+                refreshedAt: refreshedAt,
+                now: now
             )
         )
     }

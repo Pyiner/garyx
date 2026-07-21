@@ -503,7 +503,7 @@ private struct GaryxClaudeCodeAccountRow: View {
         if let usage = account.usage, usage.available, !usage.windows.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
                 ForEach(usage.windows) { window in
-                    GaryxClaudeCodeAccountQuotaMiniRow(window: window)
+                    GaryxClaudeQuotaConsoleRow(window: window, horizontalPadding: 0)
                 }
             }
             .opacity(usage.stale ? 0.55 : 1)
@@ -736,40 +736,6 @@ private struct GaryxClaudeCodeAccountDetailView: View {
             await model.loadClaudeCodeAccounts()
             await model.refreshCodingUsageWidget()
         }
-    }
-}
-
-private struct GaryxClaudeCodeAccountQuotaMiniRow: View {
-    let window: GaryxProviderUsageWindowDisplayModel
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(window.label)
-                .font(GaryxFont.caption())
-                .foregroundStyle(.secondary)
-                .frame(width: 54, alignment: .leading)
-            track
-            Text(window.remainingText)
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.primary)
-                .monospacedDigit()
-                .frame(minWidth: 35, alignment: .trailing)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(window.label), \(window.remainingText)")
-    }
-
-    private var track: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.10))
-                Capsule()
-                    .fill(Color.primary.opacity(0.82))
-                    .frame(width: proxy.size.width * max(0, min(window.remainingPercent, 100)) / 100)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 4)
     }
 }
 

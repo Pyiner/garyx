@@ -165,14 +165,29 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
                         "name": "Claude Code",
                         "available": true,
                         "plan": "max",
-                        "session": { "used_percent": 12, "remaining_percent": 88 },
-                        "weekly": { "used_percent": 23, "remaining_percent": 77 },
+                        "session": {
+                          "used_percent": 12,
+                          "remaining_percent": 88,
+                          "resets_at": "2026-07-21T14:00:00Z",
+                          "reset_after_seconds": 7200
+                        },
+                        "weekly": {
+                          "used_percent": 23,
+                          "remaining_percent": 77,
+                          "resets_at": "2026-07-22T12:00:00Z",
+                          "reset_after_seconds": 86400
+                        },
                         "scoped_limits": [
                           {
                             "id": "weekly_scoped:Fable",
                             "name": "Fable",
                             "kind": "weekly_scoped",
-                            "window": { "used_percent": 46, "remaining_percent": 54 }
+                            "window": {
+                              "used_percent": 46,
+                              "remaining_percent": 54,
+                              "resets_at": "2026-07-21T15:00:00Z",
+                              "reset_after_seconds": 10800
+                            }
                           }
                         ]
                       }
@@ -187,12 +202,19 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
         XCTAssertEqual(selected.id, "account-1")
         let presentation = GaryxClaudeCodeAccountPresentation.make(
             account: selected,
-            refreshedAt: response.refreshedAt
+            refreshedAt: response.refreshedAt,
+            now: try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-07-21T12:00:00Z")
+            )
         )
         XCTAssertEqual(presentation.title, "Work")
         XCTAssertEqual(presentation.detailText, "bot@example.com")
         XCTAssertEqual(presentation.planText, "max")
         XCTAssertEqual(presentation.usage?.windows.map(\.label), ["Session", "Weekly", "Fable"])
+        XCTAssertEqual(
+            presentation.usage?.windows.map(\.detailText),
+            ["resets in 2h", "resets in 1d", "resets in 3h"]
+        )
     }
 
     // MARK: Guided login step machine
