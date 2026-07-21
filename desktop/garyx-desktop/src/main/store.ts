@@ -4,7 +4,7 @@ import { dirname, join, basename } from 'node:path';
 
 import { app } from 'electron';
 
-import { mergeRetainedHiddenSessions } from '../shared/desktop-state';
+import { mergeRetainedHiddenSessions, stateWithCreatedThread } from '../shared/desktop-state';
 import {
   DEFAULT_DESKTOP_SETTINGS,
   DEFAULT_SESSION_TITLE,
@@ -1684,6 +1684,12 @@ export async function createDesktopThread(input?: {
       }),
     });
   }
+
+  // Hidden session threads (side-chat children) never appear in the
+  // fetched thread list; folding the authoritative create summary into the
+  // REMEMBERED main-process state makes main the durable owner, so every
+  // later hydration retains it through mergeRetainedHiddenSessions.
+  state = rememberHydratedDesktopState(stateWithCreatedThread(state, thread));
 
   return {
     state,

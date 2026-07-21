@@ -120,3 +120,23 @@ export function mergeRetainedHiddenSessions<T extends { id: string }>(
   );
   return retained.length ? [...threads, ...retained] : threads;
 }
+
+/**
+ * Fold a just-created thread summary into a state snapshot: if the fetched
+ * thread list does not carry it (hidden session threads never appear
+ * there), it joins the sessions cache. This runs in the MAIN process at
+ * creation, making main the durable cross-process owner — later full-state
+ * refreshes flow through mergeRetainedHiddenSessions and keep it.
+ */
+export function stateWithCreatedThread<
+  T extends { id: string },
+  S extends { threads: T[]; sessions: T[] },
+>(state: S, thread: T): S {
+  if (
+    state.threads.some((entry) => entry.id === thread.id) ||
+    state.sessions.some((entry) => entry.id === thread.id)
+  ) {
+    return state;
+  }
+  return { ...state, sessions: [...state.sessions, thread] };
+}
