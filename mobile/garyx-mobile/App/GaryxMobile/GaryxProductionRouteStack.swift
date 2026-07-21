@@ -329,8 +329,11 @@ final class GaryxProductionRouteStore: ObservableObject {
     }
 
     func presentationBarrierDidChange() {
-        hasPresentationBarrier = container?.hasPresentationBarrier ?? false
-        guard container?.hasPresentationBarrier != true else { return }
+        let active = container?.hasPresentationBarrier ?? false
+        if hasPresentationBarrier != active {
+            hasPresentationBarrier = active
+        }
+        guard !active else { return }
         drainAdmissiblePlans()
     }
 

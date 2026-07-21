@@ -535,6 +535,9 @@ private struct GaryxClaudeCodeAccountDetailView: View {
                 List {
                     identitySection(account)
                     quotaSection(account)
+                    if let error = model.claudeCodeAccountsError {
+                        accountErrorSection(error)
+                    }
                     actionsSection(account)
                     if !account.systemDefault {
                         deleteSection(account)
@@ -578,6 +581,25 @@ private struct GaryxClaudeCodeAccountDetailView: View {
                 },
                 secondaryButton: .cancel()
             )
+        }
+    }
+
+    private func accountErrorSection(_ error: String) -> some View {
+        Section {
+            Label {
+                Text(error)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.circle")
+            }
+            .font(GaryxFont.callout())
+            .foregroundStyle(GaryxTheme.danger)
+
+            Button("Refresh Accounts") {
+                Task { await model.loadClaudeCodeAccounts() }
+            }
+            .fontWeight(.semibold)
+            .foregroundStyle(.primary)
         }
     }
 
@@ -823,6 +845,19 @@ private struct GaryxClaudeCodeRenameAccountSheet: View {
             isSaving: isSaving,
             onSave: save
         ) {
+            if let error = model.claudeCodeAccountsError {
+                Section {
+                    Label {
+                        Text(error)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.circle")
+                    }
+                    .font(GaryxFont.callout())
+                    .foregroundStyle(GaryxTheme.danger)
+                }
+            }
+
             Section {
                 TextField("Account name", text: $name)
                     .textInputAutocapitalization(.words)

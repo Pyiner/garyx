@@ -89,6 +89,7 @@ final class GaryxPresentationLeaseSession: ObservableObject {
     private(set) var token: GaryxPresentationLeaseToken?
     private(set) var operationContext: GaryxPresentationOperationContext?
     private var appeared = false
+    private var didCompleteDismissal = false
     private var cycleFinished = false
 
     init(resultBearing: Bool = false) {
@@ -133,7 +134,7 @@ final class GaryxPresentationLeaseSession: ObservableObject {
     }
 
     func markDismissing() {
-        guard let token else { return }
+        guard !didCompleteDismissal, let token else { return }
         coordinator?.markDismissing(token)
     }
 
@@ -150,7 +151,8 @@ final class GaryxPresentationLeaseSession: ObservableObject {
     }
 
     func completeDismissal() {
-        guard let token else { return }
+        guard !didCompleteDismissal, let token else { return }
+        didCompleteDismissal = true
         coordinator?.dismissalCompleted(token)
         updateFinishedState()
     }
@@ -173,10 +175,7 @@ final class GaryxPresentationLeaseSession: ObservableObject {
     }
 
     func bindingBecameFalse(completesDismissal: Bool) {
-        guard token != nil else {
-            resetForNextCycle()
-            return
-        }
+        guard token != nil, !didCompleteDismissal else { return }
         markDismissing()
         if completesDismissal || !appeared {
             completeDismissal()
@@ -189,6 +188,7 @@ final class GaryxPresentationLeaseSession: ObservableObject {
         token = nil
         operationContext = nil
         appeared = false
+        didCompleteDismissal = false
         cycleFinished = false
     }
 
@@ -273,16 +273,7 @@ private extension GaryxPresentationLeaseModifierSupport {
         completesDismissalOnFalse: Bool
     ) -> Binding<Bool> {
         Binding(
-            get: {
-                if binding.wrappedValue {
-                    prepare()
-                } else {
-                    session.bindingBecameFalse(
-                        completesDismissal: completesDismissalOnFalse
-                    )
-                }
-                return binding.wrappedValue
-            },
+            get: { binding.wrappedValue },
             set: { presented in
                 if presented {
                     prepare()
@@ -302,16 +293,7 @@ private extension GaryxPresentationLeaseModifierSupport {
         completesDismissalOnFalse: Bool = false
     ) -> Binding<Item?> {
         Binding(
-            get: {
-                if binding.wrappedValue != nil {
-                    prepare()
-                } else {
-                    session.bindingBecameFalse(
-                        completesDismissal: completesDismissalOnFalse
-                    )
-                }
-                return binding.wrappedValue
-            },
+            get: { binding.wrappedValue },
             set: { item in
                 if item != nil {
                     prepare()
@@ -324,6 +306,26 @@ private extension GaryxPresentationLeaseModifierSupport {
                 }
             }
         )
+    }
+
+    func observingLease<Content: View>(
+        _ content: Content,
+        isPresented: Bool,
+        completesDismissalOnFalse: Bool,
+        marksPresentedOnTrue: Bool = false
+    ) -> some View {
+        content.onChange(of: isPresented, initial: true) { _, presented in
+            if presented {
+                prepare()
+                if marksPresentedOnTrue {
+                    session.markPresented()
+                }
+            } else {
+                session.bindingBecameFalse(
+                    completesDismissal: completesDismissalOnFalse
+                )
+            }
+        }
     }
 
     func presented<Content: View>(_ content: Content) -> some View {
@@ -352,7 +354,12 @@ private struct GaryxSheetModifier<Presented: View>: ViewModifier,
     let presentedContent: () -> Presented
 
     func body(content: Content) -> some View {
-        content.sheet(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: false
+        )
+        .sheet(
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: false),
             onDismiss: {
                 session.completeDismissal()
@@ -376,7 +383,12 @@ private struct GaryxItemSheetModifier<Item: Identifiable, Presented: View>: View
     let presentedContent: (Item) -> Presented
 
     func body(content: Content) -> some View {
-        content.sheet(
+        observingLease(
+            content,
+            isPresented: item.wrappedValue != nil,
+            completesDismissalOnFalse: false
+        )
+        .sheet(
             item: leasedItemBinding(item),
             onDismiss: {
                 session.completeDismissal()
@@ -456,7 +468,12 @@ private struct GaryxFullScreenModifier<Presented: View>: ViewModifier,
     }
 
     func body(content: Content) -> some View {
-        content.fullScreenCover(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: false
+        )
+        .fullScreenCover(
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: false),
             onDismiss: {
                 session.completeDismissal()
@@ -480,7 +497,12 @@ private struct GaryxItemFullScreenModifier<Item: Identifiable, Presented: View>:
     let presentedContent: (Item) -> Presented
 
     func body(content: Content) -> some View {
-        content.fullScreenCover(
+        observingLease(
+            content,
+            isPresented: item.wrappedValue != nil,
+            completesDismissalOnFalse: false
+        )
+        .fullScreenCover(
             item: leasedItemBinding(item),
             onDismiss: {
                 session.completeDismissal()
@@ -504,7 +526,12 @@ private struct GaryxPopoverModifier<Presented: View>: ViewModifier,
     let presentedContent: () -> Presented
 
     func body(content: Content) -> some View {
-        content.popover(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: false
+        )
+        .popover(
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: false),
             attachmentAnchor: attachmentAnchor,
             arrowEdge: arrowEdge
@@ -527,7 +554,13 @@ private struct GaryxFileImporterModifier: ViewModifier,
     let onCompletion: (Result<[URL], Error>, GaryxPresentationOperationContext?) -> Void
 
     func body(content: Content) -> some View {
-        content.fileImporter(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: true,
+            marksPresentedOnTrue: true
+        )
+        .fileImporter(
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: true),
             allowedContentTypes: allowedContentTypes,
             allowsMultipleSelection: allowsMultipleSelection
@@ -556,7 +589,13 @@ private struct GaryxPhotosPickerModifier: ViewModifier,
     let onSelection: ([PhotosPickerItem], GaryxPresentationOperationContext?) -> Void
 
     func body(content: Content) -> some View {
-        content.photosPicker(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: true,
+            marksPresentedOnTrue: true
+        )
+        .photosPicker(
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: true),
             selection: selection,
             maxSelectionCount: maxSelectionCount,
@@ -585,7 +624,13 @@ private struct GaryxSinglePhotosPickerModifier: ViewModifier,
     let matching: PHPickerFilter?
 
     func body(content: Content) -> some View {
-        content.photosPicker(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: true,
+            marksPresentedOnTrue: true
+        )
+        .photosPicker(
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: true),
             selection: selection,
             matching: matching
@@ -614,16 +659,19 @@ private struct GaryxConfirmationDialogModifier<Actions: View, Message: View>: Vi
     let message: () -> Message
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: true,
+            marksPresentedOnTrue: true
+        )
+        .confirmationDialog(
             title,
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: true),
             titleVisibility: titleVisibility,
             actions: actions,
             message: message
         )
-        .onChange(of: isPresented.wrappedValue) { _, presented in
-            if presented { session.markPresented() }
-        }
     }
 }
 
@@ -639,15 +687,18 @@ private struct GaryxAlertModifier<Actions: View, Message: View>: ViewModifier,
     let message: () -> Message
 
     func body(content: Content) -> some View {
-        content.alert(
+        observingLease(
+            content,
+            isPresented: isPresented.wrappedValue,
+            completesDismissalOnFalse: true,
+            marksPresentedOnTrue: true
+        )
+        .alert(
             title,
             isPresented: leasedBinding(isPresented, completesDismissalOnFalse: true),
             actions: actions,
             message: message
         )
-        .onChange(of: isPresented.wrappedValue) { _, presented in
-            if presented { session.markPresented() }
-        }
     }
 }
 
@@ -661,15 +712,18 @@ private struct GaryxItemAlertModifier<Item: Identifiable>: ViewModifier,
     let alert: (Item) -> Alert
 
     func body(content: Content) -> some View {
-        content.alert(
+        observingLease(
+            content,
+            isPresented: item.wrappedValue != nil,
+            completesDismissalOnFalse: true,
+            marksPresentedOnTrue: true
+        )
+        .alert(
             item: leasedItemBinding(
                 item,
                 completesDismissalOnFalse: true
             )
-        ) { value in
-            session.markPresented()
-            return alert(value)
-        }
+        ) { value in alert(value) }
     }
 }
 

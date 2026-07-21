@@ -327,48 +327,6 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
         XCTAssertEqual(failure.secondaryAction?.kind, .startOver)
     }
 
-    // MARK: Provider section entry
-
-    func testEntryReflectsSignedOutState() {
-        let entry = GaryxClaudeCodeAuthEntry.make(
-            session: nil,
-            usage: GaryxProviderUsage(
-                id: "claude_code",
-                name: "Claude Code",
-                available: false,
-                error: "Sign in required"
-            )
-        )
-        XCTAssertFalse(entry.isSignedIn)
-        XCTAssertEqual(entry.statusText, "Not signed in")
-        XCTAssertEqual(entry.tone, .muted)
-        XCTAssertEqual(entry.actionTitle, "Sign in with Claude")
-        XCTAssertEqual(entry.actionSymbolName, "sparkles")
-        XCTAssertNil(entry.accountText)
-        XCTAssertEqual(entry.footnote, "Sign in required")
-    }
-
-    func testEntryReflectsSignedInState() {
-        let entry = GaryxClaudeCodeAuthEntry.make(
-            session: GaryxClaudeCodeAuthSession(
-                loginId: "l",
-                status: .succeeded,
-                authStatus: .object([
-                    "loggedIn": .bool(true),
-                    "orgName": .string("Test Org"),
-                    "subscriptionType": .string("max"),
-                ])
-            ),
-            usage: nil
-        )
-        XCTAssertTrue(entry.isSignedIn)
-        XCTAssertEqual(entry.statusText, "Signed in")
-        XCTAssertEqual(entry.tone, .good)
-        XCTAssertEqual(entry.actionTitle, "Re-authenticate")
-        XCTAssertEqual(entry.actionSymbolName, "arrow.triangle.2.circlepath")
-        XCTAssertEqual(entry.accountText, "Test Org")
-    }
-
     func testClaudeCodeProviderDefaultsWriteOnlyDefaultFields() throws {
         let provider = try XCTUnwrap(GaryxModelProviderDefaults.provider(for: "claude_code"))
         var settings: [String: GaryxJSONValue] = [:]

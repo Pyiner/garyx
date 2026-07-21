@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import XCTest
 @testable import GaryxMobile
@@ -321,6 +322,37 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         resultFirst.completeDismissal()
         XCTAssertEqual(container.presentationLeaseRecord(resultFirstToken)?.releaseCount, 1)
         XCTAssertFalse(store.hasPresentationBarrier)
+    }
+
+    func testCompletedAlertDismissalObservationDoesNotRepublishBarrier() throws {
+        let store = GaryxProductionRouteStore()
+        let container = makeContainer(path: [], store: store)
+        store.attach(container)
+        let session = GaryxPresentationLeaseSession()
+        session.acquireIfNeeded(
+            coordinator: store.presentationCoordinator,
+            parent: nil,
+            operationContext: { nil }
+        )
+        session.markPresented()
+        session.markDismissing()
+        session.completeDismissal()
+        XCTAssertFalse(store.hasPresentationBarrier)
+
+        var publicationCount = 0
+        let cancellable = store.objectWillChange.sink {
+            publicationCount += 1
+        }
+        for _ in 0..<8 {
+            session.bindingBecameFalse(completesDismissal: true)
+        }
+
+        XCTAssertEqual(
+            publicationCount,
+            0,
+            "a completed alert dismissal must be observation-idempotent"
+        )
+        withExtendedLifetime(cancellable) {}
     }
 
     func testSceneInterruptionTerminatesEveryGlobalRevealInteraction() {

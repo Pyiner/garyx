@@ -167,6 +167,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   state changes. Gate actions inside an always-attached modifier instead of
   conditionally replacing modifier branches, which can tear down an in-flight
   system presentation.
+- Keep custom SwiftUI presentation `Binding` getters pure. Acquire and settle
+  modal leases from always-attached lifecycle callbacks, binding setters, or
+  dismissal callbacks, and make repeated dismissal observation idempotent.
 - `UIViewRepresentable` make/update callbacks run inside SwiftUI graph updates.
   Never synchronously publish from those callbacks into SwiftUI-observed
   storage. Keep imperative UIKit lifecycle controllers in stable,
