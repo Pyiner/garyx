@@ -24,6 +24,10 @@ import type {
   ThreadTranscript,
 } from "@shared/contracts";
 import {
+  currentPinnedOrderDomainGeneration,
+  isCurrentPinnedOrderDomainGeneration,
+} from "../pinned-order-ingress.ts";
+import {
   applyTranscriptRunStateRecord,
   decideTranscriptFetchPageAction,
   isThreadStreamGapError,
@@ -326,6 +330,25 @@ export class TranscriptLifecycle {
     return typeof value === "number" && Number.isFinite(value) && value > 0
       ? Math.trunc(value)
       : 0;
+  }
+
+  /**
+   * The unified continuation boundary for every lifecycle await chain: a
+   * dual-identity connection lease (same semantics as connection-lease.ts).
+   * The mirror connection epoch advances at switch COMMIT; the ingress
+   * domain generation advances at switch REQUEST (and rollback). Between
+   * the two, transport already answers for the new gateway while the
+   * mirror still holds — and would persist under — the old universe, so a
+   * continuation is current only while BOTH identities stand.
+   */
+  private openContinuationLease(): { isCurrent: () => boolean } {
+    const epoch = this.connectionEpoch;
+    const generation = currentPinnedOrderDomainGeneration();
+    return {
+      isCurrent: () =>
+        this.connectionEpoch === epoch &&
+        isCurrentPinnedOrderDomainGeneration(generation),
+    };
   }
 
   private freshStreamRequestId(): string {
@@ -1401,15 +1424,15 @@ export class TranscriptLifecycle {
       sideChatStreamConsumerId,
     } = this.requireDeps();
     const startSelectionGeneration = selectedThreadGenerationRef.current;
-    const epoch = this.connectionEpoch;
+    const lease = this.openContinuationLease();
     try {
       this.cancelTranscriptPersistence(threadId);
       await this.port.clearThreadTranscriptCache(threadId);
-      if (this.connectionEpoch !== epoch) {
+      if (!lease.isCurrent()) {
         return;
       }
       const transcript = await this.port.getThreadHistoryFull(threadId);
-      if (this.connectionEpoch !== epoch) {
+      if (!lease.isCurrent()) {
         // The transcript came from the previous gateway universe: neither
         // accept it nor restart streams against the new universe.
         return;
@@ -1430,7 +1453,7 @@ export class TranscriptLifecycle {
           threadId,
           transcript,
           SELECTED_THREAD_STREAM_CONSUMER_ID,
-          epoch,
+          this.connectionEpoch,
         );
       }
       if (sideChatThreadIdRef.current === threadId) {
@@ -1438,11 +1461,11 @@ export class TranscriptLifecycle {
           threadId,
           transcript,
           sideChatStreamConsumerId(threadId),
-          epoch,
+          this.connectionEpoch,
         );
       }
     } catch {
-      if (this.connectionEpoch === epoch) {
+      if (lease.isCurrent()) {
         scheduleHistoryRefresh(threadId, 3, 500, true);
       }
     }
@@ -1509,7 +1532,7 @@ export class TranscriptLifecycle {
       selectedThreadIdRef,
       setError,
     } = this.requireDeps();
-    const epoch = this.connectionEpoch;
+    const lease = this.openContinuationLease();
     try {
       const pageApplied = await this.port.fetchOlderThreadHistoryPage(threadId, {
         onPageFetched: (transcript) => {
@@ -1537,14 +1560,14 @@ export class TranscriptLifecycle {
           consumerId,
           mustEstablishStream: false,
           demandTrigger: true,
-          epoch,
+          epoch: this.connectionEpoch,
         });
       }
     } catch (historyError) {
       // Anchor and error surface belong to the operation's OWN thread and
       // universe: a late failure from thread A (same gateway or not) must
       // neither wipe thread B's prepend anchor nor surface A's error on B.
-      if (this.connectionEpoch === epoch) {
+      if (lease.isCurrent()) {
         if (pendingMessagesPrependAnchorRef.current?.threadId === threadId) {
           pendingMessagesPrependAnchorRef.current = null;
         }
@@ -1558,7 +1581,7 @@ export class TranscriptLifecycle {
       }
     } finally {
       if (
-        this.connectionEpoch === epoch &&
+        lease.isCurrent() &&
         selectedThreadIdRef.current !== threadId &&
         pendingMessagesPrependAnchorRef.current?.threadId === threadId
       ) {
@@ -1583,17 +1606,17 @@ export class TranscriptLifecycle {
     // answer (resolve OR reject) from the previous gateway universe must
     // neither vouch for the id, surface an error, nor fall through to the
     // history probe with stale context.
-    const epoch = this.connectionEpoch;
+    const lease = this.openContinuationLease();
     let refreshedState: DesktopState;
     try {
       refreshedState = await refreshDesktopState();
     } catch (refreshError) {
-      if (this.connectionEpoch !== epoch) {
+      if (!lease.isCurrent()) {
         return false;
       }
       throw refreshError;
     }
-    if (this.connectionEpoch !== epoch) {
+    if (!lease.isCurrent()) {
       return false;
     }
     if (isKnownThreadId(refreshedState, threadId)) {
@@ -1601,7 +1624,7 @@ export class TranscriptLifecycle {
     }
 
     const transcript = await this.port.getThreadHistoryFull(threadId);
-    if (this.connectionEpoch !== epoch) {
+    if (!lease.isCurrent()) {
       // Cross-universe answer: report not-openable without accepting the
       // stale transcript; the caller's own scope fence discards the result.
       return false;
@@ -1623,10 +1646,10 @@ export class TranscriptLifecycle {
     const generation =
       (this.selectedLoadGenerationByThread.get(threadId) ?? 0) + 1;
     this.selectedLoadGenerationByThread.set(threadId, generation);
-    const epoch = this.connectionEpoch;
+    const lease = this.openContinuationLease();
     const isCancelled = () =>
       this.selectedLoadGenerationByThread.get(threadId) !== generation ||
-      this.connectionEpoch !== epoch;
+      !lease.isCurrent();
     return this.loadSelectedThreadTranscriptFromSingleSource(
       threadId,
       isCancelled,

@@ -630,6 +630,70 @@ test("a background failure after ready keeps content; success publishes", async 
   assert.equal(mirror.getCatalogSnapshot().phase, "ready");
 });
 
+test("a switch REQUEST already fences the selected-thread load (pre-commit window)", async () => {
+  // The reviewer's BLOCKER window: settings for gateway B are saved (the
+  // ingress domain generation advances at the switch REQUEST), transport
+  // now answers with B's history, but B's state has NOT committed (mirror
+  // epoch unchanged, mirror still persists under A's scope). The
+  // continuation lease must already be dead.
+  const { PinnedOrderIngress, installPinnedOrderIngress } = await import(
+    "../pinned-order-ingress.ts"
+  );
+  const ingress = new PinnedOrderIngress("renderer-window-probe");
+  installPinnedOrderIngress(ingress);
+  ingress.beginGatewaySwitch("https://gateway-a.test");
+
+  const history = deferred();
+  const persists = [];
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: async () => ({
+      agents: [],
+      defaultAgentId: null,
+      effectiveDefaultAgentId: null,
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+    getThreadHistoryFull: () => history.promise,
+    loadThreadTranscriptCache: async () => null,
+    clearThreadTranscriptCache: async () => {},
+    startThreadStream: async () => {},
+    stopThreadStream: async () => {},
+    saveThreadTranscriptCache: async (scope, transcript) => {
+      persists.push({ scope, text: transcript.messages[0]?.text });
+    },
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  mirror.setTranscriptLifecycleDeps({
+    setHistoryLoading: () => {},
+    setError: () => {},
+    requestSelectedThreadMessagesBottomSnap: () => {},
+    setPendingAutomationRun: () => {},
+    transcriptHasAutomationResponse: () => false,
+    scheduleHistoryRefresh: () => {},
+    scheduleDesktopStateRefresh: () => {},
+    selectedThreadGenerationRef: { current: 0 },
+    lastRenderedMessageThreadRef: { current: null },
+    selectedThreadIdRef: { current: THREAD },
+    sideChatThreadIdRef: { current: null },
+    sideChatStreamConsumerId: (threadId) => `side-chat:${threadId}`,
+    messagesRef: { current: null },
+    pendingMessagesPrependAnchorRef: { current: null },
+  });
+
+  const pending = mirror.loadSelectedThreadTranscript(THREAD);
+  // Switch REQUEST (generation advances); NO commit (epoch unchanged).
+  ingress.beginGatewaySwitch("https://gateway-b.test");
+  history.resolve(transcriptWith("B secret"));
+  await pending.catch(() => {});
+
+  assert.equal(
+    mirror.getThreadSnapshot(THREAD).messages.length,
+    0,
+    "B's answer does not enter the still-A mirror",
+  );
+  assert.deepEqual(persists, [], "nothing persists under gateway A's scope");
+});
+
 test("a stale openability answer reports not-openable without vouching", async () => {
   const refresh = deferred();
   const mirror = new GatewayMirror({
