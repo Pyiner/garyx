@@ -7,7 +7,8 @@ recorded in `task-notification-review-debt.md` (slice B security debt /
 slice C architecture) — explicitly **out of scope** here.
 Owner: Gary (orchestrator thread)
 Scope: garyx-bridge (queue metadata), garyx-gateway (producer + strip),
-garyx-models (presentation), desktop renderer, iOS
+garyx-models (presentation), **garyx (plugin host reserved-key strip —
+`channel_plugin_host.rs`)**, desktop renderer, iOS
 
 ## 1. The need (original, unchanged)
 
@@ -206,7 +207,12 @@ versioning; internal/internal_kind retirement; history envelope changes.
   the ACK and assert the committed transcript. Run once through the
   Legacy queue path and once through the Durable exact path, plus a
   focused unit test on the single enqueue constructor. Direct-path
-  sentinel-secret regression with the same shared constant.
+  sentinel-secret regression with the same shared constant. **Quota
+  resend explicit case**: drive the real quota-auto-resend production
+  path into a busy thread and assert each `schedule_followup_{job_id,
+  scheduled_at,scheduled_for,reason,originating_run_id}` key
+  individually on the pending at rest and the ACK committed record
+  (plugin-host strip tests live in the `garyx` crate).
 - **Producer**: golden text fixture — envelope attributes escaped
   (multiline title), body = pure final_message, tutorial outside the
   envelope; task_hooks reads the object; forgery negatives at all four
