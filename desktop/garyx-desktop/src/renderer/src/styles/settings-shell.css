@@ -339,15 +339,32 @@
   pointer-events: none;
 }
 
+/* Prefer the original 8px offset below the tail anchor. When the chrome's
+   natural-height margin box no longer fits before the composer safety line,
+   align its end edge to that line instead. Position-area keeps the anchor's
+   scroll shift while position-try supplies the composer-aware upper bound. */
+@position-try --garyx-tail-thinking-clearance {
+  align-self: end;
+}
+
 .messages-tail-thinking {
   position: absolute;
   position-anchor: --garyx-transcript-tail;
-  top: calc(anchor(top) + 8px);
-  left: anchor(left);
+  position-area: block-end span-inline-start;
+  inset: auto;
   z-index: 1;
   width: anchor-size(width);
   max-width: 100%;
+  margin-block: 8px
+    calc(
+      var(--composer-overlay-height) + var(--composer-bottom-inset) +
+        var(--composer-tail-thinking-clearance) -
+        var(--composer-scroll-clip-height)
+    );
+  align-self: start;
+  justify-self: end;
   pointer-events: none;
+  position-try-fallbacks: --garyx-tail-thinking-clearance;
 }
 
 /* The composer overlays the bottom of thread-main and intrudes into the

@@ -580,6 +580,10 @@
   height: 100%;
 }
 
+.side-tool-chat-thread .thread-main {
+  --composer-bottom-inset: calc(30px + var(--padding-panel));
+}
+
 .side-tool-chat-thread .thread-layout {
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
@@ -596,7 +600,6 @@
 }
 
 .side-tool-chat-thread .composer-shell-wrap {
-  bottom: calc(30px + var(--padding-panel));
   width: calc(100% - 20px);
 }
 
