@@ -32,6 +32,7 @@ pub mod mcp_config;
 pub mod meetings;
 mod optimistic_write;
 mod prompt_attachment_lifecycle;
+mod provider_accounts;
 mod provider_auth;
 mod provider_models;
 mod provider_session_locator;

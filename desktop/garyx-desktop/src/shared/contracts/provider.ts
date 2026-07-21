@@ -79,6 +79,49 @@ export interface DesktopCodingUsage {
   refreshedAt?: string | null;
 }
 
+export interface DesktopClaudeCodeAccount {
+  id: string | null;
+  name: string;
+  systemDefault: boolean;
+  selected: boolean;
+  email?: string | null;
+  organization?: string | null;
+  plan?: string | null;
+  authMethod?: string | null;
+  usage: DesktopProviderUsage;
+}
+
+export interface DesktopClaudeCodeAccounts {
+  activeAccountId: string | null;
+  accounts: DesktopClaudeCodeAccount[];
+  refreshedAt: string;
+}
+
+export type DesktopClaudeAuthStatus =
+  | "starting"
+  | "waiting_for_code"
+  | "submitted"
+  | "succeeded"
+  | "failed";
+
+export interface DesktopClaudeAuthSession {
+  loginId: string;
+  accountId: string | null;
+  status: DesktopClaudeAuthStatus;
+  authorizationUrl: string | null;
+  authStatus: Record<string, unknown> | null;
+  error: string | null;
+  exitCode: number | null;
+}
+
+export interface StartDesktopClaudeAuthInput {
+  mode?: "claudeai" | "console";
+  sso?: boolean;
+  email?: string | null;
+  managedAccountName?: string | null;
+  accountId?: string | null;
+}
+
 export type DesktopThreadProviderType = DesktopApiProviderType;
 
 export type DesktopSessionProviderHint = "claude" | "codex";

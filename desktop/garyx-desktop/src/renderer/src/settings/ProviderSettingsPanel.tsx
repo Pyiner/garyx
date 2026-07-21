@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { Pencil, Plus } from 'lucide-react';
 
 import type {
   DesktopApiProviderType,
+  DesktopClaudeAuthSession,
+  DesktopClaudeCodeAccount,
+  DesktopClaudeCodeAccounts,
   DesktopCodingUsage,
   DesktopProviderModels,
   DesktopProviderUsage,
@@ -29,14 +33,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { ProviderAgentIcon } from '../app-shell/components/ProviderAgentIcon';
 import { useI18n, type Translate } from '../i18n';
 import { shouldRequestProviderModelCatalog } from '../provider-model-catalog';
@@ -66,6 +62,7 @@ import {
   type ModelProviderConfigDraft,
 } from './provider-settings-model.ts';
 import { classNames } from './shared';
+import { SettingsControlRow } from './shared-components';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
@@ -95,7 +92,22 @@ const PROVIDER_MODEL_TYPES = Array.from(
   new Set(MODEL_PROVIDER_ROWS.map((row) => row.providerType)),
 );
 
-const METERED_MODEL_PROVIDER_ROWS = MODEL_PROVIDER_ROWS.filter((row) => row.usageProviderId);
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function openExternalAuthUrl(value: string): Promise<void> {
+  const url = value.trim();
+  if (!isHttpUrl(url)) {
+    throw new Error('Claude returned an invalid authorization URL.');
+  }
+  await window.garyxDesktop.openExternalUrl({ url });
+}
 
 function claudeCliModeLabel(value: 'cctty' | 'native', t: Translate): string {
   return value === 'native' ? t('Native Claude CLI') : t('cctty TTY wrapper');
@@ -133,6 +145,26 @@ export function ProviderSettingsPanel({
   const [codingUsage, setCodingUsage] = useState<DesktopCodingUsage | null>(null);
   const [codingUsageLoading, setCodingUsageLoading] = useState(false);
   const [codingUsageError, setCodingUsageError] = useState<string | null>(null);
+  const [claudeAccounts, setClaudeAccounts] = useState<DesktopClaudeCodeAccounts | null>(null);
+  const [claudeAccountsLoading, setClaudeAccountsLoading] = useState(false);
+  const [claudeAccountsError, setClaudeAccountsError] = useState<string | null>(null);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [accountMutationId, setAccountMutationId] = useState<string | null>(null);
+  const [loginDialog, setLoginDialog] = useState<{
+    mode: 'new' | 'reauth';
+    account: DesktopClaudeCodeAccount | null;
+  } | null>(null);
+  const [loginAccountName, setLoginAccountName] = useState('');
+  const [loginSession, setLoginSession] = useState<DesktopClaudeAuthSession | null>(null);
+  const [loginCode, setLoginCode] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [renameAccount, setRenameAccount] = useState<DesktopClaudeCodeAccount | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [deleteAccount, setDeleteAccount] = useState<DesktopClaudeCodeAccount | null>(null);
+  const openedLoginIdsRef = useRef(new Set<string>());
+  const loginFlowIdRef = useRef(0);
+  const loginCodeInputRef = useRef<HTMLInputElement | null>(null);
   const providerConfigRow = providerConfigKey ? fixedModelProviderRow(providerConfigKey) : null;
   const activeProviderModels = providerConfigRow
     ? providerModelsByType[providerConfigRow.providerType] || null
@@ -212,6 +244,18 @@ export function ProviderSettingsPanel({
     }
   }
 
+  async function refreshClaudeAccounts() {
+    setClaudeAccountsLoading(true);
+    setClaudeAccountsError(null);
+    try {
+      setClaudeAccounts(await window.garyxDesktop.listClaudeCodeAccounts());
+    } catch (error) {
+      setClaudeAccountsError(error instanceof Error ? error.message : t('Failed to load accounts.'));
+    } finally {
+      setClaudeAccountsLoading(false);
+    }
+  }
+
   useEffect(() => {
     for (const providerType of PROVIDER_MODEL_TYPES) {
       ensureProviderModels(providerType);
@@ -231,8 +275,67 @@ export function ProviderSettingsPanel({
 
   useEffect(() => {
     void refreshCodingUsage();
+    void refreshClaudeAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
+
+  useEffect(() => {
+    if (!loginSession || loginSession.status === 'succeeded' || loginSession.status === 'failed') {
+      return;
+    }
+    const flowId = loginFlowIdRef.current;
+    const timer = window.setInterval(() => {
+      void window.garyxDesktop.getClaudeCodeAuth({ loginId: loginSession.loginId })
+        .then((session) => {
+          if (loginFlowIdRef.current === flowId) setLoginSession(session);
+        })
+        .catch((error) => {
+          if (loginFlowIdRef.current === flowId) {
+            setLoginError(error instanceof Error ? error.message : t('Failed to check sign-in.'));
+          }
+        });
+    }, 800);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginSession?.loginId, loginSession?.status]);
+
+  useEffect(() => {
+    if (loginSession?.status === 'failed') {
+      setLoginError(loginSession.error || t('Claude sign-in failed.'));
+      return;
+    }
+    if (loginSession?.status !== 'succeeded') {
+      return;
+    }
+    const flowId = loginFlowIdRef.current;
+    void Promise.all([refreshClaudeAccounts(), refreshCodingUsage()]).then(() => {
+      if (loginFlowIdRef.current !== flowId) return;
+      setLoginDialog(null);
+      setLoginSession(null);
+      setAccountSwitcherOpen(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginSession?.loginId, loginSession?.status]);
+
+  useEffect(() => {
+    if (!loginSession?.authorizationUrl || openedLoginIdsRef.current.has(loginSession.loginId)) {
+      return;
+    }
+    openedLoginIdsRef.current.add(loginSession.loginId);
+    void openExternalAuthUrl(loginSession.authorizationUrl).catch((error) => {
+      setLoginError(error instanceof Error ? error.message : t('Could not open the browser. Use the link below.'));
+    });
+  }, [loginSession?.authorizationUrl, loginSession?.loginId, t]);
+
+  useEffect(() => {
+    if (!loginSession || loginSession.status === 'starting') {
+      return;
+    }
+    loginCodeInputRef.current?.focus();
+    const refocus = () => loginCodeInputRef.current?.focus();
+    window.addEventListener('focus', refocus);
+    return () => window.removeEventListener('focus', refocus);
+  }, [loginSession?.loginId, loginSession?.status]);
 
   useEffect(() => {
     if (!providerConfigRow || !activeProviderModels) {
@@ -460,155 +563,278 @@ export function ProviderSettingsPanel({
     );
   }
 
-  function quotaGaugeStyle(remainingPercent: number): CSSProperties {
-    return {
-      '--provider-quota-percent': `${clampUsagePercent(remainingPercent)}%`,
-    } as CSSProperties;
+  function selectedClaudeAccount(): DesktopClaudeCodeAccount | null {
+    return claudeAccounts?.accounts.find((account) => account.selected) || null;
   }
 
-  function renderQuotaGauge(
-    label: string,
-    remainingPercent: number,
-    detail: string,
-    options?: {
-      available?: boolean;
-      stale?: boolean;
-      title?: string;
-    },
-  ): ReactNode {
-    const percent = clampUsagePercent(remainingPercent);
-    const level = usageLevelForRemainingPercent(percent, options?.available !== false);
+  async function handleSelectClaudeAccount(account: DesktopClaudeCodeAccount) {
+    const mutationKey = account.id || 'system';
+    setAccountMutationId(mutationKey);
+    setClaudeAccountsError(null);
+    try {
+      await window.garyxDesktop.selectClaudeCodeAccount({ accountId: account.id });
+      await Promise.all([refreshClaudeAccounts(), refreshCodingUsage()]);
+      setAccountSwitcherOpen(false);
+    } catch (error) {
+      setClaudeAccountsError(error instanceof Error ? error.message : t('Failed to switch account.'));
+    } finally {
+      setAccountMutationId(null);
+    }
+  }
+
+  function openLoginDialog(mode: 'new' | 'reauth', account: DesktopClaudeCodeAccount | null = null) {
+    loginFlowIdRef.current += 1;
+    setAccountSwitcherOpen(false);
+    setLoginDialog({ mode, account });
+    setLoginAccountName(mode === 'new' ? '' : account?.name || '');
+    setLoginSession(null);
+    setLoginCode('');
+    setLoginError(null);
+    setLoginBusy(false);
+  }
+
+  function closeLoginDialog() {
+    const session = loginSession;
+    loginFlowIdRef.current += 1;
+    setLoginDialog(null);
+    setLoginSession(null);
+    setLoginCode('');
+    setLoginError(null);
+    setLoginBusy(false);
+    if (session && session.status !== 'succeeded' && session.status !== 'failed') {
+      void window.garyxDesktop.cancelClaudeCodeAuth({ loginId: session.loginId }).catch(() => {
+        // The dialog is already closed; the gateway also cleans abandoned auth
+        // sessions when their CLI exits, so cancellation remains best effort here.
+      });
+    }
+  }
+
+  async function handleStartClaudeLogin() {
+    if (!loginDialog || loginBusy) return;
+    const name = loginAccountName.trim();
+    if (loginDialog.mode === 'new' && !name) {
+      setLoginError(t('Give this account a name first.'));
+      return;
+    }
+    setLoginBusy(true);
+    setLoginError(null);
+    const flowId = loginFlowIdRef.current;
+    try {
+      const session = await window.garyxDesktop.startClaudeCodeAuth({
+        mode: 'claudeai',
+        managedAccountName: loginDialog.mode === 'new' ? name : null,
+        accountId: loginDialog.mode === 'reauth' ? loginDialog.account?.id || null : null,
+      });
+      if (loginFlowIdRef.current !== flowId) {
+        void window.garyxDesktop.cancelClaudeCodeAuth({ loginId: session.loginId }).catch(() => {});
+        return;
+      }
+      setLoginSession(session);
+      if (session.status === 'failed') {
+        setLoginError(session.error || t('Claude sign-in failed.'));
+      }
+    } catch (error) {
+      if (loginFlowIdRef.current === flowId) {
+        setLoginError(error instanceof Error ? error.message : t('Could not start Claude sign-in.'));
+      }
+    } finally {
+      if (loginFlowIdRef.current === flowId) setLoginBusy(false);
+    }
+  }
+
+  async function handleSubmitClaudeCode() {
+    if (!loginSession || !loginCode.trim() || loginBusy) return;
+    setLoginBusy(true);
+    setLoginError(null);
+    const flowId = loginFlowIdRef.current;
+    try {
+      const session = await window.garyxDesktop.submitClaudeCodeAuth({
+        loginId: loginSession.loginId,
+        code: loginCode.trim(),
+      });
+      if (loginFlowIdRef.current === flowId) setLoginSession(session);
+    } catch (error) {
+      if (loginFlowIdRef.current === flowId) {
+        setLoginError(error instanceof Error ? error.message : t('Could not submit the code.'));
+      }
+    } finally {
+      if (loginFlowIdRef.current === flowId) setLoginBusy(false);
+    }
+  }
+
+  async function handleRenameClaudeAccount() {
+    if (!renameAccount?.id || !renameValue.trim() || accountMutationId) return;
+    setAccountMutationId(renameAccount.id);
+    try {
+      await window.garyxDesktop.renameClaudeCodeAccount({
+        accountId: renameAccount.id,
+        name: renameValue.trim(),
+      });
+      await refreshClaudeAccounts();
+      setRenameAccount(null);
+    } catch (error) {
+      setClaudeAccountsError(error instanceof Error ? error.message : t('Failed to rename account.'));
+    } finally {
+      setAccountMutationId(null);
+    }
+  }
+
+  async function handleDeleteClaudeAccount() {
+    if (!deleteAccount?.id || accountMutationId) return;
+    setAccountMutationId(deleteAccount.id);
+    try {
+      await window.garyxDesktop.deleteClaudeCodeAccount({ accountId: deleteAccount.id });
+      await Promise.all([refreshClaudeAccounts(), refreshCodingUsage()]);
+      setDeleteAccount(null);
+    } catch (error) {
+      setClaudeAccountsError(error instanceof Error ? error.message : t('Failed to delete account.'));
+    } finally {
+      setAccountMutationId(null);
+    }
+  }
+
+  function renderProviderUsageSummary(usage: DesktopProviderUsage | null): ReactNode {
+    if (!usage) {
+      return (
+        <span className="provider-card-empty">
+          {codingUsageLoading ? t('Loading quota…') : codingUsageError || t('Quota unavailable')}
+        </span>
+      );
+    }
+    if (!usage.available) {
+      return <span className="provider-card-empty">{usage.error || t('Quota unavailable')}</span>;
+    }
+    const windows = providerUsageWindows(usage);
+    const models = sortedModelsByRemaining(usage);
+    if (windows.length === 0 && models.length === 0) {
+      return <span className="provider-card-empty">{t('No quota data')}</span>;
+    }
     return (
-      <div
-        className="provider-quota-gauge"
-        data-level={level}
-        data-stale={options?.stale ? 'true' : undefined}
-        title={options?.title}
-      >
-        <div
-          className="provider-quota-gauge-ring"
-          style={quotaGaugeStyle(percent)}
-          aria-hidden
-        >
-          <span className="provider-quota-gauge-value">{formatUsagePercent(percent)}</span>
-          <span className="provider-quota-gauge-label">{label}</span>
-        </div>
-        <span className="provider-quota-gauge-detail">{detail}</span>
+      <div className="provider-summary-meter-grid">
+        {windows.map((entry) => (
+          <div className="provider-summary-meter" key={entry.key}>
+            {renderUsageMeter(
+              entry.label,
+              entry.value.remainingPercent,
+              usageWindowCaption(entry.value, entry.fallback),
+              { compact: true, stale: usage.stale },
+            )}
+          </div>
+        ))}
+        {models.slice(0, 4).map((model) => (
+          <div className="provider-summary-meter" key={model.id || model.name}>
+            {renderUsageMeter(model.name, model.remainingPercent, modelUsageCaption(model), {
+              compact: true,
+              stale: usage.stale,
+            })}
+          </div>
+        ))}
       </div>
     );
   }
 
-  function renderProviderQuotaCard(row: FixedModelProviderRow): ReactNode {
-    const usage = row.usageProviderId ? codingUsageByProviderId[row.usageProviderId] : null;
-    let body: ReactNode;
-    let footer: ReactNode = null;
-    const updated = usageUpdatedText();
-    if (!usage) {
-      const label = codingUsageLoading ? t('Loading') : codingUsageError ? t('Unavailable') : t('No data');
-      body = renderQuotaGauge(label, 0, codingUsageError || t('Quota data pending'), {
-        available: false,
-      });
-    } else if (!usage.available) {
-      body = renderQuotaGauge(t('Unavailable'), 0, usage.error || t('No usage data'), {
-        available: false,
-        stale: usage.stale,
-      });
-    } else if (usage.models.length > 0) {
-      const models = sortedModelsByRemaining(usage);
-      const tightest = models[0];
-      body = (
-        <>
-          {renderQuotaGauge(tightest.name, tightest.remainingPercent, modelUsageCaption(tightest), {
-            stale: usage.stale,
-            title: models
-              .map((model) => `${model.name}: ${formatUsagePercent(model.remainingPercent)} · ${modelUsageCaption(model)}`)
-              .join('\n'),
-          })}
-          <div className="provider-quota-secondary">
-            <span>{t('{count} models', { count: models.length })}</span>
-            <span>{t('tightest bucket')}</span>
-          </div>
-        </>
-      );
-    } else {
-      const windows = providerUsageWindows(usage);
-      const primary = windows.find((entry) => entry.key === 'weekly')
-        || windows.find((entry) => entry.key === 'session')
-        || windows[0];
-      const secondary = windows.filter((entry) => entry !== primary);
-      body = primary ? (
-        <>
-          {renderQuotaGauge(
-            primary.label,
-            primary.value.remainingPercent,
-            usageWindowCaption(primary.value, primary.fallback),
-            { stale: usage.stale },
-          )}
-          {secondary.length > 0 ? (
-            <div className={classNames('provider-quota-secondary', secondary.length > 1 && 'stacked')}>
-              {secondary.map((entry) => (
-                <div className="provider-quota-secondary-meter" key={entry.key}>
-                  {renderUsageMeter(
-                    entry.label,
-                    entry.value.remainingPercent,
-                    usageWindowCaption(entry.value, entry.fallback),
-                    { compact: true, stale: usage.stale },
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </>
-      ) : renderQuotaGauge(t('No data'), 0, t('Usage not reported'), {
-        available: false,
-        stale: usage.stale,
-      });
-    }
-
-    if (usage) {
-      footer = (
-        <div className="provider-quota-card-meta">
-          {usage.plan ? <span className="provider-usage-pill">{usage.plan}</span> : null}
-          {usage.stale ? <span className="provider-usage-pill stale">{t('stale')}</span> : null}
-          {usage.stale && updated ? <span className="provider-usage-updated">{updated}</span> : null}
-        </div>
-      );
-    }
-
-    return (
-      <article
-        className={classNames('provider-quota-card', usage?.stale && 'is-stale')}
-        key={row.key}
-      >
-        <div className="provider-quota-card-header">
-          <span className="provider-config-icon" aria-hidden>
-            <ProviderAgentIcon
-              agentId={row.agentId}
-              providerType={row.providerType}
-              size={22}
-            />
-          </span>
-          <div className="provider-config-name-cell">
-            <span className="provider-config-name">{row.label}</span>
-            <span className="provider-config-subtitle">
-              <code>{row.providerType}</code>
-            </span>
-          </div>
-        </div>
-        {body}
-        {footer}
-      </article>
+  function renderProviderCard(row: FixedModelProviderRow): ReactNode {
+    const details = providerRowDetails(row);
+    const claudeAccount = row.key === 'claude_code' ? selectedClaudeAccount() : null;
+    const usage = row.usageProviderId
+      ? codingUsageByProviderId[row.usageProviderId]
+        || (row.key === 'claude_code' ? claudeAccount?.usage : null)
+        || null
+      : null;
+    const providerDescription = row.key === 'claude_code'
+      ? t('Claude Agent SDK')
+      : details.auth;
+    const claudeSelectionUnavailable = Boolean(
+      row.key === 'claude_code' && claudeAccounts?.activeAccountId && !claudeAccount,
     );
-  }
-
-  function renderProviderQuotaHero(): ReactNode {
+    const claudeAccountName = claudeSelectionUnavailable
+      ? t('Account unavailable')
+      : claudeAccount?.name
+        || (claudeAccountsLoading ? t('Loading…') : t('System default'));
+    const claudeAccountDetail = claudeSelectionUnavailable
+      ? t('Choose another account before starting Claude Code.')
+      : claudeAccount?.email
+        || claudeAccount?.organization
+        || t('Uses this Mac’s Claude Code login');
+    const quotaDescription = usage?.plan
+      ? usage.stale
+        ? `${usage.plan} · ${t('stale')}`
+        : usage.plan
+      : usage?.stale
+        ? t('stale')
+        : usageUpdatedText() || undefined;
     return (
-      <section className="provider-quota-hero">
-        <div className="provider-quota-card-grid">
-          {METERED_MODEL_PROVIDER_ROWS.map((row) => renderProviderQuotaCard(row))}
+      <section className="codex-section provider-section" key={row.key}>
+        <div className="codex-section-header provider-section-header">
+          <div className="provider-section-identity">
+            <span className="provider-section-icon" aria-hidden>
+              <ProviderAgentIcon agentId={row.agentId} providerType={row.providerType} size={19} />
+            </span>
+            <div className="provider-section-title-group">
+              <span className="codex-section-title">{row.label}</span>
+              <span className="provider-section-description">{providerDescription}</span>
+            </div>
+          </div>
+          <button
+            className="codex-section-action"
+            onClick={() => openProviderConfigDialog(row.key)}
+            type="button"
+          >
+            <Pencil aria-hidden size={13} strokeWidth={1.8} />
+            {t('Edit')}
+          </button>
+        </div>
+
+        <div className="codex-list-card provider-section-rows">
+          {row.key === 'claude_code' ? (
+            <SettingsControlRow
+              className="provider-account-row"
+              control={(
+                <div className="provider-account-actions">
+                  <Button
+                    aria-label={t('Switch account')}
+                    onClick={() => setAccountSwitcherOpen(true)}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    {t('Switch account')}
+                  </Button>
+                  <Button
+                    aria-label={t('Add account')}
+                    onClick={() => openLoginDialog('new')}
+                    size="sm"
+                    type="button"
+                  >
+                    <Plus aria-hidden size={13} strokeWidth={2} />
+                    {t('Add account')}
+                  </Button>
+                </div>
+              )}
+              description={`${claudeAccountName} · ${claudeAccountDetail}`}
+              label={t('Current account')}
+            />
+          ) : null}
+          {row.usageProviderId ? (
+            <SettingsControlRow
+              className="provider-quota-row"
+              control={renderProviderUsageSummary(usage)}
+              description={quotaDescription}
+              label={t('Quota remaining')}
+            />
+          ) : null}
+          <SettingsControlRow
+            className="provider-default-row"
+            control={renderProviderDefaultChips(details)}
+            label={t('Default model')}
+          />
         </div>
       </section>
     );
+  }
+
+  function renderProviderCards(): ReactNode {
+    return <>{MODEL_PROVIDER_ROWS.map(renderProviderCard)}</>;
   }
 
   function renderProviderConfigUsageSection(row: FixedModelProviderRow): ReactNode {
@@ -714,89 +940,257 @@ export function ProviderSettingsPanel({
       setProviderConfigSaving(false);
     }
   }
-  const providerConfigTablePanel = (
-    <section className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">{t('Configured Providers')}</span>
-      </div>
-      <div className="provider-config-table">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="provider-config-col-provider">{t('Provider')}</TableHead>
-              <TableHead className="provider-config-col-auth">{t('Auth')}</TableHead>
-              <TableHead className="provider-config-col-default">{t('Default')}</TableHead>
-              <TableHead className="provider-config-col-status">{t('Status')}</TableHead>
-              <TableHead className="provider-config-col-actions">{t('Actions')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {MODEL_PROVIDER_ROWS.map((row) => {
-              const details = providerRowDetails(row);
-              return (
-                <TableRow key={row.key}>
-                  <TableCell className="provider-config-col-provider">
-                    <div className="provider-config-provider-cell">
-                      <span className="provider-config-icon" aria-hidden>
-                        <ProviderAgentIcon
-                          agentId={row.agentId}
-                          providerType={row.providerType}
-                          size={22}
-                        />
-                      </span>
-                      <div className="provider-config-name-cell">
-                        <span className="provider-config-name">{row.label}</span>
-                        <span className="provider-config-subtitle">
-                          <code>{row.providerType}</code>
-                          <span>{t('Default CLI')}</span>
-                        </span>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="provider-config-col-auth">
-                    <Badge
-                      className="provider-config-auth"
-                      data-state={details.authState}
-                      title={details.authTooltip || details.auth}
-                      variant="outline"
-                    >
-                      {details.auth}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="provider-config-col-default">
-                    {renderProviderDefaultChips(details)}
-                  </TableCell>
-                  <TableCell className="provider-config-col-status">
-                    <Badge
-                      className="provider-config-status"
-                      data-state={details.authState === 'error' ? 'empty' : 'ready'}
-                      variant="outline"
-                    >
-                      {details.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="provider-config-col-actions">
-                    <button
-                      className="command-row-action"
-                      onClick={() => { openProviderConfigDialog(row.key); }}
-                      type="button"
-                    >
-                      {t('Configure')}
-                    </button>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </div>
-    </section>
-  );
-
   return (
-    <div className="settings-form provider-panel">
-      {renderProviderQuotaHero()}
-      {providerConfigTablePanel}
+    <div className="provider-panel">
+      {renderProviderCards()}
+      <Dialog open={accountSwitcherOpen} onOpenChange={setAccountSwitcherOpen}>
+        <DialogContent className="provider-account-dialog" size="form">
+          <DialogHeader>
+            <DialogTitle>{t('Claude Code accounts')}</DialogTitle>
+            <DialogDescription>
+              {t('Choose the account for new Claude Code runs.')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="provider-account-dialog-body">
+            {claudeAccountsError ? (
+              <div className="provider-account-error">{claudeAccountsError}</div>
+            ) : null}
+            {claudeAccountsLoading && !claudeAccounts ? (
+              <div className="provider-account-loading">{t('Loading accounts…')}</div>
+            ) : null}
+            <div className="codex-list-card provider-account-list">
+              {(claudeAccounts?.accounts || []).map((account) => {
+                const accountKey = account.id || 'system';
+                const windows = providerUsageWindows(account.usage);
+                return (
+                  <div
+                    className={classNames('provider-account-option', account.selected && 'is-selected')}
+                    key={accountKey}
+                  >
+                    <label className="provider-account-choice">
+                      <input
+                        aria-label={account.selected
+                          ? t('Current account: {name}', { name: account.name })
+                          : t('Use account: {name}', { name: account.name })}
+                        checked={account.selected}
+                        className="provider-account-radio"
+                        disabled={Boolean(accountMutationId)}
+                        name="claude-code-account"
+                        onChange={() => {
+                          if (!account.selected) void handleSelectClaudeAccount(account);
+                        }}
+                        type="radio"
+                      />
+                      <div className="provider-account-option-content">
+                        <div className="provider-account-option-header">
+                          <div className="provider-account-option-copy">
+                            <div>
+                              <strong>{account.name}</strong>
+                              {account.selected ? <Badge variant="outline">{t('Current')}</Badge> : null}
+                              {account.plan ? <Badge variant="outline">{account.plan}</Badge> : null}
+                            </div>
+                            <span>{account.email || account.organization || (account.systemDefault
+                              ? t('This Mac’s default Claude Code login')
+                              : t('Added to Garyx'))}</span>
+                          </div>
+                          {accountMutationId === accountKey ? <span>{t('Switching…')}</span> : null}
+                        </div>
+                        <div className="provider-account-option-meters">
+                          {account.usage.available && windows.length > 0 ? windows.map((entry) => (
+                            <div key={entry.key}>
+                              {renderUsageMeter(
+                                entry.label,
+                                entry.value.remainingPercent,
+                                '',
+                                { compact: true, stale: account.usage.stale },
+                              )}
+                            </div>
+                          )) : (
+                            <span className="provider-card-empty">
+                              {account.usage.error || t('Quota unavailable')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </label>
+                    <div className="provider-account-option-actions">
+                      <button onClick={() => openLoginDialog('reauth', account)} type="button">
+                        {t('Sign in again')}
+                      </button>
+                      {!account.systemDefault ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setRenameAccount(account);
+                              setRenameValue(account.name);
+                            }}
+                            type="button"
+                          >
+                            {t('Rename')}
+                          </button>
+                          <button className="destructive" onClick={() => setDeleteAccount(account)} type="button">
+                            {t('Delete')}
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => openLoginDialog('new')} type="button">
+              <Plus aria-hidden size={14} strokeWidth={2} />
+              {t('Add Claude account')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(loginDialog)}
+        onOpenChange={(open) => {
+          if (!open) closeLoginDialog();
+        }}
+      >
+        <DialogContent
+          className="provider-login-dialog"
+          scroll="content"
+          showCloseButton={!loginBusy}
+          size="form"
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {loginDialog?.mode === 'new' ? t('Add Claude Code account') : t('Sign in to Claude Code')}
+            </DialogTitle>
+            <DialogDescription>
+              {loginSession
+                ? t('Finish authorization in your browser, then paste the code below.')
+                : loginDialog?.mode === 'new'
+                  ? t('Sign in to add another Claude Code account to Garyx.')
+                  : t('Sign in again to refresh this Claude Code account.')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="provider-login-body">
+            {!loginSession && loginDialog?.mode === 'new' ? (
+              <div className="commands-field">
+                <Label htmlFor="provider-account-name">{t('Account name')}</Label>
+                <Input
+                  autoFocus
+                  id="provider-account-name"
+                  onChange={(event) => setLoginAccountName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void handleStartClaudeLogin();
+                  }}
+                  placeholder={t('Work, Personal…')}
+                  value={loginAccountName}
+                />
+              </div>
+            ) : null}
+            {!loginSession && loginDialog?.mode === 'reauth' ? (
+              <div className="provider-login-account-summary">
+                <div>
+                  <strong>{loginDialog.account?.name || t('System default')}</strong>
+                  <span>{loginDialog.account?.email || t('Claude Code account')}</span>
+                </div>
+              </div>
+            ) : null}
+            {loginSession ? (
+              <>
+                <div className="provider-browser-opened">
+                  <span className="provider-browser-status-dot" aria-hidden />
+                  <strong>{t('Browser opened')}</strong>
+                  <span>{t('Complete sign-in there, then return to Garyx.')}</span>
+                </div>
+                {loginSession.authorizationUrl ? (
+                  <a
+                    className="provider-auth-link"
+                    href={loginSession.authorizationUrl}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openExternalAuthUrl(loginSession.authorizationUrl || '');
+                    }}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    {loginSession.authorizationUrl}
+                  </a>
+                ) : null}
+                <div className="commands-field provider-code-field">
+                  <Label htmlFor="provider-claude-code">{t('Authorization code')}</Label>
+                  <Input
+                    id="provider-claude-code"
+                    onChange={(event) => setLoginCode(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void handleSubmitClaudeCode();
+                    }}
+                    placeholder={t('Paste code from Claude')}
+                    ref={loginCodeInputRef}
+                    value={loginCode}
+                  />
+                </div>
+              </>
+            ) : null}
+            {loginError ? <div className="provider-account-error">{loginError}</div> : null}
+          </div>
+          <DialogFooter>
+            <Button disabled={loginBusy} onClick={closeLoginDialog} type="button" variant="outline">
+              {t('Cancel')}
+            </Button>
+            {!loginSession ? (
+              <Button disabled={loginBusy} onClick={() => { void handleStartClaudeLogin(); }} type="button">
+                {loginBusy ? t('Starting…') : t('Sign in with Claude')}
+              </Button>
+            ) : (
+              <Button
+                disabled={loginBusy || !loginCode.trim() || loginSession.status === 'submitted'}
+                onClick={() => { void handleSubmitClaudeCode(); }}
+                type="button"
+              >
+                {loginBusy || loginSession.status === 'submitted' ? t('Verifying…') : t('Continue')}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(renameAccount)} onOpenChange={(open) => { if (!open) setRenameAccount(null); }}>
+        <DialogContent size="narrow">
+          <DialogHeader>
+            <DialogTitle>{t('Rename account')}</DialogTitle>
+            <DialogDescription>{t('This name is only shown inside Garyx.')}</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            onChange={(event) => setRenameValue(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') void handleRenameClaudeAccount(); }}
+            value={renameValue}
+          />
+          <DialogFooter>
+            <Button onClick={() => setRenameAccount(null)} type="button" variant="outline">{t('Cancel')}</Button>
+            <Button onClick={() => { void handleRenameClaudeAccount(); }} type="button">{t('Save')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteAccount)} onOpenChange={(open) => { if (!open) setDeleteAccount(null); }}>
+        <DialogContent size="narrow">
+          <DialogHeader>
+            <DialogTitle>{t('Delete {name}?', { name: deleteAccount?.name || t('account') })}</DialogTitle>
+            <DialogDescription>
+              {t('This removes the account and its local Claude Code data from this Mac. This cannot be undone.')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setDeleteAccount(null)} type="button" variant="outline">{t('Cancel')}</Button>
+            <Button onClick={() => { void handleDeleteClaudeAccount(); }} type="button" variant="destructive">
+              {t('Delete account')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={Boolean(providerConfigKey)}
         onOpenChange={(open) => {

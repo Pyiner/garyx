@@ -221,6 +221,12 @@ impl MultiProviderBridge {
         self.inner.run_limiter.available_permits()
     }
 
+    /// Select the Claude Code configuration directory used by future runs.
+    /// Existing top-level runs retain the snapshot they captured at start.
+    pub async fn set_claude_config_dir(&self, config_dir: Option<String>) {
+        *self.inner.claude_config_dir.write().await = config_dir;
+    }
+
     /// Set the thread store for persisting messages after agent runs.
     pub async fn set_thread_store(&self, store: Arc<dyn ThreadStore>) {
         store

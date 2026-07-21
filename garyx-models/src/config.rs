@@ -1080,6 +1080,63 @@ pub struct SessionConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct DesktopConfig {}
 
+/// Provider-owned account state. Account selection deliberately lives here,
+/// outside agent and thread configuration, so every Claude Code agent observes
+/// the same identity for its next process launch.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ProviderAccountsConfig {
+    #[serde(default)]
+    pub claude_code: ClaudeCodeAccountsConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ClaudeCodeAccountsConfig {
+    /// `None` selects Claude Code's ordinary system profile (`~/.claude`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<ClaudeCodeManagedAccount>,
+}
+
+impl ClaudeCodeAccountsConfig {
+    pub fn account(&self, account_id: &str) -> Option<&ClaudeCodeManagedAccount> {
+        self.accounts
+            .iter()
+            .find(|account| account.id == account_id)
+    }
+
+    pub fn account_mut(&mut self, account_id: &str) -> Option<&mut ClaudeCodeManagedAccount> {
+        self.accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+    }
+
+    pub fn active_account(&self) -> Option<&ClaudeCodeManagedAccount> {
+        self.active_account_id
+            .as_deref()
+            .and_then(|account_id| self.account(account_id))
+    }
+}
+
+/// Non-secret display metadata for a Garyx-managed Claude Code profile.
+/// The configuration directory is derived from `id`; clients never provide
+/// or persist an arbitrary filesystem path.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ClaudeCodeManagedAccount {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Top-level configuration for the host-side plugin auto-updater.
 ///
 /// Mirrors the desktop app's electron-updater behavior conceptually:
@@ -1132,6 +1189,8 @@ pub struct GaryxConfig {
     pub sessions: SessionConfig,
     #[serde(default)]
     pub desktop: DesktopConfig,
+    #[serde(default)]
+    pub provider_accounts: ProviderAccountsConfig,
     #[serde(default)]
     pub cron: CronConfig,
     #[serde(default)]

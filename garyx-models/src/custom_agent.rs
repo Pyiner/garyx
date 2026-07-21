@@ -71,6 +71,7 @@ const BUILTIN_CLAUDE_AVATAR_PNG: &[u8] =
 const BUILTIN_CODEX_AVATAR_PNG: &[u8] = include_bytes!("../assets/builtin_agent_avatars/codex.png");
 const BUILTIN_GEMINI_AVATAR_PNG: &[u8] =
     include_bytes!("../assets/builtin_agent_avatars/gemini.png");
+const BUILTIN_TRAE_AVATAR_PNG: &[u8] = include_bytes!("../assets/builtin_agent_avatars/trae.png");
 
 fn builtin_avatar_data_url(bytes: &[u8]) -> String {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -124,9 +125,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             model_service_tier: String::new(),
             provider_env: HashMap::new(),
             default_workspace_dir: None,
-            // TRAE CLI is a Codex fork; reuse the Codex avatar until a dedicated
-            // Trae asset is provided.
-            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_CODEX_AVATAR_PNG)),
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_TRAE_AVATAR_PNG)),
             system_prompt: String::new(),
             built_in: true,
             enabled: true,

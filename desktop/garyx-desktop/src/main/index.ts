@@ -127,6 +127,7 @@ import {
   createMcpServer,
   createSlashCommand,
   bindRemoteChannelEndpoint,
+  cancelClaudeCodeAuth,
   checkConnection,
   deleteCapsule,
   deleteCustomAgent,
@@ -147,6 +148,7 @@ import {
   fetchThreadFavoritesSnapshot,
   fetchRecentThreads,
   getCodingUsage,
+  getClaudeCodeAuth,
   getCapsule,
   getCapsuleHtml,
   getWorkspaceGitStatus,
@@ -158,6 +160,7 @@ import {
   listProviderRecentSessions,
   listCustomAgents,
   listProviderModels,
+  listClaudeCodeAccounts,
   listWorkspaceDirectories,
   listWorkspaceFiles,
   listMcpServers,
@@ -169,10 +172,13 @@ import {
   readSkillFile,
   saveGatewaySettings,
   saveSkillFile,
+  selectClaudeCodeAccount,
   setDefaultCustomAgent,
   setRemoteThreadFavorite,
   sendStreamingInput,
   stopTask,
+  startClaudeCodeAuth,
+  submitClaudeCodeAuth,
   toggleMcpServer,
   toggleCustomAgent,
   toggleSkill,
@@ -182,6 +188,8 @@ import {
   updateMcpServer,
   updateSlashCommand,
   updateTaskStatus,
+  renameClaudeCodeAccount,
+  deleteClaudeCodeAccount,
   assignTask,
   assertRecentThreadGatewayScope,
   updateRemoteThread,
@@ -910,6 +918,46 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:get-coding-usage", async () => {
     const settings = await resolveSettings();
     return getCodingUsage(settings);
+  });
+
+  ipcMain.handle("garyx:list-claude-code-accounts", async () => {
+    const settings = await resolveSettings();
+    return listClaudeCodeAccounts(settings);
+  });
+
+  ipcMain.handle("garyx:select-claude-code-account", async (_event, input) => {
+    const settings = await resolveSettings();
+    await selectClaudeCodeAccount(settings, input.accountId);
+  });
+
+  ipcMain.handle("garyx:rename-claude-code-account", async (_event, input) => {
+    const settings = await resolveSettings();
+    await renameClaudeCodeAccount(settings, input.accountId, input.name);
+  });
+
+  ipcMain.handle("garyx:delete-claude-code-account", async (_event, input) => {
+    const settings = await resolveSettings();
+    await deleteClaudeCodeAccount(settings, input.accountId);
+  });
+
+  ipcMain.handle("garyx:start-claude-code-auth", async (_event, input) => {
+    const settings = await resolveSettings();
+    return startClaudeCodeAuth(settings, input);
+  });
+
+  ipcMain.handle("garyx:submit-claude-code-auth", async (_event, input) => {
+    const settings = await resolveSettings();
+    return submitClaudeCodeAuth(settings, input.loginId, input.code);
+  });
+
+  ipcMain.handle("garyx:get-claude-code-auth", async (_event, input) => {
+    const settings = await resolveSettings();
+    return getClaudeCodeAuth(settings, input.loginId);
+  });
+
+  ipcMain.handle("garyx:cancel-claude-code-auth", async (_event, input) => {
+    const settings = await resolveSettings();
+    return cancelClaudeCodeAuth(settings, input.loginId);
   });
 
   ipcMain.handle(

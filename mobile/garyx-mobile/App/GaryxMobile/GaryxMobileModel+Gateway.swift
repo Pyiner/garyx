@@ -261,6 +261,12 @@ extension GaryxMobileModel {
         gatewaySettingsDocument = [:]
         isSavingBotSettings = false
         providerModelsByType = [:]
+        claudeCodeAccounts = nil
+        isLoadingClaudeCodeAccounts = false
+        claudeCodeAccountsError = nil
+        isMutatingClaudeCodeAccount = false
+        claudeCodeAccountsLoadGeneration = nil
+        claudeCodeAccountMutationGeneration = nil
         selectedWorkspacePath = ""
         selectedWorkspaceDirectory = ""
         draftWorkspacePath = ""

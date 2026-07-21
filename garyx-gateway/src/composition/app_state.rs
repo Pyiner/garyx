@@ -31,6 +31,7 @@ use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::meetings::MeetingService;
 use crate::prompt_attachment_lifecycle::PromptAttachmentLifecycle;
+use crate::provider_accounts;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
@@ -142,6 +143,17 @@ impl AppState {
 
     pub fn replace_config(&self, config: GaryxConfig) {
         self.runtime.live_config.replace(config);
+    }
+
+    /// Apply provider-owned account selection before bridge reconciliation.
+    /// Kept public for the binary's deferred startup path, which initializes
+    /// the bridge directly before ordinary hot-reload mutations begin.
+    pub async fn apply_provider_account_selection_to_bridge(&self, config: &GaryxConfig) {
+        let config_dir = provider_accounts::validated_active_claude_config_dir(self, config).await;
+        self.integration
+            .bridge
+            .set_claude_config_dir(config_dir.map(|path| path.to_string_lossy().into_owned()))
+            .await;
     }
 
     /// Install the boot-time channel plugin rebuilder. First caller
@@ -350,11 +362,30 @@ impl AppState {
             Self::channel_plugin_rebuild_inputs(self.config_snapshot().as_ref())
                 != Self::channel_plugin_rebuild_inputs(&config);
         let projection = RuntimeConfigProjection::from_config(&config);
+        let previous_config = self.config_snapshot();
+        let previous_claude_config_dir =
+            provider_accounts::validated_active_claude_config_dir(self, previous_config.as_ref())
+                .await;
+        self.apply_provider_account_selection_to_bridge(&config)
+            .await;
         self.integration
             .bridge
             .replace_agent_profiles(self.ops.custom_agents.snapshot().await)
             .await;
-        self.integration.bridge.reload_from_config(&config).await?;
+        if let Err(error) = self.integration.bridge.reload_from_config(&config).await {
+            self.integration
+                .bridge
+                .set_claude_config_dir(
+                    previous_claude_config_dir.map(|path| path.to_string_lossy().into_owned()),
+                )
+                .await;
+            let _ = self
+                .integration
+                .bridge
+                .reload_from_config(previous_config.as_ref())
+                .await;
+            return Err(error);
+        }
         // Publish the meeting knobs only after the fallible bridge reconcile
         // above: a rejected candidate config must not leak partial runtime
         // state. The join-retry window used to refresh only on the

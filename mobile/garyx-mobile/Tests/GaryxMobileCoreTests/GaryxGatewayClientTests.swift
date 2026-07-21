@@ -1383,6 +1383,114 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(requestCounter.value(), 3)
     }
 
+    func testClaudeCodeAccountClientUsesAccountRoutesAndEscapesIdentifiers() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let requestCounter = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            let requestIndex = requestCounter.increment()
+            let path = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
+                    .percentEncodedPath
+            )
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+
+            switch requestIndex {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(path, "/garyx/api/providers/claude_code/accounts")
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "active_account_id": null,
+                          "refreshed_at": "2026-07-21T12:00:00Z",
+                          "accounts": []
+                        }
+                        """.utf8
+                    )
+                )
+            case 2:
+                XCTAssertEqual(request.httpMethod, "PUT")
+                XCTAssertEqual(path, "/garyx/api/providers/claude_code/accounts/active")
+                let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+                let object = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: body) as? [String: Any]
+                )
+                XCTAssertEqual(object["account_id"] as? String, "account/with slash")
+                return (response, Data(#"{"ok":true}"#.utf8))
+            case 3:
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                XCTAssertEqual(
+                    path,
+                    "/garyx/api/providers/claude_code/accounts/account%2Fwith%20slash"
+                )
+                let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+                let object = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: body) as? [String: Any]
+                )
+                XCTAssertEqual(object["name"] as? String, "Work")
+                return (response, Data(#"{"ok":true}"#.utf8))
+            case 4:
+                XCTAssertEqual(request.httpMethod, "DELETE")
+                XCTAssertEqual(
+                    path,
+                    "/garyx/api/providers/claude_code/accounts/account%2Fwith%20slash"
+                )
+                return (response, Data(#"{"ok":true}"#.utf8))
+            case 5:
+                XCTAssertEqual(request.httpMethod, "DELETE")
+                XCTAssertEqual(
+                    path,
+                    "/garyx/api/providers/claude_code/auth/login%2Fwith%20slash"
+                )
+                return (
+                    response,
+                    Data(
+                        #"{"login_id":"login/with slash","status":"failed","error":"cancelled"}"#.utf8
+                    )
+                )
+            default:
+                XCTFail("unexpected request \(requestIndex)")
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        _ = try await client.claudeCodeAccounts()
+        try await client.selectClaudeCodeAccount(accountId: " account/with slash ")
+        try await client.renameClaudeCodeAccount(
+            accountId: "account/with slash",
+            name: " Work "
+        )
+        try await client.deleteClaudeCodeAccount(accountId: "account/with slash")
+        let cancelled = try await client.cancelClaudeCodeAuth(loginId: "login/with slash")
+
+        XCTAssertEqual(cancelled.status, .failed)
+        XCTAssertEqual(requestCounter.value(), 5)
+    }
+
     func testRecentThreadsPageRejectsLegacyOffsetShapeWithoutCursorIdentity() throws {
         XCTAssertThrowsError(
             try JSONDecoder().decode(

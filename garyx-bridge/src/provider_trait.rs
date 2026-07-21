@@ -150,6 +150,15 @@ pub trait ProviderRuntime: Send + Sync {
         let _ = defaults;
     }
 
+    /// Hot-apply provider launch environment for future processes.
+    ///
+    /// Implementations must snapshot this at the beginning of a top-level run
+    /// so an already-running process and all retries belonging to that run keep
+    /// one stable environment.
+    fn update_launch_environment(&self, env: &HashMap<String, String>) {
+        let _ = env;
+    }
+
     /// Abort a running request. Returns `true` if the abort was acted upon.
     async fn abort(&self, run_id: &str) -> bool {
         let _ = run_id;

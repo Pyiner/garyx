@@ -320,7 +320,21 @@ impl MultiProviderBridge {
         agent_cfg: &AgentProviderConfig,
         default_workspace: &Option<String>,
     ) -> Result<String, BridgeError> {
-        let key = compute_provider_key(agent_cfg, default_workspace);
+        let mut effective_agent_cfg = agent_cfg.clone();
+        if ProviderType::from_slug(&effective_agent_cfg.provider_type)
+            == Some(ProviderType::ClaudeCode)
+        {
+            // Claude account selection owns this environment key. Always
+            // remove agent/thread-era values before applying the provider's
+            // current selection so System default really is system default.
+            effective_agent_cfg.env.remove("CLAUDE_CONFIG_DIR");
+            if let Some(config_dir) = self.inner.claude_config_dir.read().await.clone() {
+                effective_agent_cfg
+                    .env
+                    .insert("CLAUDE_CONFIG_DIR".to_owned(), config_dir);
+            }
+        }
+        let key = compute_provider_key(&effective_agent_cfg, default_workspace);
 
         // Already registered: hot-apply the (possibly reloaded) model
         // defaults onto the live instance. The provider key intentionally
@@ -329,12 +343,13 @@ impl MultiProviderBridge {
         // instance instead of being silently dropped. Active runs are
         // untouched — only default resolution for future runs changes.
         if let Some(provider) = self.get_provider(&key).await {
-            provider.update_model_defaults(&ProviderModelDefaults::from(agent_cfg));
+            provider.update_model_defaults(&ProviderModelDefaults::from(&effective_agent_cfg));
+            provider.update_launch_environment(&effective_agent_cfg.env);
             return Ok(key);
         }
 
         // Create and initialize provider.
-        let provider = create_provider(agent_cfg, default_workspace).await?;
+        let provider = create_provider(&effective_agent_cfg, default_workspace).await?;
         self.register_provider(&key, provider).await;
         Ok(key)
     }

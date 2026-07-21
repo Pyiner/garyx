@@ -2,58 +2,11 @@ import Foundation
 import SwiftUI
 import UIKit
 
-// Claude Code sign-in UI. The provider detail sheet shows only the slim
-// `GaryxClaudeCodeAuthEntryRow` (status + account summary + one full-width
-// button). The button presents `GaryxClaudeCodeLoginSheet`, a dedicated guided
-// flow whose five screens are driven entirely by the Core
-// `GaryxClaudeCodeLoginPresentation`. These views are a dumb renderer: all step
-// derivation, copy, and enablement live in GaryxMobileCore; side effects
-// (start / submit / poll / reset) live on GaryxMobileModel.
-
-// MARK: - Provider section entry
-
-/// The compact Authentication entry rendered inside the provider detail sheet.
-struct GaryxClaudeCodeAuthEntryRow: View {
-    let entry: GaryxClaudeCodeAuthEntry
-    let onSignIn: () -> Void
-
-    var body: some View {
-        Group {
-            Section {
-                GaryxFormRow(title: "Status") {
-                    GaryxStatusPill(text: entry.statusText, tone: entry.tone.garyxStatusPillTone)
-                }
-                if let account = entry.accountText {
-                    GaryxFormReadOnlyRow(title: "Account", value: account)
-                }
-            } header: {
-                Text("Authentication")
-                    .textCase(nil)
-            } footer: {
-                if let caption {
-                    Text(caption)
-                }
-            }
-
-            Section {
-                signInButton
-            }
-        }
-    }
-
-    private var caption: String? {
-        entry.isSignedIn ? entry.accountDetailText : entry.footnote
-    }
-
-    @ViewBuilder
-    private var signInButton: some View {
-        Button(action: onSignIn) {
-            Label(entry.actionTitle, systemImage: entry.actionSymbolName)
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity)
-        }
-    }
-}
+// Claude Code sign-in UI. Account surfaces present this dedicated guided flow;
+// its five screens are driven entirely by the Core
+// `GaryxClaudeCodeLoginPresentation`. Step derivation, copy, and enablement live
+// in GaryxMobileCore; side effects (start / submit / poll / reset) live on
+// GaryxMobileModel.
 
 // MARK: - Guided login sheet
 
@@ -62,6 +15,7 @@ struct GaryxClaudeCodeLoginSheet: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.garyxMotion) private var motion
     @EnvironmentObject private var model: GaryxMobileModel
+    let target: GaryxClaudeCodeAuthTarget
 
     @State private var authorizationCode = ""
     @State private var options = GaryxClaudeCodeLoginOptions()
@@ -70,6 +24,10 @@ struct GaryxClaudeCodeLoginSheet: View {
     @State private var hasOpenedAuthorizationURL = false
     @State private var showsAdvancedOptions = false
     @FocusState private var codeFieldFocused: Bool
+
+    init(target: GaryxClaudeCodeAuthTarget = .systemDefault) {
+        self.target = target
+    }
 
     private var presentation: GaryxClaudeCodeLoginPresentation {
         GaryxClaudeCodeLoginPresentation.make(
@@ -81,6 +39,10 @@ struct GaryxClaudeCodeLoginSheet: View {
     }
 
     private var claudeCodeUsage: GaryxProviderUsage? {
+        if let accountId = model.claudeCodeAuthSession?.accountId ?? target.accountId,
+           let account = model.claudeCodeAccounts?.accounts.first(where: { $0.id == accountId }) {
+            return account.usage
+        }
         guard let provider = GaryxModelProviderDefaults.provider(for: "claude_code") else { return nil }
         return GaryxModelProviderDefaults.usage(in: model.codingUsage, provider: provider)
     }
@@ -121,8 +83,8 @@ struct GaryxClaudeCodeLoginSheet: View {
             authorizationCode = ""
         }
         .onDisappear {
-            // Dismissing only stops local polling; the gateway login session is
-            // untouched (design risk note). Reset so a re-open starts at intro.
+            // Dismissal invalidates stale completions and cancels the Gateway
+            // session so a pending process or uncommitted profile cannot linger.
             model.resetClaudeCodeAuthFlow()
         }
     }
@@ -165,6 +127,11 @@ struct GaryxClaudeCodeLoginSheet: View {
             Text(presentation.title)
                 .font(GaryxFont.title(weight: .bold))
                 .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(target.displayName)
+                .font(GaryxFont.subheadline(weight: .medium))
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -390,7 +357,7 @@ struct GaryxClaudeCodeLoginSheet: View {
         case .start:
             hasOpenedAuthorizationURL = false
             authorizationCode = ""
-            Task { await model.startClaudeCodeAuth(options: options) }
+            Task { await model.startClaudeCodeAuth(options: options, target: target) }
         case .openAuthorizationURL:
             if let url = model.claudeCodeAuthSession?.authorizationURL {
                 openURL(url)
@@ -446,19 +413,6 @@ struct GaryxClaudeCodeLoginSheet: View {
 // MARK: - Tone mapping
 
 extension GaryxClaudeCodeAuthPresentationTone {
-    var garyxStatusPillTone: GaryxStatusPill.Tone {
-        switch self {
-        case .good:
-            return .good
-        case .warning:
-            return .warning
-        case .danger:
-            return .danger
-        case .muted:
-            return .muted
-        }
-    }
-
     var garyxAuthToneColor: Color {
         switch self {
         case .good:

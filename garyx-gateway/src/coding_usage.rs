@@ -19,6 +19,7 @@
 //! account identity, and project ids are never logged or persisted.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 
 use crate::claude_oauth;
+use crate::provider_accounts;
 use crate::server::AppState;
 
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -212,6 +214,10 @@ impl ProviderUsage {
     }
 }
 
+pub(crate) fn unavailable_claude_usage(error: String) -> ProviderUsage {
+    ProviderUsage::unavailable(PROVIDER_CLAUDE, "Claude Code", error)
+}
+
 /// Aggregate response for all known coding assistants.
 #[derive(Debug, Clone, Serialize)]
 pub struct CodingUsageResponse {
@@ -222,9 +228,22 @@ pub struct CodingUsageResponse {
 
 /// `GET /api/usage/coding` — weekly quota remaining for local coding assistants.
 pub async fn get_coding_usage(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let antigravity_config = antigravity_usage_config(state.config_snapshot().as_ref());
+    let config = state.config_snapshot();
+    let antigravity_config = antigravity_usage_config(config.as_ref());
+    let active_claude_account_id = config
+        .provider_accounts
+        .claude_code
+        .active_account_id
+        .clone();
+    let claude_config_dir =
+        provider_accounts::validated_active_claude_config_dir(&state, config.as_ref()).await;
+    let claude_cache_identity = if claude_config_dir.is_some() {
+        active_claude_account_id.as_deref().unwrap_or("system")
+    } else {
+        "system"
+    };
     let (claude, codex, antigravity) = tokio::join!(
-        resolve_provider(PROVIDER_CLAUDE, "Claude Code", fetch_claude_usage()),
+        resolve_claude_usage_for_config_dir(claude_config_dir.as_deref(), claude_cache_identity),
         resolve_provider(PROVIDER_CODEX, "Codex", fetch_codex_usage()),
         resolve_provider(
             PROVIDER_ANTIGRAVITY,
@@ -246,7 +265,16 @@ async fn resolve_provider(
     name: &'static str,
     fetch: impl std::future::Future<Output = Result<ProviderUsage, String>>,
 ) -> ProviderUsage {
-    if let Some((age, value)) = cached(id)
+    resolve_provider_with_cache_key(id.to_owned(), id, name, fetch).await
+}
+
+async fn resolve_provider_with_cache_key(
+    cache_key: String,
+    id: &'static str,
+    name: &'static str,
+    fetch: impl std::future::Future<Output = Result<ProviderUsage, String>>,
+) -> ProviderUsage {
+    if let Some((age, value)) = cached(&cache_key)
         && age < FRESH_TTL
     {
         return value;
@@ -254,10 +282,10 @@ async fn resolve_provider(
 
     match fetch.await {
         Ok(value) => {
-            store(id, value.clone());
+            store(cache_key, value.clone());
             value
         }
-        Err(error) => match cached(id) {
+        Err(error) => match cached(&cache_key) {
             Some((_, mut value)) => {
                 value.stale = true;
                 value.error = Some(error);
@@ -272,8 +300,16 @@ async fn resolve_provider(
 // Claude Code
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 async fn fetch_claude_usage() -> Result<ProviderUsage, String> {
-    let (token, plan) = claude_oauth::read_stored_oauth_token_and_subscription().await?;
+    fetch_claude_usage_for_config_dir(None).await
+}
+
+async fn fetch_claude_usage_for_config_dir(
+    config_dir: Option<&Path>,
+) -> Result<ProviderUsage, String> {
+    let (token, plan) =
+        claude_oauth::read_stored_oauth_token_and_subscription_for_config_dir(config_dir).await?;
 
     let client = http_client()?;
     let response = client
@@ -296,6 +332,28 @@ async fn fetch_claude_usage() -> Result<ProviderUsage, String> {
     let value: Value = serde_json::from_str(&text)
         .map_err(|error| format!("Claude usage response was not JSON: {error}"))?;
     parse_claude_usage(&value, plan)
+}
+
+/// Resolve one Claude profile's quota without sharing cache entries with any
+/// other profile. Used by the account switcher and by the active-provider
+/// aggregate endpoint.
+pub(crate) async fn resolve_claude_usage_for_config_dir(
+    config_dir: Option<&Path>,
+    cache_identity: &str,
+) -> ProviderUsage {
+    resolve_provider_with_cache_key(
+        format!("{PROVIDER_CLAUDE}:{cache_identity}"),
+        PROVIDER_CLAUDE,
+        "Claude Code",
+        fetch_claude_usage_for_config_dir(config_dir),
+    )
+    .await
+}
+
+pub(crate) fn invalidate_claude_usage_cache(cache_identity: &str) {
+    if let Ok(mut guard) = cache().lock() {
+        guard.remove(&format!("{PROVIDER_CLAUDE}:{cache_identity}"));
+    }
 }
 
 /// Build a [`ProviderUsage`] from the Anthropic OAuth usage payload.
@@ -347,9 +405,9 @@ fn parse_claude_window(window: &Value) -> Option<UsageWindow> {
 /// Ordinary `session` and `weekly_all` entries intentionally remain sourced
 /// from the stable top-level windows so they are not duplicated in clients.
 fn parse_claude_scoped_limit(limit: &Value) -> Option<ScopedUsageLimit> {
-    if limit.get("is_active").and_then(Value::as_bool) == Some(false) {
-        return None;
-    }
+    // Anthropic currently reports Fable with `is_active: false` even though
+    // its independent percentage is valid. The flag describes whether the
+    // bucket is consuming now, not whether clients should hide the allowance.
     let kind = limit.get("kind").and_then(Value::as_str)?.trim();
     if kind.is_empty() {
         return None;
@@ -954,18 +1012,18 @@ struct CacheEntry {
     value: ProviderUsage,
 }
 
-fn cache() -> &'static Mutex<HashMap<&'static str, CacheEntry>> {
-    static CACHE: OnceLock<Mutex<HashMap<&'static str, CacheEntry>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cached(id: &'static str) -> Option<(Duration, ProviderUsage)> {
+fn cached(id: &str) -> Option<(Duration, ProviderUsage)> {
     let guard = cache().lock().ok()?;
     let entry = guard.get(id)?;
     Some((entry.fetched_at.elapsed(), entry.value.clone()))
 }
 
-fn store(id: &'static str, value: ProviderUsage) {
+fn store(id: String, value: ProviderUsage) {
     if let Ok(mut guard) = cache().lock() {
         guard.insert(
             id,
@@ -997,7 +1055,7 @@ mod tests {
                     "kind": "weekly_scoped",
                     "percent": 82,
                     "resets_at": "2030-01-07T11:00:00+00:00",
-                    "is_active": true,
+                    "is_active": false,
                     "scope": {
                         "model": {"id": null, "display_name": "Fable"},
                         "surface": null
@@ -1005,7 +1063,7 @@ mod tests {
                 },
                 {
                     "kind": "weekly_scoped",
-                    "percent": 9,
+                    "percent": null,
                     "is_active": false,
                     "scope": {"model": {"id": "inactive", "display_name": "Inactive"}}
                 }

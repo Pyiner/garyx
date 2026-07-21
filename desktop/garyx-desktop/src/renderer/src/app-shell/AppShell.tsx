@@ -794,12 +794,12 @@ export function AppShell() {
       : null;
   // Settings tab: route-selected with last-active stickiness — plain
   // #/settings shows the previously active tab (design contract:
-  // route.tabId ?? last ?? 'labs'); selecting a tab navigates.
+  // route.tabId ?? last ?? 'provider'); selecting a tab navigates.
   const lastSettingsTabRef = useRef<SettingsTabId | null>(null);
   const settingsActiveTab: SettingsTabId =
     routeSnapshot.route.kind === "settings"
-      ? (routeSnapshot.route.tabId ?? lastSettingsTabRef.current ?? "labs")
-      : (lastSettingsTabRef.current ?? "labs");
+      ? (routeSnapshot.route.tabId ?? lastSettingsTabRef.current ?? "provider")
+      : (lastSettingsTabRef.current ?? "provider");
   useEffect(() => {
     if (routeSnapshot.route.kind === "settings") {
       lastSettingsTabRef.current = settingsActiveTab;
@@ -2676,11 +2676,10 @@ export function AppShell() {
   ]);
 
   function openSettingsView() {
-    // The settings application branch runs handleSelectSettingsTab, whose
-    // same-tab path refreshes non-local tab resources (superset of the
-    // old inline refresh, adding the gateway auto-save flush).
+    // Settings is the fast entry to provider identity and quota. Other tabs
+    // remain directly addressable, but every explicit click starts here.
     desktopRouteStore.navigate(
-      { kind: "settings", tabId: settingsActiveTab },
+      { kind: "settings", tabId: "provider" },
       { replace: true },
     );
   }

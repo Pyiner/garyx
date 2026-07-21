@@ -101,4 +101,24 @@ fn builtin_provider_profiles_include_desktop_provider_avatars() {
             "built-in provider avatar should contain the desktop provider icon artwork"
         );
     }
+
+    let codex_avatar = profiles
+        .iter()
+        .find(|profile| profile.agent_id == "codex")
+        .and_then(|profile| profile.avatar_data_url.as_deref())
+        .expect("Codex avatar");
+    let trae_avatar = profiles
+        .iter()
+        .find(|profile| profile.agent_id == "traex")
+        .and_then(|profile| profile.avatar_data_url.as_deref())
+        .expect("Trae avatar");
+    assert_eq!(
+        trae_avatar,
+        builtin_avatar_data_url(BUILTIN_TRAE_AVATAR_PNG),
+        "the Traex Agent must ship the canonical Trae artwork"
+    );
+    assert_ne!(
+        trae_avatar, codex_avatar,
+        "Trae must use its own brand artwork instead of the Codex avatar"
+    );
 }

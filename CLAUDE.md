@@ -92,6 +92,8 @@ for personal data and remove it.
   Do not reintroduce caps for user, assistant, or nested tool text.
 - Provider, agent, bot, and channel identity presentation should resolve
   through shared presentation helpers instead of local view switch tables.
+- Provider identity surfaces must reuse the same avatar component and branded
+  artwork as Agent surfaces; do not substitute screen-local SF Symbols.
 - A Claude Code `result` is a turn boundary, not a process boundary. Normal
   completion may close stdin, but must consume stdout through EOF and wait for
   natural process exit; background-task level signals never authorize output
@@ -110,8 +112,14 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   26). Do not add or validate new compatibility behavior for earlier iOS
   versions unless explicitly requested; leave existing fallback code unchanged
   when it is outside the task scope.
+- iOS visual QA is light-mode only. Do not add or run dark-mode test passes
+  unless the user explicitly requests them; leave existing dark-mode behavior
+  unchanged when it is outside the task scope.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
+- Provider default model and reasoning labels should use the row's available
+  control width. Do not impose percentage caps that truncate short names when
+  the row has room to show them in full.
 - Electron `contextBridge` exposes `window.garyxDesktop` as a frozen
   cross-context object. Never target it directly with a Proxy that substitutes
   property values; materialize intercepting methods on a separate facade.
@@ -168,6 +176,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   state changes. Gate actions inside an always-attached modifier instead of
   conditionally replacing modifier branches, which can tear down an in-flight
   system presentation.
+- Keep custom SwiftUI presentation `Binding` getters pure. Acquire and settle
+  modal leases from always-attached lifecycle callbacks, binding setters, or
+  dismissal callbacks, and make repeated dismissal observation idempotent.
 - `UIViewRepresentable` make/update callbacks run inside SwiftUI graph updates.
   Never synchronously publish from those callbacks into SwiftUI-observed
   storage. Keep imperative UIKit lifecycle controllers in stable,
@@ -181,6 +192,13 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 
 ## Release And Runtime Boundaries
 
+- Claude Code account selection is provider-owned runtime state. Do not persist
+  `CLAUDE_CONFIG_DIR` in thread or agent metadata; snapshot the provider's
+  selected environment only when a new top-level run starts.
+- Anthropic OAuth usage can return a valid Fable `weekly_scoped` allowance with
+  `is_active: false`; that flag means the bucket is not currently consuming,
+  not that its quota is unavailable. Preserve scoped limits that have a usable
+  model scope and percentage.
 - Gateway code changes do not affect the running gateway until the binary is
   built, installed, and the managed gateway is restarted.
 - For local macOS gateway development, use `scripts/build-local-cli.sh` to

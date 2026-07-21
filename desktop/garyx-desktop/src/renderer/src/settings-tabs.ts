@@ -14,6 +14,12 @@ export const SETTINGS_TABS: Array<{
   description: string;
 }> = [
   {
+    id: 'provider',
+    label: 'Provider',
+    eyebrow: 'Providers',
+    description: 'Accounts, quota, model defaults, and provider status.',
+  },
+  {
     id: 'labs',
     label: 'General',
     eyebrow: 'General',
@@ -24,12 +30,6 @@ export const SETTINGS_TABS: Array<{
     label: 'Gateway',
     eyebrow: 'Gateway',
     description: 'Gateway URL and storage.',
-  },
-  {
-    id: 'provider',
-    label: 'Provider',
-    eyebrow: 'Providers',
-    description: 'Model provider status, defaults, and usage.',
   },
   {
     id: 'channels',

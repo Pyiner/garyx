@@ -12,6 +12,23 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "antigravity").symbolName, "bolt.fill")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "claude_code").symbolName, "sparkles")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "traex").displayName, "Traex")
+        XCTAssertNil(GaryxProviderPresentation.make(providerType: "traex").symbolName)
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "claude_code").fallbackAssetName,
+            "ProviderClaude"
+        )
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "codex_app_server").fallbackAssetName,
+            "ProviderCodex"
+        )
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "antigravity").fallbackAssetName,
+            "ProviderAntigravity"
+        )
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "traex").fallbackAssetName,
+            "ProviderTrae"
+        )
     }
 
     func testProviderPresentationUsesAgentAndProviderForAvatarFallbacks() {
