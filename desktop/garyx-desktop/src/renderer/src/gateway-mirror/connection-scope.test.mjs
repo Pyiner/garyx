@@ -439,6 +439,35 @@ test("a refresh answer with a foreign gateway identity is never published", asyn
   );
 });
 
+test("a failed catalog refresh keeps the last-known catalog", async () => {
+  let fail = false;
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: () =>
+      fail
+        ? Promise.reject(new Error("gateway hiccup"))
+        : Promise.resolve({
+            agents: [{ id: "agent::available" }],
+            defaultAgentId: "agent::available",
+            effectiveDefaultAgentId: "agent::available",
+          }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  await mirror.refreshAgentCatalog();
+  assert.equal(mirror.getCatalogSnapshot().agents[0].id, "agent::available");
+
+  // A transient failure must never map to an EMPTY catalog over good data
+  // (that would lock the composer behind "Enable an agent...").
+  fail = true;
+  await mirror.refreshAgentCatalog();
+  assert.equal(
+    mirror.getCatalogSnapshot().agents[0]?.id,
+    "agent::available",
+    "the last-known catalog survives a failed refresh",
+  );
+});
+
 test("a stale openability answer reports not-openable without vouching", async () => {
   const refresh = deferred();
   const mirror = new GatewayMirror({
