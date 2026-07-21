@@ -121,9 +121,14 @@ export function AgentsHubPanel({
   const agents = catalog.agents;
   // Full request state from the owner: loading and failure render honestly
   // (an empty list is only ever shown for a READY empty catalog).
-  const loading = catalogSnapshot.phase === "loading";
+  // Loading/error empty states only render when there is no content to
+  // show: with last-known rows present, a refresh swaps data in place
+  // (silent focus revalidation must not blank the list).
+  const loading = catalogSnapshot.phase === "loading" && agents.length === 0;
   const loadError =
-    catalogSnapshot.phase === "error" ? t('Failed to load agents.') : null;
+    catalogSnapshot.phase === "error" && agents.length === 0
+      ? t('Failed to load agents')
+      : null;
   const [availabilityMutationAgentId, setAvailabilityMutationAgentId] =
     useState<string | null>(null);
 
@@ -159,9 +164,9 @@ export function AgentsHubPanel({
     // swaps in fresh data for the fetches that actually succeed and otherwise
     // leaves the currently displayed data untouched.
     const silent = options.silent ?? false;
-    const refreshed = await mirror.refreshAgentCatalog();
+    const refreshed = await mirror.refreshAgentCatalog({ background: silent });
     if (!refreshed && !silent) {
-      onToast?.('Failed to load agents.', 'error');
+      onToast?.(t('Failed to load agents'), 'error');
     }
   }
 

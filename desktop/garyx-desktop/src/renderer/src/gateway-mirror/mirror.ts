@@ -399,35 +399,47 @@ export class GatewayMirror {
       );
     }
     const epoch = this.connectionEpoch;
+    // The catalog leg settles INDEPENDENTLY of the root leg: a failed
+    // getState must not discard a successful catalog (which would park the
+    // phase at loading forever), and vice versa. Each leg carries its own
+    // owner checks.
     const catalogOrdinal = ++this.catalogRequestOrdinal;
-    return Promise.all([
-      Promise.resolve().then(() => services.getState()),
-      Promise.resolve()
-        .then(() => services.listCustomAgents())
-        .catch(() => null),
-    ]).then(([nextState, nextCatalog]) => {
-      const responseKey = nextState?.entitiesGatewayUrl || "";
-      const scopeKey = this.connectionScopeKey ?? "";
-      if (this.connectionEpoch !== epoch || responseKey !== scopeKey) {
-        // Epoch AND identity must both hold: an answer from the previous
-        // gateway universe — or a response whose own gateway identity does
-        // not match the adopted scope — goes to the awaiting caller (whose
-        // writes are epoch-fenced) without ever publishing as root/catalog.
-        return nextState;
-      }
-      this.desktopState = nextState;
-      this.bumpRoot();
-      if (this.catalogRequestOrdinal === catalogOrdinal) {
-        if (nextCatalog) {
-          this.publishAgentCatalog(nextCatalog);
-        } else {
+    void Promise.resolve()
+      .then(() => services.listCustomAgents())
+      .then((catalog) => {
+        if (
+          this.connectionEpoch === epoch &&
+          this.catalogRequestOrdinal === catalogOrdinal
+        ) {
+          this.publishAgentCatalog(catalog);
+        }
+      })
+      .catch(() => {
+        if (
+          this.connectionEpoch === epoch &&
+          this.catalogRequestOrdinal === catalogOrdinal
+        ) {
           // The LATEST request failed: publish the failure (content keeps
           // the last-known values) instead of a silent stale snapshot.
           this.publishAgentCatalogFailure();
         }
-      }
-      return nextState;
-    });
+      });
+    return Promise.resolve()
+      .then(() => services.getState())
+      .then((nextState) => {
+        const responseKey = nextState?.entitiesGatewayUrl || "";
+        const scopeKey = this.connectionScopeKey ?? "";
+        if (this.connectionEpoch !== epoch || responseKey !== scopeKey) {
+          // Epoch AND identity must both hold: an answer from the previous
+          // gateway universe — or a response whose own gateway identity
+          // does not match the adopted scope — goes to the awaiting caller
+          // (whose writes are epoch-fenced) without ever publishing.
+          return nextState;
+        }
+        this.desktopState = nextState;
+        this.bumpRoot();
+        return nextState;
+      });
   }
 
   /** Monotonic catalog request order: within one epoch, only the LATEST
@@ -456,14 +468,19 @@ export class GatewayMirror {
    * Refetch the agent catalog from the current gateway; the publish is
    * epoch-fenced and a failure keeps the last-known catalog.
    */
-  refreshAgentCatalog(): Promise<boolean> {
+  refreshAgentCatalog(options?: { background?: boolean }): Promise<boolean> {
     const services = this.services;
     if (!services) {
       return Promise.resolve(false);
     }
+    const background = options?.background === true;
     const epoch = this.connectionEpoch;
     const ordinal = ++this.catalogRequestOrdinal;
-    if (this.catalogPhase !== "loading") {
+    // A BACKGROUND refresh (focus revalidation) never disturbs what the
+    // user sees: no loading phase, and a transient failure keeps the
+    // current ready content instead of flipping to error. Foreground
+    // requests own the full state machine.
+    if (!background && this.catalogPhase !== "loading") {
       this.catalogPhase = "loading";
       this.bumpCatalog();
     }
@@ -481,6 +498,7 @@ export class GatewayMirror {
       })
       .catch(() => {
         if (
+          !background &&
           this.connectionEpoch === epoch &&
           this.catalogRequestOrdinal === ordinal
         ) {

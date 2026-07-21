@@ -115,6 +115,25 @@ export class PinnedOrderIngress {
     return this.domainGeneration;
   }
 
+  private domainGenerationListeners = new Set<() => void>();
+
+  /** Subscribe to domain-generation changes (switch AND rollback): UI
+   *  state owned by leases must reset on revocation, and the URL alone
+   *  cannot express a failed-switch rollback (A -> A with two generation
+   *  advances). */
+  subscribeDomainGeneration = (listener: () => void): (() => void) => {
+    this.domainGenerationListeners.add(listener);
+    return () => {
+      this.domainGenerationListeners.delete(listener);
+    };
+  };
+
+  private notifyDomainGeneration(): void {
+    for (const listener of [...this.domainGenerationListeners]) {
+      listener();
+    }
+  }
+
   isCurrentDomainGeneration(generation: number): boolean {
     return this.domainGeneration === generation;
   }
@@ -163,6 +182,7 @@ export class PinnedOrderIngress {
     this.initialized = true;
     this.gatewayIdentity = normalized;
     this.domainGeneration += 1;
+    this.notifyDomainGeneration();
     this.epoch += 1;
     this.revisionFloor = 0;
     this.committedOrder = [];
@@ -179,6 +199,7 @@ export class PinnedOrderIngress {
     // A rollback is ALSO a new generation: deliveries issued inside the
     // aborted switch window (and before it) must not be acceptable.
     this.domainGeneration += 1;
+    this.notifyDomainGeneration();
     this.epoch = invalidatingEpoch;
     this.revisionFloor = snapshot.revisionFloor;
     this.committedOrder = [...snapshot.committedOrder];
@@ -474,6 +495,12 @@ export function deriveStampedDesktopState(
  *  async continuations that fence non-state side effects. */
 export function currentPinnedOrderDomainGeneration(): number {
   return installedIngress?.currentDomainGeneration ?? 0;
+}
+
+export function subscribePinnedOrderDomainGeneration(
+  listener: () => void,
+): () => void {
+  return installedIngress?.subscribeDomainGeneration(listener) ?? (() => {});
 }
 
 export function isCurrentPinnedOrderDomainGeneration(

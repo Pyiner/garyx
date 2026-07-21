@@ -672,6 +672,10 @@ export function AppShell() {
       desktopState,
     });
     sideChatSessions.setGatewayScope(committedGatewayKey);
+    // Pending automation-run reconciliation belongs to the previous
+    // universe; its epoch-owned timers die on wake, and the bookkeeping
+    // resets here so nothing waits on a run that can never settle.
+    pendingAutomationRunsRef.current = {};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gatewayMirror, sideChatSessions, committedGatewayKey]);
   const [desktopAgentCatalog, setDesktopAgentCatalog] =
@@ -3266,8 +3270,19 @@ export function AppShell() {
       return;
     }
 
+    // The WHOLE poll chain — timer, history await, apply, clear, retry —
+    // is owned by the connection epoch it was scheduled on. A late answer
+    // from gateway A must never apply (and, transitively, persist into
+    // B's cache partition) a transcript for B's colliding thread id; a
+    // pending timer from a previous universe dies on its first wake.
+    const epoch = gatewayMirror.currentConnectionEpoch;
+    const scopeCurrent = () => gatewayMirror.isCurrentConnectionEpoch(epoch);
+
     window.setTimeout(() => {
       void (async () => {
+        if (!scopeCurrent()) {
+          return;
+        }
         const currentPending = pendingAutomationRunsRef.current[threadId];
         if (!currentPending || currentPending.runId !== run.runId) {
           return;
@@ -3276,6 +3291,9 @@ export function AppShell() {
         try {
           const transcript =
             await window.garyxDesktop.getThreadHistory(threadId);
+          if (!scopeCurrent()) {
+            return;
+          }
           if (
             transcript.messages.length > 0 ||
             transcript.pendingInputs.length > 0
@@ -3288,6 +3306,9 @@ export function AppShell() {
           }
         } catch {
           // Best-effort polling while the automation thread history lands.
+        }
+        if (!scopeCurrent()) {
+          return;
         }
 
         if (pendingAutomationRunsRef.current[threadId]?.runId === run.runId) {

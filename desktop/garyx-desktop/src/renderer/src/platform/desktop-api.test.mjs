@@ -93,24 +93,28 @@ test("facade routes only DesktopState methods through pinned-order ingress", asy
 
 test("lifecycle mutations stamp their NESTED authoritative state", async () => {
   const appliedState = { pinnedThreadIds: [], pinsRevision: 7 };
+  // The REAL lane methods return each of the four wire variants in turn,
+  // so every discriminant actually travels through the mutation lane.
+  const archiveResults = [
+    { kind: "ok", value: appliedState, status: 200 },
+    {
+      kind: "definitiveEndpointResponse",
+      status: 409,
+      error: { tag: "conflict" },
+      value: appliedState,
+      body: "{}",
+    },
+  ];
+  const deleteResults = [
+    { kind: "ambiguous", message: "gateway restarted mid-flight" },
+    { kind: "notSent", message: "no connection" },
+  ];
   const rawApi = Object.freeze({
     async archiveThread() {
-      return { kind: "ok", value: appliedState, status: 200 };
+      return archiveResults.shift();
     },
     async deleteThread() {
-      return { kind: "ambiguous", message: "gateway restarted mid-flight" };
-    },
-    async archiveDefinitive() {
-      return {
-        kind: "definitiveEndpointResponse",
-        status: 409,
-        error: { tag: "conflict" },
-        value: appliedState,
-        body: "{}",
-      };
-    },
-    async archiveNotSent() {
-      return { kind: "notSent", message: "no connection" };
+      return deleteResults.shift();
     },
   });
   const selections = [];
@@ -131,10 +135,14 @@ test("lifecycle mutations stamp their NESTED authoritative state", async () => {
   const archived = await facade.archiveThread({ threadId: "thread-1" });
   assert.equal(archived.kind, "ok");
   assert.strictEqual(archived.value, appliedState);
-  const deleted = await facade.deleteThread({ threadId: "thread-1" });
-  assert.equal(deleted.kind, "ambiguous");
-  // All four REAL wire discriminants: "ok" and a value-carrying
-  // "definitiveEndpointResponse" select their nested state; "ambiguous"
-  // and "notSent" select null (nothing to stamp).
-  assert.deepEqual(selections, [appliedState, null]);
+  const definitive = await facade.archiveThread({ threadId: "thread-1" });
+  assert.equal(definitive.kind, "definitiveEndpointResponse");
+  const ambiguous = await facade.deleteThread({ threadId: "thread-1" });
+  assert.equal(ambiguous.kind, "ambiguous");
+  const notSent = await facade.deleteThread({ threadId: "thread-1" });
+  assert.equal(notSent.kind, "notSent");
+  // All four REAL wire discriminants through the REAL lane methods: "ok"
+  // and a value-carrying "definitiveEndpointResponse" select their nested
+  // state; "ambiguous" and "notSent" select null (nothing to stamp).
+  assert.deepEqual(selections, [appliedState, appliedState, null, null]);
 });

@@ -1,4 +1,10 @@
-import { startTransition, useEffect, useState } from 'react';
+import {
+  startTransition,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 
 import type {
   DesktopAutomationActivityFeed,
@@ -15,6 +21,7 @@ import {
   isCurrentPinnedOrderDomainGeneration,
   requestDesktopState,
   requestDesktopStateResult,
+  subscribePinnedOrderDomainGeneration,
 } from '../pinned-order-ingress';
 import { buildStandaloneAgentOptions } from './agent-options';
 import type { DesktopRoute } from './desktop-route';
@@ -158,17 +165,22 @@ export function useAutomationController({
     };
   }
 
-  // Domain transition = implicit revocation of every in-flight operation
-  // (their owners go stale and can no longer settle), so the scope-owned
-  // UI state — busy keys, status line, activity feeds — resets HERE, not
-  // in the operations' own finally blocks.
-  const automationGatewayKey = desktopState?.entitiesGatewayUrl || "";
-  useEffect(() => {
+  // Domain generation change = revocation of every in-flight operation
+  // lease (their owners go stale and can no longer settle), so the
+  // scope-owned UI state — busy keys, status line, activity feeds —
+  // resets HERE. Subscribed to the GENERATION, not the URL: a failed
+  // switch's rollback is A -> A with two generation advances and no URL
+  // change. Layout timing so a committed frame never paints revoked busy.
+  const automationDomainGeneration = useSyncExternalStore(
+    subscribePinnedOrderDomainGeneration,
+    currentPinnedOrderDomainGeneration,
+  );
+  useLayoutEffect(() => {
     setAutomationMutation(null);
     setAutomationStatus(null);
     setAutomationActivityById({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [automationGatewayKey]);
+  }, [automationDomainGeneration]);
 
   async function loadAutomationActivity(
     automationId: string,
