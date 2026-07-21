@@ -518,15 +518,14 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    func addUserWorkspacePath(_ path: String, name: String? = nil) async -> String? {
+    func addUserWorkspacePath(_ path: String) async -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        let workspaceName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let runtimeGeneration = gatewayRequestToken
         do {
             let workspacesPage = try await client().addWorkspace(
                 path: trimmed,
-                name: workspaceName?.isEmpty == false ? workspaceName : trimmed.garyxLastPathComponent
+                name: trimmed.garyxLastPathComponent
             )
             guard runtimeGeneration == gatewayRequestToken else { return nil }
             applyWorkspacesPage(workspacesPage, persist: true)

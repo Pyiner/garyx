@@ -162,9 +162,10 @@ One sheet, upgraded in place (`GaryxWorkspaceDirectoryBrowser`):
   in user language; the browser stays where it was.
 - **Directory list**: server entries with a git-repo badge on repository
   roots (`gitRepo`); a local filter field narrows the current listing.
-- **Name field**: appears with the confirm action, defaulting to the
-  selected directory basename, editable before submit; submitted with the
-  add (`POST /api/workspaces` upsert — the only tombstone-revival path).
+- **No name field** (owner decision, 2026-07-21): a premature editable name
+  is noise on iOS. Add always names the workspace by folder basename
+  (`POST /api/workspaces` upsert — the only tombstone-revival path);
+  renaming lives in the workspace menus.
 - Directories only, hidden filtered, 500-entry cap, no filesystem mutation
   — unchanged server behavior.
 - Other embedders of the directory picker (agent form, bot/automation

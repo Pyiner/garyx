@@ -993,11 +993,8 @@ struct GaryxWorkspaceSelectSheet: View {
         }
         .garyxWorkspacePickerSheetStyle()
         .garyxSheet(isPresented: $showsAddWorkspace) {
-            GaryxWorkspacePathPickerSheet(
-                title: "Add Workspace",
-                showsNameField: true
-            ) { selectedPath, name in
-                Task { await addWorkspace(selectedPath, name: name) }
+            GaryxWorkspacePathPickerSheet(title: "Add Workspace") { selectedPath in
+                Task { await addWorkspace(selectedPath) }
             }
         }
         .task {
@@ -1116,11 +1113,11 @@ struct GaryxWorkspaceSelectSheet: View {
         .buttonStyle(GaryxPressableRowStyle())
     }
 
-    private func addWorkspace(_ selectedPath: String, name: String) async {
+    private func addWorkspace(_ selectedPath: String) async {
         guard !isAddingWorkspace else { return }
         isAddingWorkspace = true
         defer { isAddingWorkspace = false }
-        if let addedPath = await model.addUserWorkspacePath(selectedPath, name: name) {
+        if let addedPath = await model.addUserWorkspacePath(selectedPath) {
             path = addedPath
             showsAddWorkspace = false
             dismiss()
@@ -1128,30 +1125,24 @@ struct GaryxWorkspaceSelectSheet: View {
     }
 }
 
-/// The remote directory chooser sheet. In plain mode it writes the chosen
-/// folder into `path`; in add-workspace mode (`showsNameField`) it carries an
-/// editable workspace name (defaulting to the folder basename) and reports
-/// through `onConfirm`.
+/// The remote directory chooser sheet. It writes the chosen folder into
+/// `path` or reports it through `onConfirm`. Add-workspace flows name the
+/// workspace by folder basename; renaming lives in the workspace menus.
 struct GaryxWorkspacePathPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
     var path: Binding<String>? = nil
-    var showsNameField = false
-    var onConfirm: ((String, String) -> Void)? = nil
-    @State private var workspaceName = ""
-    @State private var nameEdited = false
+    var onConfirm: ((String) -> Void)? = nil
 
     init(title: String, path: Binding<String>) {
         self.title = title
         self.path = path
-        self.showsNameField = false
         self.onConfirm = nil
     }
 
-    init(title: String, showsNameField: Bool, onConfirm: @escaping (String, String) -> Void) {
+    init(title: String, onConfirm: @escaping (String) -> Void) {
         self.title = title
         self.path = nil
-        self.showsNameField = showsNameField
         self.onConfirm = onConfirm
     }
 
@@ -1159,23 +1150,13 @@ struct GaryxWorkspacePathPickerSheet: View {
         VStack(spacing: 0) {
             sheetHeader(title: title)
 
-            if showsNameField {
-                nameField
-            }
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     GaryxWorkspaceDirectoryBrowser(
                         selectedPath: path?.wrappedValue ?? "",
-                        onVisitDirectory: { visitedPath in
-                            guard showsNameField, !nameEdited else { return }
-                            workspaceName = visitedPath.garyxLastPathComponent
-                        },
                         onSelect: { selectedPath in
                             if let onConfirm {
-                                let fallback = selectedPath.garyxLastPathComponent
-                                let trimmedName = workspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                onConfirm(selectedPath, trimmedName.isEmpty ? fallback : trimmedName)
+                                onConfirm(selectedPath)
                             } else {
                                 path?.wrappedValue = selectedPath
                             }
@@ -1191,28 +1172,6 @@ struct GaryxWorkspacePathPickerSheet: View {
         }
         .garyxWorkspacePickerSheetStyle()
     }
-
-    private var nameField: some View {
-        HStack(spacing: 8) {
-            Text("Name")
-                .font(Font.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-            TextField("Workspace name", text: $workspaceName)
-                .font(Font.subheadline)
-                .multilineTextAlignment(.trailing)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .onChange(of: workspaceName) { oldValue, newValue in
-                    guard oldValue != newValue else { return }
-                    nameEdited = true
-                }
-        }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 40)
-        .background(Color(.tertiarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 22)
-        .padding(.bottom, 12)
-    }
 }
 
 /// Remote directory browser v2: editable path bar with breadcrumb segment
@@ -1221,7 +1180,6 @@ struct GaryxWorkspacePathPickerSheet: View {
 private struct GaryxWorkspaceDirectoryBrowser: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let selectedPath: String
-    var onVisitDirectory: ((String) -> Void)? = nil
     let onSelect: (String) -> Void
     @State private var browser = GaryxWorkspaceDirectoryBrowserState()
     @State private var isEditingPath = false
@@ -1444,7 +1402,6 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
         do {
             let listing = try await model.listWorkspaceDirectories(path: path)
             browser.apply(listing)
-            onVisitDirectory?(listing.path)
         } catch {
             browser.fail(error)
         }

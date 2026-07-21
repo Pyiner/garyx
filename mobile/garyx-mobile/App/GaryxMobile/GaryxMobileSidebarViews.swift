@@ -1708,12 +1708,9 @@ struct GaryxWorkspaceBotsView: View {
             await model.refreshRemoteState()
         }
         .garyxSheet(isPresented: $showsAddWorkspace) {
-            GaryxWorkspacePathPickerSheet(
-                title: "Add Workspace",
-                showsNameField: true
-            ) { path, name in
+            GaryxWorkspacePathPickerSheet(title: "Add Workspace") { path in
                 guard garyxIsAbsoluteWorkspacePath(path) else { return }
-                Task { await addWorkspace(path, name: name) }
+                Task { await addWorkspace(path) }
             }
         }
         .alert(
@@ -1755,8 +1752,8 @@ struct GaryxWorkspaceBotsView: View {
         model.automations.filter(\.isGeneratedThreadMode)
     }
 
-    private func addWorkspace(_ path: String, name: String) async {
-        guard let addedPath = await model.addUserWorkspacePath(path, name: name) else { return }
+    private func addWorkspace(_ path: String) async {
+        guard let addedPath = await model.addUserWorkspacePath(path) else { return }
         await model.selectWorkspace(addedPath)
         model.openWorkspaceBotsDrilldown(.workspace(addedPath), source: .current)
     }
