@@ -6,6 +6,7 @@
 //! `codex app-server --listen stdio://` via line-delimited JSON-RPC,
 //! and a high-level client for managing threads and turns.
 
+mod approval;
 pub mod client;
 pub mod error;
 pub mod transport;

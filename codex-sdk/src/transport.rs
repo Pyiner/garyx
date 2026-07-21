@@ -685,19 +685,17 @@ async fn handle_server_request(
     }
     drop(handler_guard);
 
-    // Default handling
+    // Default handling. Approval requests fall back to the SDK's deliberate
+    // auto-approve policy; the decision itself lives in `crate::approval`.
     let resp = match method.as_str() {
         "item/commandExecution/requestApproval" => JsonRpcServerResponse {
             id: request_id,
-            result: Some(serde_json::json!({
-                "decision": "accept",
-                "acceptSettings": { "forSession": true },
-            })),
+            result: Some(crate::approval::auto_approve_command_execution()),
             error: None,
         },
         "item/fileChange/requestApproval" => JsonRpcServerResponse {
             id: request_id,
-            result: Some(serde_json::json!({ "decision": "accept" })),
+            result: Some(crate::approval::auto_approve_file_change()),
             error: None,
         },
         "item/tool/requestUserInput" => JsonRpcServerResponse {
