@@ -58,6 +58,10 @@ pub struct ThreadState {
 pub struct OpsState {
     pub events: Arc<EventStreamHub>,
     pub restart_tracker: Mutex<RestartTracker>,
+    /// Composition-root restart capability. The production runtime assembly
+    /// wires [`crate::restart::process_restart_requester`]; every other
+    /// assembly keeps the inert unwired default.
+    pub restart_requester: crate::restart::RestartRequester,
     pub settings_mutex: Mutex<()>,
     pub cron_service: Option<Arc<CronService>>,
     pub config_path: Option<PathBuf>,
@@ -483,6 +487,7 @@ impl AppState {
             ops: OpsState {
                 events: EventStreamHub::new(event_tx),
                 restart_tracker: Mutex::new(RestartTracker::new()),
+                restart_requester: self.ops.restart_requester.clone(),
                 settings_mutex: Mutex::new(()),
                 cron_service: self.ops.cron_service.clone(),
                 config_path: self.ops.config_path.clone(),

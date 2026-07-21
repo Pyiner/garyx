@@ -2964,9 +2964,40 @@ async fn test_settings_update_strips_legacy_agent_defaults() {
     assert!(live.get("agent_defaults").is_none());
 }
 
+/// A recording restart requester plus the reasons it was invoked with.
+/// Restart tests inject this through the builder seam — the builder default
+/// is the inert unwired requester, so no test can reach the real
+/// process-restart path.
+fn restart_recorder() -> (
+    crate::restart::RestartRequester,
+    Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let calls: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = calls.clone();
+    let requester: crate::restart::RestartRequester = Arc::new(move |reason| {
+        let recorded = recorded.clone();
+        Box::pin(async move {
+            recorded.lock().unwrap().push(reason);
+            Ok(())
+        })
+    });
+    (requester, calls)
+}
+
+fn test_state_with_restart_requester(
+    requester: crate::restart::RestartRequester,
+) -> Arc<AppState> {
+    use crate::composition::app_bootstrap::AppStateBuilder;
+    AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
+        .with_restart_requester(requester)
+        .build()
+}
+
 #[tokio::test]
 async fn test_restart_ok() {
-    let state = test_state();
+    let (requester, calls) = restart_recorder();
+    let state = test_state_with_restart_requester(requester);
     let router = api_router(state);
 
     let req = Request::builder()
@@ -2983,6 +3014,31 @@ async fn test_restart_ok() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
+    assert_eq!(*calls.lock().unwrap(), vec!["api".to_owned()]);
+}
+
+#[tokio::test]
+async fn test_restart_unwired_assembly_reports_failure() {
+    // Builder default: no restart requester wired. The route must surface an
+    // honest failure instead of pretending the process restarted.
+    let state = test_state();
+    let router = api_router(state);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/restart")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 500);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["reason"], "restart_failed");
 }
 
 #[tokio::test]
@@ -3125,7 +3181,8 @@ async fn test_restart_auth_required_wrong_token() {
 
 #[tokio::test]
 async fn test_restart_auth_required_valid_token() {
-    let state = test_state();
+    let (requester, calls) = restart_recorder();
+    let state = test_state_with_restart_requester(requester);
     let mut state_with_auth = (*state).clone_for_test();
     state_with_auth.ops.restart_tokens = vec!["secret-token-123".to_owned()];
     let state_with_auth = Arc::new(state_with_auth);
@@ -3147,12 +3204,14 @@ async fn test_restart_auth_required_valid_token() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
+    assert_eq!(*calls.lock().unwrap(), vec!["api".to_owned()]);
 }
 
 #[tokio::test]
 async fn test_restart_no_auth_when_tokens_empty() {
     // No restart tokens configured = restart endpoint auth is not required.
-    let state = test_state();
+    let (requester, _calls) = restart_recorder();
+    let state = test_state_with_restart_requester(requester);
     let router = api_router(state);
 
     let req = Request::builder()

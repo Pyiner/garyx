@@ -2,66 +2,89 @@
 //!
 //! Provides best-effort restart orchestration for `/api/restart` and service
 //! management flows.
+//!
+//! Process restart is a composition-root capability: the production runtime
+//! assembly injects [`process_restart_requester`] through
+//! `AppStateBuilder::with_restart_requester`, mirroring
+//! `with_persistent_local_stores` — builder defaults stay inert so no test
+//! (unit or integration) can kick the developer's real launchd service by
+//! default, and this module compiles identically in every build profile.
 
-#[cfg(not(test))]
+use std::future::Future;
+use std::pin::Pin;
 use std::process::Stdio;
-#[cfg(not(test))]
+use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(not(test))]
 use tokio::process::Command;
 
-#[cfg(not(test))]
 const LAUNCHD_SERVICE_NAME: &str = "com.garyx.agent";
+
+/// Injectable seam for requesting a gateway process restart.
+///
+/// The gateway routes call whatever the composition root wired; only the
+/// production runtime assembly wires [`process_restart_requester`].
+pub type RestartRequester =
+    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
+
+/// The real process-restart requester used by the production runtime
+/// assembly. Delegates to [`request_restart`].
+pub fn process_restart_requester() -> RestartRequester {
+    Arc::new(|reason| Box::pin(request_restart(reason)))
+}
+
+/// Builder default: an assembly without an explicitly wired restart
+/// capability reports the restart as failed instead of silently pretending
+/// success or touching the host service manager.
+pub fn unwired_restart_requester() -> RestartRequester {
+    Arc::new(|reason| {
+        Box::pin(async move {
+            tracing::warn!(
+                reason = %reason,
+                "restart requested but no restart requester is wired into this assembly"
+            );
+            Err("restart is not wired into this gateway assembly".to_owned())
+        })
+    })
+}
 
 /// Request a process restart.
 ///
-/// In unit tests this is a no-op; in runtime builds it schedules a background
-/// restart attempt:
+/// Schedules a background restart attempt:
 /// 1) launchd kickstart (macOS),
 /// 2) subprocess respawn fallback.
 pub async fn request_restart(reason: String) -> Result<(), String> {
-    #[cfg(test)]
-    {
-        let _ = reason;
-        Ok(())
-    }
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
-    #[cfg(not(test))]
-    {
-        let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
-        let args: Vec<String> = std::env::args().skip(1).collect();
+    tokio::spawn(async move {
+        tracing::warn!(reason = %reason, "restart requested");
 
-        tokio::spawn(async move {
-            tracing::warn!(reason = %reason, "restart requested");
+        // Let HTTP handlers return before potentially replacing the process.
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
-            // Let HTTP handlers return before potentially replacing the process.
-            tokio::time::sleep(Duration::from_millis(150)).await;
+        let force_subprocess = cfg!(debug_assertions)
+            && std::env::var_os("GARYX_TEST_FORCE_SUBPROCESS_RESTART").is_some();
+        if !force_subprocess && try_launchd_restart().await {
+            tracing::info!("restart delegated to launchd; exiting current process");
+            // Even though launchd should kill us via kickstart -k, the
+            // current process might not be the one launchd is tracking
+            // (e.g. if launchd's tracked PID already died).  Exit
+            // explicitly so the port is freed for the new instance.
+            std::process::exit(0);
+        }
 
-            let force_subprocess = cfg!(debug_assertions)
-                && std::env::var_os("GARYX_TEST_FORCE_SUBPROCESS_RESTART").is_some();
-            if !force_subprocess && try_launchd_restart().await {
-                tracing::info!("restart delegated to launchd; exiting current process");
-                // Even though launchd should kill us via kickstart -k, the
-                // current process might not be the one launchd is tracking
-                // (e.g. if launchd's tracked PID already died).  Exit
-                // explicitly so the port is freed for the new instance.
-                std::process::exit(0);
-            }
+        if try_subprocess_restart(&exe, &args).await {
+            tracing::warn!("restart subprocess spawned; exiting current process");
+            std::process::exit(0);
+        }
 
-            if try_subprocess_restart(&exe, &args).await {
-                tracing::warn!("restart subprocess spawned; exiting current process");
-                std::process::exit(0);
-            }
+        tracing::error!("all restart strategies failed");
+    });
 
-            tracing::error!("all restart strategies failed");
-        });
-
-        Ok(())
-    }
+    Ok(())
 }
 
-#[cfg(not(test))]
 async fn try_launchd_restart() -> bool {
     if !cfg!(target_os = "macos") {
         return false;
@@ -152,7 +175,6 @@ async fn try_launchd_restart() -> bool {
 /// in, probing the GUI domain first and then the per-user domain. `None` when
 /// the service is not loaded in either (the caller then assumes a sensible
 /// default and relies on its further fallbacks).
-#[cfg(not(test))]
 async fn resolve_loaded_target(uid: &str) -> Option<String> {
     for domain in [format!("gui/{uid}"), format!("user/{uid}")] {
         let target = format!("{domain}/{LAUNCHD_SERVICE_NAME}");
@@ -169,7 +191,6 @@ async fn resolve_loaded_target(uid: &str) -> Option<String> {
     None
 }
 
-#[cfg(not(test))]
 async fn try_subprocess_restart(exe: &std::path::Path, args: &[String]) -> bool {
     let mut cmd = Command::new(exe);
     cmd.args(args)

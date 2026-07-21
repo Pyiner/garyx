@@ -304,6 +304,7 @@ mod phases {
             .with_config_path(config_path)
             .with_restart_tokens(restart_tokens)
             .with_thread_log_sink(thread_logs.clone())
+            .with_restart_requester(garyx_gateway::restart::process_restart_requester())
             .build();
 
         // Crash recovery is a destructive projection update and must finish

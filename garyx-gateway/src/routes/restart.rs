@@ -86,7 +86,7 @@ pub async fn restart(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
     tracker.mark_restart_now();
     drop(tracker);
 
-    if let Err(e) = crate::restart::request_restart("api".to_owned()).await {
+    if let Err(e) = (state.ops.restart_requester)("api".to_owned()).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({

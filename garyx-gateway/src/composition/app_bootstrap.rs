@@ -100,6 +100,12 @@ pub struct AppStateBuilder {
     /// which runs count as live.
     active_run_probe: Option<Arc<dyn ActiveRunProbe>>,
     provider_runtime_ready: bool,
+    /// Process-restart capability. Defaults to the inert unwired requester so
+    /// no test assembly (unit or integration, where `cfg(test)` gating on the
+    /// library does not apply) can kick the developer's real launchd service;
+    /// the production runtime assembly explicitly wires
+    /// [`crate::restart::process_restart_requester`].
+    restart_requester: crate::restart::RestartRequester,
 }
 
 impl AppStateBuilder {
@@ -171,7 +177,19 @@ impl AppStateBuilder {
             session_data_dir,
             active_run_probe: None,
             provider_runtime_ready: true,
+            restart_requester: crate::restart::unwired_restart_requester(),
         }
+    }
+
+    /// Wire the process-restart capability for this assembly. Only the
+    /// production runtime assembly should pass
+    /// [`crate::restart::process_restart_requester`]; tests inject fakes.
+    pub fn with_restart_requester(
+        mut self,
+        restart_requester: crate::restart::RestartRequester,
+    ) -> Self {
+        self.restart_requester = restart_requester;
+        self
     }
 
     /// Bind the real on-disk `~/.garyx` state: the persistent custom-agent
@@ -490,6 +508,7 @@ impl AppStateBuilder {
             ops: OpsState {
                 events,
                 restart_tracker: Mutex::new(RestartTracker::new()),
+                restart_requester: self.restart_requester,
                 settings_mutex: Mutex::new(()),
                 cron_service: self.cron_service,
                 config_path: self.config_path,
