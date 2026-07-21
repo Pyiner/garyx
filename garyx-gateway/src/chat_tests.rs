@@ -511,6 +511,273 @@ fn test_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+struct Task2571ThreadSubtitleCapture {
+    thread_id: String,
+    workspace_dir: String,
+    active_recent: Value,
+    active_summary: Value,
+    completed_recent: Value,
+    completed_summary: Value,
+}
+
+async fn task_2571_json_request(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let mut request = crate::test_support::authed_request()
+        .method(method)
+        .uri(uri);
+    let body = match body {
+        Some(payload) => {
+            request = request.header("content-type", "application/json");
+            Body::from(payload.to_string())
+        }
+        None => Body::empty(),
+    };
+    let response = router
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let payload = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        panic!(
+            "{method} {uri} returned non-JSON body: {error}; body={}",
+            String::from_utf8_lossy(&bytes)
+        )
+    });
+    (status, payload)
+}
+
+fn task_2571_thread_row(page: &Value, thread_id: &str) -> Value {
+    page["threads"]
+        .as_array()
+        .expect("thread page rows")
+        .iter()
+        .find(|row| row["thread_id"] == thread_id)
+        .unwrap_or_else(|| panic!("missing {thread_id} in {page}"))
+        .clone()
+}
+
+/// Captures the exact gateway payloads used by the iOS subtitle repro. This
+/// intentionally drives the production HTTP routes and provider persistence:
+/// create a private-workspace thread, submit a user message, inspect both
+/// projections while the provider is blocked, then let the run commit and
+/// inspect both projections again.
+async fn task_2571_capture_thread_subtitle_payloads() -> Task2571ThreadSubtitleCapture {
+    let data_dir = tempdir().unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let prompt = "Latest user sentence";
+    let reply = "Assistant answer";
+    let mut config = crate::test_support::with_gateway_auth(GaryxConfig::default());
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: Some("claude".to_owned()),
+            workspace_dir: None,
+            workspace_mode: None,
+        },
+    );
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "task-2571-blocking-provider",
+            Arc::new(BlockingReplyProvider {
+                started: started.clone(),
+                release: release.clone(),
+                text: reply.to_owned(),
+            }),
+        )
+        .await;
+    bridge
+        .set_route("api", "main", "task-2571-blocking-provider")
+        .await;
+    bridge
+        .set_default_provider_key("task-2571-blocking-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .build();
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = crate::route_graph::build_router(state);
+
+    let (status, created) = task_2571_json_request(
+        &router,
+        "POST",
+        "/api/threads",
+        Some(json!({
+            "label": "New Thread",
+            "noWorkspace": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create response: {created}");
+    let thread_id = created["thread_id"].as_str().expect("thread id").to_owned();
+    let workspace_dir = created["workspace_dir"]
+        .as_str()
+        .expect("private workspace")
+        .to_owned();
+
+    let (status, started_payload) = task_2571_json_request(
+        &router,
+        "POST",
+        "/api/chat/start",
+        Some(json!({
+            "threadId": thread_id,
+            "message": prompt,
+            "waitForResponse": false
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "chat/start response: {started_payload}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+        .await
+        .expect("provider should block after the user message is accepted");
+
+    // The provider notification fires at the provider boundary. Wait for the
+    // independently persisted active summary to land too, so the captured
+    // pair is stable rather than scheduler-dependent.
+    let active_summary = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let (status, page) =
+                task_2571_json_request(&router, "GET", "/api/thread-summaries?limit=100", None)
+                    .await;
+            assert_eq!(status, StatusCode::OK);
+            let row = task_2571_thread_row(&page, &thread_id);
+            if row["active_run_id"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+                && row["message_count"]
+                    .as_u64()
+                    .is_some_and(|count| count >= 2)
+            {
+                break row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("active summary projection should settle while provider is blocked");
+    let active_recent = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let (status, page) =
+                task_2571_json_request(&router, "GET", "/api/recent-threads?limit=200", None).await;
+            assert_eq!(status, StatusCode::OK);
+            let row = task_2571_thread_row(&page, &thread_id);
+            if row["active_run_id"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+                && row["message_count"]
+                    .as_u64()
+                    .is_some_and(|count| count >= 2)
+            {
+                break row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("active Recent projection should settle while provider is blocked");
+
+    release.notify_one();
+    let (completed_recent, completed_summary) =
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let (_, recent_page) =
+                    task_2571_json_request(&router, "GET", "/api/recent-threads?limit=200", None)
+                        .await;
+                let (_, summary_page) =
+                    task_2571_json_request(&router, "GET", "/api/thread-summaries?limit=100", None)
+                        .await;
+                let recent = task_2571_thread_row(&recent_page, &thread_id);
+                let summary = task_2571_thread_row(&summary_page, &thread_id);
+                if recent["last_message_preview"] == prompt
+                    && summary["last_message_preview"] == reply
+                    && summary["active_run_id"].is_null()
+                {
+                    break (recent, summary);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("terminal projections should settle");
+
+    Task2571ThreadSubtitleCapture {
+        thread_id,
+        workspace_dir,
+        active_recent,
+        active_summary,
+        completed_recent,
+        completed_summary,
+    }
+}
+
+#[tokio::test]
+#[ignore = "#TASK-2571 deterministic red reproduction; run explicitly"]
+async fn task_2571_new_thread_preview_is_missing_while_first_run_is_active() {
+    let capture = task_2571_capture_thread_subtitle_payloads().await;
+    eprintln!(
+        "TASK2571_NEW_THREAD_CAPTURE={}",
+        json!({
+            "thread_id": capture.thread_id,
+            "workspace_dir": capture.workspace_dir,
+            "active_recent": capture.active_recent,
+            "active_summary": capture.active_summary,
+            "completed_recent": capture.completed_recent,
+            "completed_summary": capture.completed_summary,
+        })
+    );
+
+    // Desired contract: once chat/start has accepted the user message, a list
+    // refresh must expose that sentence as the subtitle preview even while the
+    // provider is still running. This assertion is intentionally red.
+    assert_eq!(
+        capture.active_recent["last_message_preview"],
+        "Latest user sentence"
+    );
+}
+
+#[tokio::test]
+#[ignore = "#TASK-2571 deterministic red reproduction; run explicitly"]
+async fn task_2571_recent_and_summary_routes_disagree_after_completed_run() {
+    let capture = task_2571_capture_thread_subtitle_payloads().await;
+    eprintln!(
+        "TASK2571_SOURCE_DIVERGENCE={}",
+        json!({
+            "recent": capture.completed_recent,
+            "summary": capture.completed_summary,
+        })
+    );
+
+    // Both endpoints feed the same iOS summary cache, so the visible subtitle
+    // must not depend on which request completes last. This assertion is
+    // intentionally red: Recent selects the user preview while Summary selects
+    // the assistant preview for the same committed record.
+    assert_eq!(
+        capture.completed_recent["last_message_preview"],
+        capture.completed_summary["last_message_preview"]
+    );
+}
+
 #[tokio::test]
 async fn test_chat_start_http_returns_503_while_provider_runtime_starts() {
     let state = test_state_with_unready_provider_runtime().await;
