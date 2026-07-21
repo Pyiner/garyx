@@ -6,9 +6,8 @@ cut scope back to the original need. Everything outside this document is
 recorded in `task-notification-review-debt.md` (slice B security debt /
 slice C architecture) — explicitly **out of scope** here.
 Owner: Gary (orchestrator thread)
-Scope: garyx-bridge (queue metadata), garyx-gateway (producer + strip),
-garyx-models (presentation), **garyx (plugin host reserved-key strip —
-`channel_plugin_host.rs`)**, desktop renderer, iOS
+Scope: garyx-bridge (queue metadata), garyx-gateway (producer),
+garyx-models (presentation), desktop renderer, iOS
 
 ## 1. The need (original, unchanged)
 
@@ -88,14 +87,10 @@ are both explicitly accepted.
   needed). `title` joins `task_id` under `xml_attr` escaping, extended
   to encode CR/LF/TAB as numeric character references (multiline-title
   test). Existing body close-tag neutralization stays.
-- **Forgery mitigation in scope**: `task_notification` becomes a
-  reserved key stripped at **all four** raw-metadata ingresses — chat
-  (`prepare.rs`, next to the existing agent-identity strip), atomic
-  dispatch (`create_dispatch.rs`), `CreateThreadBody.metadata` (thread
-  metadata is later copied into dispatches), and the plugin host's
-  `extra_metadata` intake. Each is a one-key strip at an existing
-  boundary — this is not the slice-B ingress refactor, which remains
-  deferred.
+- **No reserved-key stripping** (owner decision 2026-07-21): external
+  callers who write a `task_notification` metadata object simply get a
+  card — on the single-user threat model this "forgery" is the owner
+  forging a card at himself, and no ingress filtering is added for it.
 
 ### 2.3 Models: flattened presentation payload
 
@@ -211,15 +206,11 @@ versioning; internal/internal_kind retirement; history envelope changes.
   resend explicit case**: drive the real quota-auto-resend production
   path into a busy thread and assert each `schedule_followup_{job_id,
   scheduled_at,scheduled_for,reason,originating_run_id}` key
-  individually on the pending at rest and the ACK committed record
-  (plugin-host strip tests live in the `garyx` crate).
+  individually on the pending at rest and the ACK committed record.
 - **Producer**: golden text fixture — envelope attributes escaped
   (multiline title), body = pure final_message, tutorial outside the
-  envelope; task_hooks reads the object; forgery negatives at all four
-  strip points — chat, atomic dispatch, CreateThread metadata (including
-  the copy-through into a later dispatch), and plugin `extra_metadata` —
-  each carrying `task_notification`, asserted on both the direct path
-  and the busy-queue path: the key never commits and no card renders.
+  envelope; task_hooks reads the object. (No ingress-strip tests — no
+  stripping exists by owner decision.)
 - **Models**: golden presentation JSON; reducer fixtures (new object
   shape → presentation; measured legacy dropped-marker and scattered-key
   shapes → none); malformed negatives; unknown-kind row degradation on

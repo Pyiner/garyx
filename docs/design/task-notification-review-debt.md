@@ -55,9 +55,9 @@ breaking third-party bearer auth.
 
 ### B3. External metadata forgery surface beyond chat (r3, r5, r6)
 
-Slice A strips only the single reserved `task_notification` key, at
-four ingresses (chat, atomic dispatch, CreateThread metadata, plugin
-extra_metadata). Everything else remains open: the same ingresses
+Slice A adds no ingress stripping at all (owner decision 2026-07-21:
+on the single-user threat model a forged `task_notification` card is
+the owner forging at himself — not worth a filter). All ingresses
 accept arbitrary metadata that flows toward provider/persistence:
 `CreateThreadBody.metadata` (create-only keys are
 later bulk-copied into dispatch metadata via thread-metadata
