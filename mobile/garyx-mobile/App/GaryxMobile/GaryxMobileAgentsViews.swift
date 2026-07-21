@@ -46,6 +46,7 @@ struct GaryxAgentDetailCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let agent: GaryxAgentSummary
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
 
     var body: some View {
         Group {
@@ -63,28 +64,82 @@ struct GaryxAgentDetailCard: View {
                 builtIn: displayAgent.builtIn,
                 workspacePaths: model.userWorkspacePaths
             )
-            .garyxFullScreenCover(isPresented: $showsEditForm) {
-                GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
-                    model.selectedAgentDetail = updatedAgent
+
+            if allowsNewBindingActions || !displayAgent.builtIn {
+                Section {
+                    if allowsNewBindingActions {
+                        Button {
+                            openChat()
+                        } label: {
+                            Label("Chat", systemImage: "message")
+                        }
+
+                        Button {
+                            Task { await model.setDefaultAgent(displayAgent) }
+                        } label: {
+                            Label("Use", systemImage: "checkmark.circle")
+                        }
+                    }
+
+                    if !displayAgent.builtIn {
+                        Button {
+                            showsEditForm = true
+                        } label: {
+                            Label("Edit Agent", systemImage: "pencil")
+                        }
+                    }
+                } header: {
+                    Text("Actions")
+                        .textCase(nil)
                 }
+                .foregroundStyle(.primary)
             }
 
             if !displayAgent.builtIn {
                 Section {
-                    Button {
-                        showsEditForm = true
+                    Button(role: .destructive) {
+                        showsDeleteConfirmation = true
                     } label: {
-                        Label("Edit Agent", systemImage: "pencil")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
+                        Label("Delete Agent", systemImage: "trash")
                     }
                 }
             }
+        }
+        .garyxFullScreenCover(isPresented: $showsEditForm) {
+            GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
+                model.selectedAgentDetail = updatedAgent
+            }
+        }
+        .garyxConfirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                let target = displayAgent
+                Task {
+                    if await model.deleteAgent(target) {
+                        model.selectedAgentDetail = nil
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the custom agent configuration.")
         }
     }
 
     private var displayAgent: GaryxAgentSummary {
         model.agents.first(where: { $0.id == agent.id }) ?? agent
+    }
+
+    private var allowsNewBindingActions: Bool {
+        GaryxAgentAvailabilityPresentation.allowsNewBindingActions(
+            enabled: displayAgent.enabled,
+            standalone: displayAgent.standalone
+        )
+    }
+
+    private func openChat() {
+        let agentId = displayAgent.id
+        model.selectedAgentDetail = nil
+        model.openAgentChatDraft(agentId)
     }
 }
 
@@ -1391,31 +1446,16 @@ struct GaryxAgentCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let agent: GaryxAgentSummary
-    @State private var showsEditForm = false
-    @State private var showsDeleteConfirmation = false
 
     var body: some View {
         GaryxSwipeActionRow(id: "agent:\(agent.id)", actions: availabilitySwipeActions) {
-            GaryxRowActionMenu(actions: agentMenuActions) {
-                Button {
-                    model.selectedAgentDetail = agent
-                } label: {
-                    agentIdentityRow
-                }
-                .buttonStyle(GaryxPressableRowStyle())
-                .contentShape(Rectangle())
+            Button {
+                model.selectedAgentDetail = agent
+            } label: {
+                agentIdentityRow
             }
-        }
-        .garyxFullScreenCover(isPresented: $showsEditForm) {
-            GaryxAgentEditSheet(agent: agent)
-        }
-        .garyxConfirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task { await model.deleteAgent(agent) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes the custom agent configuration.")
+            .buttonStyle(GaryxPressableRowStyle())
+            .contentShape(Rectangle())
         }
     }
 
@@ -1429,38 +1469,6 @@ struct GaryxAgentCard: View {
                 Task { await model.setAgentEnabled(agent, enabled: !agent.enabled) }
             },
         ]
-    }
-
-    private var agentMenuActions: [GaryxRowAction] {
-        var actions: [GaryxRowAction] = []
-        if GaryxAgentAvailabilityPresentation.allowsNewBindingActions(
-            enabled: agent.enabled,
-            standalone: agent.standalone
-        ) {
-            actions.append(
-                GaryxRowAction(title: "Chat", systemImage: "message", tone: .accent) {
-                    model.openAgentChatDraft(agent.id)
-                }
-            )
-            actions.append(
-                GaryxRowAction(title: "Use", systemImage: "checkmark.circle") {
-                    Task { await model.setDefaultAgent(agent) }
-                }
-            )
-        }
-        if !agent.builtIn {
-            actions.append(
-                GaryxRowAction(title: "Edit", systemImage: "pencil") {
-                    showsEditForm = true
-                }
-            )
-            actions.append(
-                GaryxRowAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                    showsDeleteConfirmation = true
-                }
-            )
-        }
-        return actions
     }
 
     @ViewBuilder
