@@ -122,7 +122,10 @@ pub async fn run_thread_store_contract(store: &dyn ThreadStore) {
     assert_eq!(threads, vec!["thread::alpha".to_owned()]);
     assert_eq!(store.count_keys(None).await.expect("count"), 3);
     assert_eq!(
-        store.count_keys(Some("thread::")).await.expect("count prefix"),
+        store
+            .count_keys(Some("thread::"))
+            .await
+            .expect("count prefix"),
         1
     );
 
@@ -145,7 +148,9 @@ pub async fn run_thread_store_contract(store: &dyn ThreadStore) {
         Err(ThreadStoreError::Archived(_))
     ));
     assert!(matches!(
-        store.patch("thread::alpha", label_patch("resurrected")).await,
+        store
+            .patch("thread::alpha", label_patch("resurrected"))
+            .await,
         Err(ThreadStoreError::Archived(_))
     ));
     assert!(matches!(
