@@ -2,7 +2,9 @@ use super::*;
 
 pub(super) fn is_task_work_run_wake(run_id: &str, metadata: &HashMap<String, Value>) -> bool {
     !run_id.starts_with("task-notify-")
-        && !metadata_bool(metadata, "task_notification")
+        && !metadata
+            .get("task_notification")
+            .is_some_and(Value::is_object)
         && !metadata_bool(metadata, "internal_dispatch")
         && !metadata_bool(metadata, "system")
 }

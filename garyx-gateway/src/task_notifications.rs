@@ -154,12 +154,29 @@ pub(crate) async fn deliver_task_review_handoff(
     match target {
         TaskNotificationTarget::None => Ok(()),
         TaskNotificationTarget::Thread { thread_id } => {
-            deliver_notification_to_thread(state, &event, &thread_id, &notification).await
+            deliver_notification_to_thread(
+                state,
+                &event,
+                &thread_id,
+                task.title.trim(),
+                &notification,
+            )
+            .await
         }
         TaskNotificationTarget::Bot {
             channel,
             account_id,
-        } => deliver_notification_to_bot(state, &event, &channel, &account_id, &notification).await,
+        } => {
+            deliver_notification_to_bot(
+                state,
+                &event,
+                &channel,
+                &account_id,
+                task.title.trim(),
+                &notification,
+            )
+            .await
+        }
     }
 }
 
@@ -168,9 +185,9 @@ pub(crate) fn format_task_ready_notification(
     title: &str,
     final_message: &str,
 ) -> String {
-    let safe_task_id = xml_attr(task_id);
+    let safe_task_id = xml_attr(task_id.trim());
+    let safe_title = xml_attr(title.trim());
     let body_task_id = neutralize_task_notification_tag(task_id.trim());
-    let title = neutralize_task_notification_tag(title.trim());
     let final_message = neutralize_task_notification_tag(final_message.trim());
     let final_message = if final_message.is_empty() {
         "The task is ready for review.".to_owned()
@@ -178,17 +195,15 @@ pub(crate) fn format_task_ready_notification(
         final_message
     };
     format!(
-        "<{TASK_NOTIFICATION_TAG} event=\"ready_for_review\" task_id=\"{safe_task_id}\" status=\"in_review\">\n\
-Task {body_task_id} is ready for review: {title}\n\n\
-{final_message}\n\n\
-View details:\n\
-garyx task get {body_task_id}\n\n\
+        "<{TASK_NOTIFICATION_TAG} event=\"ready_for_review\" task_id=\"{safe_task_id}\" status=\"in_review\" title=\"{safe_title}\">\n\
+{final_message}\n\
+</{TASK_NOTIFICATION_TAG}>\n\n\
+View details: garyx task get {body_task_id}\n\n\
 Review next:\n\
 If changes are needed, move the task back to in progress and send feedback to the task thread:\n\
 garyx task update {body_task_id} --status in_progress --note \"needs changes: summary\"\n\n\
 If approved, mark it done:\n\
-garyx task update {body_task_id} --status done --note \"approved by reviewer\"\n\
-</{TASK_NOTIFICATION_TAG}>"
+garyx task update {body_task_id} --status done --note \"approved by reviewer\""
     )
 }
 
@@ -209,6 +224,7 @@ async fn deliver_notification_to_thread(
     state: &Arc<AppState>,
     event: &TaskReadyForReviewEvent,
     target_thread_id: &str,
+    title: &str,
     text: &str,
 ) -> Result<(), TaskNotificationError> {
     if state
@@ -223,7 +239,7 @@ async fn deliver_notification_to_thread(
             format!("notification thread target not found: {target_thread_id}"),
         ));
     }
-    dispatch_notification_to_thread_agent(state, event, target_thread_id, text).await
+    dispatch_notification_to_thread_agent(state, event, target_thread_id, title, text).await
 }
 
 async fn deliver_notification_to_bot(
@@ -231,6 +247,7 @@ async fn deliver_notification_to_bot(
     event: &TaskReadyForReviewEvent,
     channel: &str,
     account_id: &str,
+    title: &str,
     text: &str,
 ) -> Result<(), TaskNotificationError> {
     let endpoint = crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id)
@@ -307,7 +324,7 @@ async fn deliver_notification_to_bot(
     };
 
     let dispatch_result =
-        dispatch_notification_to_thread_agent(state, event, &target_thread_id, text).await;
+        dispatch_notification_to_thread_agent(state, event, &target_thread_id, title, text).await;
     let send_result = send_notification_message(
         state,
         event,
@@ -330,26 +347,18 @@ async fn dispatch_notification_to_thread_agent(
     state: &Arc<AppState>,
     event: &TaskReadyForReviewEvent,
     target_thread_id: &str,
+    title: &str,
     text: &str,
 ) -> Result<(), TaskNotificationError> {
-    let mut extra_metadata = HashMap::from([
-        ("task_notification".to_owned(), Value::Bool(true)),
-        (
-            "task_notification_event".to_owned(),
-            Value::String("ready_for_review".to_owned()),
-        ),
-        ("task_id".to_owned(), Value::String(event.task_id.clone())),
-        (
-            "task_thread_id".to_owned(),
-            Value::String(event.thread_id.clone()),
-        ),
-    ]);
-    if let Some(source_run_id) = event.run_id.as_deref() {
-        extra_metadata.insert(
-            "task_notification_source_run_id".to_owned(),
-            Value::String(source_run_id.to_owned()),
-        );
-    }
+    let extra_metadata = HashMap::from([(
+        "task_notification".to_owned(),
+        json!({
+            "event": "ready_for_review",
+            "status": "in_review",
+            "task_id": event.task_id.trim(),
+            "title": title.trim(),
+        }),
+    )]);
     let run_id = format!(
         "task-notify-{}-{}",
         event.task_id.trim_start_matches('#'),
@@ -479,11 +488,20 @@ fn trimmed_owned(value: &str) -> Option<String> {
 }
 
 fn xml_attr(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '"' => escaped.push_str("&quot;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\r' => escaped.push_str("&#xD;"),
+            '\n' => escaped.push_str("&#xA;"),
+            '\t' => escaped.push_str("&#x9;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 fn neutralize_task_notification_tag(value: &str) -> String {

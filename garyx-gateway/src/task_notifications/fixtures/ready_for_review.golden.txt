@@ -1,0 +1,14 @@
+<garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review" title="Ship &amp; &quot;review&quot;&#xD;&#xA;&#x9;&lt;ready&gt;">
+Done.
+
+- Verified.
+</garyx_task_notification>
+
+View details: garyx task get #TASK-42
+
+Review next:
+If changes are needed, move the task back to in progress and send feedback to the task thread:
+garyx task update #TASK-42 --status in_progress --note "needs changes: summary"
+
+If approved, mark it done:
+garyx task update #TASK-42 --status done --note "approved by reviewer"

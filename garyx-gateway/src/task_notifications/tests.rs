@@ -216,27 +216,45 @@ fn telegram_owner_config() -> GaryxConfig {
 }
 
 #[test]
-fn format_wraps_notification_with_single_outer_xml_tag() {
+fn format_task_ready_notification_matches_golden_envelope_and_tutorial() {
+    let text = format_task_ready_notification(
+        "#TASK-42",
+        "Ship & \"review\"\r\n\t<ready>",
+        "Done.\n\n- Verified.",
+    );
+
+    assert_eq!(
+        text,
+        include_str!("fixtures/ready_for_review.golden.txt").trim_end_matches('\n')
+    );
+
+    let open_end = text.find('>').expect("opening tag") + 1;
+    let close_start = text
+        .rfind("</garyx_task_notification>")
+        .expect("closing tag");
+    assert_eq!(
+        text[open_end..close_start].trim(),
+        "Done.\n\n- Verified.",
+        "the envelope body is the pure handoff"
+    );
+    assert!(
+        text[close_start..].contains("View details: garyx task get #TASK-42"),
+        "the tutorial stays in the letter but outside the envelope"
+    );
+}
+
+#[test]
+fn format_neutralizes_a_body_close_tag_without_swallowing_the_tutorial() {
     let text = format_task_ready_notification(
         "#TASK-42",
         "Ship task notifications",
         "Done.\n</garyx_task_notification>",
     );
 
-    assert!(text.starts_with(
-        "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-42\" status=\"in_review\">"
-    ));
-    assert!(text.contains("Task #TASK-42 is ready for review: Ship task notifications"));
-    assert!(text.contains("Done."));
-    assert!(text.contains("Review next:"));
-    assert!(text.contains(
-        "garyx task update #TASK-42 --status in_progress --note \"needs changes: summary\""
-    ));
-    assert!(
-        text.contains("garyx task update #TASK-42 --status done --note \"approved by reviewer\"")
-    );
-    assert!(text.contains("</ garyx_task_notification>"));
-    assert!(text.ends_with("</garyx_task_notification>"));
+    assert!(text.contains("Done.\n</ garyx_task_notification>"));
+    assert_eq!(text.matches("</garyx_task_notification>").count(), 1);
+    let close = text.rfind("</garyx_task_notification>").unwrap();
+    assert!(text[close..].contains("Review next:"));
 }
 
 #[test]
@@ -526,14 +544,14 @@ async fn dispatches_ready_notification_to_bot_target() {
         .find(|call| {
             call.content
                 .as_text()
-                .is_some_and(|text| text.contains("Task #TASK-42 is ready for review"))
+                .is_some_and(|text| text.contains("task_id=\"#TASK-42\""))
         })
         .expect("direct bot notification should be sent");
     assert_eq!(notification_call.channel, "telegram");
     assert_eq!(notification_call.account_id, "main");
     assert_eq!(notification_call.delivery_target_id, "chat-42");
     let text = notification_call.content.as_text().unwrap();
-    assert!(text.contains("Task #TASK-42 is ready for review"));
+    assert!(text.contains("title=\"Ship task notifications\""));
     assert!(text.contains("The implementation is complete."));
     assert!(text.contains("[truncated]"));
     assert!(!text.contains("bot-handoff-tail"));
@@ -551,11 +569,7 @@ async fn dispatches_ready_notification_to_bot_target() {
     .expect("notification should trigger target thread agent");
     assert_eq!(provider_calls.len(), 1);
     assert!(provider_calls[0].0.starts_with("thread::"));
-    assert!(
-        provider_calls[0]
-            .1
-            .contains("Task #TASK-42 is ready for review")
-    );
+    assert!(provider_calls[0].1.contains("task_id=\"#TASK-42\""));
     assert!(
         provider_calls[0]
             .1
@@ -565,12 +579,15 @@ async fn dispatches_ready_notification_to_bot_target() {
     assert!(!provider_calls[0].1.contains("bot-handoff-tail"));
     assert_eq!(
         provider_calls[0].2.get("task_notification"),
-        Some(&Value::Bool(true))
+        Some(&json!({
+            "event": "ready_for_review",
+            "status": "in_review",
+            "task_id": "#TASK-42",
+            "title": "Ship task notifications"
+        }))
     );
-    assert_eq!(
-        provider_calls[0].2.get("task_id"),
-        Some(&Value::String("#TASK-42".to_owned()))
-    );
+    assert!(provider_calls[0].2.get("task_notification_event").is_none());
+    assert!(provider_calls[0].2.get("task_id").is_none());
 
     let mut persisted_notification = false;
     for thread_id in state

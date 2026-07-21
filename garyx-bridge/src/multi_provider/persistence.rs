@@ -1140,17 +1140,31 @@ fn build_run_record_drafts(
 }
 
 /// Run metadata that exists only to configure the provider runtime and must
-/// never be persisted into transcript records: the gateway bearer token and
-/// the managed MCP server definitions (whose `env` blocks carry secrets).
-/// This is the single persistence chokepoint — every dispatch source (chat
-/// API, internal dispatch, scheduled turns) funnels through it.
-const RUNTIME_ONLY_METADATA_KEYS: &[&str] = &["garyx_mcp_auth_token", "remote_mcp_servers"];
+/// never be persisted into transcript records or queued pending inputs.
+///
+/// Both direct commits and busy-thread enqueue persistence use this exact
+/// denylist so a dispatch cannot gain or lose durable metadata merely because
+/// it raced an already-active run.
+pub(super) const RUNTIME_ONLY_METADATA_KEYS: &[&str] = &[
+    "garyx_mcp_auth_token",
+    "remote_mcp_servers",
+    "garyx_mcp_headers",
+    "provider_env",
+    "system_prompt",
+    "developer_instructions",
+    "desktop_antigravity_env",
+    "sdk_session_fork",
+];
 
-fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
-    let mut metadata = run.metadata.clone();
+pub(super) fn strip_runtime_only_metadata(metadata: &mut HashMap<String, Value>) {
     for key in RUNTIME_ONLY_METADATA_KEYS {
         metadata.remove(*key);
     }
+}
+
+fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
+    let mut metadata = run.metadata.clone();
+    strip_runtime_only_metadata(&mut metadata);
     match run
         .sdk_session_id
         .map(str::trim)

@@ -2,12 +2,101 @@ use super::*;
 use garyx_router::InMemoryThreadStore;
 
 #[test]
+fn queued_dispatch_metadata_persists_full_semantics_but_no_runtime_wiring() {
+    let mut metadata = HashMap::from([
+        ("source".to_owned(), json!("task_notification")),
+        ("internal_dispatch".to_owned(), json!(true)),
+        (
+            "task_notification".to_owned(),
+            json!({
+                "event": "ready_for_review",
+                "status": "in_review",
+                "task_id": "#TASK-42",
+                "title": "Synthetic review"
+            }),
+        ),
+        ("custom_semantic_key".to_owned(), json!({"nested": true})),
+    ]);
+    for key in super::super::persistence::RUNTIME_ONLY_METADATA_KEYS {
+        metadata.insert((*key).to_owned(), json!(format!("sentinel-{key}")));
+    }
+
+    let projected = queued_dispatch_metadata(&metadata, "run-requested");
+    let persisted = pending_input_metadata_for_persistence(projected);
+
+    assert_eq!(persisted.get("source"), Some(&json!("task_notification")));
+    assert_eq!(persisted.get("internal_dispatch"), Some(&json!(true)));
+    assert_eq!(
+        persisted
+            .get("task_notification")
+            .and_then(|value| value.get("task_id")),
+        Some(&json!("#TASK-42"))
+    );
+    assert_eq!(
+        persisted.get("custom_semantic_key"),
+        Some(&json!({"nested": true}))
+    );
+    assert_eq!(
+        persisted.get("origin_run_id"),
+        Some(&json!("run-requested"))
+    );
+    for key in super::super::persistence::RUNTIME_ONLY_METADATA_KEYS {
+        assert!(!persisted.contains_key(*key), "runtime key {key} persisted");
+    }
+}
+
+#[test]
+fn queued_dispatch_metadata_keeps_every_internal_source_family() {
+    let metadata = HashMap::from([
+        ("source".to_owned(), json!("automation")),
+        ("automation_id".to_owned(), json!("automation-1")),
+        ("cron_job_id".to_owned(), json!("cron-1")),
+        ("cron_action".to_owned(), json!("run")),
+        ("task_auto_start".to_owned(), json!(true)),
+        ("task_dispatch_reason".to_owned(), json!("created")),
+        ("restart_wake".to_owned(), json!(true)),
+        ("restart_wake_id".to_owned(), json!("wake-1")),
+        ("schedule_followup_job_id".to_owned(), json!("followup-1")),
+        (
+            "schedule_followup_scheduled_at".to_owned(),
+            json!("2026-07-21T09:00:00Z"),
+        ),
+        (
+            "schedule_followup_scheduled_for".to_owned(),
+            json!("2026-07-21T09:01:00Z"),
+        ),
+        ("schedule_followup_reason".to_owned(), json!("quota")),
+        (
+            "schedule_followup_originating_run_id".to_owned(),
+            json!("run-origin"),
+        ),
+    ]);
+
+    let persisted = pending_input_metadata_for_persistence(queued_dispatch_metadata(
+        &metadata,
+        "run-requested",
+    ));
+
+    for (key, value) in metadata {
+        assert_eq!(persisted.get(&key), Some(&value), "lost source key {key}");
+    }
+}
+
+#[test]
 fn task_work_run_wake_excludes_notification_internal_and_system_runs() {
     assert!(is_task_work_run_wake("run-1", &HashMap::new()));
     assert!(!is_task_work_run_wake("task-notify-42", &HashMap::new()));
     assert!(!is_task_work_run_wake(
         "run-1",
-        &HashMap::from([("task_notification".to_owned(), json!(true))])
+        &HashMap::from([(
+            "task_notification".to_owned(),
+            json!({
+                "event": "ready_for_review",
+                "status": "in_review",
+                "task_id": "#TASK-42",
+                "title": "Synthetic review"
+            })
+        )])
     ));
     assert!(!is_task_work_run_wake(
         "run-1",

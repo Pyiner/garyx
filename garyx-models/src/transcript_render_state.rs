@@ -201,10 +201,15 @@ pub struct RenderMessageRef {
     pub presentation: Option<RenderMessagePresentation>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderMessagePresentation {
-    TaskNotification,
+    TaskNotification {
+        event: String,
+        status: String,
+        task_id: String,
+        title: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1625,21 +1630,23 @@ fn message_ref(seq: u64, role: &str, message: &Map<String, Value>) -> RenderMess
         id,
         seq,
         role: role.to_owned(),
-        presentation: render_message_presentation(message),
+        presentation: (role == "user")
+            .then(|| render_message_presentation(message))
+            .flatten(),
     }
 }
 
 fn render_message_presentation(message: &Map<String, Value>) -> Option<RenderMessagePresentation> {
     let metadata = message.get("metadata").and_then(Value::as_object)?;
-    let is_review_notification = metadata
+    let notification = metadata
         .get("task_notification")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        && metadata
-            .get("task_notification_event")
-            .and_then(Value::as_str)
-            .is_some_and(|event| event == "ready_for_review");
-    is_review_notification.then_some(RenderMessagePresentation::TaskNotification)
+        .and_then(Value::as_object)?;
+    Some(RenderMessagePresentation::TaskNotification {
+        event: notification.get("event")?.as_str()?.to_owned(),
+        status: notification.get("status")?.as_str()?.to_owned(),
+        task_id: notification.get("task_id")?.as_str()?.to_owned(),
+        title: notification.get("title")?.as_str()?.to_owned(),
+    })
 }
 
 fn origin_id_of(message: &Map<String, Value>) -> Option<String> {
@@ -2613,17 +2620,48 @@ mod tests {
     }
 
     #[test]
-    fn task_notification_metadata_owns_message_presentation() {
-        let notification = "<garyx_task_notification>Review ready</garyx_task_notification>";
+    fn task_notification_presentation_wire_matches_golden() {
+        let presentation = RenderMessagePresentation::TaskNotification {
+            event: "ready_for_review".to_owned(),
+            status: "in_review".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            title: "Synthetic review".to_owned(),
+        };
+        let actual = serde_json::to_value(&presentation).unwrap();
+        let expected: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/task_notification_presentation.json"
+        ))
+        .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            serde_json::from_value::<RenderMessagePresentation>(actual).unwrap(),
+            presentation
+        );
+        let mut missing_title = expected;
+        missing_title.as_object_mut().unwrap().remove("title");
+        assert!(
+            serde_json::from_value::<RenderMessagePresentation>(missing_title).is_err(),
+            "all flattened presentation fields are required on the wire"
+        );
+    }
+
+    #[test]
+    fn task_notification_metadata_object_owns_user_message_presentation() {
+        let envelope = "<garyx_task_notification>Review ready</garyx_task_notification>";
         let records = vec![
             message_record(
                 1,
                 json!({
                     "role": "user",
-                    "content": notification,
+                    "content": envelope,
                     "metadata": {
-                        "task_notification": true,
-                        "task_notification_event": "ready_for_review"
+                        "task_notification": {
+                            "event": "ready_for_review",
+                            "status": "in_review",
+                            "task_id": "#TASK-42",
+                            "title": "Synthetic review"
+                        }
                     }
                 }),
             ),
@@ -2631,15 +2669,60 @@ mod tests {
                 2,
                 json!({
                     "role": "user",
-                    "content": notification,
-                    "metadata": { "task_notification": true }
+                    "content": envelope,
+                    "metadata": {
+                        "task_notification": true,
+                        "task_notification_event": "ready_for_review",
+                        "task_id": "#TASK-42"
+                    }
                 }),
             ),
             message_record(
                 3,
                 json!({
                     "role": "user",
-                    "content": notification
+                    "content": envelope,
+                    "metadata": {
+                        "internal_dispatch": true,
+                        "origin_run_id": "run-notify",
+                        "queued_input_id": "queued-1"
+                    }
+                }),
+            ),
+            message_record(
+                4,
+                json!({
+                    "role": "user",
+                    "content": envelope,
+                    "metadata": {
+                        "task_notification": {
+                            "event": "ready_for_review",
+                            "status": "in_review",
+                            "task_id": "#TASK-42"
+                        }
+                    }
+                }),
+            ),
+            message_record(
+                5,
+                json!({
+                    "role": "user",
+                    "content": envelope
+                }),
+            ),
+            message_record(
+                6,
+                json!({
+                    "role": "assistant",
+                    "content": "assistant body",
+                    "metadata": {
+                        "task_notification": {
+                            "event": "ready_for_review",
+                            "status": "in_review",
+                            "task_id": "#TASK-42",
+                            "title": "Must not classify assistant rows"
+                        }
+                    }
                 }),
             ),
         ];
@@ -2647,29 +2730,102 @@ mod tests {
         let snapshot = reduce_transcript_render_state(&records);
         let first = expect_user_turn(&snapshot.rows[0]);
         assert_eq!(
-            first.user.as_ref().and_then(|message| message.presentation),
-            Some(RenderMessagePresentation::TaskNotification)
+            first
+                .user
+                .as_ref()
+                .and_then(|message| message.presentation.as_ref()),
+            Some(&RenderMessagePresentation::TaskNotification {
+                event: "ready_for_review".to_owned(),
+                status: "in_review".to_owned(),
+                task_id: "#TASK-42".to_owned(),
+                title: "Synthetic review".to_owned(),
+            })
         );
         let second = expect_user_turn(&snapshot.rows[1]);
         assert_eq!(
             second
                 .user
                 .as_ref()
-                .and_then(|message| message.presentation),
+                .and_then(|message| message.presentation.as_ref()),
             None,
-            "a generic task-notification flag is not a Garyx review-card identity"
+            "legacy scattered metadata is not upgraded"
         );
         let third = expect_user_turn(&snapshot.rows[2]);
         assert_eq!(
-            third.user.as_ref().and_then(|message| message.presentation),
+            third
+                .user
+                .as_ref()
+                .and_then(|message| message.presentation.as_ref()),
             None,
-            "an XML-looking body is not a client or reducer classification source"
+            "a measured queue record with the marker dropped stays ordinary"
+        );
+        let fourth = expect_user_turn(&snapshot.rows[3]);
+        assert!(fourth.user.as_ref().unwrap().presentation.is_none());
+        let fifth = expect_user_turn(&snapshot.rows[4]);
+        assert!(fifth.user.as_ref().unwrap().presentation.is_none());
+        let assistant = expect_assistant_reply(&fifth.activity[0]);
+        assert!(
+            assistant.message.presentation.is_none(),
+            "presentation is owned by user-role rows only"
         );
 
         let wire = serde_json::to_value(&snapshot).expect("serialize render snapshot");
-        assert_eq!(wire["rows"][0]["user"]["presentation"], "task_notification");
+        assert_eq!(
+            wire["rows"][0]["user"]["presentation"],
+            json!({
+                "kind": "task_notification",
+                "event": "ready_for_review",
+                "status": "in_review",
+                "task_id": "#TASK-42",
+                "title": "Synthetic review"
+            })
+        );
         assert!(wire["rows"][1]["user"].get("presentation").is_none());
         assert!(wire["rows"][2]["user"].get("presentation").is_none());
+        assert!(wire["rows"][3]["user"].get("presentation").is_none());
+        assert!(wire["rows"][4]["user"].get("presentation").is_none());
+    }
+
+    #[test]
+    fn task_notification_title_and_status_changes_upsert_same_seq_row() {
+        fn snapshot(status: &str, title: &str) -> RenderSnapshot {
+            reduce_transcript_render_state(&[message_record(
+                1,
+                json!({
+                    "role": "user",
+                    "content": "<garyx_task_notification>Done.</garyx_task_notification>",
+                    "metadata": {
+                        "task_notification": {
+                            "event": "ready_for_review",
+                            "status": status,
+                            "task_id": "#TASK-42",
+                            "title": title
+                        }
+                    }
+                }),
+            )])
+        }
+
+        for (status, title) in [
+            ("in_review", "Changed title"),
+            ("needs_changes", "Original title"),
+        ] {
+            let prev = snapshot("in_review", "Original title");
+            let next = snapshot(status, title);
+            assert_eq!(prev.based_on_seq, next.based_on_seq);
+            assert_ne!(
+                render_rows_digest(&prev.rows).rows_hash,
+                render_rows_digest(&next.rows).rows_hash
+            );
+            let delta = derive_render_delta(&prev, &next);
+            assert_eq!(delta.from_seq, delta.based_on_seq);
+            assert_eq!(delta.upsert_rows, next.rows);
+            assert_eq!(apply_render_delta(&prev, &delta).unwrap(), {
+                let mut expected = next;
+                expected.rows_hash = Some(delta.rows_hash.parse().unwrap());
+                expected
+            });
+        }
     }
 
     #[test]

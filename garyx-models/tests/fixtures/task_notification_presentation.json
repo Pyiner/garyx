@@ -1,0 +1,7 @@
+{
+  "kind": "task_notification",
+  "event": "ready_for_review",
+  "status": "in_review",
+  "task_id": "#TASK-42",
+  "title": "Synthetic review"
+}

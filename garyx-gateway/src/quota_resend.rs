@@ -253,7 +253,110 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use garyx_bridge::{BridgeError, MultiProviderBridge, ProviderRuntime};
+    use garyx_models::provider::{
+        AgentDispatchOutcome, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+        StreamBoundaryKind, StreamEvent,
+    };
     use serde_json::json;
+    use std::collections::HashMap;
+    use tokio::sync::{Mutex, Notify, mpsc};
+
+    struct QuotaBusyProvider {
+        queued_tx: mpsc::UnboundedSender<QueuedUserInput>,
+        queued_rx: Mutex<Option<mpsc::UnboundedReceiver<QueuedUserInput>>>,
+        active_started: Notify,
+        queued_received: Notify,
+        allow_ack: Notify,
+        release_run: Notify,
+    }
+
+    impl QuotaBusyProvider {
+        fn new() -> Self {
+            let (queued_tx, queued_rx) = mpsc::unbounded_channel();
+            Self {
+                queued_tx,
+                queued_rx: Mutex::new(Some(queued_rx)),
+                active_started: Notify::new(),
+                queued_received: Notify::new(),
+                allow_ack: Notify::new(),
+                release_run: Notify::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for QuotaBusyProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: garyx_bridge::provider_trait::StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            on_chunk(StreamEvent::Delta {
+                text: "active reply".to_owned(),
+            });
+            self.active_started.notify_one();
+
+            let queued = {
+                let mut receiver = self.queued_rx.lock().await;
+                receiver
+                    .as_mut()
+                    .expect("quota busy provider receiver is single-use")
+                    .recv()
+                    .await
+                    .expect("quota followup should reach active provider")
+            };
+            self.queued_received.notify_one();
+            self.allow_ack.notified().await;
+            on_chunk(StreamEvent::Boundary {
+                kind: StreamBoundaryKind::UserAck,
+                pending_input_id: queued.pending_input_id,
+            });
+            self.release_run.notified().await;
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "quota-busy-provider".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "active reply".to_owned(),
+                session_messages: Vec::new(),
+                sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
+                actual_model: None,
+                thread_title: None,
+                success: true,
+                error: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn add_streaming_input(&self, _thread_id: &str, input: QueuedUserInput) -> bool {
+            self.queued_tx.send(input).is_ok()
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
 
     fn committed_run_complete(rate_limit: Value) -> String {
         json!({
@@ -377,5 +480,218 @@ mod tests {
         );
         assert_eq!(job.thread_id.as_deref(), Some("thread::abc"));
         assert!(job.delete_after_run);
+    }
+
+    #[tokio::test]
+    async fn quota_auto_resend_preserves_followup_metadata_through_busy_queue_ack() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cron = Arc::new(crate::automation::CronService::new(
+            tmp.path().to_path_buf(),
+        ));
+        let bridge = Arc::new(MultiProviderBridge::new());
+        let provider = Arc::new(QuotaBusyProvider::new());
+        bridge
+            .register_provider("quota-busy-provider", provider.clone())
+            .await;
+        bridge
+            .set_route("telegram", "bot1", "quota-busy-provider")
+            .await;
+        bridge.set_default_provider_key("quota-busy-provider").await;
+
+        let state = crate::composition::app_bootstrap::AppStateBuilder::new(
+            garyx_models::config::GaryxConfig::default(),
+        )
+        .with_bridge(bridge.clone())
+        .with_cron_service(cron.clone())
+        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
+        .build();
+        bridge
+            .set_thread_store(state.threads.thread_store.clone())
+            .await;
+        bridge.set_event_tx(state.ops.events.sender()).await;
+
+        let thread_id = "thread::quota-resend-busy";
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "from_id": "test-user",
+                    "is_group": false,
+                    "messages": [],
+                    "channel_bindings": [{
+                        "channel": "telegram",
+                        "account_id": "bot1",
+                        "binding_key": "test-user",
+                        "chat_id": "test-user",
+                        "display_label": "Test User"
+                    }],
+                    "delivery_context": {
+                        "channel": "telegram",
+                        "account_id": "bot1",
+                        "chat_id": "test-user",
+                        "user_id": "test-user",
+                        "delivery_target_type": "chat_id",
+                        "delivery_target_id": "test-user",
+                        "thread_id": "test-user",
+                        "metadata": {}
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+        let active_outcome = crate::internal_inbound::dispatch_internal_message_to_thread(
+            &state,
+            thread_id,
+            "run::active",
+            "active turn",
+            crate::internal_inbound::InternalDispatchOptions::default(),
+        )
+        .await
+        .expect("active turn should start through the production front door");
+        assert_eq!(active_outcome, AgentDispatchOutcome::Started);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            provider.active_started.notified(),
+        )
+        .await
+        .expect("active provider run should become busy");
+
+        spawn_reactor(state.clone());
+        let rate_limited_run_id = "run::rate-limited";
+        let event = committed_run_complete(json!({
+            "provider": "claude",
+            "window": "weekly",
+            "reset_at": (Utc::now() + Duration::minutes(5)).to_rfc3339(),
+            "will_auto_resend": true
+        }))
+        .replace("run::xyz", rate_limited_run_id)
+        .replace("thread::abc", thread_id);
+        state
+            .ops
+            .events
+            .sender()
+            .send(event)
+            .expect("quota reactor should be subscribed");
+
+        let job_id = resend_job_id(thread_id);
+        let job = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Some(job) = cron.get(&job_id).await {
+                    break job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("real quota reactor should schedule its internal-dispatch job");
+        let CronJobKind::InternalDispatch { payload } = &job.kind else {
+            panic!(
+                "quota reactor scheduled unexpected job kind: {:?}",
+                job.kind
+            );
+        };
+        let expected = HashMap::from([
+            ("schedule_followup_job_id", Value::String(job_id.clone())),
+            (
+                "schedule_followup_scheduled_at",
+                Value::String(payload.scheduled_at.to_rfc3339()),
+            ),
+            (
+                "schedule_followup_scheduled_for",
+                Value::String(job.next_run.to_rfc3339()),
+            ),
+            (
+                "schedule_followup_reason",
+                Value::String(
+                    payload
+                        .reason
+                        .clone()
+                        .expect("quota resend reason is required"),
+                ),
+            ),
+            (
+                "schedule_followup_originating_run_id",
+                Value::String(rate_limited_run_id.to_owned()),
+            ),
+        ]);
+
+        cron.run_now(
+            &job_id,
+            &crate::composition::automation_wiring::automation_exec_env(&state),
+        )
+        .await
+        .expect("quota resend should dispatch into the busy thread");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            provider.queued_received.notified(),
+        )
+        .await
+        .expect("active provider should receive the quota resend");
+
+        let pending = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let thread = state
+                    .threads
+                    .thread_store
+                    .get(thread_id)
+                    .await
+                    .unwrap()
+                    .expect("thread should remain present");
+                if let Some(pending) = thread["pending_user_inputs"].as_array().and_then(|items| {
+                    items.iter().find(|item| {
+                        item.pointer("/metadata/schedule_followup_job_id")
+                            == Some(&Value::String(job_id.clone()))
+                    })
+                }) {
+                    break pending.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("quota resend should be persisted pending before ACK");
+        for (key, value) in &expected {
+            assert_eq!(
+                pending.pointer(&format!("/metadata/{key}")),
+                Some(value),
+                "pending quota resend lost {key}: {pending}"
+            );
+        }
+
+        provider.allow_ack.notify_one();
+        let committed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let snapshot = state
+                    .threads
+                    .history
+                    .thread_snapshot(thread_id, 100)
+                    .await
+                    .expect("thread history should load");
+                if let Some(message) = snapshot.committed_messages.iter().find(|message| {
+                    message.pointer("/metadata/schedule_followup_job_id")
+                        == Some(&Value::String(job_id.clone()))
+                }) {
+                    break message.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("provider ACK should commit the quota resend user record");
+        for (key, value) in &expected {
+            assert_eq!(
+                committed.pointer(&format!("/metadata/{key}")),
+                Some(value),
+                "committed quota resend lost {key}: {committed}"
+            );
+        }
+
+        provider.release_run.notify_one();
     }
 }

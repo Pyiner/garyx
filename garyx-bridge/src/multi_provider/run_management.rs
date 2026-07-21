@@ -36,7 +36,7 @@ use super::persistence::{
     PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord, StreamingRunSnapshot,
     TerminalRunControl, ThreadPersistenceCommand, capsule_attached_control_record,
     save_failed_thread_messages_with_terminal_control, save_streaming_partial,
-    save_thread_messages_with_terminal_control,
+    save_thread_messages_with_terminal_control, strip_runtime_only_metadata,
 };
 use super::state::{self, ActiveThreadPersistence};
 use super::{MultiProviderBridge, RunLifecycleEvent};
@@ -99,36 +99,25 @@ fn requested_agent_id_from_metadata(metadata: &HashMap<String, Value>) -> Option
         .map(ToOwned::to_owned)
 }
 
-/// Dispatch attribution keys worth carrying onto a pending input when the
-/// message is queued into an already-active run, so the acknowledged user
-/// record still identifies where the message came from. A deliberate
-/// allowlist: run metadata also carries runtime-only provider wiring
-/// (tokens, managed MCP definitions) that must not ride along.
-const DISPATCH_ATTRIBUTION_METADATA_KEYS: &[&str] = &[
-    "source",
-    "automation_id",
-    "cron_job_id",
-    "cron_action",
-    "internal_dispatch",
-];
-
-fn dispatch_attribution_metadata(
+fn queued_dispatch_metadata(
     metadata: &HashMap<String, Value>,
     requested_run_id: &str,
 ) -> HashMap<String, Value> {
-    let mut attribution = HashMap::new();
-    for key in DISPATCH_ATTRIBUTION_METADATA_KEYS {
-        if let Some(value) = metadata.get(*key) {
-            attribution.insert((*key).to_owned(), value.clone());
-        }
-    }
+    let mut durable = metadata.clone();
     if !requested_run_id.trim().is_empty() {
-        attribution.insert(
+        durable.insert(
             "origin_run_id".to_owned(),
             Value::String(requested_run_id.to_owned()),
         );
     }
-    attribution
+    durable
+}
+
+fn pending_input_metadata_for_persistence(
+    mut metadata: HashMap<String, Value>,
+) -> HashMap<String, Value> {
+    strip_runtime_only_metadata(&mut metadata);
+    metadata
 }
 
 fn thread_value_string(thread_data: &Value, key: &str) -> Option<String> {
@@ -1114,7 +1103,7 @@ impl MultiProviderBridge {
                     None,
                     queued_attachments.clone(),
                     metadata_string(&metadata, "client_intent_id"),
-                    dispatch_attribution_metadata(&metadata, &run_id),
+                    queued_dispatch_metadata(&metadata, &run_id),
                 )
                 .await
             }
@@ -1129,7 +1118,7 @@ impl MultiProviderBridge {
                     None,
                     queued_attachments.clone(),
                     metadata_string(&metadata, "client_intent_id"),
-                    dispatch_attribution_metadata(&metadata, &run_id),
+                    queued_dispatch_metadata(&metadata, &run_id),
                     pending_input_id.clone(),
                 )
                 .await
@@ -2080,6 +2069,10 @@ impl MultiProviderBridge {
             ));
             let provider_message =
                 render_streaming_user_message_for_provider(&self.inner, thread_id, message).await;
+            // Pending inputs live in the thread record while the provider has
+            // not ACKed them. Apply the same runtime-only filter used by the
+            // direct transcript path at this persistence boundary as well as
+            // at the dispatch projection above, so every caller is safe.
             let pending_input = PendingUserInput {
                 id: pending_input_id
                     .unwrap_or_else(|| format!("queued_input:{}", uuid::Uuid::new_v4())),
@@ -2092,7 +2085,7 @@ impl MultiProviderBridge {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned),
-                metadata: origin_metadata,
+                metadata: pending_input_metadata_for_persistence(origin_metadata),
                 status: PendingUserInputStatus::Queued,
             };
             if let Some(tx) = persistence_tx.as_ref() {

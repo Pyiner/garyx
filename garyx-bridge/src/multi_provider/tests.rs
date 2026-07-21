@@ -3550,6 +3550,218 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
     assert_eq!(final_roles, vec!["user", "assistant", "user", "assistant"]);
 }
 
+#[derive(Clone, Copy)]
+enum QueuedDispatchPath {
+    Legacy,
+    DurableExact,
+}
+
+async fn assert_busy_dispatch_persists_full_metadata(path: QueuedDispatchPath) {
+    let suffix = match path {
+        QueuedDispatchPath::Legacy => "legacy",
+        QueuedDispatchPath::DurableExact => "durable",
+    };
+    let thread_id = format!("thread::queued-metadata-{suffix}");
+    let active_run_id = format!("run::active-{suffix}");
+    let requested_run_id = format!("run::notify-{suffix}");
+    let message = format!("notification-{suffix}");
+
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(QueuedInputProvider::new());
+    let delta_sent = provider.delta_sent();
+    let follow_up_received = provider.follow_up_received();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store.set(&thread_id, json!({})).await.unwrap();
+    bridge.set_thread_store(store.clone()).await;
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
+
+    let first = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(&thread_id, "active run", &active_run_id, "api", "main"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bridge.dispatch(first, None).await.unwrap(),
+        garyx_models::provider::AgentDispatchOutcome::Started
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit the initial delta");
+
+    let mut request = run_request(&thread_id, &message, &requested_run_id, "api", "main");
+    request.metadata = HashMap::from([
+        ("internal_dispatch".to_owned(), json!(true)),
+        ("source".to_owned(), json!("task_notification")),
+        (
+            "task_notification".to_owned(),
+            json!({
+                "event": "ready_for_review",
+                "status": "in_review",
+                "task_id": "#TASK-42",
+                "title": "Synthetic notification"
+            }),
+        ),
+    ]);
+    let source_family_metadata = HashMap::from([
+        ("automation_id".to_owned(), json!("automation-1")),
+        ("cron_job_id".to_owned(), json!("cron-1")),
+        ("cron_action".to_owned(), json!("run")),
+        ("task_auto_start".to_owned(), json!(true)),
+        ("task_dispatch_reason".to_owned(), json!("created")),
+        ("restart_wake".to_owned(), json!(true)),
+        ("restart_wake_id".to_owned(), json!("wake-1")),
+        ("schedule_followup_job_id".to_owned(), json!("followup-1")),
+        (
+            "schedule_followup_scheduled_at".to_owned(),
+            json!("2026-07-21T09:00:00Z"),
+        ),
+        (
+            "schedule_followup_scheduled_for".to_owned(),
+            json!("2026-07-21T09:01:00Z"),
+        ),
+        ("schedule_followup_reason".to_owned(), json!("quota")),
+        (
+            "schedule_followup_originating_run_id".to_owned(),
+            json!("run-origin"),
+        ),
+    ]);
+    request.metadata.extend(source_family_metadata.clone());
+    for key in super::persistence::RUNTIME_ONLY_METADATA_KEYS {
+        request
+            .metadata
+            .insert((*key).to_owned(), json!(format!("sentinel-{key}")));
+    }
+    let second = AdmittedRun::thread_bound(store.clone(), request)
+        .await
+        .unwrap();
+    let expected_pending_id = format!("pending::{suffix}");
+    let outcome = match path {
+        QueuedDispatchPath::Legacy => bridge.dispatch(second, None).await.unwrap(),
+        QueuedDispatchPath::DurableExact => {
+            let plan = bridge
+                .prepare_durable_dispatch(second, expected_pending_id.clone())
+                .await
+                .unwrap();
+            assert_eq!(plan.effective_run_id(), active_run_id);
+            bridge.execute_durable_dispatch(plan, None).await.unwrap()
+        }
+    };
+    let pending_input_id = match outcome {
+        garyx_models::provider::AgentDispatchOutcome::QueuedToActiveRun {
+            effective_run_id,
+            pending_input_id,
+        } => {
+            assert_eq!(effective_run_id, active_run_id);
+            pending_input_id
+        }
+        other => panic!("expected real queued outcome, got {other:?}"),
+    };
+    if matches!(path, QueuedDispatchPath::DurableExact) {
+        assert_eq!(pending_input_id, expected_pending_id);
+    }
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        follow_up_received.notified(),
+    )
+    .await
+    .expect("provider should receive queued notification");
+
+    let pending = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let data = store.get(&thread_id).await.unwrap().unwrap_or_default();
+            if let Some(pending) = data["pending_user_inputs"]
+                .as_array()
+                .and_then(|inputs| inputs.iter().find(|input| input["id"] == pending_input_id))
+            {
+                break pending.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("queued notification should persist before provider ACK");
+    assert_eq!(pending["bridge_run_id"], active_run_id);
+    assert_eq!(pending["metadata"]["internal_dispatch"], true);
+    assert_eq!(pending["metadata"]["source"], "task_notification");
+    assert_eq!(
+        pending["metadata"]["task_notification"]["task_id"],
+        "#TASK-42"
+    );
+    assert_eq!(pending["metadata"]["origin_run_id"], requested_run_id);
+    for (key, value) in &source_family_metadata {
+        assert_eq!(
+            pending["metadata"].get(key),
+            Some(value),
+            "busy queue lost internal-source key {key}: {pending}"
+        );
+    }
+    for key in super::persistence::RUNTIME_ONLY_METADATA_KEYS {
+        assert!(
+            pending["metadata"].get(*key).is_none(),
+            "runtime key {key} persisted in pending input: {pending}"
+        );
+    }
+
+    provider.release_ack();
+    let committed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let messages = combined_thread_messages(&history, &thread_id).await;
+            if let Some(message) = messages
+                .iter()
+                .find(|candidate| candidate["role"] == "user" && candidate["content"] == message)
+            {
+                break message.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("provider ACK should commit queued notification");
+    assert_eq!(committed["metadata"]["internal_dispatch"], true);
+    assert_eq!(
+        committed["metadata"]["task_notification"]["title"],
+        "Synthetic notification"
+    );
+    assert_eq!(committed["metadata"]["origin_run_id"], requested_run_id);
+    assert_ne!(committed["metadata"]["origin_run_id"], active_run_id);
+    assert_eq!(committed["metadata"]["queued_input_id"], pending_input_id);
+    for (key, value) in &source_family_metadata {
+        assert_eq!(
+            committed["metadata"].get(key),
+            Some(value),
+            "ACK commit lost internal-source key {key}: {committed}"
+        );
+    }
+    for key in super::persistence::RUNTIME_ONLY_METADATA_KEYS {
+        assert!(committed["metadata"].get(*key).is_none());
+    }
+
+    provider.release_run();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active(&active_run_id).await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("active run should finish");
+}
+
+#[tokio::test]
+async fn legacy_busy_dispatch_persists_full_metadata_before_and_after_ack() {
+    assert_busy_dispatch_persists_full_metadata(QueuedDispatchPath::Legacy).await;
+}
+
+#[tokio::test]
+async fn durable_exact_busy_dispatch_persists_full_metadata_before_and_after_ack() {
+    assert_busy_dispatch_persists_full_metadata(QueuedDispatchPath::DurableExact).await;
+}
+
 #[tokio::test]
 async fn test_start_agent_run_preserves_metadata_attachments_for_active_stream_follow_up() {
     let bridge = MultiProviderBridge::new();

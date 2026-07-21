@@ -920,14 +920,11 @@ async fn test_save_thread_messages_strips_runtime_only_metadata() {
     let history = make_history(store.clone());
     let session_messages = vec![ProviderMessage::assistant_text("answer")];
     let mut metadata = HashMap::new();
-    // Runtime-only provider wiring: the gateway bearer token and managed MCP
-    // definitions (whose env can carry secrets) must never reach transcript
-    // records. Synthetic placeholder values only.
-    metadata.insert("garyx_mcp_auth_token".to_owned(), json!("${TOKEN}"));
-    metadata.insert(
-        "remote_mcp_servers".to_owned(),
-        json!({ "example": { "command": "example-mcp", "env": { "API_KEY": "${SECRET}" } } }),
-    );
+    // Synthetic sentinel values only. Every known runtime key must be removed
+    // through the same shared persistence filter.
+    for key in RUNTIME_ONLY_METADATA_KEYS {
+        metadata.insert((*key).to_owned(), json!(format!("sentinel-{key}")));
+    }
     metadata.insert("source".to_owned(), json!("automation"));
     metadata.insert("run_id".to_owned(), json!("run-runtime-only"));
 
@@ -952,11 +949,15 @@ async fn test_save_thread_messages_strips_runtime_only_metadata() {
     let messages = committed_content(&history, "thread::runtime-only-metadata").await;
     assert!(!messages.is_empty());
     for message in &messages {
-        let raw = message.to_string();
-        assert!(
-            !raw.contains("garyx_mcp_auth_token") && !raw.contains("remote_mcp_servers"),
-            "runtime-only metadata leaked into transcript record: {raw}"
-        );
+        for key in RUNTIME_ONLY_METADATA_KEYS {
+            assert!(
+                message
+                    .get("metadata")
+                    .and_then(Value::as_object)
+                    .is_none_or(|metadata| !metadata.contains_key(*key)),
+                "runtime-only metadata key {key} leaked into transcript record: {message}"
+            );
+        }
     }
     // Ordinary metadata still rides along.
     assert_eq!(messages[0]["metadata"]["source"], "automation");
