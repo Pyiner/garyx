@@ -95,9 +95,9 @@ fn test_binding_merge(
     record: &Value,
     create_if_missing: bool,
 ) -> AtomicRecordMerge {
-    // This fixture stands in for the serialized endpoint-binding mutator's
-    // write path, so it mints the binding-merge authority like one.
-    let authority = crate::ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+    // Test-only seam: this helper injects binding state for fixtures that
+    // simulate the serialized endpoint-binding write path.
+    let authority = crate::ChannelBindingsMergeAuthority::test_authority();
     AtomicRecordMerge::channel_bindings_merge(&authority, thread_id, record, create_if_missing)
 }
 

@@ -57,6 +57,7 @@ libc = "0.2"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
+garyx-router = { workspace = true, features = ["test-seams"] }
 tempfile.workspace = true
 filetime.workspace = true
 proptest.workspace = true

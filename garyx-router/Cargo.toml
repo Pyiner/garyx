@@ -20,5 +20,11 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 sha2 = "0.10"
 
+[features]
+# Test-only seams: unlocks ChannelBindingsMergeAuthority::test_authority for
+# fixtures that inject binding state without being an endpoint-binding
+# mutator. Enable from [dev-dependencies] only.
+test-seams = []
+
 [dev-dependencies]
 tempfile = { workspace = true }

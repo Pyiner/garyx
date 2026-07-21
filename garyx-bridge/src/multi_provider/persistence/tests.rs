@@ -164,7 +164,7 @@ async fn streaming_persistence_cannot_resurrect_a_binding_moved_after_its_read()
             // This store simulates a concurrent endpoint move — the binding
             // mutator's serialized write path — so it mints the
             // binding-merge authority like one.
-            let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+            let authority = ChannelBindingsMergeAuthority::test_authority();
             vec![
                 AtomicRecordMerge::channel_bindings_merge(
                     &authority,

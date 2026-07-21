@@ -45,10 +45,14 @@ reinterpreted in feature code.
   reintroduce one. The binding privilege is enforced at entry construction:
   `AtomicRecordMerge::new` rejects the protected field, and binding-carrying
   entries exist only through `AtomicRecordMerge::channel_bindings_merge`
-  under the `ChannelBindingsMergeAuthority` witness, minted solely by
-  endpoint-binding mutator implementations (and test doubles standing in
-  for them). Store-owned runtime domains (run coordinator, projection
-  read seams) live on the `ThreadStoreDomains` supertrait, and
+  under the `ChannelBindingsMergeAuthority` witness. The witness has no
+  public constructor: it is provided by the `EndpointBindingMutator` trait
+  itself (implementing the trait is the declaration of being the serialized
+  binding mutator), plus the `test-seams`-gated
+  `ChannelBindingsMergeAuthority::test_authority` seam for fixtures that
+  inject binding state from tests. Store-owned runtime domains (run
+  coordinator, projection read seams) live on the `ThreadStoreDomains`
+  supertrait, and
   `garyx_router::store_contract` is the executable contract every backend
   and delegating wrapper must run from its tests.
 - The only full walk over the legacy JSON archive is the one-shot boot

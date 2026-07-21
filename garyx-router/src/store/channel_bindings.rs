@@ -26,22 +26,34 @@ pub(super) const PROTECTED_CHANNEL_BINDINGS_FIELD: &str = "channel_bindings";
 /// field outright, and the binding-carrying constructor demands a borrow
 /// of this authority.
 ///
-/// Mint one per endpoint-binding-mutator implementation and hold it for
-/// the mutator's lifetime. Test doubles that stand in for the mutator's
-/// serialized write path mint their own; nothing else should. The mint's
-/// call sites are the audit surface — grep
-/// `for_endpoint_binding_mutator` to enumerate every holder.
+/// There is deliberately NO public constructor. The only sources are:
+/// - the provided `EndpointBindingMutator::binding_merge_authority`
+///   method — implementing that trait is the declaration of being the
+///   serialized binding mutator, so the capability rides on the trait
+///   itself and cannot be minted by ordinary `ThreadStore` callers; and
+/// - [`Self::test_authority`], a `test-seams`-gated seam for fixtures
+///   that inject binding state without being a mutator.
 #[derive(Debug)]
 pub struct ChannelBindingsMergeAuthority {
     _witness: (),
 }
 
 impl ChannelBindingsMergeAuthority {
-    /// Mint the authority to construct channel-bindings merges. Call this
-    /// only when constructing an endpoint-binding mutator (or a test
-    /// double standing in for one); every other binding write path must go
-    /// through such a mutator instead of minting its own authority.
-    pub fn for_endpoint_binding_mutator() -> Self {
+    /// Crate-internal mint backing the provided
+    /// `EndpointBindingMutator::binding_merge_authority` method. Not
+    /// callable outside `garyx-router`; downstream implementors inherit
+    /// the provided method body instead of minting themselves.
+    pub(crate) fn mutator_provided() -> Self {
+        Self { _witness: () }
+    }
+
+    /// Explicit test-only seam: mint an authority for a fixture that
+    /// injects binding state (registry drift, simulated concurrent moves)
+    /// without being an endpoint-binding mutator. Enabled only for
+    /// in-crate tests and downstream `[dev-dependencies]` that opt into
+    /// the `test-seams` feature; production builds have no such entry.
+    #[cfg(any(test, feature = "test-seams"))]
+    pub fn test_authority() -> Self {
         Self { _witness: () }
     }
 }

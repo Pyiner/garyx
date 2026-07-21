@@ -319,7 +319,7 @@ mod tests {
             // This dispatcher simulates a concurrent endpoint move, i.e. the
             // binding mutator's serialized write path, so it mints the
             // binding-merge authority like one.
-            let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+            let authority = ChannelBindingsMergeAuthority::test_authority();
             let rebound = json!({
                         "channel_bindings": [
                             {

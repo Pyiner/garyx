@@ -20,9 +20,9 @@ use super::channel_bindings::{ChannelBindingsMergeAuthority, PROTECTED_CHANNEL_B
 /// exists for. The privilege is structural, not a review rule: the fields
 /// are private, [`Self::new`] rejects the protected field outright, and the
 /// binding-carrying constructor [`Self::channel_bindings_merge`] demands a
-/// borrow of the [`ChannelBindingsMergeAuthority`] witness, so a bypassing
-/// writer needs a visible, greppable authority mint instead of a silent
-/// struct literal.
+/// borrow of the [`ChannelBindingsMergeAuthority`] witness, which has no
+/// public constructor — it is provided by the `EndpointBindingMutator`
+/// trait itself, plus a `test-seams`-gated fixture seam.
 #[derive(Debug, Clone)]
 pub struct AtomicRecordMerge {
     thread_id: String,
@@ -65,9 +65,9 @@ impl AtomicRecordMerge {
     /// the record snapshot's `channel_bindings` (missing means the empty
     /// list) plus its `updated_at` when present — exactly the two fields a
     /// binding move touches, never arbitrary payloads. Binding content
-    /// comes from the caller's record snapshot; the authority witness marks
-    /// the caller as a serialized endpoint-binding mutator (or a test
-    /// double standing in for one).
+    /// comes from the caller's record snapshot; the authority witness
+    /// proves the caller is an `EndpointBindingMutator` implementation
+    /// (its trait-provided mint) or an explicit `test-seams` fixture.
     pub fn channel_bindings_merge(
         _authority: &ChannelBindingsMergeAuthority,
         thread_id: impl Into<String>,
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn channel_bindings_merge_carries_exactly_bindings_and_updated_at() {
-        let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+        let authority = ChannelBindingsMergeAuthority::test_authority();
         let record = json!({
             "thread_id": "thread::owner",
             "label": "never merged",
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn channel_bindings_merge_defaults_missing_bindings_to_the_empty_list() {
-        let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+        let authority = ChannelBindingsMergeAuthority::test_authority();
         let merge = AtomicRecordMerge::channel_bindings_merge(
             &authority,
             "meta::known_channel_endpoints",

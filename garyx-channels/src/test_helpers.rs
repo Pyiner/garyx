@@ -29,9 +29,6 @@ use tokio::sync::{Mutex, broadcast};
 pub struct TestEndpointBindingMutator {
     store: Arc<dyn ThreadStore>,
     owners: Mutex<HashMap<String, EndpointBindingOwner>>,
-    /// This fixture stands in for the serialized endpoint-binding mutator,
-    /// so it mints the binding-merge authority like one.
-    merge_authority: ChannelBindingsMergeAuthority,
 }
 
 impl TestEndpointBindingMutator {
@@ -39,7 +36,6 @@ impl TestEndpointBindingMutator {
         Self {
             store,
             owners: Mutex::new(HashMap::new()),
-            merge_authority: ChannelBindingsMergeAuthority::for_endpoint_binding_mutator(),
         }
     }
 }
@@ -111,7 +107,7 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 ));
             }
             entries.push(AtomicRecordMerge::channel_bindings_merge(
-                &self.merge_authority,
+                &self.binding_merge_authority(),
                 previous_thread_id,
                 &previous,
                 false,
@@ -126,14 +122,14 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
         if target_changed || previous_thread_id.is_some() {
             upsert_binding(&mut target, binding.clone());
             entries.push(AtomicRecordMerge::channel_bindings_merge(
-                &self.merge_authority,
+                &self.binding_merge_authority(),
                 target_thread_id,
                 &target,
                 false,
             ));
         }
         entries.push(
-            known_endpoint_fixture_merge(&self.merge_authority, &self.store, &binding)
+            known_endpoint_fixture_merge(&self.binding_merge_authority(), &self.store, &binding)
                 .await
                 .map_err(|message| EndpointBindingMutationError::WriteFailed {
                     thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
@@ -185,17 +181,20 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 owner.thread_id,
             ));
         }
-        let registry =
-            known_endpoint_fixture_merge(&self.merge_authority, &self.store, &owner.binding)
-                .await
-                .map_err(|message| EndpointBindingMutationError::WriteFailed {
-                    thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-                    message,
-                })?;
+        let registry = known_endpoint_fixture_merge(
+            &self.binding_merge_authority(),
+            &self.store,
+            &owner.binding,
+        )
+        .await
+        .map_err(|message| EndpointBindingMutationError::WriteFailed {
+            thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+            message,
+        })?;
         self.store
             .update_many_atomic(vec![
                 AtomicRecordMerge::channel_bindings_merge(
-                    &self.merge_authority,
+                    &self.binding_merge_authority(),
                     &*owner.thread_id,
                     &previous,
                     false,

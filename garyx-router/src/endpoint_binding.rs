@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::ChannelBinding;
+use crate::store::ChannelBindingsMergeAuthority;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointBindingOwner {
@@ -53,6 +54,21 @@ pub enum EndpointBindingMutationError {
 
 #[async_trait]
 pub trait EndpointBindingMutator: Send + Sync {
+    /// Capability to construct binding-carrying `AtomicRecordMerge`
+    /// entries (`AtomicRecordMerge::channel_bindings_merge`).
+    ///
+    /// Provided for every implementor and not meaningfully overridable:
+    /// [`ChannelBindingsMergeAuthority`] has no public constructor, so an
+    /// override could only return a value obtained from another mutator.
+    /// Implementing this trait IS the declaration of being the serialized
+    /// endpoint-binding mutator; ordinary `ThreadStore` callers have no
+    /// path to the capability. Fixtures that inject binding state without
+    /// being a mutator use the `test-seams`-gated
+    /// `ChannelBindingsMergeAuthority::test_authority` seam instead.
+    fn binding_merge_authority(&self) -> ChannelBindingsMergeAuthority {
+        ChannelBindingsMergeAuthority::mutator_provided()
+    }
+
     async fn binding_for_endpoint(
         &self,
         endpoint_key: &str,

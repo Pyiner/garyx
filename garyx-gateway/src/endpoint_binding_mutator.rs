@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use garyx_models::config::GaryxConfig;
 use garyx_router::{
-    AtomicRecordMerge, ChannelBinding, ChannelBindingsMergeAuthority, EndpointBindResult,
-    EndpointBindingMutationError, EndpointBindingMutator, EndpointBindingOwner,
-    EndpointDeliveryTimestampResult, EndpointDetachResult, KNOWN_CHANNEL_ENDPOINTS_KEY,
-    KnownChannelEndpoint, ThreadStore, ThreadStoreError, bindings_from_value, remove_binding,
-    upsert_binding, validate_channel_bindings, validate_thread_accepts_bot_binding,
+    AtomicRecordMerge, ChannelBinding, EndpointBindResult, EndpointBindingMutationError,
+    EndpointBindingMutator, EndpointBindingOwner, EndpointDeliveryTimestampResult,
+    EndpointDetachResult, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadStore,
+    ThreadStoreError, bindings_from_value, remove_binding, upsert_binding,
+    validate_channel_bindings, validate_thread_accepts_bot_binding,
 };
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -22,9 +22,6 @@ use crate::sqlite_thread_store::{
 
 pub(crate) struct SqlEndpointBindingMutator {
     thread_store: Arc<dyn ThreadStore>,
-    /// Witness that this serialized mutator is the sanctioned constructor
-    /// of binding-carrying [`AtomicRecordMerge`] entries.
-    merge_authority: ChannelBindingsMergeAuthority,
     garyx_db: Arc<GaryxDbService>,
     sqlite_thread_store: Option<Arc<SqliteThreadStore>>,
     mutation_lock: Mutex<()>,
@@ -74,7 +71,6 @@ impl SqlEndpointBindingMutator {
     ) -> Self {
         Self {
             thread_store,
-            merge_authority: ChannelBindingsMergeAuthority::for_endpoint_binding_mutator(),
             garyx_db,
             sqlite_thread_store,
             mutation_lock: Mutex::new(()),
@@ -206,7 +202,7 @@ impl SqlEndpointBindingMutator {
             .unwrap_or_else(|| Value::Object(Map::new()));
         upsert_binding(&mut registry, binding.clone());
         Ok(AtomicRecordMerge::channel_bindings_merge(
-            &self.merge_authority,
+            &self.binding_merge_authority(),
             KNOWN_CHANNEL_ENDPOINTS_KEY,
             &registry,
             true,
@@ -335,7 +331,7 @@ impl SqlEndpointBindingMutator {
             command
                 .merges
                 .push(AtomicRecordMerge::channel_bindings_merge(
-                    &self.merge_authority,
+                    &self.binding_merge_authority(),
                     previous_thread_id,
                     &previous,
                     false,
@@ -449,7 +445,7 @@ impl SqlEndpointBindingMutator {
             command
                 .merges
                 .push(AtomicRecordMerge::channel_bindings_merge(
-                    &self.merge_authority,
+                    &self.binding_merge_authority(),
                     previous_thread_id,
                     &previous,
                     false,
@@ -459,7 +455,7 @@ impl SqlEndpointBindingMutator {
         command
             .merges
             .push(AtomicRecordMerge::channel_bindings_merge(
-                &self.merge_authority,
+                &self.binding_merge_authority(),
                 target_thread_id.clone(),
                 &target,
                 false,
@@ -569,7 +565,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
                 Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, &endpoint_key) {
                         entries.push(AtomicRecordMerge::channel_bindings_merge(
-                            &self.merge_authority,
+                            &self.binding_merge_authority(),
                             previous_thread_id,
                             &previous,
                             false,
@@ -602,7 +598,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         if changed {
             upsert_binding(&mut target, binding.clone());
             entries.push(AtomicRecordMerge::channel_bindings_merge(
-                &self.merge_authority,
+                &self.binding_merge_authority(),
                 target_thread_id,
                 &target,
                 false,
@@ -640,7 +636,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
                 Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, endpoint_key) {
                         entries.push(AtomicRecordMerge::channel_bindings_merge(
-                            &self.merge_authority,
+                            &self.binding_merge_authority(),
                             previous_thread_id,
                             &previous,
                             false,
@@ -759,7 +755,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         if holder_changed {
             upsert_binding(&mut holder, binding.clone());
             entries.push(AtomicRecordMerge::channel_bindings_merge(
-                &self.merge_authority,
+                &self.binding_merge_authority(),
                 expected_holder_thread_id,
                 &holder,
                 false,
@@ -768,7 +764,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         if registry_changed {
             upsert_binding(&mut registry, binding);
             entries.push(AtomicRecordMerge::channel_bindings_merge(
-                &self.merge_authority,
+                &self.binding_merge_authority(),
                 KNOWN_CHANNEL_ENDPOINTS_KEY,
                 &registry,
                 true,
@@ -787,7 +783,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use garyx_models::config::{TelegramAccount, telegram_account_to_plugin_entry};
-    use garyx_router::{MessageRouter, ThreadStoreError, ThreadTranscriptStore};
+    use garyx_router::{
+        ChannelBindingsMergeAuthority, MessageRouter, ThreadStoreError, ThreadTranscriptStore,
+    };
     use serde_json::json;
 
     use super::*;
@@ -1130,7 +1128,7 @@ mod tests {
         upsert_binding(&mut registry, drifted);
         store
             .update_many_atomic(vec![AtomicRecordMerge::channel_bindings_merge(
-                &ChannelBindingsMergeAuthority::for_endpoint_binding_mutator(),
+                &ChannelBindingsMergeAuthority::test_authority(),
                 KNOWN_CHANNEL_ENDPOINTS_KEY,
                 &registry,
                 true,
