@@ -270,7 +270,13 @@ test('server message presentation survives body resolution without text inferenc
           id: 'seq:1',
           seq: 1,
           role: 'user',
-          presentation: 'task_notification',
+          presentation: {
+            kind: 'task_notification',
+            event: 'ready_for_review',
+            status: 'in_review',
+            task_id: '#TASK-42',
+            title: 'Synthetic review',
+          },
         },
         activity: [],
         started_at: null,
@@ -292,8 +298,46 @@ test('server message presentation survives body resolution without text inferenc
   const rows = buildThreadViewRows(renderState, new Map([[1, message]]));
 
   assert.equal(rows[0].kind, 'user_turn');
-  assert.equal(rows[0].userBlock.entry.presentation, 'task_notification');
+  assert.deepEqual(rows[0].userBlock.entry.presentation, {
+    kind: 'task_notification',
+    event: 'ready_for_review',
+    status: 'in_review',
+    task_id: '#TASK-42',
+    title: 'Synthetic review',
+  });
   assert.equal(rows[0].userBlock.entry.message, message);
+});
+
+test('unknown presentation kind degrades only that row hint', () => {
+  const renderState = {
+    based_on_seq: 1,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: 'user_turn:seq:1',
+        user: {
+          id: 'seq:1',
+          seq: 1,
+          role: 'user',
+          presentation: { kind: 'future_card', payload: 'new vocabulary' },
+        },
+        activity: [],
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    filtered_placeholders: [],
+  };
+  const message = { id: 'seq:1', seq: 1, role: 'user', text: 'ordinary' };
+
+  const rows = buildThreadViewRows(renderState, new Map([[1, message]]));
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].userBlock.entry.message, message);
+  assert.equal(rows[0].userBlock.entry.presentation, undefined);
 });
 
 test('server-visible assistant text is not inferred to be a loading placeholder', () => {

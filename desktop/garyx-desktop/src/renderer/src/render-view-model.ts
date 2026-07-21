@@ -2,6 +2,7 @@ import type {
   RenderActivityRow,
   RenderCapsuleCard,
   RenderMessageRef,
+  RenderMessagePresentation,
   RenderState,
   RenderStepRow,
   RenderToolEntry,
@@ -122,12 +123,43 @@ function lookup(
 
 function messageBlock(
   message: TranscriptMessage,
-  presentation?: RenderMessageRef['presentation'],
+  presentation?: unknown,
 ): RenderTranscriptBlock {
+  const normalizedPresentation = normalizeRenderMessagePresentation(presentation);
   return {
     kind: 'message',
     key: message.id,
-    entry: { kind: 'message', key: message.id, message, presentation },
+    entry: {
+      kind: 'message',
+      key: message.id,
+      message,
+      presentation: normalizedPresentation,
+    },
+  };
+}
+
+export function normalizeRenderMessagePresentation(
+  value: unknown,
+): RenderMessagePresentation | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const presentation = value as Record<string, unknown>;
+  if (
+    presentation.kind !== 'task_notification' ||
+    typeof presentation.event !== 'string' ||
+    typeof presentation.status !== 'string' ||
+    typeof presentation.task_id !== 'string' ||
+    typeof presentation.title !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    kind: 'task_notification',
+    event: presentation.event,
+    status: presentation.status,
+    task_id: presentation.task_id,
+    title: presentation.title,
   };
 }
 

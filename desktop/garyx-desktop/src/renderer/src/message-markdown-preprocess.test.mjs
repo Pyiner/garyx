@@ -18,7 +18,7 @@ test('streaming unclosed peels opener and preserves payload', () => {
 test('unclosed internal envelope peels the opener but keeps its readable body', () => {
   const o = prepareMessageMarkdown([
     '<garyx_task_notification event="ready_for_review" task_id="#TASK-42">',
-    'Task #TASK-42 is ready for review: Synthetic renderer review',
+    'Task #TASK-42 reached review: Synthetic renderer review',
     '',
     '# Review conclusion: FAIL',
   ].join('\n'));

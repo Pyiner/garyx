@@ -16,7 +16,7 @@ const CAPTURED_TEXT_CHARS = 8_339;
 function capturedNotificationText() {
   const prefix = [
     '<garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review">',
-    "Task #TASK-42 is ready for review: Synthetic renderer review",
+    "Task #TASK-42 reached review: Synthetic renderer review",
     "",
     "# Review conclusion: FAIL",
     "",
@@ -69,7 +69,13 @@ const capturedRenderState = {
         id: "seq:227",
         role: "user",
         seq: 227,
-        presentation: "task_notification",
+        presentation: {
+          kind: "task_notification",
+          event: "ready_for_review",
+          status: "in_review",
+          task_id: "#TASK-42",
+          title: "Synthetic renderer review",
+        },
       },
     },
   ],
@@ -126,9 +132,15 @@ async function assertCapturedNotificationRenders(message) {
   );
   const userTurn = rows.find((row) => row.kind === "user_turn");
   assert.ok(userTurn, "captured user_turn row should resolve from the body cache");
-  assert.equal(
+  assert.deepEqual(
     userTurn.userBlock.entry.presentation,
-    "task_notification",
+    {
+      kind: "task_notification",
+      event: "ready_for_review",
+      status: "in_review",
+      task_id: "#TASK-42",
+      title: "Synthetic renderer review",
+    },
     "the server render ref selects the task-notification presentation",
   );
 

@@ -698,6 +698,15 @@
   overflow-wrap: anywhere;
 }
 
+/* The shared user-role width/alignment owner also wraps shadcn Bubble. Its
+   inner BubbleContent retains the ordinary bubble surface and padding. */
+.message-bubble.user[data-slot="bubble"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .message-bubble.task-notification-message,
 .message-bubble.restart-notice-message {
   padding: 0;
@@ -707,10 +716,8 @@
   box-shadow: none;
 }
 
-.message-bubble.task-notification-message {
-  align-self: flex-start;
-  width: min(100%, 736px);
-  max-width: 100%;
+.message-bubble.user.task-notification-message {
+  width: 100%;
 }
 
 .message-bubble.task-notification-message > .message-rich-content {

@@ -20,7 +20,8 @@ function stripOuterRestartNotice(text: string): string | null {
 /**
  * Parse a `<garyx_restarted>…</garyx_restarted>` restart-notice message into a
  * card model. Returns null when the text is not a restart notice, so callers can
- * fall back to rendering the raw text. Mirrors `parseTaskNotificationText`.
+ * fall back to rendering the raw text. Mirrors the former task-notification
+ * parser's failure behavior.
  */
 export function parseRestartNoticeText(
   text: string,

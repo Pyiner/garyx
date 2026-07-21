@@ -1,4 +1,4 @@
-import type { TranscriptMessage } from '@shared/contracts';
+import type { RenderState, TranscriptMessage } from '@shared/contracts';
 
 import type { IntentState, MessageIntent, ThreadRuntimeState } from '../message-machine';
 import type { LiveStreamStatus, UiTranscriptMessage } from '../app-shell/types';
@@ -11,6 +11,7 @@ import type { LiveStreamStatus, UiTranscriptMessage } from '../app-shell/types';
 
 export type StoryState = {
   messages: UiTranscriptMessage[];
+  renderState: RenderState | null;
   liveStreamStatus: LiveStreamStatus | null;
   runtimeState: ThreadRuntimeState;
   activeRunId: string | null;
@@ -119,6 +120,7 @@ function intent(
 }
 
 const idleState: Omit<StoryState, 'messages'> = {
+  renderState: null,
   liveStreamStatus: null,
   runtimeState: 'idle',
   activeRunId: null,
@@ -474,41 +476,152 @@ export function buildStories(): Story[] {
     ],
   };
 
+  const taskNotificationUserText = Array.from(
+    { length: 18 },
+    (_, index) =>
+      `Width owner validation sentence ${index + 1} keeps this ordinary user bubble at the shared trailing cap.`,
+  ).join(' ');
+  const taskNotificationTutorial = [
+    'View details: garyx task get #TASK-528',
+    '',
+    'Review next:',
+    'If changes are needed, move the task back to in progress and send feedback to the task thread:',
+    'garyx task update #TASK-528 --status in_progress --note "needs changes: summary"',
+    '',
+    'If approved, mark it done:',
+    'garyx task update #TASK-528 --status done --note "approved by reviewer"',
+  ].join('\n');
+  const taskNotificationStep = (
+    label: string,
+    description: string,
+    body: string,
+    seq: number,
+  ): StoryStep => {
+    const userSeq = seq - 1;
+    const taskText = [
+      '<garyx_task_notification event="ready_for_review" task_id="#TASK-528" status="in_review" title="MCP tool review">',
+      body,
+      '</garyx_task_notification>',
+      '',
+      taskNotificationTutorial,
+    ].join('\n');
+    return step(label, description, {
+      messages: [
+        userMessage(taskNotificationUserText, {
+          id: `task-notification-width-owner-${userSeq}`,
+          localState: 'remote_final',
+          seq: userSeq,
+        }),
+        userMessage(taskText, {
+          id: `task-notification-story-row-${seq}`,
+          localState: 'remote_final',
+          seq,
+        }),
+      ],
+      renderState: {
+        based_on_seq: seq,
+        rows: [
+          {
+            kind: 'user_turn',
+            id: `user_turn:seq:${userSeq}`,
+            user: {
+              id: `seq:${userSeq}`,
+              seq: userSeq,
+              role: 'user',
+            },
+            activity: [],
+            started_at: null,
+            finished_at: null,
+            capsule_cards: [],
+          },
+          {
+            kind: 'user_turn',
+            id: `user_turn:seq:${seq}`,
+            user: {
+              id: `seq:${seq}`,
+              seq,
+              role: 'user',
+              presentation: {
+                kind: 'task_notification',
+                event: 'ready_for_review',
+                status: 'in_review',
+                task_id: '#TASK-528',
+                title: 'MCP tool review',
+              },
+            },
+            activity: [],
+            started_at: null,
+            finished_at: null,
+            capsule_cards: [],
+          },
+        ],
+        tailActivity: 'none',
+        activeToolGroupId: null,
+        progress_locus: 'none',
+        filtered_placeholders: [],
+      },
+    });
+  };
+
   const taskNotification: Story = {
     id: 'task-notification',
     name: '任务通知 · 待审查卡片',
     description: 'garyx_task_notification 结构化通知渲染为专用审查卡片，而不是裸 XML。',
     steps: [
-      step('ready_for_review', '下游 task 进入 in_review 后回到主线程的通知形态。', {
-        messages: [
-          userMessage('等 528 也进 review 后提醒我一起验收。', {
-            localState: 'remote_final',
-          }),
-          assistantMessage(
-            [
-              '<garyx_task_notification event="ready_for_review" task_id="#TASK-528" status="in_review">',
-              'Task #TASK-528 is ready for review: MCP tool review',
-              '',
-              '528(MCP) 已经跑完：',
-              '',
-              '- MCP manifest、tool discovery、enable/disable 都过了',
-              '- 端到端验证覆盖了登录态 app 的真实调用路径',
-              '- 和 527 的 sandboxAgentService/contracts 改动没有新冲突',
-              '',
-              'View details:',
-              'garyx task get #TASK-528',
-              '',
-              'Review next:',
-              'If changes are needed, move the task back to in progress and send feedback to the task thread:',
-              'garyx task update #TASK-528 --status in_progress --note "needs changes: summary"',
-              '',
-              'If approved, mark it done:',
-              'garyx task update #TASK-528 --status done --note "approved by reviewer"',
-              '</garyx_task_notification>',
-            ].join('\n'),
-          ),
-        ],
-      }),
+      taskNotificationStep(
+        '短正文 · 无展开',
+        '短正文用于确认无 overflow 时没有展开 affordance，并与长用户消息共享宽度 owner。',
+        'All focused tests pass.',
+        528,
+      ),
+      taskNotificationStep(
+        '单行长文本 · 响应宽度',
+        '一个源文本行在窄宽度折行溢出，在加宽后重新测量并恢复 fit。',
+        Array.from(
+          { length: 6 },
+          (_, index) =>
+            `Wrapping segment ${index + 1} preserves a single source line while exercising measured line boxes across width changes.`,
+        ).join(' '),
+        530,
+      ),
+      taskNotificationStep(
+        '十一显式行 · clamp',
+        '十一行正文必须超过十个当前字体 line-boxes。',
+        Array.from({ length: 11 }, (_, index) => `Explicit line ${index + 1}.  `).join('\n'),
+        532,
+      ),
+      taskNotificationStep(
+        '富 Markdown · 交互共存',
+        '列表、代码、表格和链接使用真实 RichMessageText 布局；链接不得触发展开。',
+        [
+          '[Review documentation](https://example.test/task-notification-docs)',
+          '',
+          '- Manifest discovery passed',
+          '- Enable and disable passed',
+          '- Login-state end-to-end path passed',
+          '',
+          '```ts',
+          'const manifest = await discoverTools();',
+          'await verify(manifest);',
+          '```',
+          '',
+          '| Surface | Result |',
+          '| --- | --- |',
+          '| Desktop | pass |',
+          '| iOS | pass |',
+        ].join('\n'),
+        534,
+      ),
+      taskNotificationStep(
+        '延迟图片 · intrinsic settling',
+        '远端图片晚到后 ResizeObserver/load 重新测量，并从 fit 变为 overflow。',
+        [
+          'The image below settles after the initial text layout.',
+          '',
+          '![Late intrinsic task result](https://example.test/task-notification-late-image.svg)',
+        ].join('\n'),
+        536,
+      ),
     ],
   };
 

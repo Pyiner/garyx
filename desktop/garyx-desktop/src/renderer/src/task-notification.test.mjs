@@ -1,91 +1,72 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import test from 'node:test';
 
-import { parseTaskNotificationText } from './task-notification.ts';
+import {
+  stripTaskNotificationEnvelope,
+  taskNotificationOverflows,
+} from './message-rich-content-core.ts';
 
-test('parses ready-for-review task notification envelope', () => {
-  const parsed = parseTaskNotificationText(`
-<garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review">
-Task #TASK-42 is ready for review: Ship task notifications
+test('structurally strips only the task notification envelope body', () => {
+  const text = [
+    '<garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review" title="Changed wording">',
+    'Pure handoff body.',
+    '',
+    '- Markdown remains intact.',
+    '</garyx_task_notification>',
+    '',
+    'View details: garyx task get #TASK-42',
+    'Review next: tutorial stays outside.',
+  ].join('\n');
 
-Done.
-
-View details:
-garyx task get #TASK-42
-
-Review next:
-If changes are needed, move the task back to in progress and send feedback to the task thread:
-garyx task update #TASK-42 --status in_progress --note "needs changes: summary"
-
-If approved, mark it done:
-garyx task update #TASK-42 --status done --note "approved by reviewer"
-</garyx_task_notification>
-`);
-
-  assert.deepEqual(parsed, {
-    event: 'ready_for_review',
-    status: 'in_review',
-    taskId: '#TASK-42',
-    title: 'Ship task notifications',
-    finalMessage: 'Done.',
-    detailCommand: 'garyx task get #TASK-42',
-    reviewCommands: [
-      'garyx task update #TASK-42 --status in_progress --note "needs changes: summary"',
-      'garyx task update #TASK-42 --status done --note "approved by reviewer"',
-    ],
-  });
+  assert.equal(
+    stripTaskNotificationEnvelope(text),
+    'Pure handoff body.\n\n- Markdown remains intact.',
+  );
 });
 
-test('keeps markdown-like final text without requiring strict XML content', () => {
-  const parsed = parseTaskNotificationText(`
-<garyx_task_notification event="ready_for_review" task_id="#TASK-7" status="in_review">
-Task #TASK-7 is ready for review: Review renderer output
+test('uses the last close tag so legacy envelope bodies stay readable', () => {
+  const text = [
+    '<garyx_task_notification event="ready_for_review">',
+    'Body with neutralized </garyx_task_notification > text.',
+    'Legacy tutorial wording can be anything.',
+    '</garyx_task_notification>',
+  ].join('\n');
 
-527 skill review with enough validation:
-
-- <review> should not become a visible wrapper.
-- command stayed safe & readable.
-
-View details:
-garyx task get #TASK-7
-
-Review next:
-garyx task update #TASK-7 --status done --note "approved by reviewer"
-</garyx_task_notification>
-`);
-
-  assert.equal(parsed?.taskId, '#TASK-7');
-  assert.equal(parsed?.title, 'Review renderer output');
-  assert.match(parsed?.finalMessage || '', /527 skill/);
-  assert.match(parsed?.finalMessage || '', /<review>/);
-  assert.deepEqual(parsed?.reviewCommands, [
-    'garyx task update #TASK-7 --status done --note "approved by reviewer"',
-  ]);
+  assert.equal(
+    stripTaskNotificationEnvelope(text),
+    [
+      'Body with neutralized </garyx_task_notification > text.',
+      'Legacy tutorial wording can be anything.',
+    ].join('\n'),
+  );
+  assert.equal(stripTaskNotificationEnvelope('<review>done</review>'), null);
 });
 
-test('ignores ordinary XML snippets', () => {
-  assert.equal(parseTaskNotificationText('<review>done</review>'), null);
+test('overflow decision honors the injected epsilon at the boundary', () => {
+  assert.equal(taskNotificationOverflows(200, 200, 0.5), false);
+  assert.equal(taskNotificationOverflows(200.5, 200, 0.5), false);
+  assert.equal(taskNotificationOverflows(200.5001, 200, 0.5), true);
 });
 
-test('task notification uses the full desktop reading width', () => {
+test('task notification inherits the ordinary trailing user bubble width owner', () => {
   const turnCss = readFileSync(
     new URL('./styles/turn-summary.css', import.meta.url),
     'utf8',
   );
-  const messageCss = readFileSync(
-    new URL('./styles/messages.css', import.meta.url),
-    'utf8',
-  );
-  const surfaceRule = turnCss.match(
+  const userRule = turnCss.match(/\.message-bubble\.user\s*\{([^}]*)\}/)?.[1];
+  const taskRule = turnCss.match(
     /\.message-bubble\.task-notification-message\s*\{([^}]*)\}/,
   )?.[1];
-  const cardRule = messageCss.match(/\.task-notification-card\s*\{([^}]*)\}/)?.[1];
+  const taskFillRule = turnCss.match(
+    /\.message-bubble\.user\.task-notification-message\s*\{([^}]*)\}/,
+  )?.[1];
 
-  assert.ok(surfaceRule, 'task-notification surface rule must exist');
-  assert.match(surfaceRule, /width:\s*min\(100%,\s*736px\)/);
-  assert.match(surfaceRule, /max-width:\s*100%/);
-  assert.doesNotMatch(surfaceRule, /77%/);
-  assert.ok(cardRule, 'task-notification card rule must exist');
-  assert.match(cardRule, /width:\s*100%/);
+  assert.ok(userRule, 'ordinary user bubble must remain the width/alignment owner');
+  assert.match(userRule, /max-width:\s*77%/);
+  assert.match(userRule, /align-self:\s*flex-end/);
+  assert.equal(taskRule, undefined, 'task rows must not override the shared owner');
+  assert.match(taskFillRule ?? '', /width:\s*100%/);
+  assert.doesNotMatch(taskFillRule ?? '', /max-width|align-self/);
+  assert.doesNotMatch(turnCss, /task-notification-message[^{}]*\{[^}]*736px/s);
 });

@@ -59,6 +59,7 @@ import { RateLimitBanner } from "./RateLimitBanner";
 import { NewThreadEmptyState } from "../../NewThreadEmptyState";
 import {
   RichMessageContent,
+  TaskNotificationDialogOwner,
   buildOptimisticTranscriptContent,
   splitRichMessageContentIntoBubbleParts,
   type MessageImagePreviewLoader,
@@ -181,7 +182,7 @@ function renderUserMessageBubbleParts({
     return (
       <Bubble
         align="end"
-        className={`max-w-[77%] ${pending ? "opacity-80" : ""}`}
+        className={`message-bubble user ${pending ? "opacity-80" : ""}`}
         key={`${keyPrefix}:${part.key}`}
         variant="muted"
         {...userTurnMarker}
@@ -278,7 +279,7 @@ const TranscriptRenderRow = memo(function TranscriptRenderRow({
     const cardMessageClass =
       entry.message.pending || loopContinuation
         ? null
-        : entry.presentation === "task_notification"
+        : entry.presentation?.kind === "task_notification"
           ? "task-notification-message"
           : parseRestartNoticeText(displayText) !== null
             ? "restart-notice-message"
@@ -830,10 +831,13 @@ export function ThreadPage({
   }, []);
 
   return (
-    <div
-      className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""}`}
-      style={threadLayoutStyle}
+    <TaskNotificationDialogOwner
+      scopeKey={selectedThreadId ?? "__garyx_new_thread__"}
     >
+      <div
+        className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""}`}
+        style={threadLayoutStyle}
+      >
       <div
         className={`thread-main ${isSideChatSurface ? "thread-main--side-chat" : ""} ${emptyNewThread ? "new-thread-centered" : ""}`}
         ref={threadMainRef}
@@ -928,7 +932,7 @@ export function ThreadPage({
             <>
               <Bubble
                 align="end"
-                className="max-w-[77%]"
+                className="message-bubble user"
                 data-user-turn-start="true"
                 variant="muted"
               >
@@ -1197,6 +1201,7 @@ export function ThreadPage({
             </div>
           </div>
       </div>
-    </div>
+      </div>
+    </TaskNotificationDialogOwner>
   );
 }

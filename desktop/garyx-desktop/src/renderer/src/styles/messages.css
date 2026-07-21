@@ -942,6 +942,15 @@ button.message-image-frame:focus-visible {
   box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
 }
 
+.task-notification-card[data-overflow="true"] {
+  cursor: pointer;
+}
+
+.task-notification-card:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-token-text-primary) 26%, transparent);
+  outline-offset: 2px;
+}
+
 .task-notification-header {
   display: grid;
   gap: 0;
@@ -998,12 +1007,73 @@ button.message-image-frame:focus-visible {
 }
 
 .task-notification-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
   padding: 10px 0 0;
   border-top: 1px solid color-mix(in oklab, var(--color-token-border) 70%, transparent);
 }
 
+.task-notification-body-viewport {
+  position: relative;
+  min-width: 0;
+  max-height: var(--task-notification-clamp-height, 10lh);
+  overflow: hidden;
+}
+
+.task-notification-body-viewport[data-overflow="true"]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2.75em;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--color-token-bg-primary) 92%, #f4f1eb)
+  );
+}
+
+.task-notification-body-content {
+  min-width: 0;
+}
+
+.task-notification-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  font: inherit;
+  font-size: var(--text-xs-plus);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.task-notification-expand:hover,
+.task-notification-expand:focus-visible {
+  background: color-mix(in oklab, var(--color-token-text-primary) 6%, transparent);
+  color: var(--color-token-text-primary);
+}
+
 .task-notification-body .message-rich {
   color: var(--color-token-text-primary);
+}
+
+.task-notification-dialog {
+  min-height: min(620px, calc(100dvh - 48px));
+}
+
+.task-notification-dialog-body {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in oklab, var(--color-token-border) 70%, transparent);
 }
 
 .restart-notice-card {

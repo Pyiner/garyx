@@ -1,15 +1,22 @@
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { Download, FileText } from "lucide-react";
+import { Download, FileText, Maximize2 } from "lucide-react";
 
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogTitle,
@@ -32,10 +39,6 @@ import { useI18n, type Translate } from "./i18n";
 import { useToastActions } from "./toast-provider";
 import type { RenderMessagePresentation } from "@shared/contracts";
 import {
-  parseTaskNotificationText,
-  type ParsedTaskNotification,
-} from "./task-notification";
-import {
   parseRestartNoticeText,
   type ParsedRestartNotice,
 } from "./restart-notice";
@@ -47,6 +50,8 @@ import {
   countTranscriptImages,
   extractTranscriptText,
   fallbackJsonSegment,
+  stripTaskNotificationEnvelope,
+  taskNotificationOverflows,
   type TranscriptSegment,
   buildMessageImageDataUrl,
 } from "./message-rich-content-core";
@@ -85,38 +90,353 @@ function taskNotificationStatusLabel(status: string, t: Translate): string {
     .join(" ");
 }
 
-function TaskNotificationCard({
+type TaskNotificationPresentation = Extract<
+  RenderMessagePresentation,
+  { kind: "task_notification" }
+>;
+
+type TaskNotificationSnapshot = {
+  presentation: TaskNotificationPresentation;
+  body: string;
+  onLocalFileLinkClick?: LocalFileLinkHandler;
+  renderLocalImage?: LocalMessageImageRenderer;
+};
+
+type TaskNotificationDialogContextValue = {
+  open: (snapshot: TaskNotificationSnapshot, returnFocus: HTMLElement) => void;
+};
+
+const TaskNotificationDialogContext =
+  createContext<TaskNotificationDialogContextValue | null>(null);
+
+const TASK_NOTIFICATION_LINE_COUNT = 10;
+const TASK_NOTIFICATION_OVERFLOW_EPSILON_PX = 0.5;
+const TASK_NOTIFICATION_INTERACTIVE_SELECTOR = [
+  "a",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "[contenteditable]",
+  "[role='button']",
+  "[role='link']",
+  "[data-task-notification-interactive]",
+].join(",");
+
+function TaskNotificationHeader({
+  dialogTitle = false,
   notification,
 }: {
-  notification: ParsedTaskNotification;
+  dialogTitle?: boolean;
+  notification: TaskNotificationPresentation;
 }) {
   const { t } = useI18n();
+  const title = notification.title || t("Task ready for review");
   return (
-    <section
-      className="task-notification-card"
-      aria-label={t("Task ready for review")}
-    >
-      <div className="task-notification-header">
-        <div className="task-notification-heading">
-          <div className="task-notification-kicker">
-            <span className="task-notification-task-id">
-              {notification.taskId || t("Task")}
-            </span>
-            <span className="task-notification-status">
-              {taskNotificationStatusLabel(notification.status, t)}
-            </span>
-          </div>
-          <h3 className="task-notification-title">{notification.title}</h3>
+    <div className="task-notification-header">
+      <div className="task-notification-heading">
+        <div className="task-notification-kicker">
+          <span className="task-notification-task-id">
+            {notification.task_id || t("Task")}
+          </span>
+          <span className="task-notification-status">
+            {taskNotificationStatusLabel(notification.status, t)}
+          </span>
         </div>
+        {dialogTitle ? (
+          <DialogTitle className="task-notification-title">{title}</DialogTitle>
+        ) : (
+          <h3 className="task-notification-title">{title}</h3>
+        )}
       </div>
+    </div>
+  );
+}
 
-      <div className="task-notification-body">
-        <RichMessageText
-          text={notification.finalMessage}
-          tone="assistant"
-        />
-      </div>
-    </section>
+export function TaskNotificationDialogOwner({
+  children,
+  scopeKey,
+}: {
+  children: ReactNode;
+  scopeKey: string;
+}) {
+  const { t } = useI18n();
+  const [snapshot, setSnapshot] =
+    useState<TaskNotificationSnapshot | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const open = useCallback(
+    (next: TaskNotificationSnapshot, returnFocus: HTMLElement) => {
+      returnFocusRef.current = returnFocus;
+      setSnapshot(next);
+    },
+    [],
+  );
+  const contextValue = useMemo(() => ({ open }), [open]);
+
+  useEffect(() => {
+    returnFocusRef.current = null;
+    setSnapshot(null);
+  }, [scopeKey]);
+
+  return (
+    <TaskNotificationDialogContext.Provider value={contextValue}>
+      {children}
+      <Dialog
+        open={snapshot !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setSnapshot(null);
+          }
+        }}
+      >
+        {snapshot ? (
+          <DialogContent
+            aria-describedby="task-notification-dialog-description"
+            className="task-notification-dialog"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              const returnFocus = returnFocusRef.current;
+              if (returnFocus?.isConnected) {
+                returnFocus.focus();
+              }
+            }}
+            scroll="content"
+            size="large"
+          >
+            <TaskNotificationHeader
+              dialogTitle
+              notification={snapshot.presentation}
+            />
+            <DialogDescription
+              className="sr-only"
+              id="task-notification-dialog-description"
+            >
+              {t("Complete task notification")}
+            </DialogDescription>
+            <DialogBody className="task-notification-dialog-body">
+              <RichMessageText
+                onLocalFileLinkClick={snapshot.onLocalFileLinkClick}
+                renderLocalImage={snapshot.renderLocalImage}
+                text={snapshot.body}
+                tone="assistant"
+              />
+            </DialogBody>
+          </DialogContent>
+        ) : null}
+      </Dialog>
+    </TaskNotificationDialogContext.Provider>
+  );
+}
+
+function useTaskNotificationClamp(body: string) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [measurement, setMeasurement] = useState({
+    clampHeight: 0,
+    overflows: false,
+  });
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) {
+      return;
+    }
+
+    let disposed = false;
+    let animationFrame = 0;
+    const measure = () => {
+      animationFrame = 0;
+      if (disposed) {
+        return;
+      }
+      const richText = content.querySelector<HTMLElement>(".message-rich");
+      const style = window.getComputedStyle(richText ?? content);
+      let lineHeight = Number.parseFloat(style.lineHeight);
+      if (!Number.isFinite(lineHeight)) {
+        const fontSize = Number.parseFloat(style.fontSize);
+        lineHeight = Number.isFinite(fontSize) ? fontSize * 1.45 : 0;
+      }
+      if (!(lineHeight > 0)) {
+        return;
+      }
+      const clampHeight = lineHeight * TASK_NOTIFICATION_LINE_COUNT;
+      viewport.style.setProperty(
+        "--task-notification-clamp-height",
+        `${clampHeight}px`,
+      );
+      const naturalHeight = Math.max(
+        content.scrollHeight,
+        content.getBoundingClientRect().height,
+      );
+      const overflows = taskNotificationOverflows(
+        naturalHeight,
+        clampHeight,
+        TASK_NOTIFICATION_OVERFLOW_EPSILON_PX,
+      );
+      setMeasurement((current) =>
+        current.clampHeight === clampHeight && current.overflows === overflows
+          ? current
+          : { clampHeight, overflows },
+      );
+    };
+    const scheduleMeasure = () => {
+      if (!animationFrame) {
+        animationFrame = window.requestAnimationFrame(measure);
+      }
+    };
+
+    measure();
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
+    resizeObserver.observe(viewport);
+    resizeObserver.observe(content);
+    const mutationObserver = new MutationObserver(scheduleMeasure);
+    mutationObserver.observe(content, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    content.addEventListener("load", scheduleMeasure, true);
+    window.addEventListener("resize", scheduleMeasure);
+
+    const fonts = document.fonts;
+    void fonts?.ready.then(scheduleMeasure);
+    fonts?.addEventListener?.("loadingdone", scheduleMeasure);
+
+    return () => {
+      disposed = true;
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      content.removeEventListener("load", scheduleMeasure, true);
+      window.removeEventListener("resize", scheduleMeasure);
+      fonts?.removeEventListener?.("loadingdone", scheduleMeasure);
+    };
+  }, [body]);
+
+  return { ...measurement, contentRef, viewportRef };
+}
+
+function taskNotificationClickIsInteractive(
+  card: HTMLElement,
+  target: EventTarget | null,
+): boolean {
+  return (
+    target instanceof Element &&
+    target !== card &&
+    target.closest(TASK_NOTIFICATION_INTERACTIVE_SELECTOR) !== null
+  );
+}
+
+function taskNotificationHasActiveSelection(card: HTMLElement): boolean {
+  const selection = window.getSelection();
+  return Boolean(
+    selection &&
+      !selection.isCollapsed &&
+      ((selection.anchorNode && card.contains(selection.anchorNode)) ||
+        (selection.focusNode && card.contains(selection.focusNode))),
+  );
+}
+
+function TaskNotificationCard({
+  notification,
+  body,
+  onLocalFileLinkClick,
+  renderLocalImage,
+}: {
+  notification: TaskNotificationPresentation;
+  body: string;
+  onLocalFileLinkClick?: LocalFileLinkHandler;
+  renderLocalImage?: LocalMessageImageRenderer;
+}) {
+  const { t } = useI18n();
+  const dialog = useContext(TaskNotificationDialogContext);
+  const cardRef = useRef<HTMLElement>(null);
+  const { clampHeight, contentRef, overflows, viewportRef } =
+    useTaskNotificationClamp(body);
+  const activate = useCallback(() => {
+    const card = cardRef.current;
+    if (!overflows || !card || !dialog) {
+      return;
+    }
+    const presentation = Object.freeze({ ...notification });
+    dialog.open(
+      Object.freeze({
+        body,
+        onLocalFileLinkClick,
+        presentation,
+        renderLocalImage,
+      }),
+      card,
+    );
+  }, [body, dialog, notification, onLocalFileLinkClick, overflows, renderLocalImage]);
+  const handleCardClick = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      if (
+        !overflows ||
+        taskNotificationClickIsInteractive(event.currentTarget, event.target) ||
+        taskNotificationHasActiveSelection(event.currentTarget)
+      ) {
+        return;
+      }
+      activate();
+    },
+    [activate, overflows],
+  );
+
+  return (
+    <>
+      <section
+        aria-label={t("Task ready for review")}
+        className="task-notification-card"
+        data-overflow={overflows ? "true" : "false"}
+        onClick={handleCardClick}
+        ref={cardRef}
+        tabIndex={-1}
+      >
+        <TaskNotificationHeader notification={notification} />
+
+        <div className="task-notification-body">
+          <div
+            className="task-notification-body-viewport"
+            data-overflow={overflows ? "true" : "false"}
+            ref={viewportRef}
+            style={
+              clampHeight > 0
+                ? ({
+                    "--task-notification-clamp-height": `${clampHeight}px`,
+                  } as CSSProperties)
+                : undefined
+            }
+          >
+            <div className="task-notification-body-content" ref={contentRef}>
+              <RichMessageText
+                onLocalFileLinkClick={onLocalFileLinkClick}
+                renderLocalImage={renderLocalImage}
+                text={body}
+                tone="assistant"
+              />
+            </div>
+          </div>
+          {overflows ? (
+            <button
+              aria-label={t("Expand task notification")}
+              className="task-notification-expand"
+              data-task-notification-interactive
+              onClick={activate}
+              type="button"
+            >
+              <Maximize2 aria-hidden size={14} strokeWidth={1.9} />
+              <span>{t("Expand")}</span>
+            </button>
+          ) : null}
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -616,10 +936,13 @@ export const RichMessageContent = memo(function RichMessageContent({
     [content, segments, text],
   );
   const taskNotification = useMemo(
-    () =>
-      presentation === "task_notification"
-        ? parseTaskNotificationText(text)
-        : null,
+    () => {
+      if (presentation?.kind !== "task_notification") {
+        return null;
+      }
+      const body = stripTaskNotificationEnvelope(text);
+      return body === null ? null : { presentation, body };
+    },
     [presentation, text],
   );
 
@@ -629,7 +952,12 @@ export const RichMessageContent = memo(function RichMessageContent({
   if (taskNotification) {
     return (
       <div className="message-rich-content">
-        <TaskNotificationCard notification={taskNotification} />
+        <TaskNotificationCard
+          body={taskNotification.body}
+          notification={taskNotification.presentation}
+          onLocalFileLinkClick={onLocalFileLinkClick}
+          renderLocalImage={renderLocalMarkdownImage}
+        />
       </div>
     );
   }

@@ -153,7 +153,10 @@ function renderBlockEqual(
       right.kind === "message" &&
       left.entry.key === right.entry.key &&
       left.entry.message === right.entry.message &&
-      left.entry.presentation === right.entry.presentation
+      renderMessagePresentationEqual(
+        left.entry.presentation,
+        right.entry.presentation,
+      )
     );
   }
   if (right.kind !== "tool_group") {
@@ -171,6 +174,24 @@ function renderBlockEqual(
         renderToolProjectionEqual(entry.projection, other.projection)
       );
     })
+  );
+}
+
+function renderMessagePresentationEqual(
+  left: Extract<RenderTranscriptBlock, { kind: "message" }>["entry"]["presentation"],
+  right: Extract<RenderTranscriptBlock, { kind: "message" }>["entry"]["presentation"],
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.kind !== right.kind) {
+    return false;
+  }
+  return (
+    left.event === right.event &&
+    left.status === right.status &&
+    left.task_id === right.task_id &&
+    left.title === right.title
   );
 }
 

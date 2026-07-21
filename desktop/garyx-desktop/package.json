@@ -26,6 +26,7 @@
     "dist:mac:release": "node ./scripts/build-mac-release.mjs",
     "test:unit": "node ./scripts/run-unit-tests.mjs",
     "test:tail-thinking-cdp": "node ./scripts/tail-thinking-cdp-repro.mjs --expect fixed",
+    "test:task-notification-layout": "node ./scripts/task-notification-layout.mjs",
     "test:smoke": "npm run dist:dir && node ./scripts/electron-smoke.mjs",
     "test:i18n-literals": "node ./scripts/check-i18n-literals.mjs",
     "verify:mac:release": "node ./scripts/verify-mac-release.mjs",

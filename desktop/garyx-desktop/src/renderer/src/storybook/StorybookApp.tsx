@@ -46,7 +46,7 @@ function noop() {}
 /// Mounts the real ThreadPage against one scenario step. Activity flags are
 /// derived through the real contract derivation — the storybook only authors
 /// machine-level state, never hand-set loading booleans.
-function ThreadStage({ step }: { step: StoryStep }) {
+function ThreadStage({ step, storyId }: { step: StoryStep; storyId: string }) {
   const state = step.state;
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -75,7 +75,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       // Committed message rows are server-driven (render_state) post-SSR; the
       // storybook has no gateway, so it visualizes the conversation-state
       // machine, optimistic bubbles, and activity chrome rather than history.
-      renderState={null}
+      renderState={state.renderState}
       activeThreadSummary={null}
       activeThreadTitle="Conversation State Storybook"
       activeThreadRunId={state.activeRunId}
@@ -138,7 +138,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onSteerQueuedPrompt={noop}
       preferredWorkspaceForNewThread={null}
       selectableNewThreadWorkspaces={[]}
-      selectedThreadId="storybook-thread"
+      selectedThreadId={`storybook-${storyId}`}
       showAutomationRunInitialPlaceholder={false}
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
       showTailThinking={activity.showPendingAckLoading}
@@ -240,6 +240,7 @@ export function StorybookApp() {
           {stories.map((entry) => (
             <button
               className={`storybook-story ${entry.id === story.id ? 'is-active' : ''}`}
+              data-story-id={entry.id}
               key={entry.id}
               onClick={() => selectStory(entry.id)}
               type="button"
@@ -300,6 +301,7 @@ export function StorybookApp() {
             {story.steps.map((entry, index) => (
               <button
                 className={`storybook-timeline-step ${index === boundedStepIndex ? 'is-active' : ''} ${index < boundedStepIndex ? 'is-passed' : ''}`}
+                data-step-index={index}
                 key={entry.label}
                 onClick={() => {
                   setPlaying(false);
@@ -325,7 +327,7 @@ export function StorybookApp() {
               <RichMessageText text={MARKDOWN_PARITY_FIXTURE} tone="assistant" />
             </div>
           ) : (
-            <ThreadStage key={`${story.id}:${boundedStepIndex}`} step={step} />
+            <ThreadStage step={step} storyId={story.id} />
           )}
         </section>
       </main>

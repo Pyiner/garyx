@@ -85,7 +85,13 @@ export type RenderTailActivity =
 
 export type RenderProgressLocus = "none" | "tail" | "tool_group";
 
-export type RenderMessagePresentation = "task_notification";
+export type RenderMessagePresentation = {
+  kind: "task_notification";
+  event: string;
+  status: string;
+  task_id: string;
+  title: string;
+};
 
 export interface RenderMessageRef {
   id: string;

@@ -40,6 +40,30 @@ export type TranscriptSegment =
       json: string;
     };
 
+export function stripTaskNotificationEnvelope(text: string): string | null {
+  const openStart = text.indexOf("<garyx_task_notification");
+  if (openStart < 0) {
+    return null;
+  }
+  const openEnd = text.indexOf(">", openStart);
+  if (openEnd < 0) {
+    return null;
+  }
+  const closeStart = text.lastIndexOf("</garyx_task_notification>");
+  if (closeStart <= openEnd) {
+    return null;
+  }
+  return text.slice(openEnd + 1, closeStart).trim();
+}
+
+export function taskNotificationOverflows(
+  naturalHeight: number,
+  clampHeight: number,
+  epsilon: number,
+): boolean {
+  return naturalHeight > clampHeight + epsilon;
+}
+
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
