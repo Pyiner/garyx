@@ -23,21 +23,28 @@ garyx-models (presentation), desktop renderer, iOS
 
 ## 2. Changes
 
-### 2.1 Bug fix: semantic keys survive the queue
+### 2.1 Bug fix: the notification object survives the queue
 
-- Delete `DISPATCH_ATTRIBUTION_METADATA_KEYS` and
-  `dispatch_attribution_metadata`.
-- Enqueue carries the full dispatch metadata minus one shared runtime
-  denylist. `RUNTIME_ONLY_METADATA_KEYS` is extended to the complete
-  known runtime set — `garyx_mcp_auth_token`, `remote_mcp_servers`,
-  `garyx_mcp_headers`, `provider_env`, `system_prompt`,
-  `developer_instructions`, `desktop_antigravity_env`,
-  `sdk_session_fork` — and applied at **both** the enqueue boundary
-  (pendings are persisted inside run records) and the existing direct
-  persistence chokepoint. This fixes the dropped-semantics bug and stops
-  the direct path's existing secret leak for **new** records with the
-  same constant. (Typed metadata containers replacing the denylist
-  entirely = slice C.)
+- The queue keeps its **bounded projection** (the current allowlist
+  mechanism) — full-map pass-through is rejected for slice A: with
+  plugin/CreateThread ingress hardening deferred to slice B, copying
+  arbitrary caller metadata into pendings would let externally forged
+  `task_notification` objects reach committed records on the busy path
+  and be upgraded into trusted-looking cards, a *new* forgery surface
+  the allowlist incidentally prevents today. It would also record
+  busy-request fields (model/provider/workspace) that never applied to
+  the already-running provider as if they had.
+- `DISPATCH_ATTRIBUTION_METADATA_KEYS` gains exactly one entry:
+  `task_notification`. No other source keys are added in slice A.
+- The helper's second job is kept explicitly: the queue projection
+  still writes `origin_run_id = requested_run_id` (the notify-dispatch
+  attribution — the full metadata never contains it and the pending's
+  `bridge_run_id` is the active run, so deleting the helper would lose
+  it permanently). ACK asserts `origin_run_id` is the requested run,
+  not the active run.
+- `RUNTIME_ONLY_METADATA_KEYS` and the direct persistence path are
+  untouched (the direct-path secret leak is pre-existing slice B1 debt;
+  slice A must not widen or narrow it).
 - `acknowledge_pending_input` merge semantics unchanged (bookkeeping
   keys win).
 
@@ -72,11 +79,14 @@ garyx-models (presentation), desktop renderer, iOS
   needed). `title` joins `task_id` under `xml_attr` escaping, extended
   to encode CR/LF/TAB as numeric character references (multiline-title
   test). Existing body close-tag neutralization stays.
-- **Forgery mitigation in scope**: the chat ingress strip
-  (`prepare.rs`, next to the existing agent-identity strip) and the
-  atomic-dispatch strip (`create_dispatch.rs`) drop an externally
-  supplied `task_notification` key. (Plugin/channel ingress hardening =
-  slice B.)
+- **Forgery mitigation in scope**: `task_notification` becomes a
+  reserved key stripped at **all four** raw-metadata ingresses — chat
+  (`prepare.rs`, next to the existing agent-identity strip), atomic
+  dispatch (`create_dispatch.rs`), `CreateThreadBody.metadata` (thread
+  metadata is later copied into dispatches), and the plugin host's
+  `extra_metadata` intake. Each is a one-key strip at an existing
+  boundary — this is not the slice-B ingress refactor, which remains
+  deferred.
 
 ### 2.3 Models: flattened presentation payload
 
@@ -100,9 +110,16 @@ garyx-models (presentation), desktop renderer, iOS
   hashes the full payload; rows-hash test for a title/status-only delta
   upsert; Storybook scenario becomes a real user render row.
 - Wire cutover: desktop ships atomically with the gateway (same repo,
-  same release). iOS ships via the normal release flow; the old-app
-  window where object presentations decode as unknown is accepted by
-  the owner (no compatibility logic). No schema negotiation (slice C).
+  same release). iOS ships via the normal release flow. **Honest
+  old-iOS failure mode** (owner-accepted, no compatibility logic): the
+  current decoder reads presentation as a single String, so against a
+  new gateway an old app does not "degrade gracefully" — a full
+  snapshot drops the affected row entirely (lossy row array), and a
+  delta upsert containing an object presentation decodes as a malformed
+  delta and triggers the gap/replay path. Validation covers these two
+  real failure shapes, and the rollout note tells the owner to update
+  iOS promptly after the gateway ships. No schema negotiation (slice
+  C).
 
 ### 2.4 Clients: delete the task prose parsers; card UI
 
@@ -170,15 +187,23 @@ versioning; internal/internal_kind retirement; history envelope changes.
 
 - **Queue fix**: busy-thread dispatch (real `QueuedToActiveRun` path, no
   direct-commit shortcut) commits a user record whose metadata contains
-  the `task_notification` object and `internal_dispatch`, and none of
-  the extended denylist keys; the same sentinel-secret assertions on the
-  direct path (regression for the existing leak); all other internal
-  dispatch sources (followup/automation/cron/auto-start/restart) keep
-  their source keys through the queue.
+  the `task_notification` object, `internal_dispatch`, and
+  `origin_run_id` = the requested (notify-dispatch) run id, never the
+  active run's. **Pending-at-rest assertion**: block the provider ACK,
+  read the persisted thread record, and assert the pending's metadata
+  key set is exactly the bounded projection (allowlist keys +
+  `task_notification` + `origin_run_id`) — in particular none of the
+  eight runtime keys — then release the ACK and assert the committed
+  transcript. Run once through the Legacy queue path and once through
+  the Durable exact path, plus a focused unit test on the single
+  enqueue constructor.
 - **Producer**: golden text fixture — envelope attributes escaped
   (multiline title), body = pure final_message, tutorial outside the
-  envelope; task_hooks reads the object; a chat/atomic request carrying
-  `task_notification` metadata commits without it and renders no card.
+  envelope; task_hooks reads the object; forgery negatives at all four
+  strip points — chat, atomic dispatch, CreateThread metadata (including
+  the copy-through into a later dispatch), and plugin `extra_metadata` —
+  each carrying `task_notification`, asserted on both the direct path
+  and the busy-queue path: the key never commits and no card renders.
 - **Models**: golden presentation JSON; reducer fixtures (new object
   shape → presentation; measured legacy dropped-marker and scattered-key
   shapes → none); malformed negatives; unknown-kind row degradation on

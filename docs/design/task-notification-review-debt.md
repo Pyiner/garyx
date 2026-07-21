@@ -1,8 +1,9 @@
 # Task Notification Review Debt (Slices B & C)
 
-Status: debt register, owner decision 2026-07-21 — slice A shipped
-separately (`task-notification-structured-presentation.md`); everything
-below is recorded for future scheduling, **not** in flight.
+Status: debt register, owner decision 2026-07-21 — slice A is scoped
+and designed separately (`task-notification-structured-presentation.md`,
+not yet implemented); everything below is recorded for future
+scheduling, **not** in flight.
 Source: nine adversarial review rounds of #TASK-2541 (revisions 1–9,
 `docs/design` git history `228846ce0..042fd35bd`). Each item cites the
 round that established it. Findings were code-verified by the reviewer;
@@ -17,9 +18,12 @@ two-key denylist (`persistence.rs` `RUNTIME_ONLY_METADATA_KEYS`), while
 run-metadata backfill injects `provider_env` (may contain tokens),
 `system_prompt`, `garyx_mcp_headers` (feeds MCP HTTP headers),
 `desktop_antigravity_env` (arbitrary process env),
-`developer_instructions`, `sdk_session_fork`. Slice A extends the
-denylist so **new** records stop leaking; already-committed history
-still contains these values and `/api/threads/history` serves them.
+`developer_instructions`, `sdk_session_fork`. Slice A does **not**
+touch this (its final review round showed that widening the queue
+projection without the B3 ingress work creates a new forgery surface,
+so A keeps the bounded queue projection and leaves the direct path
+as-is); new and old records keep leaking until B1 lands, and
+`/api/threads/history` serves the values.
 Full remediation = historical scrub (see C4) plus typed containers (C1).
 Also: request-shaped fields (`model`, reasoning, tier,
 `requested_provider_type`, workspace aliases) persist today and read as
@@ -51,9 +55,11 @@ breaking third-party bearer auth.
 
 ### B3. External metadata forgery surface beyond chat (r3, r5, r6)
 
-Slice A strips `task_notification` at chat + atomic dispatch only.
-Remaining ingresses accept arbitrary metadata that flows toward
-provider/persistence: `CreateThreadBody.metadata` (create-only keys are
+Slice A strips only the single reserved `task_notification` key, at
+four ingresses (chat, atomic dispatch, CreateThread metadata, plugin
+extra_metadata). Everything else remains open: the same ingresses
+accept arbitrary metadata that flows toward provider/persistence:
+`CreateThreadBody.metadata` (create-only keys are
 later bulk-copied into dispatch metadata via thread-metadata
 copy-through and `merge_thread_agent_runtime_snapshot` picks
 runtime keys from bare thread metadata), plugin `deliver_inbound`
@@ -80,10 +86,13 @@ the second dual mechanism. Blocked on nothing; small, independent.
 
 `DispatchMetadata { provenance, durable, runtime }` with
 `external()`/`internal()` constructors (no provenance slot on the
-external path), opaque non-serializable `RuntimeMetadata`, sealed
-six-variant `ProvenanceRecord` (task notification, restart wake,
-followup, automation, cron, task auto-start; serde tag `kind`, restart
-field `wake_kind` to avoid the internal-tag conflict), per-row
+external path), opaque non-serializable `RuntimeMetadata`, a
+six-variant plain serialized `ProvenanceRecord` (task notification,
+restart wake, followup, automation, cron, task auto-start; serde tag
+`kind`, restart field `wake_kind` to avoid the internal-tag conflict —
+the record is data and does not authenticate its own origin; the r5/r6
+verdict is that trust comes from the controlled write path, never from
+the serde shape), per-row
 provenance attribution replacing `build_run_messages` bulk merge,
 `QueueCommitAttribution` as the sole source of queue keys.
 Trust model: the write path is the root of trust — trusted vs untrusted
