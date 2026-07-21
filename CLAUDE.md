@@ -12,6 +12,12 @@ operating principles here; detailed rules live in the referenced files under
 - Prefer existing crate, SwiftUI, Electron, and UI patterns over new
   abstractions unless the change clearly needs one.
 - Run focused deterministic validation for the touched area.
+- Architecture guards are structural, never textual: enforce boundaries
+  with visibility, capability tokens, feature-gated test constructors, and
+  importable contract constants — never with tests that regex-scan source
+  files. `cfg(test)` must never replace production behavior; test seams
+  are additive, with the production side wired explicitly at the
+  composition root.
 - Commit completed code changes before handoff. Stage only files changed for
   the current task.
 - When pushing completed work, push directly to the remote `main` branch unless

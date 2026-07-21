@@ -247,6 +247,31 @@ reinterpreted in feature code.
 - Discord REST writes retry 429, transient network, and 5xx responses with
   backoff.
 
+## Structural Guards And Test Seams
+
+- Architecture guards are structural, never textual: no test may walk or
+  regex-scan source files to enforce a boundary. Enforce boundaries with
+  visibility, capability tokens (e.g. `ThreadDeleteAdmission`, minted only
+  by a live coordinator delete reservation), `cfg(test)`-only helpers for
+  test seeding (`archive_thread_record`), and in-module tests that import
+  reviewed contract constants directly (the patch-field allowlists).
+- Test seams are additive injection points. `cfg(test)` must never replace
+  production behavior. The production side of a seam is wired explicitly at
+  the composition root — e.g. the runtime assembly passes
+  `AppStateBuilder::with_restart_requester(process_restart_requester())`
+  while the builder default stays inert — matching the
+  `with_persistent_local_stores` opt-in pattern.
+- Contracts formerly pinned by retired source-scan guards, now owned by
+  review: provider SPI `run_streaming` is invoked only by the bridge run
+  graph (`garyx-bridge/src/run_graph.rs`); bridge raw run entrypoints stay
+  `pub(crate)` behind `MultiProviderBridge`; automation-engine logging goes
+  through the `engine/log.rs` `cron_*` wrappers (the runtime tracing-target
+  test remains); the subprocess plugin host dispatches inbound work only
+  through `InboundPipeline` (primary enforcement stays compile-level via
+  `pub(crate)` in garyx-channels); direct `UPDATE recent_threads` writes
+  stay confined to activity-seq allocation plus the reviewed pre-bind-only
+  exceptions documented at their call sites.
+
 ## Time And Timezone
 
 - Storage, HTTP API contracts, and scheduling baselines are UTC: RFC3339 with

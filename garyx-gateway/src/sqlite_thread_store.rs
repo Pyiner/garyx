@@ -490,9 +490,10 @@ impl ThreadStore for SqliteThreadStore {
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         let prior = reservation.prior_terminal();
+        let admission = reservation.storage_delete_admission();
         let _guard = lock.lock().await;
         let removed = garyx_db
-            .run_blocking(move |db| db.delete_thread_record_with_projections(&key))
+            .run_blocking(move |db| db.delete_thread_record_with_projections(&key, admission))
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         if removed || prior.is_some() {

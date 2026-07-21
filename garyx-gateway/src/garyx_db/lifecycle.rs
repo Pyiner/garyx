@@ -386,6 +386,12 @@ impl GaryxDbService {
     /// other path — a write racing this transaction either lands before
     /// the tombstone (and is deleted here) or is rejected by the in-tx
     /// tombstone check in `write_thread_record_with_projections`.
+    ///
+    /// Test-only tombstone seeding helper: the production archive path is
+    /// `execute_lifecycle_mutation`. The `cfg(test)` gate is the structural
+    /// replacement for the retired source-scan guard — a production call
+    /// site simply does not compile.
+    #[cfg(test)]
     pub(crate) fn archive_thread_record(&self, thread_id: &str) -> GaryxDbResult<bool> {
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);

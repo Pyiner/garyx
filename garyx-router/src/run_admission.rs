@@ -672,9 +672,39 @@ impl LifecycleCommitWitness {
     }
 }
 
+/// Capability consumed by the storage layer's terminal thread-record delete.
+///
+/// Minted only from a live delete [`LifecycleReservation`], so the raw
+/// destructive record delete cannot be reached without first holding the
+/// coordinator's delete fence. This is the compile-time replacement for the
+/// retired source-scan guard over `delete_thread_record_with_projections`
+/// call sites.
+pub struct ThreadDeleteAdmission(());
+
+#[cfg(feature = "test-seams")]
+impl ThreadDeleteAdmission {
+    /// Test-only constructor for direct storage-layer tests, enabled solely
+    /// through the `test-seams` feature from dev-dependencies. Production
+    /// builds have exactly one mint: [`LifecycleReservation::storage_delete_admission`].
+    pub fn test_admission() -> Self {
+        Self(())
+    }
+}
+
 impl LifecycleReservation {
     pub fn thread_id(&self) -> &str {
         &self.token.thread_id
+    }
+
+    /// Mint the storage-delete capability. Panics if this reservation is not
+    /// a delete reservation — archive/decision owners have no business
+    /// reaching the raw record delete.
+    pub fn storage_delete_admission(&self) -> ThreadDeleteAdmission {
+        assert!(
+            matches!(self.token.expected_state, OwnedStateKind::Deleting),
+            "storage delete admission requires a delete reservation"
+        );
+        ThreadDeleteAdmission(())
     }
 
     pub fn prior_terminal(&self) -> Option<ThreadTerminalState> {

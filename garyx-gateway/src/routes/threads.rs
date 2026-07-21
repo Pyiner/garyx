@@ -1229,3 +1229,25 @@ pub async fn update_thread(
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
     }
 }
+
+#[cfg(test)]
+mod patch_allowlist_contract {
+    //! The patch-field allowlist is a reviewed durable contract for an
+    //! existing-record writer (retired source-scan guard, now pinned by
+    //! direct import): growing it means auditing what a concurrent
+    //! whole-record write could clobber.
+
+    #[test]
+    fn imported_history_patch_allowlist_is_the_reviewed_contract() {
+        assert_eq!(
+            super::IMPORTED_HISTORY_PATCH_FIELDS,
+            &[
+                "last_user_preview",
+                "last_assistant_preview",
+                "message_count",
+                "history",
+                "updated_at",
+            ]
+        );
+    }
+}

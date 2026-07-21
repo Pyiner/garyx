@@ -2356,12 +2356,12 @@ fn thread_record_write_read_list_delete_round_trip() {
 
     assert!(
         service
-            .delete_thread_record_with_projections("thread::alpha")
+            .delete_thread_record_with_projections("thread::alpha", garyx_router::ThreadDeleteAdmission::test_admission())
             .expect("delete")
     );
     assert!(
         !service
-            .delete_thread_record_with_projections("thread::alpha")
+            .delete_thread_record_with_projections("thread::alpha", garyx_router::ThreadDeleteAdmission::test_admission())
             .expect("delete again")
     );
     assert_eq!(
@@ -2461,7 +2461,7 @@ fn thread_record_write_derives_projections_in_the_same_transaction() {
         .expect("write again");
     service.pin_thread(thread_id).expect("pin");
     service
-        .delete_thread_record_with_projections(thread_id)
+        .delete_thread_record_with_projections(thread_id, garyx_router::ThreadDeleteAdmission::test_admission())
         .expect("delete");
     assert!(
         !service
@@ -3513,7 +3513,7 @@ fn terminal_tombstones_fence_favorite_cleanup_without_noop_revision_bumps() {
     let incarnation = deleted.store_incarnation_id().unwrap();
     assert!(
         deleted
-            .delete_thread_record_with_projections("thread::delete-recreate")
+            .delete_thread_record_with_projections("thread::delete-recreate", garyx_router::ThreadDeleteAdmission::test_admission())
             .expect("plain delete without favorite")
     );
     assert_eq!(deleted.list_thread_favorites().unwrap().revision, 0);
@@ -3536,7 +3536,7 @@ fn terminal_tombstones_fence_favorite_cleanup_without_noop_revision_bumps() {
         .expect("favorite before delete");
     assert!(
         delete_with_favorite
-            .delete_thread_record_with_projections("thread::delete-favorite")
+            .delete_thread_record_with_projections("thread::delete-favorite", garyx_router::ThreadDeleteAdmission::test_admission())
             .expect("delete with favorite")
     );
     let page = delete_with_favorite.list_thread_favorites().unwrap();
@@ -3547,7 +3547,7 @@ fn terminal_tombstones_fence_favorite_cleanup_without_noop_revision_bumps() {
     assert!(page.favorites.is_empty());
     assert!(
         !delete_with_favorite
-            .delete_thread_record_with_projections("thread::delete-favorite")
+            .delete_thread_record_with_projections("thread::delete-favorite", garyx_router::ThreadDeleteAdmission::test_admission())
             .expect("repeat delete")
     );
     assert_eq!(
@@ -3898,14 +3898,14 @@ fn archive_and_runtime_delete_each_bump_pin_revision_once() {
         .pin_thread("thread::deleted")
         .expect("delete candidate pin");
     deleted
-        .delete_thread_record_with_projections("thread::deleted")
+        .delete_thread_record_with_projections("thread::deleted", garyx_router::ThreadDeleteAdmission::test_admission())
         .expect("runtime delete");
     assert_eq!(
         deleted.list_pinned_threads().expect("delete page").revision,
         2
     );
     deleted
-        .delete_thread_record_with_projections("thread::deleted")
+        .delete_thread_record_with_projections("thread::deleted", garyx_router::ThreadDeleteAdmission::test_admission())
         .expect("repeat delete");
     assert_eq!(
         deleted
@@ -5025,7 +5025,7 @@ fn seed_lifecycle_state(db: &GaryxDbService, thread_id: &str, state: LifecycleSe
             )
             .expect("seed thread before delete");
             assert!(
-                db.delete_thread_record_with_projections(thread_id)
+                db.delete_thread_record_with_projections(thread_id, garyx_router::ThreadDeleteAdmission::test_admission())
                     .expect("seed deleted tombstone")
             );
         }
@@ -5416,7 +5416,7 @@ fn startup_recovery_abandons_only_orphaned_queued_inputs_in_one_pass() {
 fn missing_raw_delete_does_not_create_a_tombstone_but_real_delete_does() {
     let db = GaryxDbService::memory().expect("db opens");
     assert!(
-        !db.delete_thread_record_with_projections("thread::missing-delete")
+        !db.delete_thread_record_with_projections("thread::missing-delete", garyx_router::ThreadDeleteAdmission::test_admission())
             .unwrap()
     );
     assert_eq!(
@@ -5425,7 +5425,7 @@ fn missing_raw_delete_does_not_create_a_tombstone_but_real_delete_does() {
     );
     seed_lifecycle_state(&db, "thread::real-delete", LifecycleSeedState::Active);
     assert!(
-        db.delete_thread_record_with_projections("thread::real-delete")
+        db.delete_thread_record_with_projections("thread::real-delete", garyx_router::ThreadDeleteAdmission::test_admission())
             .unwrap()
     );
     assert_eq!(

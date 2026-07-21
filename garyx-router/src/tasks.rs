@@ -1446,3 +1446,26 @@ fn is_allowed_transition(from: TaskStatus, to: TaskStatus) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod patch_allowlist_contract {
+    //! The patch-field allowlist is a reviewed durable contract for an
+    //! existing-record writer (retired source-scan guard, now pinned by
+    //! direct import): growing it means auditing what a concurrent
+    //! whole-record write could clobber.
+
+    #[test]
+    fn task_creation_patch_allowlist_is_the_reviewed_contract() {
+        assert_eq!(
+            super::TASK_CREATION_PATCH_FIELDS,
+            &[
+                "label",
+                "thread_title_source",
+                "provider_thread_title",
+                "thread_kind",
+                "task",
+                "updated_at",
+            ]
+        );
+    }
+}

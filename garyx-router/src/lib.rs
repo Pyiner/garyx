@@ -79,7 +79,8 @@ pub use router::{
 };
 pub use run_admission::{
     AdmittedRun, ArchiveBarrier, CoordinationError, LifecycleCommitWitness, LifecycleReservation,
-    RunAdmissionError, ThreadRunAborter, ThreadRunCoordinator, ThreadRunLease,
+    RunAdmissionError, ThreadDeleteAdmission, ThreadRunAborter, ThreadRunCoordinator,
+    ThreadRunLease,
 };
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::contract as store_contract;

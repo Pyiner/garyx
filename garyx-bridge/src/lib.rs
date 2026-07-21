@@ -12,6 +12,3 @@ mod run_graph;
 
 pub use multi_provider::{MultiProviderBridge, RunLifecycleEvent};
 pub use provider_trait::{BridgeError, ClearSessionOutcome, ProviderRuntime};
-
-#[cfg(test)]
-mod api_guard_tests;

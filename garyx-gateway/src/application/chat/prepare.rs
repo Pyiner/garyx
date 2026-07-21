@@ -1242,3 +1242,19 @@ fn build_chat_metadata(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod patch_allowlist_contract {
+    //! The patch-field allowlist is a reviewed durable contract for an
+    //! existing-record writer (retired source-scan guard, now pinned by
+    //! direct import): growing it means auditing what a concurrent
+    //! whole-record write could clobber.
+
+    #[test]
+    fn provider_type_patch_allowlist_is_the_reviewed_contract() {
+        assert_eq!(
+            super::PROVIDER_TYPE_PATCH_FIELDS,
+            &["provider_type", "updated_at"]
+        );
+    }
+}
