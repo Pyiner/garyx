@@ -139,8 +139,6 @@ function ThreadStage({ step, storyId }: { step: StoryStep; storyId: string }) {
       onSelectBotBinding={noop}
       onOpenThreadById={noop}
       onSteerQueuedPrompt={noop}
-      preferredWorkspaceForNewThread={null}
-      selectableNewThreadWorkspaces={[]}
       selectedThreadId={`storybook-${storyId}`}
       showAutomationRunInitialPlaceholder={false}
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
