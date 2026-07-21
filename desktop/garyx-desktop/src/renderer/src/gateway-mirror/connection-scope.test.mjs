@@ -643,28 +643,74 @@ test("a switch REQUEST already fences inbound stream events (hub reconnect windo
   installPinnedOrderIngress(ingress);
   ingress.beginGatewaySwitch("https://gateway-a.test");
 
-  const mirror = new GatewayMirror();
+  // The request id comes from the PRODUCTION mint: start a real committed
+  // stream and capture what the lifecycle hands the transport. Both halves
+  // are load-bearing — reverting the mint to a generation-less format OR
+  // weakening the ingest verifier must fail below.
+  let capturedRequestId = null;
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: async () => ({
+      agents: [],
+      defaultAgentId: null,
+      effectiveDefaultAgentId: null,
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+    startThreadStream: async (input) => {
+      capturedRequestId = input.requestId;
+    },
+    stopThreadStream: async () => {},
+  });
   mirror.beginConnectionScope("http://gateway-a");
   mirror.setTranscriptLifecycleDeps({
     scheduleDesktopStateRefresh: () => {},
+    setDesktopState: () => {},
+    setError: () => {},
+    setPendingAutomationRun: () => {},
+    transcriptHasAutomationResponse: () => false,
+    scheduleHistoryRefresh: () => {},
+    requestSelectedThreadMessagesBottomSnap: () => {},
+    selectedThreadIdRef: { current: THREAD },
+    sideChatThreadIdRef: { current: null },
+    sideChatStreamConsumerId: (id) => `side-chat:${id}`,
+    lastRenderedMessageThreadRef: { current: null },
+    messagesRef: { current: null },
+    pendingMessagesPrependAnchorRef: { current: null },
   });
-  // Mint a request id under the CURRENT (A) identity, as a live stream
-  // subscription would.
-  const requestId = mirror.mintStreamRequestIdForTest?.()
-    ?? `desktop-stream-request-e${mirror.currentConnectionEpoch}-g1-1`;
+  await mirror.startCommittedThreadStream(
+    THREAD,
+    transcriptWith("A baseline"),
+    "probe-consumer",
+  );
+  assert.ok(
+    capturedRequestId,
+    "the production mint issued a request id to the transport",
+  );
+
+  // Sanity: under the SAME identity, an event carrying the production id
+  // is accepted (mint and verifier agree). A generation-less mint mutation
+  // turns the id request-less-shaped and this half's pairing breaks.
+  mirror.notifyStreamEvent({
+    type: "committed_message",
+    threadId: THREAD,
+    requestId: capturedRequestId,
+    seq: 6,
+    message: { role: "assistant", content: "A live tail" },
+  });
+  const acceptedBefore = mirror.getThreadSnapshot(THREAD).messages.length;
 
   // Switch REQUEST: generation advances, NO commit (epoch unchanged).
   ingress.beginGatewaySwitch("https://gateway-b.test");
   mirror.notifyStreamEvent({
     type: "committed_message",
     threadId: THREAD,
-    requestId,
+    requestId: capturedRequestId,
     seq: 7,
     message: { role: "assistant", content: "B secret from reconnect" },
   });
   assert.equal(
     mirror.getThreadSnapshot(THREAD).messages.length,
-    0,
+    acceptedBefore,
     "the reconnect-window event does not enter the still-A mirror",
   );
 });
