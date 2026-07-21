@@ -1541,22 +1541,26 @@ export class TranscriptLifecycle {
         });
       }
     } catch (historyError) {
+      // Anchor and error surface belong to the operation's OWN thread and
+      // universe: a late failure from thread A (same gateway or not) must
+      // neither wipe thread B's prepend anchor nor surface A's error on B.
       if (this.connectionEpoch === epoch) {
-        // Anchor and error surface belong to the operation's own universe:
-        // a stale rejection must not wipe a successor's prepend anchor.
-        pendingMessagesPrependAnchorRef.current = null;
-        setError(
-          historyError instanceof Error
-            ? historyError.message
-            : "Failed to load earlier thread history",
-        );
+        if (pendingMessagesPrependAnchorRef.current?.threadId === threadId) {
+          pendingMessagesPrependAnchorRef.current = null;
+        }
+        if (selectedThreadIdRef.current === threadId) {
+          setError(
+            historyError instanceof Error
+              ? historyError.message
+              : "Failed to load earlier thread history",
+          );
+        }
       }
     } finally {
-      // Owner check first: a stale operation from a previous universe must
-      // not clear a successor's prepend anchor.
       if (
         this.connectionEpoch === epoch &&
-        selectedThreadIdRef.current !== threadId
+        selectedThreadIdRef.current !== threadId &&
+        pendingMessagesPrependAnchorRef.current?.threadId === threadId
       ) {
         pendingMessagesPrependAnchorRef.current = null;
       }

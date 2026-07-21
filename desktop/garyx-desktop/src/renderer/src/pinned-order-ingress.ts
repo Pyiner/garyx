@@ -5,6 +5,12 @@ export type DesktopStateDeliveryEnvelope = {
   capturedEpoch: number;
   rendererSessionId: string;
   gatewayIdentity: string;
+  /** The gateway DOMAIN GENERATION the request was issued under. Identity
+   *  (the URL) is not enough: switching A -> B -> A re-matches the URL, so
+   *  a delivery from the first A connection could resurrect and overwrite
+   *  the new A generation's state. Every gateway switch (and rollback)
+   *  advances the generation, and acceptance requires an exact match. */
+  domainGeneration: number;
 };
 
 export type DesktopStateAction =
@@ -86,6 +92,7 @@ export class PinnedOrderIngress {
 
   private initialized = false;
   private gatewayIdentity = "";
+  private domainGeneration = 0;
   private epoch = 0;
   private revisionFloor = 0;
   private committedOrder: string[] = [];
@@ -144,6 +151,7 @@ export class PinnedOrderIngress {
     }
     this.initialized = true;
     this.gatewayIdentity = normalized;
+    this.domainGeneration += 1;
     this.epoch += 1;
     this.revisionFloor = 0;
     this.committedOrder = [];
@@ -157,6 +165,9 @@ export class PinnedOrderIngress {
     const invalidatingEpoch = Math.max(this.epoch, snapshot.epoch) + 1;
     this.initialized = snapshot.initialized;
     this.gatewayIdentity = snapshot.gatewayIdentity;
+    // A rollback is ALSO a new generation: deliveries issued inside the
+    // aborted switch window (and before it) must not be acceptable.
+    this.domainGeneration += 1;
     this.epoch = invalidatingEpoch;
     this.revisionFloor = snapshot.revisionFloor;
     this.committedOrder = [...snapshot.committedOrder];
@@ -252,6 +263,7 @@ export class PinnedOrderIngress {
     // The complete stamp is captured before invoking/awaiting the request.
     const capturedEpoch = this.epoch;
     const rendererSessionId = this.rendererSessionId;
+    const domainGeneration = this.domainGeneration;
     const gatewayIdentity = normalizeGatewayIdentity(
       gatewayIdentityOverride ?? this.gatewayIdentity,
     );
@@ -262,6 +274,7 @@ export class PinnedOrderIngress {
       capturedEpoch,
       rendererSessionId,
       gatewayIdentity,
+      domainGeneration,
     };
     // Bookkeeping advances NOW, in the delivery continuation — the single
     // place ingress state may mutate. The later commitState call re-runs
@@ -278,6 +291,11 @@ export class PinnedOrderIngress {
     envelope: DesktopStateDeliveryEnvelope,
   ): boolean {
     if (envelope.rendererSessionId !== this.rendererSessionId) {
+      return false;
+    }
+    if (envelope.domainGeneration !== this.domainGeneration) {
+      // Cross-generation delivery: the URL may match again (A -> B -> A),
+      // but the connection it answered for is gone.
       return false;
     }
     const responseIdentity = stateGatewayIdentity(envelope.state);

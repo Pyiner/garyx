@@ -172,6 +172,33 @@ test("bookkeeping advances at delivery, never inside the commit decision", async
   assert.deepEqual(once.pinnedThreadIds, ["b", "a"]);
 });
 
+test("a delivery cannot resurrect across A->B->A generations", async () => {
+  const ingress = new PinnedOrderIngress("renderer-session-a");
+  const initial = state(["a"], 10, "https://gateway-a.test");
+  ingress.initializeFromState(initial);
+
+  // The stale A request is in flight when the user switches away and back:
+  // the URL matches again, but the connection it answered for is gone.
+  const stalePending = ingress.requestState(
+    async () => state(["stale"], 99, "https://gateway-a.test", "a-stale-generation"),
+  );
+  ingress.beginGatewaySwitch("https://gateway-b.test");
+  ingress.beginGatewaySwitch("https://gateway-a.test");
+  const fresh = await ingress.requestState(
+    async () => state(["fresh"], 3, "https://gateway-a.test", "a-new-generation"),
+  );
+  let committed = ingress.commitState(null, fresh);
+  assert.deepEqual(committed.pinnedThreadIds, ["fresh"]);
+
+  const stale = await stalePending;
+  const afterStale = ingress.commitState(committed, stale);
+  assert.equal(
+    afterStale,
+    committed,
+    "the first A generation's delivery is rejected wholesale",
+  );
+});
+
 test("renderer reload drops a previous-session delivery envelope", async () => {
   const initial = state(["a", "b"], 10);
   const previous = new PinnedOrderIngress("renderer-session-old");

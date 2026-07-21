@@ -488,6 +488,61 @@ test("a stale openability answer reports not-openable without vouching", async (
   assert.deepEqual(errors, [], "nothing surfaced through setError");
 });
 
+test("a late older-page from another thread leaves the successor's anchor alone", async () => {
+  const history = deferred();
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: async () => ({
+      agents: [],
+      defaultAgentId: null,
+      effectiveDefaultAgentId: null,
+    }),
+    getThreadHistory: () => history.promise,
+    startThreadStream: async () => {},
+    stopThreadStream: async () => {},
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  mirror.applyRemoteTranscript(
+    THREAD,
+    transcriptWith("A recent", {
+      pageInfo: { hasMoreBefore: true, nextBeforeIndex: 42 },
+    }),
+    { persist: false },
+  );
+  const anchorRef = { current: null };
+  const selectedRef = { current: THREAD };
+  const errors = [];
+  mirror.setTranscriptLifecycleDeps({
+    messagesRef: { current: null },
+    pendingMessagesPrependAnchorRef: anchorRef,
+    selectedThreadIdRef: selectedRef,
+    setError: (error) => {
+      if (error) {
+        errors.push(error);
+      }
+    },
+  });
+
+  const pending = mirror.loadOlderThreadHistoryPage(THREAD);
+  // Same gateway: the user switches to ANOTHER thread which captures its
+  // own prepend anchor while A's page is still in flight.
+  selectedRef.current = "thread::b-side";
+  anchorRef.current = {
+    threadId: "thread::b-side",
+    scrollHeight: 100,
+    scrollTop: 50,
+  };
+  history.reject(new Error("gateway a page failed"));
+  await pending;
+
+  assert.deepEqual(
+    anchorRef.current,
+    { threadId: "thread::b-side", scrollHeight: 100, scrollTop: 50 },
+    "B's anchor survives A's late failure",
+  );
+  assert.deepEqual(errors, [], "A's page error is not surfaced on B");
+});
+
 test("a stale older-history page cannot prepend into the new universe", async () => {
   const history = deferred();
   const mirror = new GatewayMirror({
