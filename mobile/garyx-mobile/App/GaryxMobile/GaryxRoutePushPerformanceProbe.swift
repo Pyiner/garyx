@@ -359,7 +359,7 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
 
         if liveRevealTimestamp != nil, messagePreparationCompletedTimestamp != nil {
             postTerminalFrameCount += 1
-            // Keep sampling after the initial history refresh has applied so a
+            // Keep sampling after the local live graph has materialized so a
             // deferred AttributeGraph/layout commit cannot escape the gate.
             if postTerminalFrameCount >= 12 {
                 finish()

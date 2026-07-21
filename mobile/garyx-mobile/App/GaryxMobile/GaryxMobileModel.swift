@@ -463,10 +463,12 @@ final class GaryxMobileModel: ObservableObject {
     /// on a thread-id change; the async restore task captures it at spawn and
     /// aborts if it moved (switch-away-and-back). TASK-1751 P1.
     var selectedThreadColdOpenGeneration: UInt64 = 0
-    /// Conversation IO and stream activation are occurrence-scoped and begin
-    /// only when the Core route policy enters its masked preparation phase.
+    /// Conversation runtime activation is occurrence-scoped and begins only
+    /// when the Core route policy enters its masked preparation phase. Local
+    /// activation and its waiters complete without waiting for the independent
+    /// initial history refresh.
     var conversationContentActivationOccurrenceID: GaryxRouteInstanceID?
-    var conversationContentActivationTask: Task<Void, Never>?
+    var conversationInitialHistoryRefreshTask: Task<Void, Never>?
     var completedConversationContentActivationOccurrenceID: GaryxRouteInstanceID?
     var conversationContentActivationWaiters: [
         GaryxRouteInstanceID: [CheckedContinuation<Void, Never>]

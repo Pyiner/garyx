@@ -195,7 +195,7 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         model.selectedThread = thread
         model.productionRouteStore.applyCanonicalPath([second])
         model.conversationContentActivationOccurrenceID = first.id
-        model.conversationContentActivationTask = Task { @MainActor in
+        model.conversationInitialHistoryRefreshTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000_000)
         }
 
@@ -211,10 +211,15 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         }
         await fulfillment(of: [registered], timeout: 1)
 
-        model.conversationRouteContentPreparationBegan(second) {}
+        model.conversationRouteContentPreparationBegan(second)
 
         XCTAssertNil(model.conversationContentActivationWaiters[first.id])
         XCTAssertEqual(model.conversationContentActivationOccurrenceID, second.id)
+        XCTAssertEqual(model.completedConversationContentActivationOccurrenceID, second.id)
+        XCTAssertNotNil(
+            model.conversationInitialHistoryRefreshTask,
+            "local activation must complete while the independent history refresh remains in flight"
+        )
         model.cancelConversationContentActivation()
         await fulfillment(of: [resumed], timeout: 1)
         waiterTask.cancel()

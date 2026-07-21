@@ -805,7 +805,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertEqual(
             draftRegistry.observationCounts(for: draftIdentity),
             .init(),
-            "a local draft must not own the staged lifecycle, readiness, or frame observers"
+            "a local draft must not own the staged lifecycle or frame observers"
         )
         XCTAssertFalse(draftRegistry.hasPresentedFrameDemand)
 
@@ -846,8 +846,8 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 
         XCTAssertEqual(
             existingRegistry.observationCounts(for: existingIdentity),
-            .init(lifecycle: 1, contentReady: 1, presentedFrames: 1),
-            "the sensitivity control must observe the unchanged staged gateway-thread driver"
+            .init(lifecycle: 1, presentedFrames: 1),
+            "the sensitivity control must observe the staged gateway-thread driver"
         )
         XCTAssertTrue(existingRegistry.hasPresentedFrameDemand)
 
@@ -1572,6 +1572,13 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             .environment(model.homeObservationStore)
             .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
             .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
+            // The production route host always supplies this through its root
+            // shell. Once the staged control advances all the way to the live
+            // graph, its task-tree reveal requires the same ownership context.
+            .environment(
+                \.garyxRootSurfaceOccurrenceID,
+                GaryxRootSurfaceOccurrenceID(rawValue: 1)
+            )
             .environment(\.garyxRouteLifecycleRegistry, routeLifecycleRegistry)
             .environment(
                 \.garyxPresentationLeaseCoordinator,

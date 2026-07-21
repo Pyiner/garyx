@@ -7,13 +7,11 @@ import SwiftUI
 @MainActor
 final class GaryxRouteLifecycleRegistry {
     typealias Observer = @MainActor (GaryxRouteHostLifecyclePhase) -> Void
-    typealias ContentReadyObserver = @MainActor () -> Void
     typealias PresentedFrameDemand = @MainActor () -> Bool
     typealias PresentedFrameObserver = @MainActor (TimeInterval?) -> Void
 
     struct ObservationCounts: Equatable {
         var lifecycle = 0
-        var contentReady = 0
         var presentedFrames = 0
     }
 
@@ -24,10 +22,6 @@ final class GaryxRouteLifecycleRegistry {
 
     private var phaseByIdentity: [GaryxRoutePresentationIdentity: GaryxRouteHostLifecyclePhase] = [:]
     private var observers: [GaryxRoutePresentationIdentity: [UUID: Observer]] = [:]
-    private var contentReadyIdentities = Set<GaryxRoutePresentationIdentity>()
-    private var contentReadyObservers: [
-        GaryxRoutePresentationIdentity: [UUID: ContentReadyObserver]
-    ] = [:]
     private var presentedFrameSubscriptions: [
         GaryxRoutePresentationIdentity: [UUID: PresentedFrameSubscription]
     ] = [:]
@@ -65,8 +59,6 @@ final class GaryxRouteLifecycleRegistry {
         phaseByIdentity.removeValue(forKey: identity)
         let removedObservers = observers.removeValue(forKey: identity)
             .map { Array($0.values) } ?? []
-        contentReadyIdentities.remove(identity)
-        contentReadyObservers.removeValue(forKey: identity)
         presentedFrameSubscriptions.removeValue(forKey: identity)
         for observer in removedObservers {
             observer(.disappeared)
@@ -87,41 +79,6 @@ final class GaryxRouteLifecycleRegistry {
         observers[identity]?[token] = nil
         if observers[identity]?.isEmpty == true {
             observers[identity] = nil
-        }
-    }
-
-    func observeContentReady(
-        _ identity: GaryxRoutePresentationIdentity,
-        observer: @escaping ContentReadyObserver
-    ) -> UUID {
-        let token = UUID()
-        contentReadyObservers[identity, default: [:]][token] = observer
-        if contentReadyIdentities.contains(identity) {
-            observer()
-        }
-        return token
-    }
-
-    func removeContentReadyObserver(
-        _ token: UUID,
-        for identity: GaryxRoutePresentationIdentity
-    ) {
-        contentReadyObservers[identity]?[token] = nil
-        if contentReadyObservers[identity]?.isEmpty == true {
-            contentReadyObservers[identity] = nil
-        }
-    }
-
-    func contentDidBecomeReady(_ identity: GaryxRoutePresentationIdentity) {
-        guard contentReadyIdentities.insert(identity).inserted else { return }
-        let currentObservers = contentReadyObservers[identity]
-            .map { Array($0.values) } ?? []
-        for observer in currentObservers {
-            observer()
-        }
-        if hasPresentedFrameDemand {
-            previousPresentedFrameTimestamp = nil
-            presentedFrameDemandDidBecomeActive?()
         }
     }
 
@@ -150,14 +107,13 @@ final class GaryxRouteLifecycleRegistry {
     }
 
     /// A deterministic diagnostic for route-wiring contract tests. Draft
-    /// occurrences have no staged presentation driver and therefore keep all
-    /// three counts at zero; gateway-thread occurrences own one of each.
+    /// occurrences have no staged presentation driver and therefore keep both
+    /// counts at zero; gateway-thread occurrences own one of each.
     func observationCounts(
         for identity: GaryxRoutePresentationIdentity
     ) -> ObservationCounts {
         ObservationCounts(
             lifecycle: observers[identity]?.count ?? 0,
-            contentReady: contentReadyObservers[identity]?.count ?? 0,
             presentedFrames: presentedFrameSubscriptions[identity]?.count ?? 0
         )
     }
@@ -363,10 +319,13 @@ private struct GaryxStagedConversationRouteView: View {
                 // history refreshes, and only an empty transcript chooses its
                 // message-local skeleton.
                 GaryxConversationView(destination: destination)
-                .allowsHitTesting(presentationDriver.renderPhase == .live)
-                .onAppear {
-                    GaryxRoutePushPerformanceProbe.shared?.conversationSurfaceMounted()
-                }
+                    .allowsHitTesting(presentationDriver.allowsLiveConversationInteraction)
+                    .onAppear {
+                        GaryxRoutePushPerformanceProbe.shared?.conversationSurfaceMounted()
+                        // This marks local live-graph materialization, not the
+                        // independent network history refresh.
+                        GaryxRoutePushPerformanceProbe.shared?.messagePreparationCompleted()
+                    }
             }
 
             GaryxConversationOpeningPageView(
@@ -380,7 +339,7 @@ private struct GaryxStagedConversationRouteView: View {
                 // reveal: changing a compositor opacity is cheap, while tearing
                 // down the complete SwiftUI chrome can drop the handoff frame.
                 .opacity(presentationDriver.renderPhase == .live ? 0 : 0.999)
-                .allowsHitTesting(presentationDriver.renderPhase != .live)
+                .allowsHitTesting(!presentationDriver.allowsLiveConversationInteraction)
                 // This is a pixel-continuity layer. The real page owns the
                 // route's semantics throughout their brief overlap.
                 .accessibilityHidden(true)
@@ -512,10 +471,13 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
 
     private var presentation = GaryxConversationRoutePresentationState()
 
+    var allowsLiveConversationInteraction: Bool {
+        presentation.allowsLiveConversationInteraction
+    }
+
     private weak var lifecycleRegistry: GaryxRouteLifecycleRegistry?
     private var observedIdentity: GaryxRoutePresentationIdentity?
     private var observationToken: UUID?
-    private var contentReadyObservationToken: UUID?
     private var frameObservationToken: UUID?
     private var fallbackFrameTask: Task<Void, Never>?
     private var awaitsPresentedLiveReveal = false
@@ -527,7 +489,6 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         if lifecycleRegistry === registry,
            observedIdentity == identity,
            observationToken != nil,
-           contentReadyObservationToken != nil,
            frameObservationToken != nil {
             return
         }
@@ -546,9 +507,6 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         observedIdentity = identity
         observationToken = registry.observe(identity) { [weak self] lifecycle in
             self?.apply(lifecycle: lifecycle)
-        }
-        contentReadyObservationToken = registry.observeContentReady(identity) { [weak self] in
-            self?.messageContentDidBecomeReady()
         }
         frameObservationToken = registry.observePresentedFrames(
             identity,
@@ -573,39 +531,24 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
                 for: observedIdentity
             )
         }
-        if let lifecycleRegistry, let observedIdentity, let contentReadyObservationToken {
-            lifecycleRegistry.removeContentReadyObserver(
-                contentReadyObservationToken,
-                for: observedIdentity
-            )
-        }
         lifecycleRegistry = nil
         observedIdentity = nil
         observationToken = nil
-        contentReadyObservationToken = nil
         frameObservationToken = nil
         fallbackFrameTask?.cancel()
         fallbackFrameTask = nil
         awaitsPresentedLiveReveal = false
         guard !presentation.hasPresentedLiveConversation else { return }
         var next = presentation
-        _ = next.apply(lifecycle: .disappeared)
+        next.apply(lifecycle: .disappeared)
         commit(next)
     }
 
     private func apply(lifecycle: GaryxRouteHostLifecyclePhase) {
         var next = presentation
-        let action = next.apply(lifecycle: lifecycle)
+        next.apply(lifecycle: lifecycle)
         commit(next)
-        perform(action)
         scheduleFallbackFrames()
-    }
-
-    private func messageContentDidBecomeReady() {
-        var next = presentation
-        next.messageContentDidBecomeReady()
-        commit(next)
-        GaryxRoutePushPerformanceProbe.shared?.messagePreparationCompleted()
     }
 
     private func presentedFrame(interval: TimeInterval?) {
@@ -621,13 +564,12 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
             return
         }
         let previousPhase = presentation.renderPhase
-        let previousMessagePhase = presentation.messagePhase
+        let hadBegunContentPreparation = presentation.hasBegunContentPreparation
         var next = presentation
         _ = next.presentedFrame(interval: interval)
         commit(next)
-        if previousMessagePhase != next.messagePhase,
-           next.messagePhase == .loading {
-            perform(.beginMessagePreparation)
+        if !hadBegunContentPreparation, next.hasBegunContentPreparation {
+            beginContentPreparation()
         }
         guard previousPhase != next.renderPhase else { return }
         switch next.renderPhase {
@@ -640,8 +582,7 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         }
     }
 
-    private func perform(_ action: GaryxConversationRoutePresentationAction) {
-        guard action == .beginMessagePreparation else { return }
+    private func beginContentPreparation() {
         GaryxRoutePushPerformanceProbe.shared?.messagePreparationBegan()
         if let lifecycleRegistry, let observedIdentity {
             lifecycleRegistry.contentPreparationDidBegin?(observedIdentity)
@@ -670,7 +611,8 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
     private func commit(_ next: GaryxConversationRoutePresentationState) {
         guard next != presentation else { return }
         presentation = next
-        // Delivered-frame counters and message readiness are policy internals.
+        // Delivered-frame counters and the one-shot preparation flag are
+        // policy internals.
         // Publishing them would reevaluate the complete opening page on every
         // terminal display-link callback and can itself drop the next frame.
         // SwiftUI only observes the two surface implementation handoffs.
