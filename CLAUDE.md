@@ -106,6 +106,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   26). Do not add or validate new compatibility behavior for earlier iOS
   versions unless explicitly requested; leave existing fallback code unchanged
   when it is outside the task scope.
+- iOS visual QA is light-mode only. Do not add or run dark-mode test passes
+  unless the user explicitly requests them; leave existing dark-mode behavior
+  unchanged when it is outside the task scope.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
 - Provider default model and reasoning labels should use the row's available
