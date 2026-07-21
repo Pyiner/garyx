@@ -2046,9 +2046,7 @@ mod tests {
         let legacy_connection = rusqlite::Connection::open(&db_path).expect("legacy database");
         legacy_connection
             .execute(
-                &format!(
-                    "CREATE TABLE {retired_table_name} (message_id TEXT NOT NULL)"
-                ),
+                &format!("CREATE TABLE {retired_table_name} (message_id TEXT NOT NULL)"),
                 [],
             )
             .expect("legacy projection table");
