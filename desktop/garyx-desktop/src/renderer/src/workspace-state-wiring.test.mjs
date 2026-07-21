@@ -211,6 +211,37 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     /setDesktopState\(archivedResult\.value\);/,
     'archive commits the authoritative value as-is',
   );
+  // The automation-run reconcile poll chain is epoch-owned end to end:
+  // capture at scheduling, check on timer wake AND after the history
+  // await (a late gateway-A answer must never apply into B), and the
+  // transition drops the pending bookkeeping.
+  const reconcileIdx = appShellSource.indexOf(
+    'function reconcilePendingAutomationRun(',
+  );
+  assert.ok(reconcileIdx > 0);
+  const reconcileBody = appShellSource.slice(reconcileIdx, reconcileIdx + 2600);
+  assert.match(
+    reconcileBody,
+    /const epoch = gatewayMirror\.currentConnectionEpoch;/,
+    'reconcile captures its owning epoch at scheduling',
+  );
+  assert.equal(
+    (reconcileBody.match(/if \(!scopeCurrent\(\)\) \{/g) || []).length >= 3
+      ? 3
+      : 0,
+    3,
+    'timer wake, post-await, and retry are all fenced',
+  );
+  assert.match(
+    reconcileBody,
+    /await window\.garyxDesktop\.getThreadHistory\(threadId\);\s*\n\s*if \(!scopeCurrent\(\)\) \{/,
+    'the history answer is fenced BEFORE any apply',
+  );
+  assert.match(
+    appShellSource,
+    /pendingAutomationRunsRef\.current = \{\};/,
+    'the transition drops the previous universe pending-run bookkeeping',
+  );
   // No side effects hide inside the state updater anymore.
   assert.doesNotMatch(
     appShellSource,
