@@ -18,12 +18,12 @@ two-key denylist (`persistence.rs` `RUNTIME_ONLY_METADATA_KEYS`), while
 run-metadata backfill injects `provider_env` (may contain tokens),
 `system_prompt`, `garyx_mcp_headers` (feeds MCP HTTP headers),
 `desktop_antigravity_env` (arbitrary process env),
-`developer_instructions`, `sdk_session_fork`. Slice A does **not**
-touch this (its final review round showed that widening the queue
-projection without the B3 ingress work creates a new forgery surface,
-so A keeps the bounded queue projection and leaves the direct path
-as-is); new and old records keep leaking until B1 lands, and
-`/api/threads/history` serves the values.
+`developer_instructions`, `sdk_session_fork`. Slice A extends the
+shared denylist to the full known runtime set at both the enqueue
+boundary and the direct chokepoint, so **new** records stop leaking
+(owner accepted the accompanying full pass-through on the single-user
+threat model); already-committed history still contains these values
+and `/api/threads/history` serves them until C4 lands.
 Full remediation = historical scrub (see C4) plus typed containers (C1).
 Also: request-shaped fields (`model`, reasoning, tier,
 `requested_provider_type`, workspace aliases) persist today and read as

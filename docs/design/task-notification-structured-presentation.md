@@ -23,28 +23,36 @@ garyx-models (presentation), desktop renderer, iOS
 
 ## 2. Changes
 
-### 2.1 Bug fix: the notification object survives the queue
+### 2.1 Bug fix: queued dispatches persist like direct ones
 
-- The queue keeps its **bounded projection** (the current allowlist
-  mechanism) — full-map pass-through is rejected for slice A: with
-  plugin/CreateThread ingress hardening deferred to slice B, copying
-  arbitrary caller metadata into pendings would let externally forged
-  `task_notification` objects reach committed records on the busy path
-  and be upgraded into trusted-looking cards, a *new* forgery surface
-  the allowlist incidentally prevents today. It would also record
-  busy-request fields (model/provider/workspace) that never applied to
-  the already-running provider as if they had.
-- `DISPATCH_ATTRIBUTION_METADATA_KEYS` gains exactly one entry:
-  `task_notification`. No other source keys are added in slice A.
-- The helper's second job is kept explicitly: the queue projection
-  still writes `origin_run_id = requested_run_id` (the notify-dispatch
-  attribution — the full metadata never contains it and the pending's
-  `bridge_run_id` is the active run, so deleting the helper would lose
-  it permanently). ACK asserts `origin_run_id` is the requested run,
-  not the active run.
-- `RUNTIME_ONLY_METADATA_KEYS` and the direct persistence path are
-  untouched (the direct-path secret leak is pre-existing slice B1 debt;
-  slice A must not widen or narrow it).
+**Owner decision (2026-07-21, risk accepted)**: internal-dispatch
+messages persist with the same logic as ordinary user messages — the
+attribution allowlist is deleted, not extended. Garyx is a single-user
+system: every chat/atomic/CreateThread caller holds the owner's token
+and plugins are owner-installed, so the residual theoretical forgery
+surface at not-yet-hardened ingresses (slice B3) and the recording
+noise of busy-request fields that never applied to the running provider
+are both explicitly accepted.
+
+- Delete `DISPATCH_ATTRIBUTION_METADATA_KEYS` and
+  `dispatch_attribution_metadata`.
+- Enqueue carries the full dispatch metadata minus one shared runtime
+  denylist. `RUNTIME_ONLY_METADATA_KEYS` is extended to the complete
+  known runtime set — `garyx_mcp_auth_token`, `remote_mcp_servers`,
+  `garyx_mcp_headers`, `provider_env`, `system_prompt`,
+  `developer_instructions`, `desktop_antigravity_env`,
+  `sdk_session_fork` — and applied at **both** the enqueue boundary
+  (pendings are persisted inside run records; without this the queue
+  path would leak secrets it never carried before) and the existing
+  direct persistence chokepoint (stopping the direct path's existing
+  leak for new records with the same constant). Typed containers
+  replacing the denylist entirely = slice C.
+- The deleted helper's second job is kept explicitly: the enqueue
+  boundary still writes `origin_run_id = requested_run_id` (the
+  notify-dispatch attribution — the full metadata never contains it and
+  the pending's `bridge_run_id` is the active run, so it would
+  otherwise be lost permanently). ACK asserts `origin_run_id` is the
+  requested run, not the active run.
 - `acknowledge_pending_input` merge semantics unchanged (bookkeeping
   keys win).
 
@@ -189,14 +197,16 @@ versioning; internal/internal_kind retirement; history envelope changes.
   direct-commit shortcut) commits a user record whose metadata contains
   the `task_notification` object, `internal_dispatch`, and
   `origin_run_id` = the requested (notify-dispatch) run id, never the
-  active run's. **Pending-at-rest assertion**: block the provider ACK,
-  read the persisted thread record, and assert the pending's metadata
-  key set is exactly the bounded projection (allowlist keys +
-  `task_notification` + `origin_run_id`) — in particular none of the
-  eight runtime keys — then release the ACK and assert the committed
-  transcript. Run once through the Legacy queue path and once through
-  the Durable exact path, plus a focused unit test on the single
-  enqueue constructor.
+  active run's. All other internal dispatch sources
+  (followup/automation/cron/auto-start/restart) keep their source keys
+  through the queue. **Pending-at-rest assertion**: block the provider
+  ACK, read the persisted thread record, and assert the pending's
+  metadata contains the semantic keys and `origin_run_id` while none of
+  the eight extended-denylist runtime keys are present — then release
+  the ACK and assert the committed transcript. Run once through the
+  Legacy queue path and once through the Durable exact path, plus a
+  focused unit test on the single enqueue constructor. Direct-path
+  sentinel-secret regression with the same shared constant.
 - **Producer**: golden text fixture — envelope attributes escaped
   (multiline title), body = pure final_message, tutorial outside the
   envelope; task_hooks reads the object; forgery negatives at all four
