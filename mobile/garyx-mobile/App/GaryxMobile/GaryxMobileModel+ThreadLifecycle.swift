@@ -479,6 +479,8 @@ extension GaryxMobileModel {
             saveGatewaySettings()
             let workspace = (workspaceOverride ?? newThreadWorkspaceSelection.createPayloadWorkspaceDir ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let explicitNoWorkspace = workspaceOverride == nil
+                && newThreadWorkspaceSelection.isExplicitNoWorkspace
             let agentId = newThreadAgentTargetId(agentOverride: agentOverride)
             let workspaceMode = workspaceModeForNewThread(workspace: workspace)
             let modelOverride = newThreadModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -489,6 +491,7 @@ extension GaryxMobileModel {
             let thread = try await client().createThread(
                 GaryxCreateThreadRequest(
                     workspaceDir: workspace.isEmpty ? nil : workspace,
+                    noWorkspace: explicitNoWorkspace ? true : nil,
                     workspaceMode: workspaceMode,
                     agentId: agentId.isEmpty ? nil : agentId,
                     model: modelOverride.isEmpty ? nil : modelOverride,

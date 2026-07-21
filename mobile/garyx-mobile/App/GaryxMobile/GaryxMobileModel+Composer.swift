@@ -1057,6 +1057,8 @@ extension GaryxMobileModel {
         let workspace = pendingWorkspace.isEmpty
             ? (newThreadWorkspaceSelection.createPayloadWorkspaceDir ?? "")
             : pendingWorkspace
+        let explicitNoWorkspace = pendingWorkspace.isEmpty
+            && newThreadWorkspaceSelection.isExplicitNoWorkspace
         let agentId = pendingAgentId.isEmpty
             ? newThreadAgentTargetId()
             : pendingAgentId
@@ -1076,6 +1078,7 @@ extension GaryxMobileModel {
         }
         let createRequest = GaryxCreateThreadRequest(
                 workspaceDir: workspace.isEmpty ? nil : workspace,
+                noWorkspace: explicitNoWorkspace ? true : nil,
                 workspaceMode: workspaceMode,
                 agentId: agentId.isEmpty ? nil : agentId,
                 model: modelOverride.isEmpty ? nil : modelOverride,

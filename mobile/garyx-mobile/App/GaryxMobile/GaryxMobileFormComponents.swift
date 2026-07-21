@@ -1130,6 +1130,7 @@ struct GaryxWorkspaceSelectSheet: View {
 /// workspace by folder basename; renaming lives in the workspace menus.
 struct GaryxWorkspacePathPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
     let title: String
     var path: Binding<String>? = nil
     var onConfirm: ((String) -> Void)? = nil
@@ -1171,6 +1172,13 @@ struct GaryxWorkspacePathPickerSheet: View {
             .scrollIndicators(.hidden)
         }
         .garyxWorkspacePickerSheetStyle()
+        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
+            // A gateway switch resets the catalog to idle; this browser
+            // belongs to the previous universe and must not survive it.
+            if phase == .idle {
+                dismiss()
+            }
+        }
     }
 }
 
@@ -1402,6 +1410,8 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
         do {
             let listing = try await model.listWorkspaceDirectories(path: path)
             browser.apply(listing)
+        } catch is CancellationError {
+            // Superseded by a gateway switch; the sheet is on its way out.
         } catch {
             browser.fail(error)
         }

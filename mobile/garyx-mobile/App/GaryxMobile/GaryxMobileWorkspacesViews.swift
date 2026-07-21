@@ -81,11 +81,16 @@ struct GaryxWorkspacesView: View {
 
 struct GaryxWorkspacesContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var renameTarget: GaryxWorkspaceSummary?
+    @State private var renameDraft = ""
+    @State private var removeTarget: GaryxWorkspaceSummary?
 
     var body: some View {
-        let paths = model.userWorkspacePaths
+        // Server order and names verbatim — this panel is not a second
+        // source of workspace identity.
+        let workspaces = model.workspaceCatalog.workspaces
         VStack(alignment: .leading, spacing: 12) {
-            if paths.isEmpty {
+            if workspaces.isEmpty {
                 if model.isLoadingWorkspaces {
                     GaryxLoadingPanelView(title: "Loading workspaces...")
                 } else {
@@ -98,12 +103,15 @@ struct GaryxWorkspacesContent: View {
             } else {
                 GaryxSectionBlock(title: "Workspace") {
                     GaryxCompactListGroup {
-                        ForEach(Array(paths.enumerated()), id: \.element) { index, path in
+                        ForEach(Array(workspaces.enumerated()), id: \.element.path) { index, workspace in
                             GaryxWorkspacePathRow(
-                                path: path,
-                                isSelected: model.selectedWorkspacePath == path
+                                workspace: workspace,
+                                isSelected: model.selectedWorkspacePath == workspace.path
                             )
-                            if index < paths.count - 1 {
+                            .contextMenu {
+                                workspaceRowMenu(workspace)
+                            }
+                            if index < workspaces.count - 1 {
                                 GaryxCompactRowDivider()
                             }
                         }
@@ -124,26 +132,105 @@ struct GaryxWorkspacesContent: View {
                 }
             }
         }
+        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
+            // A gateway switch resets the catalog; management dialogs from
+            // the previous universe must not survive it.
+            if phase == .idle {
+                renameTarget = nil
+                removeTarget = nil
+            }
+        }
+        .alert(
+            "Rename Workspace",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )
+        ) {
+            TextField("Name", text: $renameDraft)
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+            Button("Rename") {
+                if let target = renameTarget {
+                    let name = renameDraft
+                    Task { await model.renameUserWorkspace(path: target.path, name: name) }
+                }
+                renameTarget = nil
+            }
+        }
+        .confirmationDialog(
+            "Remove this workspace from the list? Files on the gateway machine are not touched.",
+            isPresented: Binding(
+                get: { removeTarget != nil },
+                set: { if !$0 { removeTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Workspace", role: .destructive) {
+                if let target = removeTarget {
+                    Task { await model.removeUserWorkspace(path: target.path) }
+                }
+                removeTarget = nil
+            }
+            Button("Cancel", role: .cancel) { removeTarget = nil }
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceRowMenu(_ workspace: GaryxWorkspaceSummary) -> some View {
+        Button {
+            Task { await model.setWorkspacePinned(path: workspace.path, pinned: !workspace.pinned) }
+        } label: {
+            if workspace.pinned {
+                Label("Unpin", systemImage: "pin.slash")
+            } else {
+                Label("Pin", systemImage: "pin")
+            }
+        }
+        Button {
+            renameDraft = workspace.name
+            renameTarget = workspace
+        } label: {
+            Label("Rename…", systemImage: "pencil")
+        }
+        Button {
+            model.selectDraftWorkspace(workspace.path)
+            model.openNewThreadDraft()
+        } label: {
+            Label("New Thread", systemImage: "square.and.pencil")
+        }
+        Button {
+            UIPasteboard.general.string = workspace.path
+        } label: {
+            Label("Copy Path", systemImage: "doc.on.doc")
+        }
+        Divider()
+        Button(role: .destructive) {
+            removeTarget = workspace
+        } label: {
+            Label("Remove", systemImage: "trash")
+        }
     }
 }
 
 struct GaryxWorkspacePathRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    let path: String
+    let workspace: GaryxWorkspaceSummary
     let isSelected: Bool
+
+    private var path: String { workspace.path }
 
     var body: some View {
         Button {
             Task { await model.selectWorkspace(path) }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: isSelected ? "folder.fill" : "folder")
+                Image(systemName: workspace.pinned ? "pin.fill" : (isSelected ? "folder.fill" : "folder"))
                     .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .frame(width: 28, height: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent)
+                    Text(workspace.name)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
                         .garyxReadingLineLimit()
@@ -171,7 +258,7 @@ struct GaryxWorkspacePathRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(GaryxPressableRowStyle())
-        .accessibilityLabel(path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent)
+        .accessibilityLabel(workspace.name)
         .accessibilityValue(
             GaryxMobileWorkspacePresentation.abbreviatedPath(
                 path,
@@ -386,4 +473,3 @@ struct GaryxWorkspacePreviewSection: View {
 private func garyxFormattedFileSize(_ size: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
 }
-

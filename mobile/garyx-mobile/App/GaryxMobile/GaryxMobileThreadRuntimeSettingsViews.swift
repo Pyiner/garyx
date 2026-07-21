@@ -563,10 +563,10 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         }
                     }
 
-                    if let workspaceContext = threadWorkspaceContextLabel {
+                    if let workspaceContext = threadWorkspaceContext {
                         Divider().padding(.leading, 16)
 
-                        workspaceContextRow(value: workspaceContext)
+                        workspaceContextRow(context: workspaceContext)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -575,22 +575,35 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         }
     }
 
+    private struct ThreadWorkspaceContext {
+        var value: String
+        var isWorktree: Bool
+    }
+
     /// Server-owned provenance drives the read-only workspace context:
     /// `implicit` reads as "No workspace"; `explicit` shows the root path
-    /// even when it is no longer in the catalog. The client never infers.
-    private var threadWorkspaceContextLabel: String? {
+    /// even when it is no longer in the catalog, plus the worktree marker
+    /// for worktree threads. The client never infers provenance.
+    private var threadWorkspaceContext: ThreadWorkspaceContext? {
         guard let thread = model.selectedThread else { return nil }
+        let isWorktree = thread.worktreePath?.isEmpty == false
         let rootPath = thread.rootWorkspacePath ?? thread.workspacePath
         switch thread.workspaceOrigin {
         case "implicit":
-            return "No workspace"
+            return ThreadWorkspaceContext(value: "No workspace", isWorktree: false)
         case "explicit":
             guard let rootPath, !rootPath.isEmpty else { return nil }
-            return abbreviatedWorkspacePath(rootPath)
+            return ThreadWorkspaceContext(
+                value: abbreviatedWorkspacePath(rootPath),
+                isWorktree: isWorktree
+            )
         default:
             // Records predating the provenance field: show what is known.
             guard let rootPath, !rootPath.isEmpty else { return nil }
-            return abbreviatedWorkspacePath(rootPath)
+            return ThreadWorkspaceContext(
+                value: abbreviatedWorkspacePath(rootPath),
+                isWorktree: isWorktree
+            )
         }
     }
 
@@ -601,13 +614,25 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         )
     }
 
-    private func workspaceContextRow(value: String) -> some View {
+    private func workspaceContextRow(context: ThreadWorkspaceContext) -> some View {
         HStack(spacing: 12) {
             Text("Workspace")
                 .font(GaryxFont.callout())
                 .foregroundStyle(.primary)
             Spacer(minLength: 0)
-            Text(value)
+            if context.isWorktree {
+                Label("Worktree", systemImage: "arrow.triangle.branch")
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(
+                        Color(.secondarySystemFill),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+                    .garyxTypographyBoundary(.compactBadgeChrome)
+            }
+            Text(context.value)
                 .font(GaryxFont.callout())
                 .foregroundStyle(.secondary)
                 .garyxReadingLineLimit()

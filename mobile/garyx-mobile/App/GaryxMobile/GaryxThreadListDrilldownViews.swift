@@ -73,6 +73,14 @@ struct GaryxWorkspaceThreadListDrilldown: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .onChange(of: model.workspaceCatalogState.phase) { _, phase in
+            // A gateway switch resets the catalog; management dialogs from
+            // the previous universe must not survive it.
+            if phase == .idle {
+                showsRenameDialog = false
+                showsRemoveConfirm = false
+            }
+        }
     }
 
     /// The iOS adaptation of the desktop workspace hover card: name, pin

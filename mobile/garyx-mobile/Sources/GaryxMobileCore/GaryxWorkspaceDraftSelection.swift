@@ -28,6 +28,15 @@ public enum GaryxDraftWorkspaceSelection: Equatable, Sendable {
         workspacePath
     }
 
+    /// The explicit No-workspace choice needs its own wire bit: an absent
+    /// `workspace_dir` alone lets the agent default substitute, while
+    /// `noWorkspace=true` makes the gateway provision the private managed
+    /// thread workspace.
+    public var isExplicitNoWorkspace: Bool {
+        if case .none = self { return true }
+        return false
+    }
+
     /// Resolves this selection against the server-ordered catalog.
     /// - `.unresolved` resolves once to the first catalog row (the list
     ///   arrives pre-sorted, so a pinned row wins), or `.none` when the

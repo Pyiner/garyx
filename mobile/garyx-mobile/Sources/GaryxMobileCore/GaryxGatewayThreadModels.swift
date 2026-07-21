@@ -1005,6 +1005,10 @@ public struct GaryxPendingUserInput: Decodable, Identifiable, Equatable, Sendabl
 public struct GaryxCreateThreadRequest: Encodable, Equatable, Sendable {
     public var label: String?
     public var workspaceDir: String?
+    /// Explicit No-workspace creation: the gateway provisions the private
+    /// managed thread workspace; agent default workspaces must not
+    /// substitute. Omitted (nil) means "no explicit choice".
+    public var noWorkspace: Bool?
     public var workspaceMode: String?
     public var agentId: String?
     /// Per-thread model override; wins over the agent's configured model.
@@ -1018,6 +1022,7 @@ public struct GaryxCreateThreadRequest: Encodable, Equatable, Sendable {
     public init(
         label: String? = nil,
         workspaceDir: String? = nil,
+        noWorkspace: Bool? = nil,
         workspaceMode: String? = nil,
         agentId: String? = nil,
         model: String? = nil,
@@ -1027,6 +1032,7 @@ public struct GaryxCreateThreadRequest: Encodable, Equatable, Sendable {
     ) {
         self.label = label
         self.workspaceDir = workspaceDir
+        self.noWorkspace = noWorkspace
         self.workspaceMode = workspaceMode
         self.agentId = agentId
         self.model = model

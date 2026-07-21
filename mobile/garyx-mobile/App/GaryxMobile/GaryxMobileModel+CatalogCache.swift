@@ -7,6 +7,9 @@ extension GaryxMobileModel {
 
     func restoreWorkspaceCatalog(_ catalog: GaryxWorkspaceCatalog) {
         workspaceCatalogState.restore(catalog)
+        // A restored cache is a loaded catalog: the once-only default
+        // resolution must not wait for the next network refresh.
+        resolveDraftWorkspaceSelectionIfNeeded()
     }
 
     /// Server order and names land verbatim: the catalog is rendered exactly

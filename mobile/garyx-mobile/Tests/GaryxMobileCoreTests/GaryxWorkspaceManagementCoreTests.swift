@@ -166,6 +166,88 @@ final class GaryxWorkspaceManagementCoreTests: XCTestCase {
         XCTAssertEqual(GaryxDraftWorkspaceSelection.path("/w/a").createPayloadWorkspaceDir, "/w/a")
         XCTAssertNil(GaryxDraftWorkspaceSelection.none.createPayloadWorkspaceDir)
         XCTAssertNil(GaryxDraftWorkspaceSelection.unresolved.createPayloadWorkspaceDir)
+        // Only the explicit choice raises the wire bit — an unresolved draft
+        // still lets the agent default substitute.
+        XCTAssertTrue(GaryxDraftWorkspaceSelection.none.isExplicitNoWorkspace)
+        XCTAssertFalse(GaryxDraftWorkspaceSelection.unresolved.isExplicitNoWorkspace)
+        XCTAssertFalse(GaryxDraftWorkspaceSelection.path("/w/a").isExplicitNoWorkspace)
+    }
+
+    func testCreateThreadRequestEncodesExplicitNoWorkspaceBit() throws {
+        // Explicit No workspace: no workspaceDir, noWorkspace=true so the
+        // gateway provisions the managed directory instead of the agent
+        // default substituting.
+        let noWorkspace = GaryxCreateThreadRequest(noWorkspace: true, agentId: "reviewer")
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(noWorkspace)
+        ) as? [String: Any]
+        XCTAssertEqual(encoded?["noWorkspace"] as? Bool, true)
+        XCTAssertNil(encoded?["workspaceDir"])
+
+        // No explicit choice: the bit is omitted entirely.
+        let unresolved = GaryxCreateThreadRequest(agentId: "reviewer")
+        let unresolvedEncoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(unresolved)
+        ) as? [String: Any]
+        XCTAssertNil(unresolvedEncoded?["noWorkspace"])
+
+        // A chosen path never raises the bit.
+        let picked = GaryxCreateThreadRequest(workspaceDir: "/w/a")
+        let pickedEncoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(picked)
+        ) as? [String: Any]
+        XCTAssertEqual(pickedEncoded?["workspaceDir"] as? String, "/w/a")
+        XCTAssertNil(pickedEncoded?["noWorkspace"])
+    }
+
+    func testThreadSummariesPageStrictRowsCarryProvenance() throws {
+        // The strict summaries-page adapter (production list path) must not
+        // drop the membership/provenance fields.
+        let json = """
+        {
+            "store_incarnation_id": "inc-1",
+            "server_boot_id": "boot-1",
+            "threads": [
+                {
+                    "thread_id": "thread::wt",
+                    "title": "Worktree thread",
+                    "workspace_dir": "/workspace/root-worktrees/wt1",
+                    "thread_type": "chat",
+                    "message_count": 2,
+                    "root_workspace_path": "/workspace/root",
+                    "workspace_origin": "explicit",
+                    "worktree": {"path": "/workspace/root-worktrees/wt1"}
+                }
+            ],
+            "has_more": false,
+            "next_cursor": null
+        }
+        """
+        let page = try JSONDecoder().decode(GaryxThreadSummariesPage.self, from: Data(json.utf8))
+        let summary = try XCTUnwrap(page.threads.first)
+        XCTAssertEqual(summary.rootWorkspacePath, "/workspace/root")
+        XCTAssertEqual(summary.workspaceOrigin, "explicit")
+        XCTAssertEqual(summary.workspacePath, "/workspace/root-worktrees/wt1")
+        XCTAssertEqual(summary.worktreePath, "/workspace/root-worktrees/wt1")
+    }
+
+    func testLegacyThreadRecordAdapterCarriesProvenance() throws {
+        // The point-read adapter (GET /api/threads/:id) must surface the
+        // server-owned provenance for the thread settings panel.
+        let json = """
+        {
+            "thread_id": "thread::implicit",
+            "label": "Implicit thread",
+            "workspace_dir": "/data/thread-workspaces/thread--implicit",
+            "root_workspace_path": null,
+            "workspace_origin": "implicit"
+        }
+        """
+        let record = try JSONDecoder().decode(GaryxLegacyThreadRecordDTO.self, from: Data(json.utf8))
+        let summary = GaryxThreadSummaryAdapter.summary(record)
+        XCTAssertNil(summary.rootWorkspacePath)
+        XCTAssertEqual(summary.workspaceOrigin, "implicit")
+        XCTAssertEqual(summary.workspacePath, "/data/thread-workspaces/thread--implicit")
     }
 
     func testPersistedEncodingDistinguishesNoneFromUnresolved() {

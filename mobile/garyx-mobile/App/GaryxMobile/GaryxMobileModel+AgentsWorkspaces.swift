@@ -314,6 +314,17 @@ extension GaryxMobileModel {
     func openAgentChatDraft(_ id: String) {
         let targetId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !targetId.isEmpty else { return }
+        // The one-off Chat target carries the agent's default workspace:
+        // seed the draft with it, or re-arm the once-only default
+        // resolution when the agent has none.
+        let defaultDir = agents.first { $0.id == targetId }?
+            .defaultWorkspaceDir
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if defaultDir.isEmpty {
+            seedDraftWorkspaceDefault()
+        } else {
+            selectDraftWorkspace(defaultDir)
+        }
         openNewThreadDraft(agentTargetOverride: targetId)
     }
 
@@ -578,7 +589,14 @@ extension GaryxMobileModel {
     }
 
     func listWorkspaceDirectories(path: String?) async throws -> GaryxWorkspaceDirectoryListing {
-        try await client().listWorkspaceDirectories(path: path)
+        let runtimeGeneration = gatewayRequestToken
+        let listing = try await client().listWorkspaceDirectories(path: path)
+        guard runtimeGeneration == gatewayRequestToken else {
+            // A gateway switch superseded this navigation; the browser
+            // discards it instead of applying another universe's listing.
+            throw CancellationError()
+        }
+        return listing
     }
 
     func setNewThreadWorkspaceMode(_ mode: String) {
@@ -616,8 +634,10 @@ extension GaryxMobileModel {
     func refreshWorkspaceGitStatus(for path: String) async {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let runtimeGeneration = gatewayRequestToken
         do {
             let status = try await client().workspaceGitStatus(workspaceDir: trimmed)
+            guard runtimeGeneration == gatewayRequestToken else { return }
             workspaceGitStatuses[trimmed] = status
             if !status.canUseWorktree, newThreadWorkspaceSelection.workspacePath == trimmed {
                 setNewThreadWorkspaceMode("local")

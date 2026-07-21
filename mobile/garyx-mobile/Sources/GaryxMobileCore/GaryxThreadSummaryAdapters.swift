@@ -20,6 +20,8 @@ public struct GaryxThreadSummaryRowDTO: Decodable, Equatable, Sendable {
     public var recentRunId: String?
     public var activeRunId: String?
     public var worktree: GaryxThreadSummaryWorktreeDTO?
+    public var rootWorkspacePath: String?
+    public var workspaceOrigin: String?
 
     enum CodingKeys: String, CodingKey {
         case threadId = "thread_id"
@@ -37,6 +39,8 @@ public struct GaryxThreadSummaryRowDTO: Decodable, Equatable, Sendable {
         case recentRunId = "recent_run_id"
         case activeRunId = "active_run_id"
         case worktree
+        case rootWorkspacePath = "root_workspace_path"
+        case workspaceOrigin = "workspace_origin"
     }
 }
 
@@ -153,7 +157,9 @@ public enum GaryxThreadSummaryAdapter {
             recentRunId: row.recentRunId,
             activeRunId: row.activeRunId,
             runState: runState(activeRunId: row.activeRunId, recentRunId: row.recentRunId),
-            worktreePath: row.worktree?.visiblePath
+            worktreePath: row.worktree?.visiblePath,
+            rootWorkspacePath: nonEmpty(row.rootWorkspacePath),
+            workspaceOrigin: nonEmpty(row.workspaceOrigin)
         )
     }
 
@@ -181,6 +187,8 @@ public enum GaryxThreadSummaryAdapter {
             runState: string(payload, keys: ["run_state"])
                 ?? runState(activeRunId: activeRunId, recentRunId: recentRunId),
             worktreePath: legacyWorktreePath(payload),
+            rootWorkspacePath: string(payload, keys: ["root_workspace_path"]),
+            workspaceOrigin: string(payload, keys: ["workspace_origin"]),
             automationId: string(payload, keys: ["automation_id"]),
             automationThreadMode: string(payload, keys: ["automation_thread_mode"]),
             threadRuntime: decode(GaryxThreadRuntimeSummary.self, from: payload["thread_runtime"])
