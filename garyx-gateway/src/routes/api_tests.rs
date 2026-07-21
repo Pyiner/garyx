@@ -2984,9 +2984,7 @@ fn restart_recorder() -> (
     (requester, calls)
 }
 
-fn test_state_with_restart_requester(
-    requester: crate::restart::RestartRequester,
-) -> Arc<AppState> {
+fn test_state_with_restart_requester(requester: crate::restart::RestartRequester) -> Arc<AppState> {
     use crate::composition::app_bootstrap::AppStateBuilder;
     AppStateBuilder::new(GaryxConfig::default())
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))

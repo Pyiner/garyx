@@ -499,8 +499,9 @@ impl GaryxDbService {
         // Deliberately does not allocate activity_seq: merely settling a run
         // orphan from the previous boot must not move an old thread to the
         // head. RuntimeAssembler invokes this under the data-dir lock before
-        // listener bind; the source guard pins this as a pre-bind-only direct
-        // recent_threads UPDATE.
+        // listener bind; this is a reviewed pre-bind-only direct
+        // recent_threads UPDATE (contract recorded in
+        // docs/agents/repository-contracts.md).
         let recent = conn.execute(
             "UPDATE recent_threads
                 SET active_run_id = NULL,

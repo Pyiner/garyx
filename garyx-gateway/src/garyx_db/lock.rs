@@ -146,20 +146,33 @@ pub(super) fn configured_data_lock_wait() -> GaryxDbResult<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
+/// Typestate witness that the pre-R5 parent handoff barrier completed while
+/// the data-dir lock was held. Minted only by
+/// [`wait_for_pre_r5_parent_handoff`] (which requires the held lock as
+/// evidence) and demanded by the first database open, so the startup order
+/// lock -> parent handoff -> SQLite open is pinned by the compiler instead of
+/// a retired source-scan guard.
+pub(super) struct PreR5HandoffComplete(());
+
 #[cfg(unix)]
-pub(super) fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
+pub(super) fn wait_for_pre_r5_parent_handoff(
+    _lock: &DataDirLock,
+) -> GaryxDbResult<PreR5HandoffComplete> {
     let parent_pid = unsafe { libc::getppid() };
     if parent_pid <= 1 || !parent_has_same_executable_name(parent_pid as u32)? {
-        return Ok(());
+        return Ok(PreR5HandoffComplete(()));
     }
     wait_for_parent_exit(parent_pid as u32, PRE_R5_PARENT_HANDOFF_WAIT, || {
         process_is_alive(parent_pid as u32)
-    })
+    })?;
+    Ok(PreR5HandoffComplete(()))
 }
 
 #[cfg(not(unix))]
-pub(super) fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
-    Ok(())
+pub(super) fn wait_for_pre_r5_parent_handoff(
+    _lock: &DataDirLock,
+) -> GaryxDbResult<PreR5HandoffComplete> {
+    Ok(PreR5HandoffComplete(()))
 }
 
 pub(super) fn wait_for_parent_exit(

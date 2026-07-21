@@ -3,10 +3,11 @@
 //!
 //! Each wrapper pins the stable `garyx_gateway::cron` target structurally, so
 //! a callsite cannot omit or drift it — module moves never change what
-//! operator `RUST_LOG` filters and alert rules see. The source guard in
-//! `tests.rs` bans the `tracing` token from every other engine file, which
-//! also forbids aliased imports (`use tracing::warn as …`) and direct macro
-//! calls.
+//! operator `RUST_LOG` filters and alert rules see. The runtime
+//! capturing-subscriber test in `tests.rs` asserts engine events land on this
+//! stable target and none drift to module-path targets; engine code outside
+//! this module must keep routing through the `cron_*` wrappers (review-owned
+//! contract, see docs/agents/repository-contracts.md).
 
 macro_rules! cron_debug {
     ($($arg:tt)*) => {

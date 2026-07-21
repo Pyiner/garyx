@@ -95,16 +95,17 @@ impl ThreadStore for InMemoryThreadStore {
     }
 
     async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-        let mut reservation = self
+        let reservation = self
             .run_coordinator
             .reserve_delete(self, thread_id)
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
-        self.run_coordinator
-            .abort_and_drain_delete(&reservation)
+        let drained = self
+            .run_coordinator
+            .abort_and_drain_delete(reservation)
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
-        let prior = reservation.prior_terminal();
+        let prior = drained.prior_terminal();
         let mut state = self.store.write().await;
         let removed = state.records.remove(thread_id).is_some();
         let upgraded = state.terminal_states.get(thread_id) == Some(&ThreadTerminalState::Archived);
@@ -115,9 +116,9 @@ impl ThreadStore for InMemoryThreadStore {
         }
         drop(state);
         if removed || upgraded || prior == Some(ThreadTerminalState::Deleted) {
-            reservation.settle_committed(Some(ThreadTerminalState::Deleted));
+            drained.settle_committed(Some(ThreadTerminalState::Deleted));
         } else {
-            reservation.settle_decision(None);
+            drained.settle_decision(None);
         }
         Ok(removed || upgraded)
     }

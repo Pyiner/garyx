@@ -2540,15 +2540,4 @@ mod tests {
             assert_eq!(serde_json::to_string(&selector).unwrap(), wire);
         }
     }
-
-    #[test]
-    fn retired_scalar_diff_tokens_have_no_producer_or_consumer() {
-        let source = include_str!("tool_field_projection.rs");
-        for retired in [
-            ["RenderToolFieldFormat::", "Diff"].concat(),
-            ["RenderToolFieldLabel::", "Diff"].concat(),
-        ] {
-            assert!(!source.contains(&retired));
-        }
-    }
 }

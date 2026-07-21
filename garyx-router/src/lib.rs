@@ -78,9 +78,9 @@ pub use router::{
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
 pub use run_admission::{
-    AdmittedRun, ArchiveBarrier, CoordinationError, LifecycleCommitWitness, LifecycleReservation,
-    RunAdmissionError, ThreadDeleteAdmission, ThreadRunAborter, ThreadRunCoordinator,
-    ThreadRunLease,
+    AdmittedRun, ArchiveBarrier, CoordinationError, DrainedDeleteReservation,
+    LifecycleCommitWitness, LifecycleReservation, RunAdmissionError, ThreadRunAborter,
+    ThreadRunCoordinator, ThreadRunLease,
 };
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::contract as store_contract;

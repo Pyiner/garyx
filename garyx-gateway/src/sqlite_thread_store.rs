@@ -480,26 +480,33 @@ impl ThreadStore for SqliteThreadStore {
         let lock = self.key_lock(thread_id);
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
-        let mut reservation = self
+        let reservation = self
             .run_coordinator
             .reserve_delete(self, thread_id)
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
-        self.run_coordinator
-            .abort_and_drain_delete(&reservation)
+        // The drain barrier consumes the reservation and returns the typestate
+        // witness the raw record delete borrows; settlement consumes the
+        // witness afterwards, so drain → delete → settle is the only order
+        // that compiles.
+        let drained = self
+            .run_coordinator
+            .abort_and_drain_delete(reservation)
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
-        let prior = reservation.prior_terminal();
-        let admission = reservation.storage_delete_admission();
+        let prior = drained.prior_terminal();
         let _guard = lock.lock().await;
-        let removed = garyx_db
-            .run_blocking(move |db| db.delete_thread_record_with_projections(&key, admission))
+        let (removed, drained) = garyx_db
+            .run_blocking(move |db| {
+                let removed = db.delete_thread_record_with_projections(&key, &drained)?;
+                Ok((removed, drained))
+            })
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         if removed || prior.is_some() {
-            reservation.settle_committed(Some(ThreadTerminalState::Deleted));
+            drained.settle_committed(Some(ThreadTerminalState::Deleted));
         } else {
-            reservation.settle_decision(None);
+            drained.settle_decision(None);
         }
         Ok(removed)
     }

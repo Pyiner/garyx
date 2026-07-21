@@ -163,6 +163,17 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests;
 
+/// The first SQLite open of a locked on-disk database. Demanding the
+/// [`PreR5HandoffComplete`] witness (itself minted only while the data-dir
+/// lock is held) makes the startup order lock -> parent handoff -> open a
+/// compile-time property.
+fn open_locked_database(
+    path: &Path,
+    _handoff_complete: &PreR5HandoffComplete,
+) -> GaryxDbResult<Connection> {
+    Ok(Connection::open(path)?)
+}
+
 impl GaryxDbService {
     pub fn open(path: impl AsRef<Path>) -> GaryxDbResult<Self> {
         Self::open_with_lock_wait(path, configured_data_lock_wait()?)
@@ -170,13 +181,14 @@ impl GaryxDbService {
 
     fn open_with_lock_wait(path: impl AsRef<Path>, lock_wait: Duration) -> GaryxDbResult<Self> {
         let path = path.as_ref();
-        // This must stay before Connection::open and every schema/import/
-        // purge action. It is also the pre-R5 fallback cutover boundary:
-        // once we own the new lock, a still-live same-executable parent must
+        // Startup order lock -> parent handoff -> SQLite open is pinned by
+        // types: the handoff barrier demands the held data-dir lock and mints
+        // the `PreR5HandoffComplete` witness the first database open consumes.
+        // Once we own the new lock, a still-live same-executable parent must
         // exit before this binary may touch the database.
         let data_dir_lock = DataDirLock::acquire(path, lock_wait)?;
-        wait_for_pre_r5_parent_handoff()?;
-        let conn = Connection::open(path)?;
+        let handoff_complete = wait_for_pre_r5_parent_handoff(&data_dir_lock)?;
+        let conn = open_locked_database(path, &handoff_complete)?;
         configure_file_connection(&conn)?;
         initialize_connection(&conn)?;
         // Dedicated read connections: under WAL they see consistent

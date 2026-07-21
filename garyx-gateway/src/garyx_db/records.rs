@@ -169,14 +169,16 @@ impl GaryxDbService {
     /// thread with no tombstone remains missing, matching the lifecycle
     /// result matrix's rejected-not-found branch.
     ///
-    /// The [`garyx_router::ThreadDeleteAdmission`] parameter is a capability
-    /// minted only from a live coordinator delete reservation (or the
-    /// `test-seams` constructor in tests), so no call site can reach this raw
-    /// destructive delete without holding the delete fence.
+    /// The [`garyx_router::DrainedDeleteReservation`] parameter is a
+    /// typestate witness minted only by the coordinator's delete abort/drain
+    /// barrier (or the inert `test-seams` constructor in tests), and
+    /// settlement consumes it after this call — so no call site can reach
+    /// this raw destructive delete without holding a live, drained delete
+    /// reservation.
     pub(crate) fn delete_thread_record_with_projections(
         &self,
         key: &str,
-        _admission: garyx_router::ThreadDeleteAdmission,
+        _drained_delete: &garyx_router::DrainedDeleteReservation,
     ) -> GaryxDbResult<bool> {
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);

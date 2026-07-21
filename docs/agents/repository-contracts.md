@@ -251,10 +251,12 @@ reinterpreted in feature code.
 
 - Architecture guards are structural, never textual: no test may walk or
   regex-scan source files to enforce a boundary. Enforce boundaries with
-  visibility, capability tokens (e.g. `ThreadDeleteAdmission`, minted only
-  by a live coordinator delete reservation), `cfg(test)`-only helpers for
-  test seeding (`archive_thread_record`), and in-module tests that import
-  reviewed contract constants directly (the patch-field allowlists).
+  visibility, typestate witnesses (e.g. `DrainedDeleteReservation`, minted
+  only by consuming a delete reservation through the coordinator's
+  abort/drain barrier and consumed again by settlement), `cfg(test)`-only
+  helpers for test seeding (`archive_thread_record`), and in-module tests
+  that import reviewed contract constants directly (the patch-field
+  allowlists).
 - Test seams are additive injection points. `cfg(test)` must never replace
   production behavior. The production side of a seam is wired explicitly at
   the composition root — e.g. the runtime assembly passes
@@ -270,7 +272,14 @@ reinterpreted in feature code.
   through `InboundPipeline` (primary enforcement stays compile-level via
   `pub(crate)` in garyx-channels); direct `UPDATE recent_threads` writes
   stay confined to activity-seq allocation plus the reviewed pre-bind-only
-  exceptions documented at their call sites.
+  exceptions documented at their call sites; the channel dispatcher stays
+  channel-blind — no built-in channel-name literals or downcast vocabulary
+  in `dispatcher.rs` (the privacy seal in `outbound_registry` remains the
+  compile-level boundary).
+- Startup ordering that used to be text-pinned is typestate-pinned:
+  `garyx_db` opens SQLite only through the `PreR5HandoffComplete` witness
+  (lock -> parent handoff -> open), and migration registration order is
+  enforced by runtime preconditions plus the full-runner tests.
 
 ## Time And Timezone
 
