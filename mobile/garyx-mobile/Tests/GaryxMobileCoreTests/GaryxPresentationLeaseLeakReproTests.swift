@@ -2,63 +2,39 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxPresentationLeaseLeakReproTests: XCTestCase {
-    func testAbandonedLeaseHasNoOwnerLivenessRecoveryBeforeExplicitTerminalCallback() {
+    func testOwnerLossTerminatesAbandonedLeaseAndAuditsCause() {
         let abandoned = GaryxPresentationLeaseToken(rawValue: "abandoned-presenter")
         let unknown = GaryxPresentationLeaseToken(rawValue: "unknown-presenter")
         var leases = GaryxPresentationLeaseTree()
 
-        XCTAssertTrue(leases.acquire(abandoned))
+        XCTAssertTrue(leases.acquire(abandoned, resultBearing: true))
         leases.markPresented(abandoned)
+        leases.ownerPresentationEnded(unknown)
 
-        XCTAssertFalse(leases.acquire(abandoned), "duplicate acquisition is a no-op")
-
-        // Exercise every non-terminal mutation available to a lease whose
-        // presenter owner has vanished. Also churn unrelated leases through
-        // their full lifecycle; neither new acquisitions nor their terminals
-        // prove that the abandoned presenter dismissed.
-        for index in 0..<8 {
-            leases.markPresented(abandoned)
-            leases.markDismissing(abandoned)
-            leases.recordResult(abandoned)
-            leases.recordNoResult(abandoned)
-            leases.markPresented(unknown)
-            leases.markDismissing(unknown)
-            leases.recordResult(unknown)
-            leases.recordNoResult(unknown)
-
-            let unrelated = GaryxPresentationLeaseToken(rawValue: "unrelated-\(index)")
-            XCTAssertTrue(leases.acquire(unrelated))
-            leases.markPresented(unrelated)
-            leases.dismissalCompleted(unrelated)
-            XCTAssertEqual(leases.garbageCollectReleased(), 1)
-            XCTAssertTrue(leases.hasBarrier)
-        }
+        XCTAssertTrue(leases.hasBarrier)
+        leases.ownerPresentationEnded(abandoned)
 
         XCTAssertEqual(leases.records.count, 1)
-        XCTAssertEqual(leases.records[abandoned]?.joinState, .dismissing)
-        XCTAssertEqual(leases.records[abandoned]?.releaseCount, 0)
-        XCTAssertFalse(leases.records[abandoned]?.released == true)
-        XCTAssertTrue(
-            leases.hasBarrier,
-            "REPRO: an ownerless non-terminal lease has no liveness-based recovery"
-        )
+        XCTAssertEqual(leases.records[abandoned]?.joinState, .released)
+        XCTAssertEqual(leases.records[abandoned]?.releaseCount, 1)
+        XCTAssertEqual(leases.records[abandoned]?.result, .explicitNoResult)
+        XCTAssertEqual(leases.records[abandoned]?.terminalCause, .ownerLoss)
+        XCTAssertFalse(leases.hasBarrier)
 
-        var dismissalRecovery = leases
-        dismissalRecovery.dismissalCompleted(abandoned)
-        XCTAssertFalse(dismissalRecovery.hasBarrier)
-
-        var forcedRecovery = leases
-        forcedRecovery.presentationFailed(abandoned)
-        XCTAssertFalse(forcedRecovery.hasBarrier)
+        leases.dismissalCompleted(abandoned)
+        leases.presentationFailed(abandoned)
+        leases.ownerPresentationEnded(abandoned)
+        XCTAssertEqual(leases.records[abandoned]?.releaseCount, 1)
+        XCTAssertEqual(leases.records[abandoned]?.terminalCause, .ownerLoss)
 
         print(
-            "PRESENTATION_LEASE_CORE_REPRO state=\(String(describing: leases.records[abandoned]?.joinState)) "
+            "PRESENTATION_LEASE_CORE_HEALTH state=\(String(describing: leases.records[abandoned]?.joinState)) "
                 + "released=\(leases.records[abandoned]?.released == true) "
-                + "barrier=\(leases.hasBarrier) nonTerminalRecovery=false"
+                + "barrier=\(leases.hasBarrier) terminalCause=ownerLoss"
         )
     }
 
-    func testAbandonedLeasePermanentlyQueuesOrdinaryNavigationUntilExplicitDismissal() {
+    func testOwnerLossAdmitsNavigationQueuedBehindAbandonedLease() {
         let scope = GaryxGatewayScope(identity: "synthetic-gateway", epoch: 1)
         let scopes = GaryxGatewayScopeRegistry(initialActiveScope: scope)
         let abandoned = GaryxPresentationLeaseToken(rawValue: "abandoned-navigation-barrier")
@@ -88,44 +64,25 @@ final class GaryxPresentationLeaseLeakReproTests: XCTestCase {
             ),
             .queued
         )
-
-        for _ in 0..<32 {
-            coordinator.setTransactionStatus(.nonTerminal)
-            XCTAssertEqual(
-                coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
-                .waitForTransactionTerminal
-            )
-            coordinator.setTransactionStatus(.terminal)
-            XCTAssertEqual(
-                coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
-                .waitForPresentationBarrier
-            )
-            XCTAssertTrue(
-                coordinator.drainAdmissible(presentationBarrier: leases.hasBarrier).isEmpty
-            )
-
-            leases.markPresented(abandoned)
-            leases.markDismissing(abandoned)
-            XCTAssertEqual(leases.garbageCollectReleased(), 0)
-            XCTAssertTrue(leases.hasBarrier)
-        }
-
-        XCTAssertEqual(coordinator.queued, [intent])
         XCTAssertEqual(
             coordinator.nextAdmissionAction(presentationBarrier: leases.hasBarrier),
             .waitForPresentationBarrier
         )
+        XCTAssertTrue(coordinator.drainAdmissible(presentationBarrier: true).isEmpty)
 
-        leases.dismissalCompleted(abandoned)
+        leases.ownerPresentationEnded(abandoned)
+
         XCTAssertFalse(leases.hasBarrier)
+        XCTAssertEqual(leases.records[abandoned]?.terminalCause, .ownerLoss)
         XCTAssertEqual(
             coordinator.drainAdmissible(presentationBarrier: leases.hasBarrier),
             [intent]
         )
+        XCTAssertTrue(coordinator.queued.isEmpty)
 
         print(
-            "PRESENTATION_LEASE_NAV_REPRO cycles=32 queuedBeforeDismissal=true "
-                + "nextAction=waitForPresentationBarrier admittedBeforeDismissal=false"
+            "PRESENTATION_LEASE_NAV_HEALTH queuedBeforeOwnerLoss=true "
+                + "barrierAfterOwnerLoss=false admittedAfterOwnerLoss=true"
         )
     }
 }

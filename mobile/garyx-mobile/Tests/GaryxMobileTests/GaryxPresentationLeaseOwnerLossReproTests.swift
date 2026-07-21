@@ -5,7 +5,173 @@ import XCTest
 
 @MainActor
 final class GaryxPresentationLeaseOwnerLossReproTests: XCTestCase {
-    func testRemovingPresentedLazyRowLeaksLeaseAndFreezesEdgesAndThreadOpen() async throws {
+    func testRemovingPresentedLazyRowReleasesLeaseAndUnblocksNavigation() async throws {
+        let harness = try makeHarness()
+        defer { tearDown(harness) }
+
+        let token = try await presentParent(in: harness)
+        let queuedEntry = harness.store.open(
+            .conversation(threadID: "synthetic-owner-loss-open"),
+            source: .replace,
+            animated: false
+        )
+        XCTAssertTrue(harness.store.path.isEmpty)
+        XCTAssertTrue(harness.container.path.isEmpty)
+
+        harness.probe.removePresenterRow()
+        let recovered = await waitUntil {
+            harness.window.layoutIfNeeded()
+            return harness.probe.presenterRowDisappearCount == 1
+                && harness.probe.parentContentDisappearCount == 1
+                && !self.hasPresentedViewController(in: harness.container)
+                && harness.container.presentationLeaseRecord(token)?.released == true
+                && !harness.container.hasPresentationBarrier
+                && !harness.store.hasPresentationBarrier
+                && harness.store.path == [queuedEntry]
+                && harness.container.path == [queuedEntry]
+                && harness.container.leadingEdgePanGestureRecognizer.isEnabled
+                && harness.container.trailingEdgePanGestureRecognizer.isEnabled
+        }
+        XCTAssertTrue(recovered)
+
+        let record = try XCTUnwrap(harness.container.presentationLeaseRecord(token))
+        XCTAssertNotNil(
+            harness.probe.rowLifetime,
+            "iOS 26 retains the removed presenter's StateObject after both views disappear"
+        )
+        XCTAssertTrue(harness.probe.presenterRowIDs.isEmpty)
+        XCTAssertEqual(harness.probe.onDismissCount, 0)
+        XCTAssertEqual(harness.probe.selectionNilObservationCount, 0)
+        XCTAssertEqual(record.joinState, .released)
+        XCTAssertEqual(record.releaseCount, 1)
+        XCTAssertEqual(record.terminalCause, .ownerLoss)
+        XCTAssertFalse(hasPresentedViewController(in: harness.container))
+
+        print(
+            "PRESENTATION_LEASE_UI_HEALTH os=\(UIDevice.current.systemVersion) "
+                + "onDismiss=\(harness.probe.onDismissCount) "
+                + "selectionNil=\(harness.probe.selectionNilObservationCount) "
+                + "terminalCause=ownerLoss released=\(record.released) "
+                + "barrier=\(harness.container.hasPresentationBarrier) "
+                + "openPushed=\(harness.store.path == [queuedEntry]) "
+                + "leadingEnabled=\(harness.container.leadingEdgePanGestureRecognizer.isEnabled) "
+                + "trailingEnabled=\(harness.container.trailingEdgePanGestureRecognizer.isEnabled)"
+        )
+
+        XCTAssertEqual(harness.container.reclaimReleasedPresentationLeases(), 1)
+        XCTAssertNil(harness.container.presentationLeaseRecord(token))
+    }
+
+    func testNormalDismissalKeepsNormalTerminalHistory() async throws {
+        let harness = try makeHarness()
+        defer { tearDown(harness) }
+
+        let token = try await presentParent(in: harness)
+        harness.probe.requestParentDismissal()
+
+        let dismissed = await waitUntil {
+            harness.window.layoutIfNeeded()
+            return harness.probe.onDismissCount == 1
+                && harness.probe.selectionNilObservationCount == 1
+                && harness.container.presentationLeaseRecord(token)?.released == true
+                && !harness.container.hasPresentationBarrier
+                && !self.hasPresentedViewController(in: harness.container)
+        }
+        XCTAssertTrue(dismissed)
+
+        let record = try XCTUnwrap(harness.container.presentationLeaseRecord(token))
+        XCTAssertEqual(record.joinState, .released)
+        XCTAssertEqual(record.releaseCount, 1)
+        XCTAssertEqual(record.terminalCause, .normalDismissal)
+        XCTAssertFalse(harness.store.hasPresentationBarrier)
+        XCTAssertTrue(harness.container.leadingEdgePanGestureRecognizer.isEnabled)
+        XCTAssertTrue(harness.container.trailingEdgePanGestureRecognizer.isEnabled)
+    }
+
+    func testNestedCoverDoesNotSettleStillPresentedAncestor() async throws {
+        let harness = try makeHarness()
+        defer { tearDown(harness) }
+
+        let parentToken = try await presentParent(in: harness)
+        harness.probe.requestNestedPresentation()
+
+        let nestedDidPresent = await waitUntil {
+            harness.window.layoutIfNeeded()
+            let active = harness.container.presentationLeaseRecordsForTesting.values
+                .filter { !$0.released }
+            return harness.probe.nestedContentAppearCount == 1
+                && active.count == 2
+                && active.allSatisfy { $0.joinState == .presented }
+                && harness.probe.parentController != nil
+        }
+        print(
+            "PRESENTATION_LEASE_NESTED_SETUP nestedAppear="
+                + "\(harness.probe.nestedContentAppearCount) parentDisappear="
+                + "\(harness.probe.parentContentDisappearCount) records="
+                + "\(harness.container.presentationLeaseRecordsForTesting.values.map(\.joinState))"
+        )
+        XCTAssertTrue(nestedDidPresent)
+        let childToken = try XCTUnwrap(
+            harness.container.presentationLeaseRecordsForTesting.keys.first {
+                $0 != parentToken
+            }
+        )
+
+        for _ in 0..<20 { await Task.yield() }
+
+        let parentController = try XCTUnwrap(harness.probe.parentController)
+        let parentWhileNested = try XCTUnwrap(
+            harness.container.presentationLeaseRecord(parentToken)
+        )
+        XCTAssertFalse(parentWhileNested.released)
+        XCTAssertNil(parentWhileNested.terminalCause)
+        XCTAssertEqual(parentWhileNested.joinState, .presented)
+        XCTAssertEqual(
+            harness.container.presentationLeaseRecord(childToken)?.parent,
+            parentToken
+        )
+        XCTAssertFalse(
+            harness.container.presentationLeaseRecord(childToken)?.released == true
+        )
+        XCTAssertTrue(harness.container.hasPresentationBarrier)
+        XCTAssertTrue(hasPresentedViewController(in: harness.container))
+        XCTAssertTrue(
+            harness.container.containsControllerInPresentedHierarchy(parentController),
+            "the ancestor controller remains UIKit presentation ground truth"
+        )
+
+        XCTAssertEqual(harness.probe.nestedContentDisappearCount, 0)
+    }
+
+    private func presentParent(
+        in harness: GaryxPresentationLeaseHarness
+    ) async throws -> GaryxPresentationLeaseToken {
+        let presenterDidAppear = await waitUntil {
+            harness.probe.presenterRowAppearCount == 1
+        }
+        XCTAssertTrue(presenterDidAppear)
+        harness.probe.requestParentPresentation()
+
+        let didPresent = await waitUntil {
+            harness.window.layoutIfNeeded()
+            return harness.probe.parentContentAppearCount == 1
+                && harness.container.presentationLeaseRecordsForTesting.values.count == 1
+                && harness.container.presentationLeaseRecordsForTesting.values.first?.joinState
+                    == .presented
+                && harness.container.hasPresentationBarrier
+                && self.hasPresentedViewController(in: harness.container)
+        }
+        XCTAssertTrue(didPresent)
+        let token = try XCTUnwrap(
+            harness.container.presentationLeaseRecordsForTesting.keys.first
+        )
+        XCTAssertNotNil(harness.probe.rowLifetime)
+        XCTAssertFalse(harness.container.leadingEdgePanGestureRecognizer.isEnabled)
+        XCTAssertFalse(harness.container.trailingEdgePanGestureRecognizer.isEnabled)
+        return token
+    }
+
+    private func makeHarness() throws -> GaryxPresentationLeaseHarness {
         let probe = GaryxPresentationLeaseOwnerLossProbe()
         let store = GaryxProductionRouteStore()
         let container = makeRouteContainer(store: store, probe: probe)
@@ -18,129 +184,19 @@ final class GaryxPresentationLeaseOwnerLossReproTests: XCTestCase {
         container.view.frame = window.bounds
         container.view.setNeedsLayout()
         container.view.layoutIfNeeded()
-
-        defer {
-            // Intentionally exercise the ordinary representable/window
-            // teardown with the lease still unreleased. A forced release here
-            // would hide any direct teardown crash caused by this state.
-            window.rootViewController?.dismiss(animated: false)
-            window.isHidden = true
-            window.rootViewController = nil
-            store.detach(container)
-        }
-
-        let presenterDidAppear = await waitUntil { probe.presenterRowAppearCount == 1 }
-        XCTAssertTrue(presenterDidAppear)
-        probe.requestPresentation()
-
-        let didPresent = await waitUntil {
-            probe.presentedContentAppearCount == 1
-                && container.presentationLeaseRecordsForTesting.count == 1
-                && container.hasPresentationBarrier
-        }
-        print(
-            "PRESENTATION_LEASE_UI_SETUP os=\(UIDevice.current.systemVersion) "
-                + "rowAppear=\(probe.presenterRowAppearCount) "
-                + "contentAppear=\(probe.presentedContentAppearCount) "
-                + "barrier=\(container.hasPresentationBarrier)"
+        return GaryxPresentationLeaseHarness(
+            probe: probe,
+            store: store,
+            container: container,
+            window: window
         )
-        XCTAssertTrue(didPresent)
-        let token = try XCTUnwrap(container.presentationLeaseRecordsForTesting.keys.first)
-        XCTAssertEqual(container.presentationLeaseRecord(token)?.joinState, .presented)
-        XCTAssertNotNil(probe.rowLifetime)
-        XCTAssertTrue(hasPresentedViewController(in: container))
-        XCTAssertFalse(container.leadingEdgePanGestureRecognizer.isEnabled)
-        XCTAssertFalse(container.trailingEdgePanGestureRecognizer.isEnabled)
+    }
 
-        probe.removePresenterRow()
-        let presenterDidDisappear = await waitUntil {
-            probe.presenterRowDisappearCount == 1
-        }
-        XCTAssertTrue(presenterDidDisappear)
-        XCTAssertTrue(probe.presenterRowIDs.isEmpty)
-        let coverDidDisappear = await waitUntil {
-            probe.presentedContentDisappearCount == 1
-                && !self.hasPresentedViewController(in: container)
-        }
-        XCTAssertTrue(coverDidDisappear)
-
-        // Give SwiftUI/UIKit ample time to perform any automatic teardown,
-        // binding writeback, or onDismiss delivery caused by presenter loss.
-        for _ in 0..<40 {
-            await Task.yield()
-            try await Task.sleep(for: .milliseconds(25))
-            window.layoutIfNeeded()
-        }
-
-        let abandonedRecord = try XCTUnwrap(container.presentationLeaseRecord(token))
-        print(
-            "PRESENTATION_LEASE_UI_REPRO rowDisappear=\(probe.presenterRowDisappearCount) "
-                + "rowLifetimeAlive=\(probe.rowLifetime != nil) "
-                + "contentAppear=\(probe.presentedContentAppearCount) "
-                + "contentDisappear=\(probe.presentedContentDisappearCount) "
-                + "onDismiss=\(probe.onDismissCount) "
-                + "selectionNilObservations=\(probe.selectionNilObservationCount) "
-                + "joinState=\(abandonedRecord.joinState) "
-                + "released=\(abandonedRecord.released) "
-                + "barrier=\(container.hasPresentationBarrier) "
-                + "presentedController=\(hasPresentedViewController(in: container))"
-        )
-
-        XCTAssertNotNil(
-            probe.rowLifetime,
-            "iOS 26 retains the removed presenter's StateObject storage after both views disappear"
-        )
-        XCTAssertEqual(probe.presentedContentDisappearCount, 1)
-        XCTAssertFalse(hasPresentedViewController(in: container))
-        XCTAssertEqual(
-            probe.onDismissCount,
-            0,
-            "REPRO: iOS 26 does not deliver the cover's onDismiss after presenter removal"
-        )
-        XCTAssertEqual(probe.selectionNilObservationCount, 0)
-        XCTAssertFalse(abandonedRecord.released)
-        XCTAssertEqual(abandonedRecord.releaseCount, 0)
-        XCTAssertTrue(container.hasPresentationBarrier)
-        XCTAssertTrue(store.hasPresentationBarrier)
-        XCTAssertEqual(container.reclaimReleasedPresentationLeases(), 0)
-        XCTAssertNotNil(container.presentationLeaseRecord(token))
-        XCTAssertFalse(container.leadingEdgePanGestureRecognizer.isEnabled)
-        XCTAssertFalse(container.trailingEdgePanGestureRecognizer.isEnabled)
-
-        let directOpen = store.open(
-            .conversation(threadID: "synthetic-direct-open"),
-            source: .replace,
-            animated: false
-        )
-        XCTAssertTrue(store.path.isEmpty)
-        XCTAssertTrue(container.path.isEmpty)
-        XCTAssertEqual(directOpen.destination, .conversation(threadID: "synthetic-direct-open"))
-
-        let preparation = store.beginNavigationPreparation(source: .replace, animated: false)
-        let queuedOpen = store.completeNavigationPreparation(
-            preparation,
-            outcome: .ready([.conversation(threadID: "synthetic-queued-open")])
-        )
-        XCTAssertEqual(queuedOpen.result, .queued)
-
-        for _ in 0..<16 {
-            store.rendererBecameIdle()
-            store.presentationBarrierDidChange()
-            await Task.yield()
-            XCTAssertTrue(store.path.isEmpty)
-            XCTAssertTrue(container.path.isEmpty)
-        }
-
-        XCTAssertTrue(container.hasPresentationBarrier)
-        XCTAssertFalse(container.leadingEdgePanGestureRecognizer.isEnabled)
-        XCTAssertFalse(container.trailingEdgePanGestureRecognizer.isEnabled)
-        print(
-            "PRESENTATION_LEASE_UI_FREEZE_REPRO directOpenAdmitted=false "
-                + "queuedResult=\(queuedOpen.result) drainCycles=16 "
-                + "leadingEnabled=\(container.leadingEdgePanGestureRecognizer.isEnabled) "
-                + "trailingEnabled=\(container.trailingEdgePanGestureRecognizer.isEnabled)"
-        )
-        print("PRESENTATION_LEASE_UI_EXIT_PROBE teardownWithUnreleasedLease=true")
+    private func tearDown(_ harness: GaryxPresentationLeaseHarness) {
+        harness.window.rootViewController?.dismiss(animated: false)
+        harness.window.isHidden = true
+        harness.window.rootViewController = nil
+        harness.store.detach(harness.container)
     }
 
     private func makeRouteContainer(
@@ -179,7 +235,7 @@ final class GaryxPresentationLeaseOwnerLossReproTests: XCTestCase {
     }
 
     private func waitUntil(
-        timeout: Duration = .seconds(3),
+        timeout: Duration = .seconds(5),
         condition: @escaping @MainActor () -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
@@ -198,19 +254,40 @@ final class GaryxPresentationLeaseOwnerLossReproTests: XCTestCase {
 }
 
 @MainActor
+private struct GaryxPresentationLeaseHarness {
+    let probe: GaryxPresentationLeaseOwnerLossProbe
+    let store: GaryxProductionRouteStore
+    let container: GaryxRouteStackContainer
+    let window: UIWindow
+}
+
+@MainActor
 private final class GaryxPresentationLeaseOwnerLossProbe: ObservableObject {
     @Published private(set) var presenterRowIDs = [1]
-    @Published private(set) var presentationRequestGeneration = 0
+    @Published private(set) var parentPresentationGeneration = 0
+    @Published private(set) var parentDismissalGeneration = 0
+    @Published var nestedPresented = false
     weak var rowLifetime: GaryxPresentationLeaseRowLifetime?
+    weak var parentController: UIViewController?
     var presenterRowAppearCount = 0
     var presenterRowDisappearCount = 0
-    var presentedContentAppearCount = 0
-    var presentedContentDisappearCount = 0
+    var parentContentAppearCount = 0
+    var parentContentDisappearCount = 0
+    var nestedContentAppearCount = 0
+    var nestedContentDisappearCount = 0
     var onDismissCount = 0
     var selectionNilObservationCount = 0
 
-    func requestPresentation() {
-        presentationRequestGeneration += 1
+    func requestParentPresentation() {
+        parentPresentationGeneration += 1
+    }
+
+    func requestParentDismissal() {
+        parentDismissalGeneration += 1
+    }
+
+    func requestNestedPresentation() {
+        nestedPresented = true
     }
 
     func removePresenterRow() {
@@ -243,11 +320,6 @@ private struct GaryxPresentationLeasePresenterRow: View {
     @StateObject private var lifetime = GaryxPresentationLeaseRowLifetime()
     @State private var selection: GaryxPresentationLeaseReproSelection?
 
-    init(probe: GaryxPresentationLeaseOwnerLossProbe) {
-        _probe = ObservedObject(wrappedValue: probe)
-        _selection = State(initialValue: nil)
-    }
-
     var body: some View {
         Text("Synthetic transcript preview row")
             .frame(maxWidth: .infinity, minHeight: 80)
@@ -256,9 +328,13 @@ private struct GaryxPresentationLeasePresenterRow: View {
                 probe.presenterRowAppearCount += 1
             }
             .onDisappear { probe.presenterRowDisappearCount += 1 }
-            .onChange(of: probe.presentationRequestGeneration) { oldValue, newValue in
+            .onChange(of: probe.parentPresentationGeneration) { oldValue, newValue in
                 guard newValue > oldValue else { return }
                 selection = GaryxPresentationLeaseReproSelection()
+            }
+            .onChange(of: probe.parentDismissalGeneration) { oldValue, newValue in
+                guard newValue > oldValue else { return }
+                selection = nil
             }
             .onChange(of: selection) { oldValue, newValue in
                 guard oldValue != nil, newValue == nil else { return }
@@ -268,21 +344,90 @@ private struct GaryxPresentationLeasePresenterRow: View {
                 item: $selection,
                 onDismiss: { probe.onDismissCount += 1 }
             ) { _ in
-                GaryxPresentationLeasePresentedContent(probe: probe)
+                GaryxPresentationLeaseParentContent(probe: probe)
             }
     }
 }
 
-private struct GaryxPresentationLeasePresentedContent: View {
-    let probe: GaryxPresentationLeaseOwnerLossProbe
+private struct GaryxPresentationLeaseParentContent: View {
+    @ObservedObject var probe: GaryxPresentationLeaseOwnerLossProbe
 
     var body: some View {
         Color.white
             .overlay(Text("Synthetic full-screen preview"))
-            .onAppear {
-                probe.presentedContentAppearCount += 1
+            .background {
+                GaryxPresentationLeaseControllerReader { controller in
+                    probe.parentController = controller
+                }
+                .frame(width: 0, height: 0)
             }
-            .onDisappear { probe.presentedContentDisappearCount += 1 }
+            .onAppear {
+                probe.parentContentAppearCount += 1
+            }
+            .onDisappear { probe.parentContentDisappearCount += 1 }
+            .garyxFullScreenCover(
+                isPresented: $probe.nestedPresented
+            ) {
+                GaryxPresentationLeaseNestedContent(probe: probe)
+            }
+    }
+}
+
+private struct GaryxPresentationLeaseNestedContent: View {
+    let probe: GaryxPresentationLeaseOwnerLossProbe
+
+    var body: some View {
+        Color.white
+            .overlay(Text("Synthetic nested full-screen preview"))
+            .onAppear {
+                probe.nestedContentAppearCount += 1
+            }
+            .onDisappear { probe.nestedContentDisappearCount += 1 }
+    }
+}
+
+private struct GaryxPresentationLeaseControllerReader: UIViewRepresentable {
+    let resolve: @MainActor (UIViewController) -> Void
+
+    func makeUIView(context: Context) -> ResolverView {
+        let view = ResolverView()
+        view.isUserInteractionEnabled = false
+        view.resolve = resolve
+        return view
+    }
+
+    func updateUIView(_ uiView: ResolverView, context: Context) {
+        uiView.resolve = resolve
+    }
+
+    final class ResolverView: UIView {
+        var resolve: (@MainActor (UIViewController) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            resolveController()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            resolveController()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            resolveController()
+        }
+
+        private func resolveController() {
+            var responder: UIResponder? = self
+            while let next = responder?.next {
+                if let controller = next as? UIViewController {
+                    resolve?(controller)
+                    return
+                }
+                responder = next
+            }
+        }
     }
 }
 
