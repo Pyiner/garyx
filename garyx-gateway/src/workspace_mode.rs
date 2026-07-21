@@ -71,7 +71,10 @@ pub(crate) async fn ensure_implicit_thread_workspace_for_config(
 /// the fallback for records that predate the persisted `workspace_origin`
 /// field; new implicit creations write the field explicitly at creation
 /// time, and the projection persists whichever value applies.
-pub(crate) fn thread_workspace_origin(thread_id: &str, workspace_dir: Option<&str>) -> &'static str {
+pub(crate) fn thread_workspace_origin(
+    thread_id: &str,
+    workspace_dir: Option<&str>,
+) -> &'static str {
     let Some(dir) = workspace_dir.map(str::trim).filter(|dir| !dir.is_empty()) else {
         return "implicit";
     };
@@ -174,9 +177,7 @@ mod tests {
         assert_eq!(
             thread_workspace_origin(
                 THREAD_ID,
-                Some(
-                    "/data/thread-workspaces/thread--aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-                ),
+                Some("/data/thread-workspaces/thread--aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
             ),
             "implicit",
         );
@@ -212,9 +213,7 @@ mod tests {
         assert_eq!(
             thread_root_workspace_path(
                 "implicit",
-                Some(
-                    "/data/thread-workspaces/thread--aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-                ),
+                Some("/data/thread-workspaces/thread--aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
                 &json!(null),
             ),
             None,
@@ -254,9 +253,6 @@ mod tests {
             safe_thread_workspace_segment(unusual)
         );
         assert_eq!(safe_thread_workspace_segment(unusual), "thread--with-slash");
-        assert_eq!(
-            thread_workspace_origin(unusual, Some(&managed)),
-            "implicit",
-        );
+        assert_eq!(thread_workspace_origin(unusual, Some(&managed)), "implicit",);
     }
 }

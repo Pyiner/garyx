@@ -1050,14 +1050,15 @@ async fn create_thread_legacy(state: Arc<AppState>, body: CreateThreadBody) -> i
     // A fork inherits the source thread's workspace AND its provenance: a
     // fork of an implicit thread stays implicit even though the managed
     // path embeds the source's id, not the fork's.
-    let fork_workspace_origin = fork_source.as_ref().map(
-        |(source_thread_id, source_thread_data, _, _)| {
-            crate::workspace_mode::fork_inherited_workspace_origin(
-                source_thread_id,
-                source_thread_data,
-            )
-        },
-    );
+    let fork_workspace_origin =
+        fork_source
+            .as_ref()
+            .map(|(source_thread_id, source_thread_data, _, _)| {
+                crate::workspace_mode::fork_inherited_workspace_origin(
+                    source_thread_id,
+                    source_thread_data,
+                )
+            });
     let options = ThreadEnsureOptions {
         label: body.label.clone(),
         workspace_dir: recovered_session
@@ -1071,9 +1072,7 @@ async fn create_thread_legacy(state: Arc<AppState>, body: CreateThreadBody) -> i
                     })
             })
             .or_else(|| body.workspace_dir.clone()),
-        no_workspace: body.no_workspace
-            && recovered_session.is_none()
-            && fork_source.is_none(),
+        no_workspace: body.no_workspace && recovered_session.is_none() && fork_source.is_none(),
         workspace_origin: fork_workspace_origin,
         workspace_mode: body.workspace_mode,
         worktree_base_dir: Some(worktree_base_dir_for_config(&state.config_snapshot())),

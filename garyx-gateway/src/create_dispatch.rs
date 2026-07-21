@@ -887,13 +887,13 @@ async fn prepare_atomic_thread_record(
         );
         metadata.insert(SDK_SESSION_FORK_METADATA_KEY.to_owned(), Value::Bool(true));
     }
-    let fork_workspace_origin = fork_source.as_ref().map(|(source_thread_id, source, _, _)| {
-        crate::workspace_mode::fork_inherited_workspace_origin(source_thread_id, source)
-    });
+    let fork_workspace_origin = fork_source
+        .as_ref()
+        .map(|(source_thread_id, source, _, _)| {
+            crate::workspace_mode::fork_inherited_workspace_origin(source_thread_id, source)
+        });
     let mut options = ThreadEnsureOptions {
-        no_workspace: body.no_workspace
-            && recovered_session.is_none()
-            && fork_source.is_none(),
+        no_workspace: body.no_workspace && recovered_session.is_none() && fork_source.is_none(),
         workspace_origin: fork_workspace_origin,
         label: body.label.clone(),
         workspace_dir: recovered_session

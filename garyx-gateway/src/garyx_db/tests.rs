@@ -5537,8 +5537,7 @@ fn workspace_membership_meta_draft(
         data["workspace_dir"] = serde_json::Value::String(workspace_dir.to_owned());
     }
     if let Some(worktree_json) = worktree_json {
-        data["worktree"] =
-            serde_json::from_str(worktree_json).expect("worktree fixture parses");
+        data["worktree"] = serde_json::from_str(worktree_json).expect("worktree fixture parses");
     }
     if default_list_hidden {
         data["source"] = serde_json::Value::String("side_chat".to_owned());
@@ -5806,7 +5805,10 @@ fn workspace_sort_path_tie_breaker_orders_shuffled_same_name_rows() {
     ];
     sort_workspace_list_entries(&mut entries);
     assert_eq!(
-        entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(),
+        entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
         vec![
             "/workspace/twin-a",
             "/workspace/twin-b",
@@ -5881,7 +5883,8 @@ fn workspace_pin_and_rename_are_active_row_only_point_mutations() {
     .expect("add workspace");
     db.set_workspace_pinned("/workspace/repo", true)
         .expect("pin");
-    db.rename_workspace("/workspace/repo", "Repo").expect("rename");
+    db.rename_workspace("/workspace/repo", "Repo")
+        .expect("rename");
 
     // Tombstoned rows are invisible to point mutations and never revived.
     db.delete_workspace("/workspace/repo").expect("remove");

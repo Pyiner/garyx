@@ -469,7 +469,9 @@ mod tests {
     #[tokio::test]
     async fn directory_listing_flags_git_repository_roots() {
         let temp = tempfile::tempdir().expect("temp dir");
-        fs::create_dir_all(temp.path().join("repo/.git")).await.unwrap();
+        fs::create_dir_all(temp.path().join("repo/.git"))
+            .await
+            .unwrap();
         fs::create_dir(temp.path().join("plain")).await.unwrap();
 
         let listing = build_directory_listing(Some(temp.path().to_string_lossy().to_string()))
@@ -493,7 +495,9 @@ mod tests {
     #[tokio::test]
     async fn directory_listing_rejects_bad_paths_with_typed_codes() {
         let temp = tempfile::tempdir().expect("temp dir");
-        fs::write(temp.path().join("note.txt"), "file").await.unwrap();
+        fs::write(temp.path().join("note.txt"), "file")
+            .await
+            .unwrap();
 
         let relative = build_directory_listing(Some("relative/path".to_owned()))
             .await
