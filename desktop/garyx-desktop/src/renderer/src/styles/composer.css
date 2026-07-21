@@ -3,7 +3,7 @@
 .composer-shell-wrap {
   position: absolute;
   right: 0;
-  bottom: var(--composer-bottom-inset);
+  bottom: 16px;
   left: 0;
   z-index: 10;
   /* Keep the surface ring and shadow inside thread-main's clipping boundary,

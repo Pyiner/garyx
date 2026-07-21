@@ -25,6 +25,7 @@
     "dist:dir": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir --config.mac.identity=null --publish never && npm run install:app",
     "dist:mac:release": "node ./scripts/build-mac-release.mjs",
     "test:unit": "node ./scripts/run-unit-tests.mjs",
+    "test:tail-thinking-cdp": "node ./scripts/tail-thinking-cdp-repro.mjs --expect fixed",
     "test:smoke": "npm run dist:dir && node ./scripts/electron-smoke.mjs",
     "test:i18n-literals": "node ./scripts/check-i18n-literals.mjs",
     "verify:mac:release": "node ./scripts/verify-mac-release.mjs",

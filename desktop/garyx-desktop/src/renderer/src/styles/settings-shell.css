@@ -292,7 +292,6 @@
    `.messages-content` / `.messages-item` carry the column layout that
    used to live on `.messages` itself. */
 .messages-scroller {
-  anchor-scope: --garyx-transcript-tail;
   height: calc(100% - var(--composer-scroll-clip-height));
   min-height: 0;
   width: min(var(--thread-content-max-width), 100%);
@@ -302,6 +301,7 @@
 }
 
 .messages {
+  --messages-tail-scroll-reserve: 0px;
   min-height: 0;
   overflow: auto;
   overflow-x: hidden;
@@ -310,61 +310,35 @@
   max-width: 100%;
   box-sizing: border-box;
   padding: 8px 16px
-    calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance));
-  scroll-padding-block-end: calc(
-    var(--composer-scroll-clip-height) + var(--composer-message-clearance)
+    max(
+      0px,
+      calc(
+        var(--composer-scroll-clip-height) + var(--composer-message-clearance) -
+          var(--messages-tail-scroll-reserve)
+      )
+    );
+  scroll-padding-block-end: max(
+    0px,
+    calc(
+      var(--composer-scroll-clip-height) + var(--composer-message-clearance) -
+        var(--messages-tail-scroll-reserve)
+    )
   );
   overscroll-behavior: contain;
 }
 
 .messages-content,
 .messages-item {
-  --messages-row-gap: 14px;
   display: flex;
   flex-direction: column;
-  gap: var(--messages-row-gap);
+  gap: 14px;
   min-width: 0;
 }
 
-/* Tail thinking is transient chrome, not transcript content. Keep a permanent
-   zero-extent anchor after the final renderable child, then position the
-   conditional chrome against it outside the scroll viewport. Cancelling the
-   column gap makes both visibility states identical scroll geometry. */
-.messages-tail-anchor {
-  anchor-name: --garyx-transcript-tail;
-  block-size: 0;
-  margin-block-start: calc(-1 * var(--messages-row-gap));
-  flex: 0 0 auto;
-  min-block-size: 0;
-  pointer-events: none;
-}
-
-/* Prefer the original 8px offset below the tail anchor. When the chrome's
-   natural-height margin box no longer fits before the composer safety line,
-   align its end edge to that line instead. Position-area keeps the anchor's
-   scroll shift while position-try supplies the composer-aware upper bound. */
-@position-try --garyx-tail-thinking-clearance {
-  align-self: end;
-}
-
-.messages-tail-thinking {
-  position: absolute;
-  position-anchor: --garyx-transcript-tail;
-  position-area: block-end span-inline-start;
-  inset: auto;
-  z-index: 1;
-  width: anchor-size(width);
-  max-width: 100%;
-  margin-block: 8px
-    calc(
-      var(--composer-overlay-height) + var(--composer-bottom-inset) +
-        var(--composer-tail-thinking-clearance) -
-        var(--composer-scroll-clip-height)
-    );
-  align-self: start;
-  justify-self: end;
-  pointer-events: none;
-  position-try-fallbacks: --garyx-tail-thinking-clearance;
+/* Tail thinking is transcript content. Keep the browser's native anchor on a
+   stable message row while the measured tail row consumes bottom clearance. */
+.messages-tail-thinking-row {
+  overflow-anchor: none;
 }
 
 /* The composer overlays the bottom of thread-main and intrudes into the

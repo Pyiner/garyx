@@ -11,13 +11,18 @@
 // automation view, and dispatch/lifecycle orchestration requests snaps
 // regardless of the active view.
 
-import { useContext, useEffect, useLayoutEffect } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef } from "react";
 
 import { useMessageScroller } from "@/components/ui/message-scroller";
 import { GatewayMirrorContext } from "../../gateway-mirror/react";
 import { messagesNearEarlierUserTurnBoundary } from "../../gateway-mirror/transcript-materialize";
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import type { UiTranscriptMessage } from "../types";
+import {
+  restoreTranscriptScrollAnchor,
+  tailThinkingScrollReserve,
+  type TranscriptScrollAnchorSnapshot,
+} from "./transcript-scroll-anchor";
 
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
 
@@ -39,6 +44,181 @@ export function scrollMessagesToLatest(
     top: node.scrollHeight,
     behavior,
   });
+}
+
+const MESSAGE_SCROLLER_CONTENT_SELECTOR =
+  '[data-slot="message-scroller-content"]';
+const MESSAGE_SCROLLER_ITEM_SELECTOR = '[data-slot="message-scroller-item"]';
+const TAIL_THINKING_ROW_SELECTOR = '[data-tail-thinking-row="true"]';
+const TAIL_THINKING_RESERVE_PROPERTY = "--messages-tail-scroll-reserve";
+
+function transcriptContent(viewport: HTMLElement): HTMLElement | null {
+  return viewport.querySelector<HTMLElement>(MESSAGE_SCROLLER_CONTENT_SELECTOR);
+}
+
+function captureTranscriptScrollAnchor(
+  viewport: HTMLElement,
+): TranscriptScrollAnchorSnapshot | null {
+  const content = transcriptContent(viewport);
+  if (!content) {
+    return null;
+  }
+  const viewportRect = viewport.getBoundingClientRect();
+  const anchor = Array.from(
+    content.querySelectorAll<HTMLElement>(MESSAGE_SCROLLER_ITEM_SELECTOR),
+  ).find((item) => {
+    const rect = item.getBoundingClientRect();
+    return (
+      rect.bottom > viewportRect.top + 1 &&
+      rect.top < viewportRect.bottom - 1
+    );
+  });
+  if (!anchor) {
+    return null;
+  }
+  return {
+    element: anchor,
+    viewportTop: anchor.getBoundingClientRect().top,
+  };
+}
+
+function syncTailThinkingScrollReserve(viewport: HTMLElement): boolean {
+  const content = transcriptContent(viewport);
+  const tailRow = content?.querySelector<HTMLElement>(TAIL_THINKING_ROW_SELECTOR);
+  let reserve = 0;
+  if (content && tailRow) {
+    const rowGap = Number.parseFloat(getComputedStyle(content).rowGap || "0");
+    let previous = tailRow.previousElementSibling;
+    while (previous instanceof HTMLElement && previous.hidden) {
+      previous = previous.previousElementSibling;
+    }
+    reserve = tailThinkingScrollReserve(
+      tailRow.getBoundingClientRect().height,
+      rowGap,
+      previous instanceof HTMLElement,
+    );
+  }
+
+  const nextValue = reserve > 0 ? `${reserve}px` : "0px";
+  if (
+    viewport.style.getPropertyValue(TAIL_THINKING_RESERVE_PROPERTY) ===
+    nextValue
+  ) {
+    return false;
+  }
+  viewport.style.setProperty(TAIL_THINKING_RESERVE_PROPERTY, nextValue);
+  return true;
+}
+
+type TailThinkingLayoutSnapshot = {
+  anchor: TranscriptScrollAnchorSnapshot | null;
+  scopeKey: string | null;
+  showTailThinking: boolean;
+};
+
+/**
+ * Keep the transcript's visual row anchor stable across the in-flow thinking
+ * row lifecycle. The row consumes measured space from the existing composer
+ * clearance, and a same-frame ResizeObserver correction runs after the
+ * MessageScroller's own bottom-follow observer. No timer or out-of-flow chrome
+ * participates in the transaction.
+ */
+export function useTailThinkingScrollStability({
+  messagesRef,
+  scopeKey,
+  showTailThinking,
+}: {
+  messagesRef: React.RefObject<HTMLDivElement | null>;
+  scopeKey: string | null;
+  showTailThinking: boolean;
+}): void {
+  const currentStateRef = useRef({ scopeKey, showTailThinking });
+  currentStateRef.current = { scopeKey, showTailThinking };
+  const stableLayoutRef = useRef<TailThinkingLayoutSnapshot | null>(null);
+  const pendingAnchorRef = useRef<TranscriptScrollAnchorSnapshot | null>(null);
+
+  const captureStableLayout = (viewport: HTMLElement) => {
+    const current = currentStateRef.current;
+    stableLayoutRef.current = {
+      anchor: captureTranscriptScrollAnchor(viewport),
+      scopeKey: current.scopeKey,
+      showTailThinking: current.showTailThinking,
+    };
+  };
+
+  useLayoutEffect(() => {
+    const viewport = messagesRef.current;
+    if (!viewport) {
+      stableLayoutRef.current = null;
+      pendingAnchorRef.current = null;
+      return;
+    }
+
+    const previous = stableLayoutRef.current;
+    pendingAnchorRef.current =
+      previous &&
+      previous.scopeKey === scopeKey &&
+      previous.showTailThinking !== showTailThinking
+        ? previous.anchor
+        : null;
+    syncTailThinkingScrollReserve(viewport);
+    restoreTranscriptScrollAnchor(viewport, pendingAnchorRef.current);
+    captureStableLayout(viewport);
+  }, [messagesRef, scopeKey, showTailThinking]);
+
+  useEffect(() => {
+    const viewport = messagesRef.current;
+    const content = viewport ? transcriptContent(viewport) : null;
+    if (!viewport || !content || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    let disposed = false;
+    const observer = new ResizeObserver(() => {
+      if (disposed) {
+        return;
+      }
+      const stableBeforeResize = stableLayoutRef.current?.anchor ?? null;
+      const reserveChanged = syncTailThinkingScrollReserve(viewport);
+      const transactionAnchor = pendingAnchorRef.current;
+      const anchor =
+        transactionAnchor ?? (reserveChanged ? stableBeforeResize : null);
+      if (!anchor) {
+        captureStableLayout(viewport);
+        return;
+      }
+
+      restoreTranscriptScrollAnchor(viewport, anchor);
+      queueMicrotask(() => {
+        // ResizeObserver callbacks share one delivery round. Correct once more
+        // after every observer (including MessageScroller's) has run, then
+        // retire this tail transaction before the next transcript update.
+        if (!disposed && pendingAnchorRef.current === transactionAnchor) {
+          restoreTranscriptScrollAnchor(viewport, anchor);
+          pendingAnchorRef.current = null;
+          captureStableLayout(viewport);
+        }
+      });
+    });
+    observer.observe(content);
+
+    const handleScroll = () => {
+      if (!pendingAnchorRef.current) {
+        captureStableLayout(viewport);
+      }
+    };
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    captureStableLayout(viewport);
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      viewport.removeEventListener("scroll", handleScroll);
+      viewport.style.removeProperty(TAIL_THINKING_RESERVE_PROPERTY);
+      pendingAnchorRef.current = null;
+      stableLayoutRef.current = null;
+    };
+  }, [messagesRef]);
 }
 
 export function messageTailSignature(messages: UiTranscriptMessage[]): string {

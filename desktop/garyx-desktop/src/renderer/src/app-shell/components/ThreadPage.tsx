@@ -46,6 +46,7 @@ import type { ComposerPendingUpload } from "../useMessageDispatchController";
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import {
   TranscriptScrollBridge,
+  useTailThinkingScrollStability,
   useThreadTranscriptScroll,
   type TranscriptScrollIntent,
 } from "./thread-transcript-scroll";
@@ -741,6 +742,11 @@ export function ThreadPage({
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const threadMainRef = useRef<HTMLDivElement | null>(null);
   const isSideChatSurface = surfaceVariant === "side-chat";
+  useTailThinkingScrollStability({
+    messagesRef,
+    scopeKey: activeThreadMessageKey ?? selectedThreadId,
+    showTailThinking,
+  });
   // Resolve render_state seq refs against committed bodies by the raw record
   // seq stamped at the wire boundary (TranscriptMessage.seq). The message id is
   // unreliable here — optimistic reconciliation rewrites it to a stable id.
@@ -803,8 +809,8 @@ export function ThreadPage({
       // unlucky 4-bearing values 66 and 70±). The visible gap above
       // the composer is `2 × scroll-clip + clearance − composerHeight`;
       // this +6 offset adds 12 to that gap and is paired with
-      // `--composer-message-clearance` chosen in styles.css to keep
-      // the visible gap at the desired 48px (+50% of the legacy 32).
+      // `--composer-message-clearance` chosen in conversation.css to keep
+      // the normal visible gap while reserving one in-flow tail status line.
       threadMain.style.setProperty(
         "--composer-scroll-clip-height",
         `${Math.ceil(composerHeight / 2) + 6}px`,
@@ -844,7 +850,7 @@ export function ThreadPage({
             onOpenThread={onOpenThreadById}
           />
         ) : null}
-        <MessageScrollerProvider autoScroll>
+        <MessageScrollerProvider autoScroll scrollEdgeThreshold={48}>
           <MessageScroller className="messages-scroller">
           <MessageScrollerViewport
             className="messages"
@@ -996,31 +1002,26 @@ export function ThreadPage({
           )}
 
           <RateLimitBanner onContinue={onRateLimitContinue} rateLimit={rateLimit} />
-          <span aria-hidden="true" className="messages-tail-anchor" />
+          {showTailThinking ? (
+            <Bubble
+              className="messages-tail-thinking-row w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+              data-tail-thinking-row="true"
+              variant="ghost"
+            >
+              <BubbleContent>
+                <div
+                  aria-label={t("Garyx is working")}
+                  className="message-loading"
+                >
+                  <p className="message-loading-label message-loading-label--thinking">
+                    {t(RUN_LOADING_LABEL)}
+                  </p>
+                </div>
+              </BubbleContent>
+            </Bubble>
+          ) : null}
           </MessageScrollerContent>
           </MessageScrollerViewport>
-          {showTailThinking ? (
-            <div
-              className="messages-tail-thinking"
-              data-tail-thinking-chrome="true"
-            >
-              <Bubble
-                className="w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
-                variant="ghost"
-              >
-                <BubbleContent>
-                  <div
-                    aria-label={t("Garyx is working")}
-                    className="message-loading"
-                  >
-                    <p className="message-loading-label message-loading-label--thinking">
-                      {t(RUN_LOADING_LABEL)}
-                    </p>
-                  </div>
-                </BubbleContent>
-              </Bubble>
-            </div>
-          ) : null}
           <MessageScrollerButton behavior="smooth" className="rounded-full shadow-sm">
             <ArrowDown aria-hidden size={16} strokeWidth={2} />
             <span className="sr-only">{t("Scroll to latest")}</span>

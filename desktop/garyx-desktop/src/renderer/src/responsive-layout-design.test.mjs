@@ -49,10 +49,7 @@ test("transcript and composer share Codex's 736px reading edge", () => {
     ),
   );
   assert.ok(
-    conversationCss.includes("--composer-bottom-inset: 16px;"),
-  );
-  assert.ok(
-    composerCss.includes(".composer-shell-wrap {\n  position: absolute;\n  right: 0;\n  bottom: var(--composer-bottom-inset);"),
+    composerCss.includes(".composer-shell-wrap {\n  position: absolute;\n  right: 0;\n  bottom: 16px;"),
   );
   assert.ok(threadPageSource.includes("composerContext={composerContext}"));
   assert.ok(!threadPageSource.includes("<div\n                aria-label={t(\"Workspace mode\")}\n                className=\"thread-composer-status\""));
