@@ -2,11 +2,11 @@
 
 ## Goal
 
-Garyx desktop can keep several Claude Code logins, show the active account and its Session / Weekly / scoped (including Fable) quota on the Providers page, and switch the account used by future Claude Code processes.
+Garyx Mac and iOS can keep several Claude Code logins, show the active account and its Session / Weekly / scoped (including Fable) quota on the Providers page, and switch the account used by future Claude Code processes.
 
 The system Claude Code profile remains a first-class, undeletable account. It uses Claude's ordinary default configuration (`~/.claude`) and Garyx does not inject `CLAUDE_CONFIG_DIR` for it. Managed accounts live in isolated Garyx-owned configuration directories.
 
-This change is desktop-first. The existing iOS Settings navigation and manual Claude login flow remain compatible and unchanged.
+Mac opens Settings at Providers. iOS keeps its existing Settings navigation and Provider entry, then adapts the same account and quota concepts to native grouped mobile management surfaces.
 
 ## Product contract
 
@@ -14,6 +14,7 @@ This change is desktop-first. The existing iOS Settings navigation and manual Cl
 - Every provider is a fully expanded native Settings section; there is no disclosure/folding state.
 - Provider content uses one flat list surface with row separators. The selected account is a row, not a nested summary card.
 - Surfaces, meters, selection, and status treatments stay within Garyx's black / white / neutral-gray visual language.
+- Provider identity reuses the Agent avatar component and branded artwork on Mac and iOS; Claude, Codex, Antigravity, and Trae never get screen-local substitute glyphs.
 - Quota is represented with horizontal linear meters.
 - The Claude Code section shows the selected account, its identity/plan, default model controls, and Session / Weekly / Fable quota.
 - Default model and reasoning labels consume the row's available control width and remain fully visible whenever they fit; the chips do not impose percentage caps that truncate short model names.
@@ -24,6 +25,9 @@ This change is desktop-first. The existing iOS Settings navigation and manual Cl
 - A managed login begins with one explicit `Sign in with Claude` action. Once the Gateway returns an authorization URL, desktop opens it in the default browser once per `login_id`, immediately shows and focuses the code input, and leaves the URL visible as a clickable fallback. There is no separate Open/Open Again button.
 - The system-default account can be reauthenticated but cannot be renamed or deleted.
 - Deleting the active managed account switches Claude Code back to System default atomically before removing the directory.
+- iOS keeps Providers at its existing Settings location. Its Claude Code row follows the selected Quota Console mobile specimen: provider identity, a tappable current-account row, and aligned Session / Weekly / Fable linear meters are visible on the first Provider screen.
+- iOS account management is a native sheet, not a desktop card grid. Account rows show identity, plan, quota, monochrome selected state, and a disclosure affordance. Tapping a row opens one account detail page; switching, renaming, reauthentication, and deletion live there instead of in an ellipsis menu.
+- iOS reuses its existing guided browser + paste-code login experience for System default, new managed accounts, and managed-account reauthentication. Dismissing or restarting a nonterminal login calls the cancellation endpoint so no login process or uncommitted profile remains behind.
 
 ## Configuration model
 
@@ -91,7 +95,7 @@ The existing state machine remains:
 - `GET /api/providers/claude_code/auth/{login_id}`
 - `DELETE /api/providers/claude_code/auth/{login_id}`
 
-The start request gains optional desktop fields:
+The start request gains optional account-target fields:
 
 ```json
 {
@@ -101,11 +105,11 @@ The start request gains optional desktop fields:
 }
 ```
 
-- neither field: authenticate System default (the current iOS contract);
+- neither field: authenticate System default;
 - `managed_account_name`: reserve a new account ID and owned directory and authenticate there;
 - `account_id`: reauthenticate that existing managed account.
 
-The response adds optional `account_id`. Unknown response fields remain harmless to iOS decoders. The auth session owns its target configuration directory and uses it for both `auth login` and `auth status`. Closing desktop's login dialog calls the DELETE endpoint, terminates the pending Claude process, and cleans an uncommitted managed directory after ownership validation. A newly reserved directory is also cleaned up after any terminal failure. On success, parsed auth metadata is committed and a newly added account becomes active.
+The response adds optional `account_id`. The auth session owns its target configuration directory and uses it for both `auth login` and `auth status`. Closing either client's login surface calls the DELETE endpoint, terminates the pending Claude process, and cleans an uncommitted managed directory after ownership validation. A newly reserved directory is also cleaned up after any terminal failure. On success, parsed auth metadata is committed and a newly added account becomes active.
 
 ## Claude process runtime
 
@@ -143,6 +147,19 @@ The Providers page replaces the separate quota hero plus configuration table wit
 
 Desktop calls the account/auth APIs through typed main-process IPC methods. External authorization URLs are validated as HTTP(S) before using Electron's external URL opener. The renderer tracks opened `login_id` values in component state so React rerenders and polling cannot open duplicate browser tabs.
 
+## iOS structure
+
+iOS keeps the existing Settings route and Provider destination. The Provider screen removes the duplicate quota hero and gives Claude Code the selected mobile Quota Console treatment inside the existing grouped surface:
+
+1. provider identity and edit affordance;
+2. one current-account row that opens account management;
+3. Session, Weekly, and scoped limits such as Fable as aligned horizontal meters;
+4. the full default-model label in the footer row.
+
+Other providers retain their existing native compact rows and inline quota treatment. The Claude account manager uses a native sheet with a navigation toolbar. Each candidate renders its own quota so selection is informed; tapping it opens a native account detail page. That page offers `Use This Account` when needed, plus reauthentication, rename, and confirmed deletion for managed accounts. System default offers selection and reauthentication only. A plus toolbar action opens the alias-first add flow. The list, first-screen console, and detail page use the same monochrome meter treatment.
+
+The existing guided iOS login sheet accepts an explicit target (`system default`, `new managed name`, or `existing managed id`). It keeps the browser/paste-code interaction, refreshes both account-list and active-provider usage after success, and cancels a nonterminal Gateway session when dismissed or restarted. Core owns all wire models, target encoding, account presentation, and selection semantics; SwiftUI owns only composition and local focus/presentation state.
+
 ## Failure behavior
 
 - Unknown/stale selected account: runtime quarantines launches in an isolated invalid-selection directory instead of silently using System default; the accounts endpoint returns no selected account and a subsequent explicit selection repairs config.
@@ -160,4 +177,6 @@ Desktop calls the account/auth APIs through typed main-process IPC methods. Exte
 4. Credential/keychain service and per-account cache-key unit tests.
 5. Bridge tests proving selection hot reload affects the next run, not an active run, and no account value enters thread metadata.
 6. Desktop tests for Providers-first navigation, flat expanded linear-meter sections, fixed login-dialog geometry, one browser open per login ID, immediate code field, account switching, and Fable rendering.
-7. Focused Rust tests, desktop typecheck/unit tests, then a packaged-app end-to-end pass with screenshots of the card, switcher, and centered login dialog.
+7. SwiftPM tests for account decoding, optional login-target encoding, selection presentation, Session / Weekly / Fable display order, and cancellation fencing; app-target tests for Gateway requests and model state transitions.
+8. iOS simulator checks for the first-screen Quota Console row, account switcher, add/rename/delete/reauth presentation, Dynamic Type, light/dark mode, and login dismissal cleanup, plus a full `xcodebuild`.
+9. Focused Rust tests, desktop typecheck/unit tests, then packaged Mac and simulator iOS end-to-end passes with screenshots.

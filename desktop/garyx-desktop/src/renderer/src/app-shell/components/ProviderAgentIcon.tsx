@@ -1,22 +1,21 @@
-import AntigravityColor from '@lobehub/icons/es/Antigravity/components/Color';
-import ClaudeCodeColor from '@lobehub/icons/es/ClaudeCode/components/Color';
-import CodexColor from '@lobehub/icons/es/Codex/components/Color';
-import GeminiColor from '@lobehub/icons/es/Gemini/components/Color';
-
 import type {
   DesktopApiProviderType,
   DesktopProviderIconDescriptor,
 } from '@shared/contracts';
 
+import antigravityAvatarUrl from '../../assets/provider-avatars/antigravity.png';
+import claudeAvatarUrl from '../../assets/provider-avatars/claude.png';
+import codexAvatarUrl from '../../assets/provider-avatars/codex.png';
+import traeAvatarUrl from '../../assets/provider-avatars/trae.png';
+
 type BuiltInAgentIconKey = 'antigravity' | 'claude' | 'codex' | 'traex' | 'gemini';
 
 const BUILT_IN_AGENT_ICONS = {
-  antigravity: AntigravityColor,
-  claude: ClaudeCodeColor,
-  codex: CodexColor,
-  // TRAE CLI is a Codex fork; reuse the Codex glyph until a dedicated icon exists.
-  traex: CodexColor,
-  gemini: GeminiColor,
+  antigravity: antigravityAvatarUrl,
+  claude: claudeAvatarUrl,
+  codex: codexAvatarUrl,
+  traex: traeAvatarUrl,
+  gemini: antigravityAvatarUrl,
 };
 
 function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | null {
@@ -30,7 +29,12 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   if (normalized === 'codex' || normalized === 'codex_app_server') {
     return 'codex';
   }
-  if (normalized === 'traex' || normalized === 'trae' || normalized === 'trae_cli' || normalized === 'traecli') {
+  if (
+    normalized === 'traex' ||
+    normalized === 'trae' ||
+    normalized === 'trae_cli' ||
+    normalized === 'traecli'
+  ) {
     return 'traex';
   }
   if (normalized === 'antigravity' || normalized === 'agy') {
@@ -81,6 +85,15 @@ export function ProviderAgentIcon({
     return null;
   }
 
-  const Icon = BUILT_IN_AGENT_ICONS[iconKey];
-  return <Icon aria-hidden className={className} size={size} />;
+  const avatarUrl = BUILT_IN_AGENT_ICONS[iconKey];
+  return (
+    <img
+      alt=""
+      aria-hidden
+      className={className}
+      draggable={false}
+      src={avatarUrl}
+      style={{ height: size, width: size }}
+    />
+  );
 }

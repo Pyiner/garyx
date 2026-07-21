@@ -188,7 +188,14 @@ struct GaryxAgentAvatarView: View {
 
     @ViewBuilder
     private var fallbackContent: some View {
-        if let symbol = providerPresentation.symbolName {
+        if let assetName = providerPresentation.fallbackAssetName,
+           let image = UIImage(named: assetName) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: diameter, height: diameter)
+                .clipShape(Circle())
+        } else if let symbol = providerPresentation.symbolName {
             Image(systemName: symbol)
                 .font(GaryxFont.fixedSystem(size: providerIconSize, weight: .semibold))
                 .foregroundStyle(fallbackForeground)
@@ -236,6 +243,32 @@ struct GaryxAgentAvatarView: View {
 
     private var providerIconSize: CGFloat {
         diameter * CGFloat(providerPresentation.iconSizeFactor)
+    }
+}
+
+/// The single provider identity surface used anywhere a Provider is shown as
+/// an Agent. The bundled artwork is byte-identical to the built-in Agent
+/// avatar, so custom or stale Agent data can never replace provider identity.
+struct GaryxProviderAgentAvatarView: View {
+    let providerType: String
+    var diameter: CGFloat = 30
+
+    var body: some View {
+        GaryxAgentAvatarView(
+            // Provider identity is not an Agent-cache lookup. An empty ID
+            // prevents a previously cached Agent avatar from overriding the
+            // canonical bundled provider artwork.
+            agentId: "",
+            avatarDataUrl: "",
+            label: providerPresentation.displayName,
+            providerType: providerType,
+            builtIn: true,
+            diameter: diameter
+        )
+    }
+
+    private var providerPresentation: GaryxProviderPresentation {
+        GaryxProviderPresentation.make(providerType: providerType)
     }
 }
 

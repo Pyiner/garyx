@@ -23,6 +23,7 @@ public struct GaryxProviderFallbackRGB: Equatable, Sendable {
 public struct GaryxProviderPresentation: Equatable {
     public let kind: GaryxProviderIdentityKind
     public let displayName: String
+    public let fallbackAssetName: String?
     public let symbolName: String?
     public let fallbackInitials: String
     public let fallbackBackgroundRGB: GaryxProviderFallbackRGB
@@ -35,6 +36,7 @@ public struct GaryxProviderPresentation: Equatable {
         return GaryxProviderPresentation(
             kind: kind,
             displayName: displayName(for: normalized, kind: kind),
+            fallbackAssetName: fallbackAssetName(for: kind),
             symbolName: symbolName(for: kind),
             fallbackInitials: initials(for: displayName(for: normalized, kind: kind), fallback: "P"),
             fallbackBackgroundRGB: fallbackBackgroundRGB(for: kind),
@@ -58,6 +60,7 @@ public struct GaryxProviderPresentation: Equatable {
         return GaryxProviderPresentation(
             kind: kind,
             displayName: display,
+            fallbackAssetName: fallbackAssetName(for: kind),
             symbolName: symbolName(for: kind),
             fallbackInitials: initials(for: label.isEmpty ? display : label, fallback: "A"),
             fallbackBackgroundRGB: fallbackBackgroundRGB(for: kind),
@@ -110,10 +113,24 @@ public struct GaryxProviderPresentation: Equatable {
         case .codex:
             "chevron.left.forwardslash.chevron.right"
         case .traex:
-            // Reuse the Codex glyph; TRAE CLI is a Codex fork.
-            "chevron.left.forwardslash.chevron.right"
+            nil
         case .claude:
             "sparkles"
+        case .generic:
+            nil
+        }
+    }
+
+    private static func fallbackAssetName(for kind: GaryxProviderIdentityKind) -> String? {
+        switch kind {
+        case .antigravity:
+            "ProviderAntigravity"
+        case .codex:
+            "ProviderCodex"
+        case .traex:
+            "ProviderTrae"
+        case .claude:
+            "ProviderClaude"
         case .generic:
             nil
         }

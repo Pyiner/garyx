@@ -1,33 +1,24 @@
 import Foundation
 import SwiftUI
-import UIKit
-import WidgetKit
 
-// Model-provider settings surfaces: the provider list (topped by the Quota
-// hero, with the shared §4 usage visualization inline) and the provider
-// detail sheet with sectioned editing. Business rules (patch shape and usage
-// display models) live in GaryxMobileCore; these views dumb-render Core models.
+// Model-provider settings surfaces: the provider list with inline quota and
+// account state, plus the provider detail sheet with sectioned editing.
+// Business rules (patch shape and usage display models) live in
+// GaryxMobileCore; these views dumb-render Core models.
 
 struct GaryxSettingsProviderContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var selectedProvider: GaryxModelProviderDefault?
+    @State private var showsClaudeAccounts = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GaryxSectionBlock(title: "Quota") {
-                GaryxCompactListGroup {
-                    GaryxProviderQuotaHero(usage: model.codingUsage)
-                }
-            }
             GaryxSectionBlock(title: "Model Providers") {
                 GaryxCompactListGroup {
                     let providers = GaryxModelProviderDefaults.providers
                     ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-                        Button {
-                            selectedProvider = provider
-                            Task { await model.loadProviderModels(providerType: provider.providerType) }
-                        } label: {
-                            GaryxProviderModelsRow(
+                        if provider.providerType == "claude_code" {
+                            GaryxClaudeCodeProviderOverview(
                                 provider: provider,
                                 catalog: model.providerModelsByType[provider.providerType],
                                 settings: model.gatewaySettingsDocument,
@@ -35,10 +26,36 @@ struct GaryxSettingsProviderContent: View {
                                     in: model.codingUsage,
                                     provider: provider
                                 ),
-                                usageRefreshedAt: model.codingUsage?.refreshedAt
+                                usageRefreshedAt: model.codingUsage?.refreshedAt,
+                                accounts: model.claudeCodeAccounts,
+                                accountsLoading: model.isLoadingClaudeCodeAccounts,
+                                accountsError: model.claudeCodeAccountsError,
+                                onEdit: {
+                                    selectedProvider = provider
+                                    Task { await model.loadProviderModels(providerType: provider.providerType) }
+                                },
+                                onManageAccounts: {
+                                    showsClaudeAccounts = true
+                                }
                             )
+                        } else {
+                            Button {
+                                selectedProvider = provider
+                                Task { await model.loadProviderModels(providerType: provider.providerType) }
+                            } label: {
+                                GaryxProviderModelsRow(
+                                    provider: provider,
+                                    catalog: model.providerModelsByType[provider.providerType],
+                                    settings: model.gatewaySettingsDocument,
+                                    usage: GaryxModelProviderDefaults.usage(
+                                        in: model.codingUsage,
+                                        provider: provider
+                                    ),
+                                    usageRefreshedAt: model.codingUsage?.refreshedAt
+                                )
+                            }
+                            .buttonStyle(GaryxPressableRowStyle())
                         }
-                        .buttonStyle(GaryxPressableRowStyle())
 
                         if index < providers.count - 1 {
                             GaryxCompactRowDivider()
@@ -48,7 +65,9 @@ struct GaryxSettingsProviderContent: View {
             }
         }
         .task {
-            await model.refreshCodingUsageWidget()
+            async let usageRefresh: Void = model.refreshCodingUsageWidget()
+            async let accountsRefresh: Void = model.loadClaudeCodeAccounts()
+            _ = await (usageRefresh, accountsRefresh)
             for provider in GaryxModelProviderDefaults.providers
             where model.providerModelsByType[provider.providerType] == nil {
                 await model.loadProviderModels(providerType: provider.providerType)
@@ -56,6 +75,786 @@ struct GaryxSettingsProviderContent: View {
         }
         .garyxFullScreenCover(item: $selectedProvider) { provider in
             GaryxModelProviderDefaultsSheet(provider: provider)
+        }
+        .garyxSheet(isPresented: $showsClaudeAccounts) {
+            GaryxClaudeCodeAccountsSheet()
+        }
+    }
+}
+
+/// The selected mobile Quota Console treatment. Claude account identity and
+/// Session / Weekly / scoped limits stay visible on the first Provider screen;
+/// account management and defaults remain one tap away.
+private struct GaryxClaudeCodeProviderOverview: View {
+    let provider: GaryxModelProviderDefault
+    let catalog: GaryxProviderModels?
+    let settings: [String: GaryxJSONValue]
+    let usage: GaryxProviderUsage?
+    var usageRefreshedAt: String?
+    let accounts: GaryxClaudeCodeAccounts?
+    let accountsLoading: Bool
+    let accountsError: String?
+    let onEdit: () -> Void
+    let onManageAccounts: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            providerHeader
+            GaryxCompactRowDivider()
+            currentAccountRow
+            GaryxCompactRowDivider()
+            quotaRows
+            GaryxCompactRowDivider()
+            defaultsRow
+        }
+        .accessibilityIdentifier("provider.claude.overview")
+    }
+
+    private var providerHeader: some View {
+        HStack(spacing: 10) {
+            GaryxProviderAgentAvatarView(
+                providerType: provider.providerType,
+                diameter: 32
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(providerPresentation.displayName)
+                    .font(GaryxFont.headline())
+                    .foregroundStyle(.primary)
+                Text("Claude Agent SDK")
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: onEdit) {
+                Label("Edit", systemImage: "pencil")
+                    .font(GaryxFont.subheadline(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(GaryxPressableRowStyle())
+            .accessibilityHint("Edits Claude Code defaults")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    private var currentAccountRow: some View {
+        Button(action: onManageAccounts) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Current account")
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(accountTitle)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(accountDetail)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(accountsError == nil ? Color.secondary : GaryxTheme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 5) {
+                    Text("Switch")
+                        .font(GaryxFont.subheadline(weight: .medium))
+                    Image(systemName: "chevron.right")
+                        .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(minHeight: 58)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(GaryxPressableRowStyle())
+        .accessibilityIdentifier("provider.claude.current-account")
+    }
+
+    @ViewBuilder
+    private var quotaRows: some View {
+        if let usageDisplay {
+            if usageDisplay.available, !usageDisplay.windows.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(usageDisplay.windows.enumerated()), id: \.element.id) { index, window in
+                        if index > 0 {
+                            GaryxCompactRowDivider()
+                        }
+                        GaryxClaudeQuotaConsoleRow(window: window)
+                    }
+                }
+                .opacity(usageDisplay.stale ? 0.55 : 1)
+            } else {
+                quotaUnavailable(usageDisplay.summaryText)
+            }
+        } else {
+            quotaUnavailable(accountsLoading ? "Loading quota…" : "No quota data")
+        }
+    }
+
+    private var defaultsRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("Defaults")
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(rowModel.detailText)
+                .font(GaryxFont.caption())
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private func quotaUnavailable(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Text("Remaining quota")
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            if accountsLoading {
+                ProgressView().controlSize(.small)
+            }
+            Text(text)
+                .font(GaryxFont.caption())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+    }
+
+    private var selectedAccount: GaryxClaudeCodeAccountPresentation? {
+        guard let accounts, let account = accounts.selectedAccount else { return nil }
+        return GaryxClaudeCodeAccountPresentation.make(
+            account: account,
+            refreshedAt: accounts.refreshedAt
+        )
+    }
+
+    private var accountTitle: String {
+        guard let selectedAccount else {
+            if accountsLoading { return "Loading…" }
+            if accountsError != nil { return "Account unavailable" }
+            return "System default"
+        }
+        return selectedAccount.title
+    }
+
+    private var accountDetail: String {
+        if let selectedAccount {
+            guard let plan = selectedAccount.planText else { return selectedAccount.detailText }
+            return "\(selectedAccount.detailText) · \(plan)"
+        }
+        return accountsError ?? "Uses this Mac's default Claude Code login"
+    }
+
+    private var usageDisplay: GaryxProviderUsageDisplayModel? {
+        selectedAccount?.usage ?? GaryxProviderUsageDisplayModel.make(
+            from: usage,
+            refreshedAt: usageRefreshedAt
+        )
+    }
+
+    private var providerPresentation: GaryxProviderPresentation {
+        GaryxProviderPresentation.make(providerType: provider.providerType)
+    }
+
+    private var rowModel: GaryxProviderSettingsPresentation.RowModel {
+        .make(provider: provider, catalog: catalog, settings: settings)
+    }
+}
+
+private struct GaryxClaudeQuotaConsoleRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let window: GaryxProviderUsageWindowDisplayModel
+    var horizontalPadding: CGFloat = 12
+
+    var body: some View {
+        Group {
+            if dynamicTypeSize.garyxUsesExpandedReadingLayout {
+                VStack(alignment: .leading, spacing: 7) {
+                    label
+                    HStack(spacing: 10) {
+                        track
+                        percent
+                    }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    label.frame(width: 108, alignment: .leading)
+                    track
+                    percent.frame(minWidth: 42, alignment: .trailing)
+                }
+            }
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, 9)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(window.label), \(window.remainingText), \(window.detailText)")
+    }
+
+    private var label: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(window.label)
+                .font(GaryxFont.subheadline(weight: .semibold))
+                .foregroundStyle(.primary)
+            if !window.detailText.isEmpty {
+                Text(window.detailText)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var track: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.10))
+                Capsule()
+                    .fill(Color.primary.opacity(0.82))
+                    .frame(width: proxy.size.width * max(0, min(window.remainingPercent, 100)) / 100)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 5)
+    }
+
+    private var percent: some View {
+        Text(window.remainingText)
+            .font(GaryxFont.subheadline(weight: .semibold))
+            .foregroundStyle(.primary)
+            .monospacedDigit()
+    }
+}
+
+private struct GaryxClaudeCodeAccountFlow: Identifiable {
+    enum Kind {
+        case add
+        case login(GaryxClaudeCodeAuthTarget)
+    }
+
+    let id = UUID()
+    let kind: Kind
+}
+
+struct GaryxClaudeCodeAccountsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var accountFlow: GaryxClaudeCodeAccountFlow?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let error = model.claudeCodeAccountsError {
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(error)
+                                .font(GaryxFont.callout())
+                                .foregroundStyle(GaryxTheme.danger)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Try Again") {
+                                Task { await model.loadClaudeCodeAccounts() }
+                            }
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+
+                Section {
+                    if accountRows.isEmpty, model.isLoadingClaudeCodeAccounts {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading accounts…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        ForEach(accountRows) { account in
+                            NavigationLink {
+                                GaryxClaudeCodeAccountDetailView(accountStableId: account.id)
+                            } label: {
+                                GaryxClaudeCodeAccountRow(account: account)
+                            }
+                            .disabled(model.isMutatingClaudeCodeAccount)
+                        }
+                    }
+                } header: {
+                    Text("Claude Code accounts")
+                        .textCase(nil)
+                } footer: {
+                    Text("The selected account applies to new and restarted Claude runs. Active runs continue unchanged.")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Claude Code")
+            .navigationBarTitleDisplayMode(.inline)
+            .refreshable {
+                await model.loadClaudeCodeAccounts()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(.primary)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        accountFlow = GaryxClaudeCodeAccountFlow(kind: .add)
+                    } label: {
+                        Image(systemName: "plus")
+                            .foregroundStyle(.primary)
+                    }
+                    .disabled(model.isMutatingClaudeCodeAccount)
+                    .accessibilityLabel("Add Claude Code account")
+                }
+            }
+        }
+        .tint(GaryxTheme.controlTint)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .garyxFullScreenCover(item: $accountFlow, onDismiss: refreshAfterAccountFlow) { flow in
+            switch flow.kind {
+            case .add:
+                GaryxClaudeCodeAddAccountFlow()
+            case .login(let target):
+                GaryxClaudeCodeLoginSheet(target: target)
+            }
+        }
+        .task {
+            if model.claudeCodeAccounts == nil {
+                await model.loadClaudeCodeAccounts()
+            }
+        }
+    }
+
+    private var accountRows: [GaryxClaudeCodeAccountPresentation] {
+        guard let accounts = model.claudeCodeAccounts else { return [] }
+        return accounts.accounts.map {
+            GaryxClaudeCodeAccountPresentation.make(
+                account: $0,
+                refreshedAt: accounts.refreshedAt
+            )
+        }
+    }
+
+    private func refreshAfterAccountFlow() {
+        Task {
+            await model.loadClaudeCodeAccounts()
+            await model.refreshCodingUsageWidget()
+        }
+    }
+}
+
+private struct GaryxClaudeCodeAccountRow: View {
+    let account: GaryxClaudeCodeAccountPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .top, spacing: 10) {
+                Group {
+                    if account.selected {
+                        GaryxSelectionCheckmark(style: .circle, size: 17)
+                    } else {
+                        Color.clear.frame(width: 17, height: 17)
+                    }
+                }
+                .frame(width: 20, height: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(account.title)
+                            .font(GaryxFont.subheadline(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let plan = account.planText {
+                            Text(plan)
+                                .font(GaryxFont.caption(weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(account.detailText)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            accountQuota
+                .padding(.leading, 30)
+        }
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private var accountQuota: some View {
+        if let usage = account.usage, usage.available, !usage.windows.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(usage.windows) { window in
+                    GaryxClaudeCodeAccountQuotaMiniRow(window: window)
+                }
+            }
+            .opacity(usage.stale ? 0.55 : 1)
+        } else {
+            Text(account.usage?.summaryText ?? "No quota data")
+                .font(GaryxFont.caption())
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var accessibilityLabel: String {
+        let state = account.selected ? "selected" : "not selected"
+        return "\(account.title), \(account.detailText), \(state)"
+    }
+}
+
+private struct GaryxClaudeCodeAccountDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let accountStableId: String
+
+    @State private var accountFlow: GaryxClaudeCodeAccountFlow?
+    @State private var renameAccount: GaryxClaudeCodeAccountPresentation?
+    @State private var deleteAccount: GaryxClaudeCodeAccountPresentation?
+
+    var body: some View {
+        Group {
+            if let account {
+                List {
+                    identitySection(account)
+                    quotaSection(account)
+                    actionsSection(account)
+                    if !account.systemDefault {
+                        deleteSection(account)
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .refreshable {
+                    await model.loadClaudeCodeAccounts()
+                }
+            } else if model.isLoadingClaudeCodeAccounts {
+                ProgressView("Loading account…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "Account Unavailable",
+                    systemImage: "person.crop.circle.badge.questionmark",
+                    description: Text("This Claude Code account may have been removed.")
+                )
+            }
+        }
+        .navigationTitle("Account")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(GaryxTheme.controlTint)
+        .garyxFullScreenCover(item: $accountFlow, onDismiss: refreshAfterAuthentication) { flow in
+            switch flow.kind {
+            case .add:
+                GaryxClaudeCodeAddAccountFlow()
+            case .login(let target):
+                GaryxClaudeCodeLoginSheet(target: target)
+            }
+        }
+        .garyxSheet(item: $renameAccount) { account in
+            GaryxClaudeCodeRenameAccountSheet(account: account)
+        }
+        .garyxAlert(item: $deleteAccount) { account in
+            Alert(
+                title: Text("Delete \(account.title)?"),
+                message: Text("Garyx will remove this managed Claude Code login. Active runs continue, and future runs use System default if this account is selected."),
+                primaryButton: .destructive(Text("Delete")) {
+                    delete(account)
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private func identitySection(_ account: GaryxClaudeCodeAccountPresentation) -> some View {
+        Section {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(account.title)
+                        .font(GaryxFont.headline())
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let plan = account.planText {
+                        Text(plan)
+                            .font(GaryxFont.subheadline(weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(account.detailText)
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if account.selected {
+                    Label("Current account", systemImage: "checkmark.circle.fill")
+                        .font(GaryxFont.caption(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.top, 3)
+                }
+            }
+            .padding(.vertical, 5)
+        }
+    }
+
+    @ViewBuilder
+    private func quotaSection(_ account: GaryxClaudeCodeAccountPresentation) -> some View {
+        Section {
+            if let usage = account.usage, usage.available, !usage.windows.isEmpty {
+                ForEach(usage.windows) { window in
+                    GaryxClaudeQuotaConsoleRow(window: window, horizontalPadding: 0)
+                        .listRowInsets(
+                            EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+                        )
+                }
+                .opacity(usage.stale ? 0.55 : 1)
+            } else {
+                Text(account.usage?.summaryText ?? "No quota data")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Quota")
+                .textCase(nil)
+        }
+    }
+
+    private func actionsSection(_ account: GaryxClaudeCodeAccountPresentation) -> some View {
+        Section {
+            if !account.selected {
+                Button {
+                    select(account)
+                } label: {
+                    Label("Use This Account", systemImage: "checkmark.circle")
+                }
+                .disabled(model.isMutatingClaudeCodeAccount)
+            }
+
+            Button {
+                reauthenticate(account)
+            } label: {
+                Label("Re-authenticate", systemImage: "arrow.triangle.2.circlepath")
+            }
+
+            if !account.systemDefault {
+                Button {
+                    renameAccount = account
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+
+    private func deleteSection(_ account: GaryxClaudeCodeAccountPresentation) -> some View {
+        Section {
+            Button(role: .destructive) {
+                deleteAccount = account
+            } label: {
+                Label("Delete Account", systemImage: "trash")
+            }
+            .disabled(model.isMutatingClaudeCodeAccount)
+        }
+    }
+
+    private var account: GaryxClaudeCodeAccountPresentation? {
+        guard let accounts = model.claudeCodeAccounts,
+              let account = accounts.accounts.first(where: { $0.stableId == accountStableId })
+        else { return nil }
+        return GaryxClaudeCodeAccountPresentation.make(
+            account: account,
+            refreshedAt: accounts.refreshedAt
+        )
+    }
+
+    private func select(_ account: GaryxClaudeCodeAccountPresentation) {
+        guard !account.selected, !model.isMutatingClaudeCodeAccount else { return }
+        Task {
+            if await model.selectClaudeCodeAccount(accountId: account.accountId) {
+                dismiss()
+            }
+        }
+    }
+
+    private func reauthenticate(_ account: GaryxClaudeCodeAccountPresentation) {
+        let target: GaryxClaudeCodeAuthTarget
+        if let accountId = account.accountId {
+            target = .managedAccount(id: accountId, name: account.title)
+        } else {
+            target = .systemDefault
+        }
+        accountFlow = GaryxClaudeCodeAccountFlow(kind: .login(target))
+    }
+
+    private func delete(_ account: GaryxClaudeCodeAccountPresentation) {
+        guard let accountId = account.accountId else { return }
+        Task {
+            if await model.deleteClaudeCodeAccount(accountId: accountId) {
+                dismiss()
+            }
+        }
+    }
+
+    private func refreshAfterAuthentication() {
+        Task {
+            await model.loadClaudeCodeAccounts()
+            await model.refreshCodingUsageWidget()
+        }
+    }
+}
+
+private struct GaryxClaudeCodeAccountQuotaMiniRow: View {
+    let window: GaryxProviderUsageWindowDisplayModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(window.label)
+                .font(GaryxFont.caption())
+                .foregroundStyle(.secondary)
+                .frame(width: 54, alignment: .leading)
+            track
+            Text(window.remainingText)
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+                .frame(minWidth: 35, alignment: .trailing)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(window.label), \(window.remainingText)")
+    }
+
+    private var track: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.10))
+                Capsule()
+                    .fill(Color.primary.opacity(0.82))
+                    .frame(width: proxy.size.width * max(0, min(window.remainingPercent, 100)) / 100)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 4)
+    }
+}
+
+private struct GaryxClaudeCodeAddAccountFlow: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var accountName = ""
+    @State private var loginTarget: GaryxClaudeCodeAuthTarget?
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        Group {
+            if let loginTarget {
+                GaryxClaudeCodeLoginSheet(target: loginTarget)
+            } else {
+                GaryxFormSheet(
+                    title: "Add Claude Account",
+                    canSave: canContinue,
+                    saveTitle: "Continue",
+                    onCancel: { dismiss() },
+                    onSave: continueToLogin
+                ) {
+                    Section {
+                        TextField("Account name", text: $accountName)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .focused($nameFocused)
+                            .submitLabel(.continue)
+                            .onSubmit {
+                                if canContinue { continueToLogin() }
+                            }
+                    } header: {
+                        Text("Name")
+                            .textCase(nil)
+                    } footer: {
+                        Text("Use a short name such as Work or Personal. Garyx keeps this login isolated from System default.")
+                    }
+                }
+                .onAppear { nameFocused = true }
+            }
+        }
+    }
+
+    private var trimmedName: String {
+        accountName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canContinue: Bool { !trimmedName.isEmpty }
+
+    private func continueToLogin() {
+        guard canContinue else { return }
+        nameFocused = false
+        loginTarget = .newManagedAccount(name: trimmedName)
+    }
+}
+
+private struct GaryxClaudeCodeRenameAccountSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let account: GaryxClaudeCodeAccountPresentation
+    @State private var name: String
+    @State private var isSaving = false
+    @FocusState private var nameFocused: Bool
+
+    init(account: GaryxClaudeCodeAccountPresentation) {
+        self.account = account
+        _name = State(initialValue: account.title)
+    }
+
+    var body: some View {
+        GaryxFormSheet(
+            title: "Rename Account",
+            canSave: canSave,
+            isSaving: isSaving,
+            onSave: save
+        ) {
+            Section {
+                TextField("Account name", text: $name)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .focused($nameFocused)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        if canSave { save() }
+                    }
+            } header: {
+                Text("Name")
+                    .textCase(nil)
+            }
+        }
+        .onAppear { nameFocused = true }
+    }
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSave: Bool {
+        !isSaving && !trimmedName.isEmpty && trimmedName != account.title
+    }
+
+    private func save() {
+        guard canSave, let accountId = account.accountId else { return }
+        isSaving = true
+        Task {
+            let didSave = await model.renameClaudeCodeAccount(accountId: accountId, name: trimmedName)
+            isSaving = false
+            if didSave { dismiss() }
         }
     }
 }
@@ -70,10 +869,10 @@ struct GaryxProviderModelsRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 9) {
-                Image(systemName: iconName)
-                    .font(GaryxFont.fixedSystem(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
+                GaryxProviderAgentAvatarView(
+                    providerType: provider.providerType,
+                    diameter: 20
+                )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(providerPresentation.displayName)
@@ -105,10 +904,6 @@ struct GaryxProviderModelsRow: View {
         .contentShape(Rectangle())
     }
 
-    private var iconName: String {
-        providerPresentation.symbolName ?? "cpu"
-    }
-
     private var providerPresentation: GaryxProviderPresentation {
         GaryxProviderPresentation.make(providerType: provider.providerType)
     }
@@ -137,75 +932,16 @@ private extension GaryxProviderSettingsPresentation.RowModel.Tone {
     }
 }
 
-// MARK: - Quota hero (design §6.4/D8)
-
-private extension GaryxCodingUsageMetrics {
-    /// Hero sizing: the widget's medium-family gauge visual, tightened so
-    /// three columns fit the provider page width.
-    static var providerQuotaHero: GaryxCodingUsageMetrics {
-        var metrics = GaryxCodingUsageMetrics(family: .systemMedium)
-        metrics.gaugeSpacing = 14
-        metrics.gaugeLineWidth = 9
-        metrics.gaugeValueSize = 22
-        metrics.gaugeIconSize = 11
-        metrics.gaugeLabelSpacing = 4
-        metrics.gaugeMaxWidth = 88
-        metrics.titleSize = 12
-        metrics.detailSize = 10
-        return metrics
-    }
-}
-
-/// The widget deep-link landing at the top of the provider list: a horizontal
-/// row of quota gauges for the three metered providers, rendering the shared
-/// widget speedometer from Core hero models. Stale gauges dim and surface the
-/// "updated Nm ago" freshness caption (design §4).
-private struct GaryxProviderQuotaHero: View {
-    let usage: GaryxCodingUsage?
-
-    private var gauges: [GaryxUsageGaugeModel] {
-        GaryxUsageGaugeModel.heroModels(from: usage)
-    }
-
-    private var staleUpdatedText: String? {
-        guard gauges.contains(where: \.stale) else { return nil }
-        return GaryxUsageGaugeModel.usageUpdatedText(refreshedAt: usage?.refreshedAt)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: GaryxCodingUsageMetrics.providerQuotaHero.gaugeSpacing) {
-                ForEach(gauges, id: \.providerId) { gauge in
-                    GaryxUsageSpeedometer(model: gauge, metrics: .providerQuotaHero)
-                        .opacity(gauge.stale ? 0.55 : 1)
-                }
-            }
-            if let staleUpdatedText {
-                Text(staleUpdatedText)
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 10)
-    }
-}
-
 // MARK: - Shared §4 usage visualization
 
 extension GaryxUsageLevel {
-    /// Shared remaining-% severity tint (D3): `≥50 green / 20–50 amber / <20
-    /// red`, muted when unavailable. The thresholds live in Core
-    /// (`GaryxUsageGaugeModel.level`); this is the single tint mapping.
+    /// Provider settings keep every available quota meter monochrome. Severity
+    /// still lives in Core for accessibility/copy, but it does not introduce a
+    /// second visual color language on this page.
     var garyxTint: Color {
         switch self {
-        case .healthy:
-            return GaryxTheme.accent
-        case .warning:
-            return GaryxTheme.warning
-        case .critical:
-            return GaryxTheme.danger
+        case .healthy, .warning, .critical:
+            return Color.primary.opacity(0.82)
         case .unavailable:
             return Color.secondary
         }
@@ -386,7 +1122,7 @@ struct GaryxModelProviderDefaultsSheet: View {
     @State private var modelName = ""
     @State private var reasoningEffort = ""
     @State private var serviceTier = ""
-    @State private var showsClaudeLoginSheet = false
+    @State private var showsClaudeAccountsSheet = false
     @State private var isHydrated = false
     @State private var hydrationFailed = false
     @State private var isSaving = false
@@ -461,8 +1197,8 @@ struct GaryxModelProviderDefaultsSheet: View {
             }
         }
         .task { await hydrate() }
-        .garyxSheet(isPresented: $showsClaudeLoginSheet) {
-            GaryxClaudeCodeLoginSheet()
+        .garyxSheet(isPresented: $showsClaudeAccountsSheet) {
+            GaryxClaudeCodeAccountsSheet()
         }
         .onDisappear {
             if authSection == .claudeCode {
@@ -484,8 +1220,34 @@ struct GaryxModelProviderDefaultsSheet: View {
     private var authenticationSection: some View {
         switch authSection {
         case .claudeCode:
-            GaryxClaudeCodeAuthEntryRow(entry: claudeCodeAuthEntry) {
-                showsClaudeLoginSheet = true
+            Section {
+                Button {
+                    showsClaudeAccountsSheet = true
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(claudeSelectedAccountTitle)
+                                .font(GaryxFont.body(weight: .medium))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(claudeSelectedAccountDetail)
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(GaryxPressableRowStyle())
+            } header: {
+                Text("Account")
+                    .textCase(nil)
+            } footer: {
+                Text("Manage Claude Code logins and choose the account used by future runs.")
             }
         case .managedOAuth:
             GaryxFormGroupedSection(title: "Authentication") {
@@ -555,11 +1317,23 @@ struct GaryxModelProviderDefaultsSheet: View {
         catalog?.serviceTiers ?? []
     }
 
-    private var claudeCodeAuthEntry: GaryxClaudeCodeAuthEntry {
-        GaryxClaudeCodeAuthEntry.make(
-            session: model.claudeCodeAuthSession,
-            usage: GaryxModelProviderDefaults.usage(in: model.codingUsage, provider: provider)
+    private var claudeSelectedAccount: GaryxClaudeCodeAccountPresentation? {
+        guard let accounts = model.claudeCodeAccounts,
+              let account = accounts.selectedAccount else { return nil }
+        return GaryxClaudeCodeAccountPresentation.make(
+            account: account,
+            refreshedAt: accounts.refreshedAt
         )
+    }
+
+    private var claudeSelectedAccountTitle: String {
+        guard let account = claudeSelectedAccount else { return "System default" }
+        guard let plan = account.planText else { return account.title }
+        return "\(account.title) · \(plan)"
+    }
+
+    private var claudeSelectedAccountDetail: String {
+        claudeSelectedAccount?.detailText ?? "Uses this Mac's default Claude Code login"
     }
 
     private var defaultModelLabel: String {
@@ -571,6 +1345,9 @@ struct GaryxModelProviderDefaultsSheet: View {
     /// stays disabled so a stale restored projection can never be written back.
     private func hydrate() async {
         async let catalogLoad: Void = model.loadProviderModels(providerType: provider.providerType)
+        if provider.providerType == "claude_code" {
+            await model.loadClaudeCodeAccounts()
+        }
         let fetched = await model.refreshAuthoritativeGatewaySettings()
         _ = await catalogLoad
         if fetched {

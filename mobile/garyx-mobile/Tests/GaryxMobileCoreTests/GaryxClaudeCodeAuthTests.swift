@@ -9,6 +9,7 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
                 """
                 {
                   "login_id": "login-test",
+                  "account_id": "managed-test",
                   "status": "waiting_for_code",
                   "url": "https://claude.example.test/oauth",
                   "auth_status": {
@@ -24,6 +25,7 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
         )
 
         XCTAssertEqual(session.loginId, "login-test")
+        XCTAssertEqual(session.accountId, "managed-test")
         XCTAssertEqual(session.status, .waitingForCode)
         XCTAssertEqual(session.authorizationURL?.absoluteString, "https://claude.example.test/oauth")
         XCTAssertEqual(session.exitCode, 0)
@@ -109,6 +111,88 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
         XCTAssertEqual(object["sso"] as? Bool, true)
         XCTAssertNil(object["email"])
         XCTAssertFalse(options.isDefault)
+    }
+
+    func testManagedAuthTargetsEncodeExactlyOneTargetField() throws {
+        let options = GaryxClaudeCodeLoginOptions()
+        let newData = try JSONEncoder().encode(
+            options.makeStartRequest(target: .newManagedAccount(name: " Work "))
+        )
+        let newObject = try XCTUnwrap(JSONSerialization.jsonObject(with: newData) as? [String: Any])
+        XCTAssertEqual(newObject["managed_account_name"] as? String, "Work")
+        XCTAssertNil(newObject["account_id"])
+
+        let existingData = try JSONEncoder().encode(
+            options.makeStartRequest(target: .managedAccount(id: " account-1 ", name: "Work"))
+        )
+        let existingObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: existingData) as? [String: Any]
+        )
+        XCTAssertEqual(existingObject["account_id"] as? String, "account-1")
+        XCTAssertNil(existingObject["managed_account_name"])
+    }
+
+    func testAccountListDecodesSelectionAndFablePresentation() throws {
+        let response = try JSONDecoder().decode(
+            GaryxClaudeCodeAccounts.self,
+            from: Data(
+                """
+                {
+                  "active_account_id": "account-1",
+                  "refreshed_at": "2026-07-21T12:00:00Z",
+                  "accounts": [
+                    {
+                      "id": null,
+                      "name": "System default",
+                      "system_default": true,
+                      "selected": false,
+                      "usage": {
+                        "id": "claude_code",
+                        "name": "Claude Code",
+                        "available": true,
+                        "plan": "pro"
+                      }
+                    },
+                    {
+                      "id": "account-1",
+                      "name": "Work",
+                      "system_default": false,
+                      "selected": true,
+                      "email": "bot@example.com",
+                      "plan": "max",
+                      "usage": {
+                        "id": "claude_code",
+                        "name": "Claude Code",
+                        "available": true,
+                        "plan": "max",
+                        "session": { "used_percent": 12, "remaining_percent": 88 },
+                        "weekly": { "used_percent": 23, "remaining_percent": 77 },
+                        "scoped_limits": [
+                          {
+                            "id": "weekly_scoped:Fable",
+                            "name": "Fable",
+                            "kind": "weekly_scoped",
+                            "window": { "used_percent": 46, "remaining_percent": 54 }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """.utf8
+            )
+        )
+
+        let selected = try XCTUnwrap(response.selectedAccount)
+        XCTAssertEqual(selected.id, "account-1")
+        let presentation = GaryxClaudeCodeAccountPresentation.make(
+            account: selected,
+            refreshedAt: response.refreshedAt
+        )
+        XCTAssertEqual(presentation.title, "Work")
+        XCTAssertEqual(presentation.detailText, "bot@example.com")
+        XCTAssertEqual(presentation.planText, "max")
+        XCTAssertEqual(presentation.usage?.windows.map(\.label), ["Session", "Weekly", "Fable"])
     }
 
     // MARK: Guided login step machine

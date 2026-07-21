@@ -764,6 +764,30 @@ public final class GaryxGatewayClient {
         try await get("/api/provider-models/\(providerType.urlPathEncoded)")
     }
 
+    public func claudeCodeAccounts() async throws -> GaryxClaudeCodeAccounts {
+        try await get("/api/providers/claude_code/accounts")
+    }
+
+    public func selectClaudeCodeAccount(accountId: String?) async throws {
+        let _: GaryxJSONValue = try await put(
+            "/api/providers/claude_code/accounts/active",
+            body: GaryxClaudeCodeAccountSelectionRequest(accountId: accountId)
+        )
+    }
+
+    public func renameClaudeCodeAccount(accountId: String, name: String) async throws {
+        let _: GaryxJSONValue = try await patch(
+            "/api/providers/claude_code/accounts/\(accountId.urlPathEncoded)",
+            body: GaryxClaudeCodeAccountRenameRequest(name: name)
+        )
+    }
+
+    public func deleteClaudeCodeAccount(accountId: String) async throws {
+        let _: GaryxJSONValue = try await delete(
+            "/api/providers/claude_code/accounts/\(accountId.urlPathEncoded)"
+        )
+    }
+
     public func startClaudeCodeAuth(
         _ request: GaryxClaudeCodeAuthStartRequest = GaryxClaudeCodeAuthStartRequest()
     ) async throws -> GaryxClaudeCodeAuthSession {
@@ -786,6 +810,10 @@ public final class GaryxGatewayClient {
 
     public func claudeCodeAuth(loginId: String) async throws -> GaryxClaudeCodeAuthSession {
         try await get("/api/providers/claude_code/auth/\(loginId.urlPathEncoded)")
+    }
+
+    public func cancelClaudeCodeAuth(loginId: String) async throws -> GaryxClaudeCodeAuthSession {
+        try await delete("/api/providers/claude_code/auth/\(loginId.urlPathEncoded)")
     }
 
     public func generateAvatar(prompt: String, timeoutSecs: Int = 600) async throws -> GaryxGeneratedAvatar {

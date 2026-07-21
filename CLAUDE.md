@@ -86,6 +86,8 @@ for personal data and remove it.
   Do not reintroduce caps for user, assistant, or nested tool text.
 - Provider, agent, bot, and channel identity presentation should resolve
   through shared presentation helpers instead of local view switch tables.
+- Provider identity surfaces must reuse the same avatar component and branded
+  artwork as Agent surfaces; do not substitute screen-local SF Symbols.
 - A Claude Code `result` is a turn boundary, not a process boundary. Normal
   completion may close stdin, but must consume stdout through EOF and wait for
   natural process exit; background-task level signals never authorize output

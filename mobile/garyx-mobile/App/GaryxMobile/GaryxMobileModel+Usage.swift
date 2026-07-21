@@ -7,9 +7,13 @@ extension GaryxMobileModel {
     /// shared App Group, then reload the widget. The widget never fetches or holds
     /// the gateway token itself — the app owns the network call. Failures are
     /// non-fatal: the widget keeps its last app-warmed snapshot.
-    func refreshCodingUsageWidget() async {
+    func refreshCodingUsageWidget(
+        runtimeGeneration: GaryxGatewayRequestToken? = nil
+    ) async {
+        let observedGeneration = runtimeGeneration ?? gatewayRequestToken
         guard let gateway = try? client() else { return }
         guard let usage = try? await gateway.codingUsage() else { return }
+        guard observedGeneration == gatewayRequestToken else { return }
         codingUsage = usage
         GaryxUsageWidgetStore.saveSnapshot(
             GaryxUsageWidgetSnapshot(usage: usage, fetchedAt: Date())

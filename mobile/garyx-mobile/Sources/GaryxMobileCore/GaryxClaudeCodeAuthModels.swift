@@ -1,11 +1,170 @@
 import Foundation
 
-// Claude Code sign-in models. The gateway HTTP contract (start / submit / get)
-// is unchanged; iOS drives it through a dedicated guided login sheet. The email
-// field was removed from the start request entirely so iOS can never send it —
-// gateway still accepts it, we simply omit it (default body `{"mode":"claudeai"}`).
-// `console` and `sso` remain available as advanced-only options via the existing
-// wire fields.
+// Claude Code account + sign-in models. Account selection belongs to the
+// provider; the client never receives a config path and never snapshots an
+// account onto a thread. iOS drives login through its existing guided sheet,
+// now with an explicit system/new-managed/existing-managed target.
+
+public struct GaryxClaudeCodeAccounts: Codable, Equatable, Sendable {
+    public var activeAccountId: String?
+    public var accounts: [GaryxClaudeCodeAccount]
+    public var refreshedAt: String
+
+    public init(
+        activeAccountId: String? = nil,
+        accounts: [GaryxClaudeCodeAccount],
+        refreshedAt: String
+    ) {
+        self.activeAccountId = activeAccountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .garyxGatewayTrimmedNilIfEmpty
+        self.accounts = accounts
+        self.refreshedAt = refreshedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case activeAccountId = "active_account_id"
+        case accounts
+        case refreshedAt = "refreshed_at"
+    }
+
+    public var selectedAccount: GaryxClaudeCodeAccount? {
+        accounts.first(where: \.selected)
+    }
+}
+
+public struct GaryxClaudeCodeAccount: Codable, Equatable, Sendable {
+    public var id: String?
+    public var name: String
+    public var systemDefault: Bool
+    public var selected: Bool
+    public var email: String?
+    public var organization: String?
+    public var plan: String?
+    public var authMethod: String?
+    public var usage: GaryxProviderUsage
+
+    public init(
+        id: String? = nil,
+        name: String,
+        systemDefault: Bool,
+        selected: Bool,
+        email: String? = nil,
+        organization: String? = nil,
+        plan: String? = nil,
+        authMethod: String? = nil,
+        usage: GaryxProviderUsage
+    ) {
+        self.id = id?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.systemDefault = systemDefault
+        self.selected = selected
+        self.email = email?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+        self.organization = organization?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+        self.plan = plan?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+        self.authMethod = authMethod?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+        self.usage = usage
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case systemDefault = "system_default"
+        case selected
+        case email
+        case organization
+        case plan
+        case authMethod = "auth_method"
+        case usage
+    }
+
+    public var stableId: String { id ?? "system-default" }
+}
+
+/// Pure account-row projection shared by the Provider overview and account
+/// switcher. SwiftUI only composes these values and dispatches actions.
+public struct GaryxClaudeCodeAccountPresentation: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var accountId: String?
+    public var title: String
+    public var detailText: String
+    public var planText: String?
+    public var systemDefault: Bool
+    public var selected: Bool
+    public var usage: GaryxProviderUsageDisplayModel?
+
+    public static func make(
+        account: GaryxClaudeCodeAccount,
+        refreshedAt: String?
+    ) -> GaryxClaudeCodeAccountPresentation {
+        let detail: String
+        if let email = account.email {
+            detail = email
+        } else if let organization = account.organization {
+            detail = organization
+        } else if account.systemDefault {
+            detail = "This Mac's default Claude Code login"
+        } else {
+            detail = "Managed Claude Code login"
+        }
+        return GaryxClaudeCodeAccountPresentation(
+            id: account.stableId,
+            accountId: account.id,
+            title: account.name,
+            detailText: detail,
+            planText: account.plan ?? account.usage.plan,
+            systemDefault: account.systemDefault,
+            selected: account.selected,
+            usage: GaryxProviderUsageDisplayModel.make(
+                from: account.usage,
+                refreshedAt: refreshedAt
+            )
+        )
+    }
+}
+
+public struct GaryxClaudeCodeAccountSelectionRequest: Encodable, Equatable, Sendable {
+    public var accountId: String?
+
+    public init(accountId: String?) {
+        self.accountId = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .garyxGatewayTrimmedNilIfEmpty
+    }
+
+    enum CodingKeys: String, CodingKey { case accountId = "account_id" }
+}
+
+public struct GaryxClaudeCodeAccountRenameRequest: Encodable, Equatable, Sendable {
+    public var name: String
+
+    public init(name: String) {
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+public enum GaryxClaudeCodeAuthTarget: Equatable, Sendable {
+    case systemDefault
+    case newManagedAccount(name: String)
+    case managedAccount(id: String, name: String)
+
+    public var displayName: String {
+        switch self {
+        case .systemDefault:
+            return "System default"
+        case .newManagedAccount(let name), .managedAccount(_, let name):
+            return name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    public var accountId: String? {
+        guard case .managedAccount(let id, _) = self else { return nil }
+        return id.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+    }
+
+    public var managedAccountName: String? {
+        guard case .newManagedAccount(let name) = self else { return nil }
+        return name.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+    }
+}
 
 public enum GaryxClaudeCodeAuthMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case claudeai
@@ -49,18 +208,30 @@ public enum GaryxClaudeCodeAuthStatus: String, Codable, Equatable, Sendable {
 public struct GaryxClaudeCodeAuthStartRequest: Encodable, Equatable, Sendable {
     public var mode: GaryxClaudeCodeAuthMode
     public var sso: Bool
+    public var managedAccountName: String?
+    public var accountId: String?
 
     public init(
         mode: GaryxClaudeCodeAuthMode = .claudeai,
-        sso: Bool = false
+        sso: Bool = false,
+        managedAccountName: String? = nil,
+        accountId: String? = nil
     ) {
         self.mode = mode
         self.sso = sso
+        self.managedAccountName = managedAccountName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .garyxGatewayTrimmedNilIfEmpty
+        self.accountId = accountId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .garyxGatewayTrimmedNilIfEmpty
     }
 
     enum CodingKeys: String, CodingKey {
         case mode
         case sso
+        case managedAccountName = "managed_account_name"
+        case accountId = "account_id"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -71,6 +242,8 @@ public struct GaryxClaudeCodeAuthStartRequest: Encodable, Equatable, Sendable {
         if sso {
             try container.encode(sso, forKey: .sso)
         }
+        try container.encodeIfPresent(managedAccountName, forKey: .managedAccountName)
+        try container.encodeIfPresent(accountId, forKey: .accountId)
     }
 }
 
@@ -104,12 +277,22 @@ public struct GaryxClaudeCodeLoginOptions: Equatable, Sendable {
 
     /// The wire request for these options. Never carries an email.
     public var startRequest: GaryxClaudeCodeAuthStartRequest {
-        GaryxClaudeCodeAuthStartRequest(mode: mode, sso: useSSO)
+        makeStartRequest(target: .systemDefault)
+    }
+
+    public func makeStartRequest(target: GaryxClaudeCodeAuthTarget) -> GaryxClaudeCodeAuthStartRequest {
+        GaryxClaudeCodeAuthStartRequest(
+            mode: mode,
+            sso: useSSO,
+            managedAccountName: target.managedAccountName,
+            accountId: target.accountId
+        )
     }
 }
 
 public struct GaryxClaudeCodeAuthSession: Codable, Equatable, Sendable {
     public var loginId: String
+    public var accountId: String?
     public var status: GaryxClaudeCodeAuthStatus
     public var url: String?
     public var authStatus: GaryxJSONValue?
@@ -118,6 +301,7 @@ public struct GaryxClaudeCodeAuthSession: Codable, Equatable, Sendable {
 
     public init(
         loginId: String,
+        accountId: String? = nil,
         status: GaryxClaudeCodeAuthStatus,
         url: String? = nil,
         authStatus: GaryxJSONValue? = nil,
@@ -125,6 +309,8 @@ public struct GaryxClaudeCodeAuthSession: Codable, Equatable, Sendable {
         exitCode: Int? = nil
     ) {
         self.loginId = loginId
+        self.accountId = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .garyxGatewayTrimmedNilIfEmpty
         self.status = status
         self.url = url?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
         self.authStatus = authStatus
@@ -134,6 +320,7 @@ public struct GaryxClaudeCodeAuthSession: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case loginId = "login_id"
+        case accountId = "account_id"
         case status
         case url
         case authStatus = "auth_status"
