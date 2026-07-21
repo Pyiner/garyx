@@ -222,8 +222,9 @@ test('side-chat scope ownership is wired at every production boundary', () => {
   const reconcileBody = appShellSource.slice(reconcileIdx, reconcileIdx + 2600);
   assert.match(
     reconcileBody,
-    /const epoch = gatewayMirror\.currentConnectionEpoch;/,
-    'reconcile captures its owning epoch at scheduling',
+    /const lease = openConnectionLease\(gatewayMirror\);\s*\n\s*const scopeCurrent = \(\) => lease\.isCurrent\(\);/,
+    'reconcile holds the dual-identity connection lease (the lease factory ' +
+      'itself is behavior-tested; bypassing it here goes red)',
   );
   assert.equal(
     (reconcileBody.match(/if \(!scopeCurrent\(\)\) \{/g) || []).length >= 3
@@ -239,8 +240,8 @@ test('side-chat scope ownership is wired at every production boundary', () => {
   );
   assert.match(
     appShellSource,
-    /pendingAutomationRunsRef\.current = \{\};/,
-    'the transition drops the previous universe pending-run bookkeeping',
+    /setPendingAutomationRunsByThread\(\{\}\);\s*\n\s*pendingAutomationRunsRef\.current = \{\};/,
+    'the transition resets BOTH pending-run owners: rendered state and ref',
   );
   // No side effects hide inside the state updater anymore.
   assert.doesNotMatch(
@@ -301,10 +302,12 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     /\}, \[Boolean\(desktopState\), selectedThreadId, desktopState\?\.entitiesGatewayUrl\]\);/,
     'the selected-thread loader re-keys on the gateway universe',
   );
-  assert.match(
-    appShellSource,
-    /const epoch = gatewayMirror\.currentConnectionEpoch;\s*\n\s*const scopeCurrent = \(\) =>\s*gatewayMirror\.isCurrentConnectionEpoch\(epoch\);/,
-    'scheduleHistoryRefresh captures its owning epoch at schedule time',
+  assert.equal(
+    (appShellSource.match(
+      /const lease = openConnectionLease\(gatewayMirror\);\s*\n\s*const scopeCurrent = \(\) => lease\.isCurrent\(\);/g,
+    ) || []).length,
+    2,
+    'both poll chains (reconcile + history refresh) hold the connection lease',
   );
 
   // 3. The history/stream effect is keyed on the scope generation, so a

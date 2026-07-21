@@ -557,6 +557,73 @@ test("catalog is a request state machine: failures publish, never blank silently
   assert.equal(freshOk.getCatalogSnapshot().agents[0].id, "agent::fresh");
 });
 
+test("a background refresh never unsettles a pending foreground owner", async () => {
+  const foreground = deferred();
+  let calls = 0;
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: () => {
+      calls += 1;
+      return foreground.promise;
+    },
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+
+  // Foreground load in flight; a focus revalidation arrives.
+  const fg = mirror.refreshAgentCatalog();
+  assert.equal(mirror.getCatalogSnapshot().phase, "loading");
+  const bg = await mirror.refreshAgentCatalog({ background: true });
+  assert.equal(bg, true, "background coalesces while foreground is pending");
+  assert.equal(calls, 1, "no second request is issued");
+
+  // The foreground answer still owns its publish (the reviewer's probe:
+  // a background ordinal advance used to cancel it and park the phase at
+  // loading forever).
+  foreground.resolve({
+    agents: [{ id: "agent::fg" }],
+    defaultAgentId: "agent::fg",
+    effectiveDefaultAgentId: "agent::fg",
+  });
+  await fg;
+  assert.equal(mirror.getCatalogSnapshot().phase, "ready");
+  assert.equal(mirror.getCatalogSnapshot().agents[0].id, "agent::fg");
+});
+
+test("a background failure after ready keeps content; success publishes", async () => {
+  let mode = "ok";
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: () =>
+      mode === "ok"
+        ? Promise.resolve({
+            agents: [{ id: "agent::ready" }],
+            defaultAgentId: "agent::ready",
+            effectiveDefaultAgentId: "agent::ready",
+          })
+        : Promise.reject(new Error("transient")),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  await mirror.refreshAgentCatalog();
+  assert.equal(mirror.getCatalogSnapshot().phase, "ready");
+
+  mode = "fail";
+  assert.equal(await mirror.refreshAgentCatalog({ background: true }), false);
+  assert.equal(
+    mirror.getCatalogSnapshot().phase,
+    "ready",
+    "a transient background failure never disturbs ready content",
+  );
+  assert.equal(mirror.getCatalogSnapshot().agents[0].id, "agent::ready");
+
+  mode = "ok2";
+  // (mode not matching "ok" -> rejection; flip back for a real publish)
+  mode = "ok";
+  await mirror.refreshAgentCatalog({ background: true });
+  assert.equal(mirror.getCatalogSnapshot().phase, "ready");
+});
+
 test("a stale openability answer reports not-openable without vouching", async () => {
   const refresh = deferred();
   const mirror = new GatewayMirror({

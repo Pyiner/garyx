@@ -475,11 +475,19 @@ export class GatewayMirror {
     }
     const background = options?.background === true;
     const epoch = this.connectionEpoch;
-    const ordinal = ++this.catalogRequestOrdinal;
     // A BACKGROUND refresh (focus revalidation) never disturbs what the
-    // user sees: no loading phase, and a transient failure keeps the
-    // current ready content instead of flipping to error. Foreground
-    // requests own the full state machine.
+    // user sees NOR an unsettled foreground owner: it does not advance
+    // the request ordinal (advancing it would cancel the in-flight
+    // foreground publish and park the phase at loading forever), it
+    // coalesces away entirely while a foreground load is pending, it
+    // publishes no loading phase, and a transient failure keeps the
+    // current content. Foreground requests own the full state machine.
+    if (background && this.catalogPhase === "loading") {
+      return Promise.resolve(true);
+    }
+    const ordinal = background
+      ? this.catalogRequestOrdinal
+      : ++this.catalogRequestOrdinal;
     if (!background && this.catalogPhase !== "loading") {
       this.catalogPhase = "loading";
       this.bumpCatalog();

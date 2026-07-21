@@ -35,6 +35,7 @@ import {
 } from "@shared/contracts";
 
 import { desktopStateWithoutThread } from "@shared/desktop-state";
+import { openConnectionLease } from "../connection-lease";
 import { isToolRole } from "@shared/transcript-sync";
 
 import {
@@ -673,8 +674,12 @@ export function AppShell() {
     });
     sideChatSessions.setGatewayScope(committedGatewayKey);
     // Pending automation-run reconciliation belongs to the previous
-    // universe; its epoch-owned timers die on wake, and the bookkeeping
-    // resets here so nothing waits on a run that can never settle.
+    // universe; its leased timers die on wake, and BOTH owners — the
+    // rendered state and the timer bookkeeping ref — reset here (the ref
+    // alone would leave a colliding thread id showing the old gateway's
+    // optimistic prompt forever, since the dead timer no longer clears
+    // the state through its setter).
+    setPendingAutomationRunsByThread({});
     pendingAutomationRunsRef.current = {};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gatewayMirror, sideChatSessions, committedGatewayKey]);
@@ -3271,12 +3276,14 @@ export function AppShell() {
     }
 
     // The WHOLE poll chain — timer, history await, apply, clear, retry —
-    // is owned by the connection epoch it was scheduled on. A late answer
-    // from gateway A must never apply (and, transitively, persist into
-    // B's cache partition) a transcript for B's colliding thread id; a
-    // pending timer from a previous universe dies on its first wake.
-    const epoch = gatewayMirror.currentConnectionEpoch;
-    const scopeCurrent = () => gatewayMirror.isCurrentConnectionEpoch(epoch);
+    // holds a dual-identity connection lease. The mirror epoch alone is
+    // NOT enough: between the switch REQUEST (ingress generation advances,
+    // transport already answers for the new gateway) and the switch COMMIT
+    // (mirror epoch advances), an answer would be applied and persisted
+    // under the OLD universe's scope. The lease dies at whichever identity
+    // moves first.
+    const lease = openConnectionLease(gatewayMirror);
+    const scopeCurrent = () => lease.isCurrent();
 
     window.setTimeout(() => {
       void (async () => {
@@ -4184,8 +4191,8 @@ export function AppShell() {
     // The whole timer/fetch/apply loop is owned by the connection epoch it
     // was scheduled on: a response that lands after a gateway switch must
     // not replace the new universe's transcript for a colliding thread id.
-    const epoch = gatewayMirror.currentConnectionEpoch;
-    const scopeCurrent = () => gatewayMirror.isCurrentConnectionEpoch(epoch);
+    const lease = openConnectionLease(gatewayMirror);
+    const scopeCurrent = () => lease.isCurrent();
     scheduleThreadHistoryRefresh({
       api: getDesktopApi(),
       threadId,
