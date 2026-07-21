@@ -188,6 +188,13 @@ expand affordance:
   plus the card body clamped to **at most 10 text lines**. When the body
   exceeds the clamp, the card shows a clear expand affordance and the whole
   card is activatable; when it fits, no affordance and no dead interaction.
+- **Alignment and width (product owner, 2026-07-21)**: the card is **not**
+  full-width. A task notification is a user-role row; the card aligns to the
+  user side (trailing) and follows the same width constraint as ordinary
+  user bubbles — ~70–80% of the content width. Reuse each platform's
+  existing user-bubble width rule (iOS already caps user rows at 0.77 ×
+  screen width; desktop uses its existing user-side max-width) instead of
+  inventing a notification-specific constant.
 - **Expanded view** renders the same header plus the full envelope-stripped
   body as markdown — same data path as the card, no separate fetch or
   re-parse:
