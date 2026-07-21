@@ -373,9 +373,14 @@ async fn read_auth_events(
         tokio::select! {
             _ = session.cancellation.cancelled() => {
                 session.close_input().await;
+                if let Err(error) = auth_session.shutdown().await {
+                    tracing::warn!(
+                        login_id = %session.login_id,
+                        error = %error,
+                        "failed to shut down Claude Code auth process"
+                    );
+                }
                 drop(events);
-                drop(auth_session);
-                tokio::task::yield_now().await;
                 provider_accounts::cleanup_failed_auth_target(&app_state, &session.target).await;
                 return;
             }
@@ -674,6 +679,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::time::Instant;
     use tempfile::tempdir;
     use tower::ServiceExt;
 
@@ -808,6 +814,7 @@ mod tests {
     async fn cancelling_managed_auth_closes_process_and_removes_uncommitted_profile() {
         let dir = tempdir().unwrap();
         let fake_claude = write_fake_claude(dir.path());
+        let auth_pid_path = dir.path().join("auth-login.pid");
         let config = crate::test_support::with_gateway_auth(GaryxConfig::default());
         let state = crate::server::AppStateBuilder::new(config)
             .with_config_path(dir.path().join("config.yaml"))
@@ -841,6 +848,11 @@ mod tests {
         )
         .unwrap();
         let account_id = start.account_id.as_deref().expect("managed account id");
+        let auth_pid = fs::read_to_string(&auth_pid_path)
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
         let account_dir = dir
             .path()
             .join("provider-accounts/claude-code")
@@ -887,6 +899,7 @@ mod tests {
                 .accounts
                 .is_empty()
         );
+        assert_child_reaped(auth_pid).await;
 
         let status_response = router
             .oneshot(
@@ -1109,6 +1122,7 @@ if args == ["auth", "status", "--json"]:
     sys.exit(0)
 
 if args[:2] == ["auth", "login"]:
+    Path(__file__).with_name("auth-login.pid").write_text(str(os.getpid()), encoding="utf-8")
     if config_dir:
         Path(config_dir, "login-env-seen").write_text(config_dir, encoding="utf-8")
     print("Opening browser to sign in...", flush=True)
@@ -1147,6 +1161,29 @@ sys.exit(2)
             let mut perms = fs::metadata(&path).unwrap().permissions();
             perms.set_mode(0o755);
             fs::set_permissions(&path, perms).unwrap();
+        }
+    }
+
+    async fn assert_child_reaped(pid: libc::pid_t) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let result = unsafe { libc::kill(pid, 0) };
+            if result != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                let mut status = 0;
+                let wait_result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if wait_result == 0 {
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                        libc::kill(pid, libc::SIGKILL);
+                        libc::waitpid(pid, &mut status, 0);
+                    }
+                }
+                panic!("auth login child {pid} was not reaped; waitpid returned {wait_result}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 }

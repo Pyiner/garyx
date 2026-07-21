@@ -315,7 +315,7 @@ dependencies = [
 [[package]]
 name = "cctty"
 version = "0.2.7"
-source = "git+https://github.com/Pyiner/cctty.git?rev=5401243975ddc61cdf9a774754df7619f4062eb5#5401243975ddc61cdf9a774754df7619f4062eb5"
+source = "git+https://github.com/Pyiner/cctty.git?rev=04c9b6c16c009f831bca826927c5c5b075513fe7#04c9b6c16c009f831bca826927c5c5b075513fe7"
 dependencies = [
  "libc",
  "serde",
