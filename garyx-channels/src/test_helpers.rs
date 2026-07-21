@@ -17,17 +17,21 @@ use garyx_router::recent_threads::{
     RecentThreadFilter, RecentThreadListEntry, RecentThreadPage, RecentThreadPageReader,
 };
 use garyx_router::{
-    AtomicRecordMerge, ChannelBinding, EndpointBindResult, EndpointBindingMutationError,
-    EndpointBindingMutator, EndpointBindingOwner, EndpointDetachResult, InMemoryThreadStore,
-    MessageRouter, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
-    bindings_from_value, remove_binding, upsert_binding, validate_thread_accepts_bot_binding,
+    AtomicRecordMerge, ChannelBinding, ChannelBindingsMergeAuthority, EndpointBindResult,
+    EndpointBindingMutationError, EndpointBindingMutator, EndpointBindingOwner,
+    EndpointDetachResult, InMemoryThreadStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
+    ThreadTranscriptStore, bindings_from_value, remove_binding, upsert_binding,
+    validate_thread_accepts_bot_binding,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::{Mutex, broadcast};
 
 pub struct TestEndpointBindingMutator {
     store: Arc<dyn ThreadStore>,
     owners: Mutex<HashMap<String, EndpointBindingOwner>>,
+    /// This fixture stands in for the serialized endpoint-binding mutator,
+    /// so it mints the binding-merge authority like one.
+    merge_authority: ChannelBindingsMergeAuthority,
 }
 
 impl TestEndpointBindingMutator {
@@ -35,11 +39,13 @@ impl TestEndpointBindingMutator {
         Self {
             store,
             owners: Mutex::new(HashMap::new()),
+            merge_authority: ChannelBindingsMergeAuthority::for_endpoint_binding_mutator(),
         }
     }
 }
 
 async fn known_endpoint_fixture_merge(
+    authority: &ChannelBindingsMergeAuthority,
     store: &Arc<dyn ThreadStore>,
     binding: &ChannelBinding,
 ) -> Result<AtomicRecordMerge, String> {
@@ -49,28 +55,12 @@ async fn known_endpoint_fixture_merge(
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| Value::Object(Default::default()));
     upsert_binding(&mut value, binding.clone());
-    Ok(binding_fixture_merge(
+    Ok(AtomicRecordMerge::channel_bindings_merge(
+        authority,
         garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY,
         &value,
         true,
     ))
-}
-
-fn binding_fixture_merge(
-    thread_id: &str,
-    record: &Value,
-    create_if_missing: bool,
-) -> AtomicRecordMerge {
-    AtomicRecordMerge {
-        thread_id: thread_id.to_owned(),
-        fields: json!({
-            "channel_bindings": record
-                .get("channel_bindings")
-                .cloned()
-                .unwrap_or_else(|| Value::Array(Vec::new()))
-        }),
-        create_if_missing,
-    }
 }
 
 #[async_trait]
@@ -120,7 +110,12 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                     previous_thread_id.to_owned(),
                 ));
             }
-            entries.push(binding_fixture_merge(previous_thread_id, &previous, false));
+            entries.push(AtomicRecordMerge::channel_bindings_merge(
+                &self.merge_authority,
+                previous_thread_id,
+                &previous,
+                false,
+            ));
         }
 
         let target_changed = bindings_from_value(&target)
@@ -130,10 +125,15 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
             != Some(&binding);
         if target_changed || previous_thread_id.is_some() {
             upsert_binding(&mut target, binding.clone());
-            entries.push(binding_fixture_merge(target_thread_id, &target, false));
+            entries.push(AtomicRecordMerge::channel_bindings_merge(
+                &self.merge_authority,
+                target_thread_id,
+                &target,
+                false,
+            ));
         }
         entries.push(
-            known_endpoint_fixture_merge(&self.store, &binding)
+            known_endpoint_fixture_merge(&self.merge_authority, &self.store, &binding)
                 .await
                 .map_err(|message| EndpointBindingMutationError::WriteFailed {
                     thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
@@ -185,15 +185,21 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 owner.thread_id,
             ));
         }
-        let registry = known_endpoint_fixture_merge(&self.store, &owner.binding)
-            .await
-            .map_err(|message| EndpointBindingMutationError::WriteFailed {
-                thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-                message,
-            })?;
+        let registry =
+            known_endpoint_fixture_merge(&self.merge_authority, &self.store, &owner.binding)
+                .await
+                .map_err(|message| EndpointBindingMutationError::WriteFailed {
+                    thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                    message,
+                })?;
         self.store
             .update_many_atomic(vec![
-                binding_fixture_merge(&owner.thread_id, &previous, false),
+                AtomicRecordMerge::channel_bindings_merge(
+                    &self.merge_authority,
+                    &*owner.thread_id,
+                    &previous,
+                    false,
+                ),
                 registry,
             ])
             .await

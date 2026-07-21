@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use super::ThreadStoreError;
-use super::channel_bindings::PROTECTED_CHANNEL_BINDINGS_FIELD;
+use super::channel_bindings::{ChannelBindingsMergeAuthority, PROTECTED_CHANNEL_BINDINGS_FIELD};
 
 /// One record's top-level field merge inside an atomic multi-record
 /// mutation (see `ThreadStore::update_many_atomic`).
@@ -17,15 +17,98 @@ use super::channel_bindings::PROTECTED_CHANNEL_BINDINGS_FIELD;
 /// This is the privileged merge shape: it is the only write entry allowed
 /// to touch the protected `channel_bindings` field, because moving an
 /// endpoint binding is exactly the multi-record transition the atomic path
-/// exists for. Callers outside the endpoint-binding mutator and atomic
-/// thread creation must not put protected fields in `fields`.
+/// exists for. The privilege is structural, not a review rule: the fields
+/// are private, [`Self::new`] rejects the protected field outright, and the
+/// binding-carrying constructor [`Self::channel_bindings_merge`] demands a
+/// borrow of the [`ChannelBindingsMergeAuthority`] witness, so a bypassing
+/// writer needs a visible, greppable authority mint instead of a silent
+/// struct literal.
 #[derive(Debug, Clone)]
 pub struct AtomicRecordMerge {
-    pub thread_id: String,
-    pub fields: Value,
+    thread_id: String,
+    fields: Value,
     /// Missing records normally abort the mutation; registry-style
     /// records owned by the mutation itself are created on first write.
-    pub create_if_missing: bool,
+    create_if_missing: bool,
+}
+
+impl AtomicRecordMerge {
+    /// Unprivileged merge entry over ordinary top-level fields. The
+    /// protected `channel_bindings` field is rejected here — exactly like
+    /// [`ThreadRecordPatch`] — and non-object field payloads fail before
+    /// storage is touched instead of silently merging nothing.
+    pub fn new(
+        thread_id: impl Into<String>,
+        fields: Value,
+        create_if_missing: bool,
+    ) -> Result<Self, ThreadStoreError> {
+        let thread_id = thread_id.into();
+        let Some(object) = fields.as_object() else {
+            return Err(ThreadStoreError::InvalidPatch(format!(
+                "atomic merge fields for '{thread_id}' must be a JSON object"
+            )));
+        };
+        if object.contains_key(PROTECTED_CHANNEL_BINDINGS_FIELD) {
+            return Err(ThreadStoreError::InvalidPatch(format!(
+                "protected field '{PROTECTED_CHANNEL_BINDINGS_FIELD}' requires the \
+                 channel-bindings merge authority"
+            )));
+        }
+        Ok(Self {
+            thread_id,
+            fields,
+            create_if_missing,
+        })
+    }
+
+    /// Privileged constructor for the endpoint-binding write path: merges
+    /// the record snapshot's `channel_bindings` (missing means the empty
+    /// list) plus its `updated_at` when present — exactly the two fields a
+    /// binding move touches, never arbitrary payloads. Binding content
+    /// comes from the caller's record snapshot; the authority witness marks
+    /// the caller as a serialized endpoint-binding mutator (or a test
+    /// double standing in for one).
+    pub fn channel_bindings_merge(
+        _authority: &ChannelBindingsMergeAuthority,
+        thread_id: impl Into<String>,
+        record: &Value,
+        create_if_missing: bool,
+    ) -> Self {
+        let mut fields = Map::new();
+        fields.insert(
+            PROTECTED_CHANNEL_BINDINGS_FIELD.to_owned(),
+            record
+                .get(PROTECTED_CHANNEL_BINDINGS_FIELD)
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        );
+        if let Some(updated_at) = record.get("updated_at") {
+            fields.insert("updated_at".to_owned(), updated_at.clone());
+        }
+        Self {
+            thread_id: thread_id.into(),
+            fields: Value::Object(fields),
+            create_if_missing,
+        }
+    }
+
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    pub fn fields(&self) -> &Value {
+        &self.fields
+    }
+
+    pub fn create_if_missing(&self) -> bool {
+        self.create_if_missing
+    }
+
+    /// Decompose for backend application. Read-only consumers should use
+    /// the borrowing accessors instead.
+    pub fn into_parts(self) -> (String, Value, bool) {
+        (self.thread_id, self.fields, self.create_if_missing)
+    }
 }
 
 /// A validated top-level mutation for one existing thread record.
@@ -153,5 +236,78 @@ impl ThreadRecordPatch {
             changed |= object.remove(field).is_some();
         }
         Ok(changed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn plain_merge_rejects_the_protected_channel_bindings_field() {
+        let error = AtomicRecordMerge::new(
+            "thread::plain",
+            json!({"label": "ok", "channel_bindings": []}),
+            false,
+        )
+        .expect_err("protected field must be rejected without the authority witness");
+        assert!(matches!(error, ThreadStoreError::InvalidPatch(_)));
+        assert!(error.to_string().contains(PROTECTED_CHANNEL_BINDINGS_FIELD));
+    }
+
+    #[test]
+    fn plain_merge_rejects_non_object_fields() {
+        let error = AtomicRecordMerge::new("thread::plain", json!(["not", "an", "object"]), false)
+            .expect_err("non-object fields must fail before storage is touched");
+        assert!(matches!(error, ThreadStoreError::InvalidPatch(_)));
+    }
+
+    #[test]
+    fn plain_merge_accepts_ordinary_fields() {
+        let merge = AtomicRecordMerge::new("thread::plain", json!({"label": "ok"}), true)
+            .expect("ordinary fields are accepted");
+        assert_eq!(merge.thread_id(), "thread::plain");
+        assert!(merge.create_if_missing());
+        let (thread_id, fields, create_if_missing) = merge.into_parts();
+        assert_eq!(thread_id, "thread::plain");
+        assert_eq!(fields, json!({"label": "ok"}));
+        assert!(create_if_missing);
+    }
+
+    #[test]
+    fn channel_bindings_merge_carries_exactly_bindings_and_updated_at() {
+        let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+        let record = json!({
+            "thread_id": "thread::owner",
+            "label": "never merged",
+            "channel_bindings": [{"channel": "telegram"}],
+            "updated_at": "2026-07-20T00:00:00Z"
+        });
+        let merge =
+            AtomicRecordMerge::channel_bindings_merge(&authority, "thread::owner", &record, false);
+        assert_eq!(
+            merge.fields(),
+            &json!({
+                "channel_bindings": [{"channel": "telegram"}],
+                "updated_at": "2026-07-20T00:00:00Z"
+            }),
+            "only the protected field and updated_at may travel in a binding merge"
+        );
+        assert!(!merge.create_if_missing());
+    }
+
+    #[test]
+    fn channel_bindings_merge_defaults_missing_bindings_to_the_empty_list() {
+        let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+        let merge = AtomicRecordMerge::channel_bindings_merge(
+            &authority,
+            "meta::known_channel_endpoints",
+            &json!({"label": "no bindings, no updated_at"}),
+            true,
+        );
+        assert_eq!(merge.fields(), &json!({"channel_bindings": []}));
+        assert!(merge.create_if_missing());
     }
 }

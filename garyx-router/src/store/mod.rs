@@ -23,7 +23,9 @@ use crate::ThreadRunCoordinator;
 use crate::endpoint_projection::ChannelEndpointProjection;
 use crate::tasks::TaskProjectionReader;
 
-pub use channel_bindings::{ensure_channel_bindings_unchanged, validate_channel_bindings};
+pub use channel_bindings::{
+    ChannelBindingsMergeAuthority, ensure_channel_bindings_unchanged, validate_channel_bindings,
+};
 pub use patch::{AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch};
 
 /// Durable terminal state recorded by the canonical thread tombstone.
@@ -169,6 +171,12 @@ pub trait ThreadStore: ThreadStoreDomains {
     /// `create_if_missing` (the known-endpoint registry record is created
     /// on first bind); vanished thread records are never resurrected as
     /// skeletons.
+    ///
+    /// Entry construction is where the binding privilege is enforced:
+    /// [`AtomicRecordMerge::new`] rejects the protected `channel_bindings`
+    /// field, and binding-carrying entries exist only through
+    /// [`AtomicRecordMerge::channel_bindings_merge`] under the
+    /// [`ChannelBindingsMergeAuthority`] witness.
     ///
     /// Every backend that participates in multi-record mutations MUST
     /// supply a genuinely atomic implementation (the SQLite store commits

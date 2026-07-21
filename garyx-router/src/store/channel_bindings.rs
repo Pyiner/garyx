@@ -15,6 +15,37 @@ use crate::threads::ChannelBinding;
 
 pub(super) const PROTECTED_CHANNEL_BINDINGS_FIELD: &str = "channel_bindings";
 
+/// Capability witness for constructing binding-carrying
+/// [`AtomicRecordMerge`](super::AtomicRecordMerge) entries.
+///
+/// The repository contract (docs/agents/repository-contracts.md) makes
+/// `update_many_atomic` the only write shape allowed to change
+/// `channel_bindings`, and the serialized `EndpointBindingMutator` service
+/// the only driver of that shape. This witness turns the second half of
+/// that rule structural: `AtomicRecordMerge::new` rejects the protected
+/// field outright, and the binding-carrying constructor demands a borrow
+/// of this authority.
+///
+/// Mint one per endpoint-binding-mutator implementation and hold it for
+/// the mutator's lifetime. Test doubles that stand in for the mutator's
+/// serialized write path mint their own; nothing else should. The mint's
+/// call sites are the audit surface — grep
+/// `for_endpoint_binding_mutator` to enumerate every holder.
+#[derive(Debug)]
+pub struct ChannelBindingsMergeAuthority {
+    _witness: (),
+}
+
+impl ChannelBindingsMergeAuthority {
+    /// Mint the authority to construct channel-bindings merges. Call this
+    /// only when constructing an endpoint-binding mutator (or a test
+    /// double standing in for one); every other binding write path must go
+    /// through such a mutator instead of minting its own authority.
+    pub fn for_endpoint_binding_mutator() -> Self {
+        Self { _witness: () }
+    }
+}
+
 fn canonical_channel_bindings(
     thread_id: &str,
     record: &Value,

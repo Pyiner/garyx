@@ -42,7 +42,12 @@ reinterpreted in feature code.
   (validated `ThreadRecordPatch` witness), and `update_many_atomic` (the
   privileged all-or-nothing batch — the only shape allowed to change
   `channel_bindings`). There is no raw top-level merge method; do not
-  reintroduce one. Store-owned runtime domains (run coordinator, projection
+  reintroduce one. The binding privilege is enforced at entry construction:
+  `AtomicRecordMerge::new` rejects the protected field, and binding-carrying
+  entries exist only through `AtomicRecordMerge::channel_bindings_merge`
+  under the `ChannelBindingsMergeAuthority` witness, minted solely by
+  endpoint-binding mutator implementations (and test doubles standing in
+  for them). Store-owned runtime domains (run coordinator, projection
   read seams) live on the `ThreadStoreDomains` supertrait, and
   `garyx_router::store_contract` is the executable contract every backend
   and delegating wrapper must run from its tests.

@@ -95,17 +95,10 @@ fn test_binding_merge(
     record: &Value,
     create_if_missing: bool,
 ) -> AtomicRecordMerge {
-    AtomicRecordMerge {
-        thread_id: thread_id.to_owned(),
-        fields: serde_json::json!({
-            "channel_bindings": record
-                .get("channel_bindings")
-                .cloned()
-                .unwrap_or_else(|| Value::Array(Vec::new())),
-            "updated_at": record.get("updated_at").cloned().unwrap_or(Value::Null),
-        }),
-        create_if_missing,
-    }
+    // This fixture stands in for the serialized endpoint-binding mutator's
+    // write path, so it mints the binding-merge authority like one.
+    let authority = crate::ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+    AtomicRecordMerge::channel_bindings_merge(&authority, thread_id, record, create_if_missing)
 }
 
 impl TestEndpointBindingMutator {

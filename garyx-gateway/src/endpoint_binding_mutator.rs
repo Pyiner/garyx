@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use garyx_models::config::GaryxConfig;
 use garyx_router::{
-    AtomicRecordMerge, ChannelBinding, EndpointBindResult, EndpointBindingMutationError,
-    EndpointBindingMutator, EndpointBindingOwner, EndpointDeliveryTimestampResult,
-    EndpointDetachResult, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadStore,
-    ThreadStoreError, bindings_from_value, remove_binding, upsert_binding,
-    validate_channel_bindings, validate_thread_accepts_bot_binding,
+    AtomicRecordMerge, ChannelBinding, ChannelBindingsMergeAuthority, EndpointBindResult,
+    EndpointBindingMutationError, EndpointBindingMutator, EndpointBindingOwner,
+    EndpointDeliveryTimestampResult, EndpointDetachResult, KNOWN_CHANNEL_ENDPOINTS_KEY,
+    KnownChannelEndpoint, ThreadStore, ThreadStoreError, bindings_from_value, remove_binding,
+    upsert_binding, validate_channel_bindings, validate_thread_accepts_bot_binding,
 };
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -22,6 +22,9 @@ use crate::sqlite_thread_store::{
 
 pub(crate) struct SqlEndpointBindingMutator {
     thread_store: Arc<dyn ThreadStore>,
+    /// Witness that this serialized mutator is the sanctioned constructor
+    /// of binding-carrying [`AtomicRecordMerge`] entries.
+    merge_authority: ChannelBindingsMergeAuthority,
     garyx_db: Arc<GaryxDbService>,
     sqlite_thread_store: Option<Arc<SqliteThreadStore>>,
     mutation_lock: Mutex<()>,
@@ -71,6 +74,7 @@ impl SqlEndpointBindingMutator {
     ) -> Self {
         Self {
             thread_store,
+            merge_authority: ChannelBindingsMergeAuthority::for_endpoint_binding_mutator(),
             garyx_db,
             sqlite_thread_store,
             mutation_lock: Mutex::new(()),
@@ -201,11 +205,12 @@ impl SqlEndpointBindingMutator {
             })?
             .unwrap_or_else(|| Value::Object(Map::new()));
         upsert_binding(&mut registry, binding.clone());
-        Ok(AtomicRecordMerge {
-            thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-            fields: binding_fields_of(&registry),
-            create_if_missing: true,
-        })
+        Ok(AtomicRecordMerge::channel_bindings_merge(
+            &self.merge_authority,
+            KNOWN_CHANNEL_ENDPOINTS_KEY,
+            &registry,
+            true,
+        ))
     }
 
     /// Commit every record merge of one binding mutation as a single
@@ -327,11 +332,14 @@ impl SqlEndpointBindingMutator {
                     previous_thread_id.to_owned(),
                 ));
             }
-            command.merges.push(AtomicRecordMerge {
-                thread_id: previous_thread_id.to_owned(),
-                fields: binding_fields_of(&previous),
-                create_if_missing: false,
-            });
+            command
+                .merges
+                .push(AtomicRecordMerge::channel_bindings_merge(
+                    &self.merge_authority,
+                    previous_thread_id,
+                    &previous,
+                    false,
+                ));
         }
         upsert_binding(&mut command.target_data, binding.clone());
         command.merges.push(self.registry_merge(&binding).await?);
@@ -438,18 +446,24 @@ impl SqlEndpointBindingMutator {
                     previous_thread_id.to_owned(),
                 ));
             }
-            command.merges.push(AtomicRecordMerge {
-                thread_id: previous_thread_id.to_owned(),
-                fields: binding_fields_of(&previous),
-                create_if_missing: false,
-            });
+            command
+                .merges
+                .push(AtomicRecordMerge::channel_bindings_merge(
+                    &self.merge_authority,
+                    previous_thread_id,
+                    &previous,
+                    false,
+                ));
         }
         upsert_binding(&mut target, binding.clone());
-        command.merges.push(AtomicRecordMerge {
-            thread_id: target_thread_id.clone(),
-            fields: binding_fields_of(&target),
-            create_if_missing: false,
-        });
+        command
+            .merges
+            .push(AtomicRecordMerge::channel_bindings_merge(
+                &self.merge_authority,
+                target_thread_id.clone(),
+                &target,
+                false,
+            ));
         command.merges.push(self.registry_merge(&binding).await?);
         store
             .commit_existing_dispatch_atomic(command)
@@ -459,22 +473,6 @@ impl SqlEndpointBindingMutator {
                 message: error.to_string(),
             })
     }
-}
-
-/// `channel_bindings` + `updated_at` as a top-level merge for one record.
-fn binding_fields_of(record: &Value) -> Value {
-    let mut updates = Map::new();
-    updates.insert(
-        "channel_bindings".to_owned(),
-        record
-            .get("channel_bindings")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new())),
-    );
-    if let Some(updated_at) = record.get("updated_at") {
-        updates.insert("updated_at".to_owned(), updated_at.clone());
-    }
-    Value::Object(updates)
 }
 
 fn binding_from_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBinding {
@@ -570,11 +568,12 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
             match self.thread_store.get(previous_thread_id).await {
                 Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, &endpoint_key) {
-                        entries.push(AtomicRecordMerge {
-                            thread_id: previous_thread_id.to_owned(),
-                            fields: binding_fields_of(&previous),
-                            create_if_missing: false,
-                        });
+                        entries.push(AtomicRecordMerge::channel_bindings_merge(
+                            &self.merge_authority,
+                            previous_thread_id,
+                            &previous,
+                            false,
+                        ));
                     } else {
                         return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                             previous_thread_id.to_owned(),
@@ -602,11 +601,12 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         let changed = previous_thread_id.is_some() || target_changed;
         if changed {
             upsert_binding(&mut target, binding.clone());
-            entries.push(AtomicRecordMerge {
-                thread_id: target_thread_id.to_owned(),
-                fields: binding_fields_of(&target),
-                create_if_missing: false,
-            });
+            entries.push(AtomicRecordMerge::channel_bindings_merge(
+                &self.merge_authority,
+                target_thread_id,
+                &target,
+                false,
+            ));
         }
         entries.push(self.registry_merge(&binding).await?);
         self.commit_atomic(target_thread_id, entries).await?;
@@ -639,11 +639,12 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
             match self.thread_store.get(previous_thread_id).await {
                 Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, endpoint_key) {
-                        entries.push(AtomicRecordMerge {
-                            thread_id: previous_thread_id.to_owned(),
-                            fields: binding_fields_of(&previous),
-                            create_if_missing: false,
-                        });
+                        entries.push(AtomicRecordMerge::channel_bindings_merge(
+                            &self.merge_authority,
+                            previous_thread_id,
+                            &previous,
+                            false,
+                        ));
                         previous_thread_id.to_owned()
                     } else {
                         return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
@@ -757,19 +758,21 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         let mut entries = Vec::with_capacity(2);
         if holder_changed {
             upsert_binding(&mut holder, binding.clone());
-            entries.push(AtomicRecordMerge {
-                thread_id: expected_holder_thread_id.to_owned(),
-                fields: binding_fields_of(&holder),
-                create_if_missing: false,
-            });
+            entries.push(AtomicRecordMerge::channel_bindings_merge(
+                &self.merge_authority,
+                expected_holder_thread_id,
+                &holder,
+                false,
+            ));
         }
         if registry_changed {
             upsert_binding(&mut registry, binding);
-            entries.push(AtomicRecordMerge {
-                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-                fields: binding_fields_of(&registry),
-                create_if_missing: true,
-            });
+            entries.push(AtomicRecordMerge::channel_bindings_merge(
+                &self.merge_authority,
+                KNOWN_CHANNEL_ENDPOINTS_KEY,
+                &registry,
+                true,
+            ));
         }
         self.commit_atomic(expected_holder_thread_id, entries)
             .await?;
@@ -894,9 +897,9 @@ mod tests {
                     .failed_updates
                     .lock()
                     .unwrap()
-                    .contains(&entry.thread_id)
+                    .contains(entry.thread_id())
                 {
-                    return Err(ThreadStoreError::NotFound(entry.thread_id.clone()));
+                    return Err(ThreadStoreError::NotFound(entry.thread_id().to_owned()));
                 }
             }
             self.inner.update_many_atomic(entries).await
@@ -1126,11 +1129,12 @@ mod tests {
         drifted.last_delivery_at = Some("2026-07-20T00:30:00Z".to_owned());
         upsert_binding(&mut registry, drifted);
         store
-            .update_many_atomic(vec![AtomicRecordMerge {
-                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
-                fields: binding_fields_of(&registry),
-                create_if_missing: true,
-            }])
+            .update_many_atomic(vec![AtomicRecordMerge::channel_bindings_merge(
+                &ChannelBindingsMergeAuthority::for_endpoint_binding_mutator(),
+                KNOWN_CHANNEL_ENDPOINTS_KEY,
+                &registry,
+                true,
+            )])
             .await
             .unwrap();
         assert_eq!(

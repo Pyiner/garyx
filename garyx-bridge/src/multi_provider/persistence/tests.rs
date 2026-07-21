@@ -1,8 +1,9 @@
 use super::*;
 use async_trait::async_trait;
 use garyx_router::{
-    AtomicRecordMerge, InMemoryThreadStore, ThreadHistoryRepository, ThreadPatchResult,
-    ThreadRecordPatch, ThreadRunCoordinator, ThreadStoreError, ThreadTranscriptStore,
+    AtomicRecordMerge, ChannelBindingsMergeAuthority, InMemoryThreadStore, ThreadHistoryRepository,
+    ThreadPatchResult, ThreadRecordPatch, ThreadRunCoordinator, ThreadStoreError,
+    ThreadTranscriptStore,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -159,23 +160,32 @@ async fn streaming_persistence_cannot_resurrect_a_binding_moved_after_its_read()
     let store: Arc<dyn ThreadStore> = Arc::new(MoveEndpointAfterReadStore {
         inner,
         previous_owner: previous_owner.to_owned(),
-        move_entries: vec![
-            AtomicRecordMerge {
-                thread_id: previous_owner.to_owned(),
-                fields: json!({"channel_bindings": []}),
-                create_if_missing: false,
-            },
-            AtomicRecordMerge {
-                thread_id: target.to_owned(),
-                fields: json!({"channel_bindings": [binding.clone()]}),
-                create_if_missing: false,
-            },
-            AtomicRecordMerge {
-                thread_id: registry.to_owned(),
-                fields: json!({"channel_bindings": [moved_registry_binding.clone()]}),
-                create_if_missing: false,
-            },
-        ],
+        move_entries: {
+            // This store simulates a concurrent endpoint move — the binding
+            // mutator's serialized write path — so it mints the
+            // binding-merge authority like one.
+            let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+            vec![
+                AtomicRecordMerge::channel_bindings_merge(
+                    &authority,
+                    previous_owner,
+                    &json!({"channel_bindings": []}),
+                    false,
+                ),
+                AtomicRecordMerge::channel_bindings_merge(
+                    &authority,
+                    target,
+                    &json!({"channel_bindings": [binding.clone()]}),
+                    false,
+                ),
+                AtomicRecordMerge::channel_bindings_merge(
+                    &authority,
+                    registry,
+                    &json!({"channel_bindings": [moved_registry_binding.clone()]}),
+                    false,
+                ),
+            ]
+        },
         moved: AtomicBool::new(false),
     });
     let history = make_history(store.clone());

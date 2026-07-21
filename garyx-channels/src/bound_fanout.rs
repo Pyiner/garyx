@@ -265,7 +265,10 @@ mod tests {
 
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::AgentRunRequest;
-    use garyx_router::{AtomicRecordMerge, InMemoryThreadStore, MessageRouter, ThreadStore};
+    use garyx_router::{
+        AtomicRecordMerge, ChannelBindingsMergeAuthority, InMemoryThreadStore, MessageRouter,
+        ThreadStore,
+    };
     use serde_json::json;
 
     #[derive(Default)]
@@ -313,10 +316,11 @@ mod tests {
             run: AdmittedRun,
             response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
         ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
-            self.store
-                .update_many_atomic(vec![AtomicRecordMerge {
-                    thread_id: run.thread_id().to_owned(),
-                    fields: json!({
+            // This dispatcher simulates a concurrent endpoint move, i.e. the
+            // binding mutator's serialized write path, so it mints the
+            // binding-merge authority like one.
+            let authority = ChannelBindingsMergeAuthority::for_endpoint_binding_mutator();
+            let rebound = json!({
                         "channel_bindings": [
                             {
                                 "channel": "telegram",
@@ -343,9 +347,14 @@ mod tests {
                                 "delivery_target_id": "chat-c"
                             }
                         ]
-                    }),
-                    create_if_missing: false,
-                }])
+            });
+            self.store
+                .update_many_atomic(vec![AtomicRecordMerge::channel_bindings_merge(
+                    &authority,
+                    run.thread_id(),
+                    &rebound,
+                    false,
+                )])
                 .await
                 .unwrap();
             if let Some(callback) = response_callback {

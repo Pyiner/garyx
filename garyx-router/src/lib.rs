@@ -84,9 +84,9 @@ pub use run_admission::{
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::contract as store_contract;
 pub use store::{
-    AtomicRecordMerge, ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreDomains,
-    ThreadStoreError, ThreadStoreExt, ThreadTerminalState, ensure_channel_bindings_unchanged,
-    validate_channel_bindings,
+    AtomicRecordMerge, ChannelBindingsMergeAuthority, ThreadPatchResult, ThreadRecordPatch,
+    ThreadStore, ThreadStoreDomains, ThreadStoreError, ThreadStoreExt, ThreadTerminalState,
+    ensure_channel_bindings_unchanged, validate_channel_bindings,
 };
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{

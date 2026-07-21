@@ -121,16 +121,10 @@ async fn default_update_many_atomic_refuses_with_zero_writes() {
 
     let error = store
         .update_many_atomic(vec![
-            crate::AtomicRecordMerge {
-                thread_id: "thread::first".to_owned(),
-                fields: json!({"state": "after"}),
-                create_if_missing: false,
-            },
-            crate::AtomicRecordMerge {
-                thread_id: "thread::second".to_owned(),
-                fields: json!({"state": "after"}),
-                create_if_missing: false,
-            },
+            crate::AtomicRecordMerge::new("thread::first", json!({"state": "after"}), false)
+                .expect("plain merge is valid"),
+            crate::AtomicRecordMerge::new("thread::second", json!({"state": "after"}), false)
+                .expect("plain merge is valid"),
         ])
         .await
         .expect_err("the non-transactional default must refuse");

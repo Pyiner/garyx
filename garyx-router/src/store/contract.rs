@@ -155,11 +155,10 @@ pub async fn run_thread_store_contract(store: &dyn ThreadStore) {
     ));
     assert!(matches!(
         store
-            .update_many_atomic(vec![AtomicRecordMerge {
-                thread_id: "thread::alpha".to_owned(),
-                fields: json!({"label": "resurrected"}),
-                create_if_missing: false,
-            }])
+            .update_many_atomic(vec![
+                AtomicRecordMerge::new("thread::alpha", json!({"label": "resurrected"}), false)
+                    .expect("plain label merge is valid"),
+            ])
             .await,
         Err(ThreadStoreError::Archived(_))
     ));
@@ -224,6 +223,14 @@ pub async fn run_patch_and_protected_field_contract(store: &dyn ThreadStore) {
     illegal_patch.insert("channel_bindings".to_owned(), json!([]));
     assert!(matches!(
         ThreadRecordPatch::new(illegal_patch, BTreeSet::new()),
+        Err(ThreadStoreError::InvalidPatch(_))
+    ));
+
+    // The atomic-merge witness enforces the same privilege at construction:
+    // a binding-carrying entry exists only through the authority-gated
+    // constructor, never through the plain one.
+    assert!(matches!(
+        AtomicRecordMerge::new(thread_id, json!({"channel_bindings": []}), false),
         Err(ThreadStoreError::InvalidPatch(_))
     ));
 

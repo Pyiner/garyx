@@ -209,7 +209,7 @@ impl SqliteThreadStore {
         let mut keys = command
             .merges
             .iter()
-            .map(|entry| entry.thread_id.clone())
+            .map(|entry| entry.thread_id().to_owned())
             .chain(std::iter::once(command.target_thread_id.clone()))
             .collect::<Vec<_>>();
         keys.sort_unstable();
@@ -236,17 +236,21 @@ impl SqliteThreadStore {
                 let create_if_missing = command
                     .merges
                     .iter()
-                    .filter(|entry| entry.thread_id == key)
-                    .all(|entry| entry.create_if_missing);
+                    .filter(|entry| entry.thread_id() == key)
+                    .all(|entry| entry.create_if_missing());
                 match self.get(&key).await? {
                     Some(data) => data,
                     None if create_if_missing => Value::Object(serde_json::Map::new()),
                     None => return Err(ThreadStoreError::NotFound(key)),
                 }
             };
-            for entry in command.merges.iter().filter(|entry| entry.thread_id == key) {
+            for entry in command
+                .merges
+                .iter()
+                .filter(|entry| entry.thread_id() == key)
+            {
                 if let (Some(target), Some(fields)) =
-                    (data.as_object_mut(), entry.fields.as_object())
+                    (data.as_object_mut(), entry.fields().as_object())
                 {
                     for (field, value) in fields {
                         target.insert(field.clone(), value.clone());
@@ -319,7 +323,7 @@ impl SqliteThreadStore {
         let mut keys = command
             .merges
             .iter()
-            .map(|entry| entry.thread_id.clone())
+            .map(|entry| entry.thread_id().to_owned())
             .chain(std::iter::once(command.target_thread_id.clone()))
             .collect::<Vec<_>>();
         keys.sort_unstable();
@@ -338,8 +342,8 @@ impl SqliteThreadStore {
             let create_if_missing = command
                 .merges
                 .iter()
-                .filter(|entry| entry.thread_id == key)
-                .all(|entry| entry.create_if_missing);
+                .filter(|entry| entry.thread_id() == key)
+                .all(|entry| entry.create_if_missing());
             let mut data = match self.get(&key).await? {
                 Some(data) => data,
                 None if key != command.target_thread_id && create_if_missing => {
@@ -350,9 +354,13 @@ impl SqliteThreadStore {
             if key == command.target_thread_id {
                 command.target_patch.apply_to(&mut data)?;
             }
-            for entry in command.merges.iter().filter(|entry| entry.thread_id == key) {
+            for entry in command
+                .merges
+                .iter()
+                .filter(|entry| entry.thread_id() == key)
+            {
                 if let (Some(target), Some(fields)) =
-                    (data.as_object_mut(), entry.fields.as_object())
+                    (data.as_object_mut(), entry.fields().as_object())
                 {
                     for (field, value) in fields {
                         target.insert(field.clone(), value.clone());
@@ -553,10 +561,7 @@ impl ThreadStore for SqliteThreadStore {
         // lock-order deadlock), and every record plus its derived
         // projections commit in ONE SQLite transaction — a failure on any
         // record rolls the whole mutation back.
-        let mut keys: Vec<&str> = entries
-            .iter()
-            .map(|entry| entry.thread_id.as_str())
-            .collect();
+        let mut keys: Vec<&str> = entries.iter().map(|entry| entry.thread_id()).collect();
         keys.sort_unstable();
         keys.dedup();
         let locks: Vec<_> = keys.iter().map(|key| self.key_lock(key)).collect();
@@ -567,18 +572,17 @@ impl ThreadStore for SqliteThreadStore {
 
         let mut writes = Vec::with_capacity(entries.len());
         for entry in entries {
-            let key = entry.thread_id;
+            let (key, fields, create_if_missing) = entry.into_parts();
             if self.terminal_state(&key).await?.is_some() {
                 return Err(ThreadStoreError::Archived(key));
             }
             let current = self.get(&key).await?;
             let mut data = match current {
                 Some(data) => data,
-                None if entry.create_if_missing => Value::Object(serde_json::Map::new()),
+                None if create_if_missing => Value::Object(serde_json::Map::new()),
                 None => return Err(ThreadStoreError::NotFound(key)),
             };
-            if let (Some(target), Some(updates)) = (data.as_object_mut(), entry.fields.as_object())
-            {
+            if let (Some(target), Some(updates)) = (data.as_object_mut(), fields.as_object()) {
                 for (field, value) in updates {
                     target.insert(field.clone(), value.clone());
                 }
@@ -808,19 +812,22 @@ mod contract_tests {
         assert_eq!(updated["metadata"]["source"], "legacy-client");
 
         store
-            .update_many_atomic(vec![garyx_router::AtomicRecordMerge {
-                thread_id: thread_id.to_owned(),
-                fields: json!({
-                    "exclude_from_recent": true,
-                    "excludeFromRecent": true,
-                    "metadata": {
-                        "source": "legacy-atomic-client",
+            .update_many_atomic(vec![
+                garyx_router::AtomicRecordMerge::new(
+                    thread_id,
+                    json!({
                         "exclude_from_recent": true,
-                        "excludeFromRecent": true
-                    }
-                }),
-                create_if_missing: false,
-            }])
+                        "excludeFromRecent": true,
+                        "metadata": {
+                            "source": "legacy-atomic-client",
+                            "exclude_from_recent": true,
+                            "excludeFromRecent": true
+                        }
+                    }),
+                    false,
+                )
+                .expect("plain merge is valid"),
+            ])
             .await
             .expect("legacy atomic merge payload");
         let atomically_updated = store.get(thread_id).await.unwrap().unwrap();

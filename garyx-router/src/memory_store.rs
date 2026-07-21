@@ -167,20 +167,20 @@ impl ThreadStore for InMemoryThreadStore {
         // entry applies or none do.
         let mut guard = self.store.write().await;
         for entry in &entries {
-            if guard.terminal_states.contains_key(&entry.thread_id) {
-                return Err(ThreadStoreError::Archived(entry.thread_id.clone()));
+            if guard.terminal_states.contains_key(entry.thread_id()) {
+                return Err(ThreadStoreError::Archived(entry.thread_id().to_owned()));
             }
-            if !entry.create_if_missing && !guard.records.contains_key(&entry.thread_id) {
-                return Err(ThreadStoreError::NotFound(entry.thread_id.clone()));
+            if !entry.create_if_missing() && !guard.records.contains_key(entry.thread_id()) {
+                return Err(ThreadStoreError::NotFound(entry.thread_id().to_owned()));
             }
         }
         for entry in entries {
+            let (thread_id, fields, _) = entry.into_parts();
             let record = guard
                 .records
-                .entry(entry.thread_id)
+                .entry(thread_id)
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            if let (Some(existing), Some(new_fields)) =
-                (record.as_object_mut(), entry.fields.as_object())
+            if let (Some(existing), Some(new_fields)) = (record.as_object_mut(), fields.as_object())
             {
                 for (k, v) in new_fields {
                     existing.insert(k.clone(), v.clone());
