@@ -95,6 +95,11 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
         .unwrap_or("New Thread")
         .to_owned();
     let workspace_dir = workspace_dir_from_value(data);
+    let workspace_membership = crate::workspace_mode::thread_workspace_membership_from_record(
+        thread_id,
+        workspace_dir.as_deref(),
+        data,
+    );
     let thread_type = thread_summary_type_from_record(data);
     let provider_type = data
         .get("provider_type")
@@ -140,6 +145,8 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
         thread_id: thread_id.to_owned(),
         title,
         workspace_dir,
+        root_workspace_path: workspace_membership.root_workspace_path,
+        workspace_origin: Some(workspace_membership.workspace_origin),
         thread_type,
         provider_type,
         agent_id,

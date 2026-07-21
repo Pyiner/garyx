@@ -3932,6 +3932,8 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
             thread_id: "thread::snapshot-recent".to_owned(),
             title: "Snapshot Recent".to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: "chat".to_owned(),
             provider_type: None,
             agent_id: None,
@@ -5163,6 +5165,11 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     assert_eq!(payload["threads"][1]["thread_id"], "thread::recent-running");
     assert_eq!(payload["threads"][1]["title"], "Recent Running");
     assert_eq!(payload["threads"][1]["workspace_dir"], "/work/test-running");
+    assert_eq!(
+        payload["threads"][1]["root_workspace_path"], "/work/test-running",
+        "Recent rows must carry the same explicit workspace membership as Summary rows"
+    );
+    assert_eq!(payload["threads"][1]["workspace_origin"], "explicit");
     assert_eq!(payload["threads"][1]["provider_type"], "codex");
     assert_eq!(payload["threads"][1]["agent_id"], "agent::running");
     assert_eq!(payload["threads"][1]["message_count"], 4);
@@ -5182,6 +5189,8 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     );
     assert_eq!(payload["threads"][2]["recent_run_id"], "run::older");
     assert_eq!(payload["threads"][2]["run_state"], "completed");
+    assert_eq!(payload["threads"][0]["root_workspace_path"], Value::Null);
+    assert_eq!(payload["threads"][0]["workspace_origin"], "implicit");
     let sequences = payload["threads"]
         .as_array()
         .unwrap()
@@ -5233,6 +5242,8 @@ async fn recent_threads_route_reads_persistent_projection_without_router_resync(
             thread_id: thread_id.to_owned(),
             title: "Projected Thread Title".to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: "chat".to_owned(),
             provider_type: None,
             agent_id: None,
@@ -5273,6 +5284,8 @@ async fn recent_threads_route_defaults_to_thirty_threads() {
                 thread_id: thread_id.clone(),
                 title: format!("Recent Default Limit {index:02}"),
                 workspace_dir: Some("/workspace/test".to_owned()),
+                root_workspace_path: Some("/workspace/test".to_owned()),
+                workspace_origin: Some("explicit".to_owned()),
                 thread_type: "chat".to_owned(),
                 provider_type: None,
                 agent_id: None,
@@ -5325,6 +5338,8 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
                 thread_id: thread_id.to_owned(),
                 title: format!("Title for {thread_id}"),
                 workspace_dir: Some("/workspace/test".to_owned()),
+                root_workspace_path: Some("/workspace/test".to_owned()),
+                workspace_origin: Some("explicit".to_owned()),
                 thread_type: thread_type.to_owned(),
                 provider_type: Some("codex".to_owned()),
                 agent_id: Some("test-agent".to_owned()),
@@ -5619,6 +5634,8 @@ async fn recent_threads_tasks_exclude_never_scans_thread_store() {
                 thread_id: thread_id.to_owned(),
                 title: format!("Title for {thread_id}"),
                 workspace_dir: Some("/workspace/test".to_owned()),
+                root_workspace_path: Some("/workspace/test".to_owned()),
+                workspace_origin: Some("explicit".to_owned()),
                 thread_type: thread_type.to_owned(),
                 provider_type: None,
                 agent_id: None,
@@ -5756,6 +5773,8 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
             thread_id: thread_id.to_owned(),
             title: "Delete Recent Route".to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: "chat".to_owned(),
             provider_type: None,
             agent_id: None,
@@ -6691,6 +6710,8 @@ async fn thread_summary_routes_include_runtime_summary() {
             thread_id: thread_id.to_owned(),
             title: "Runtime summary routes".to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: "chat".to_owned(),
             provider_type: Some("codex_app_server".to_owned()),
             agent_id: Some("codex".to_owned()),

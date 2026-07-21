@@ -19,6 +19,11 @@ pub(crate) const THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_NAME: &str =
 
 pub(super) const THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION: i64 = 1;
 
+pub(crate) const RECENT_THREAD_WORKSPACE_MEMBERSHIP_MIGRATION_NAME: &str =
+    "recent_thread_workspace_membership_v1";
+
+pub(super) const RECENT_THREAD_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION: i64 = 1;
+
 pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thread_kind_v1";
 
 pub(super) const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
@@ -289,6 +294,8 @@ pub(super) fn insert_recent_membership_placeholder_tx(
     let last_active_at = normalize_required("last_active_at", &draft.last_active_at)?;
     let title = draft.title.trim().to_owned();
     let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
+    let root_workspace_path = normalize_optional(draft.root_workspace_path.as_deref());
+    let workspace_origin = normalize_optional(draft.workspace_origin.as_deref());
     let provider_type = normalize_optional(draft.provider_type.as_deref());
     let agent_id = normalize_optional(draft.agent_id.as_deref());
     let last_message_preview = draft.last_message_preview.trim().to_owned();
@@ -297,14 +304,19 @@ pub(super) fn insert_recent_membership_placeholder_tx(
     let updated_at = normalize_optional(draft.updated_at.as_deref());
     let inserted = tx.execute(
         "INSERT INTO recent_threads (
-            thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+            thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+            thread_type, provider_type, agent_id,
             message_count, last_message_preview, recent_run_id, active_run_id, run_state,
             updated_at, last_active_at, activity_seq, recorded_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14)",
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16
+         )",
         params![
             thread_id,
             title,
             workspace_dir,
+            root_workspace_path,
+            workspace_origin,
             thread_type,
             provider_type,
             agent_id,
@@ -677,6 +689,7 @@ impl GaryxDbService {
         self.migrate_thread_meta_schema_v2()?;
         self.migrate_thread_preview_user_first_v1()?;
         self.migrate_thread_meta_workspace_membership_v1()?;
+        self.migrate_recent_thread_workspace_membership_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         self.migrate_dispatch_admission_ledger_v1()?;
         self.recover_stale_dispatch_admissions()?;
@@ -1723,6 +1736,100 @@ impl GaryxDbService {
             &tx,
             THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_NAME,
             THREAD_META_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
+    }
+
+    /// Backfill the Recent projection with the same presentation-safe
+    /// workspace membership derived by normal canonical-record writes. Legacy
+    /// orphan/corrupt projection rows stay prefix-free and do not block boot;
+    /// their next valid canonical write repairs them.
+    pub(crate) fn migrate_recent_thread_workspace_membership_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            RECENT_THREAD_WORKSPACE_MEMBERSHIP_MIGRATION_NAME,
+            RECENT_THREAD_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION,
+        )?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_rows = {
+            let mut stmt = tx.prepare(
+                "SELECT recent.thread_id, record.body
+                   FROM recent_threads AS recent
+                   LEFT JOIN thread_records AS record ON record.key = recent.thread_id
+                  ORDER BY recent.thread_id ASC",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let source_row_count = i64::try_from(source_rows.len()).unwrap_or(i64::MAX);
+
+        let mut updated_row_count = 0usize;
+        for (thread_id, body) in source_rows {
+            let Some(body) = body else {
+                tracing::warn!(
+                    thread_id,
+                    "recent workspace-membership cutover skipped orphan projection"
+                );
+                continue;
+            };
+            let data: Value = match serde_json::from_str(&body) {
+                Ok(data) => data,
+                Err(error) => {
+                    tracing::warn!(
+                        thread_id,
+                        error = %error,
+                        "recent workspace-membership cutover skipped invalid record"
+                    );
+                    continue;
+                }
+            };
+            let workspace_dir = garyx_router::workspace_dir_from_value(&data);
+            let membership = crate::workspace_mode::thread_workspace_membership_from_record(
+                &thread_id,
+                workspace_dir.as_deref(),
+                &data,
+            );
+            updated_row_count += tx.execute(
+                "UPDATE recent_threads
+                    SET root_workspace_path = ?2, workspace_origin = ?3
+                  WHERE thread_id = ?1
+                    AND (
+                        root_workspace_path IS NOT ?2
+                        OR workspace_origin IS NOT ?3
+                    )",
+                params![
+                    thread_id,
+                    membership.root_workspace_path,
+                    membership.workspace_origin,
+                ],
+            )?;
+        }
+        record_projection_state_tx(
+            &tx,
+            RECENT_THREAD_WORKSPACE_MEMBERSHIP_MIGRATION_NAME,
+            RECENT_THREAD_WORKSPACE_MEMBERSHIP_MIGRATION_VERSION,
             source_row_count,
             Some(import_generation),
         )?;

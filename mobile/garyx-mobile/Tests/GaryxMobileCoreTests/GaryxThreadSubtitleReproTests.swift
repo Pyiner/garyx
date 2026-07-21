@@ -48,6 +48,82 @@ final class GaryxThreadSubtitleReproTests: XCTestCase {
         )
     }
 
+    func testExplicitWorkspacePrefixMatchesAcrossProductionRecentAndSummaryShapes() throws {
+        let recentPage = try JSONDecoder().decode(
+            GaryxRecentThreadsPage.self,
+            from: Data(
+                #"""
+                {
+                  "store_incarnation_id": "store-test",
+                  "server_boot_id": "boot-test",
+                  "threads": [{
+                    "thread_id": "thread::explicit-workspace",
+                    "title": "Explicit workspace",
+                    "workspace_dir": "/Users/test/workspaces/project-alpha",
+                    "root_workspace_path": "/Users/test/workspaces/project-alpha",
+                    "workspace_origin": "explicit",
+                    "thread_type": "chat",
+                    "message_count": 2,
+                    "last_message_preview": "Latest user sentence",
+                    "run_state": "completed",
+                    "updated_at": "2026-07-22T00:00:00Z",
+                    "last_active_at": "2026-07-22T00:00:00Z",
+                    "activity_seq": 42,
+                    "recorded_at": "2026-07-22T00:00:00Z"
+                  }],
+                  "count": 1,
+                  "limit": 30,
+                  "total": 1,
+                  "has_more": false,
+                  "next_cursor": null
+                }
+                """#.utf8
+            )
+        )
+        let summaryPage = try JSONDecoder().decode(
+            GaryxThreadSummariesPage.self,
+            from: Data(
+                #"""
+                {
+                  "store_incarnation_id": "store-test",
+                  "server_boot_id": "boot-test",
+                  "threads": [{
+                    "thread_id": "thread::explicit-workspace",
+                    "title": "Explicit workspace",
+                    "workspace_dir": "/Users/test/workspaces/project-alpha",
+                    "root_workspace_path": "/Users/test/workspaces/project-alpha",
+                    "workspace_origin": "explicit",
+                    "thread_type": "chat",
+                    "message_count": 2,
+                    "last_user_message": "Latest user sentence",
+                    "last_assistant_message": "Assistant answer",
+                    "last_message_preview": "Latest user sentence",
+                    "updated_at": "2026-07-22T00:00:00Z"
+                  }],
+                  "has_more": false,
+                  "next_cursor": null
+                }
+                """#.utf8
+            )
+        )
+        let recent = try XCTUnwrap(recentPage.threads.first)
+        let summary = try XCTUnwrap(summaryPage.threads.first)
+        let cache = GaryxThreadSummaryCache()
+
+        cache.writeThrough([recent])
+        let afterRecent = try XCTUnwrap(cache.summary(for: recent.id))
+        cache.writeThrough([summary])
+        let afterSummary = try XCTUnwrap(cache.summary(for: recent.id))
+        cache.writeThrough([recent])
+        let afterNextRecent = try XCTUnwrap(cache.summary(for: recent.id))
+
+        XCTAssertEqual(
+            [afterRecent, afterSummary, afterNextRecent].map(subtitle),
+            Array(repeating: "project-alpha · Latest user sentence", count: 3),
+            "equal-freshness route responses must preserve an explicit workspace prefix"
+        )
+    }
+
     private func subtitle(for thread: GaryxThreadSummary) -> String? {
         GaryxSidebarThreadRowPresentation(
             thread: thread,

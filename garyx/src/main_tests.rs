@@ -2503,6 +2503,8 @@ async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind(
                     thread_id: thread_id.to_owned(),
                     title: "Startup orphan".to_owned(),
                     workspace_dir: None,
+                    root_workspace_path: None,
+                    workspace_origin: None,
                     thread_type: "chat".to_owned(),
                     provider_type: None,
                     agent_id: None,

@@ -50,6 +50,12 @@ fn app_state_builder_without_boot_import_uses_generation_zero_cutover_gate() {
     );
     assert!(
         garyx_db
+            .migrate_recent_thread_workspace_membership_v1()
+            .unwrap()
+            .already_completed
+    );
+    assert!(
+        garyx_db
             .migrate_endpoint_holder_dedup_v1()
             .unwrap()
             .already_completed
@@ -664,6 +670,8 @@ async fn read_side_warmup_does_not_run_destructive_orphan_cleanup() {
             thread_id: "thread::cold-running".to_owned(),
             title: "Cold Running".to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: "chat".to_owned(),
             provider_type: None,
             agent_id: None,

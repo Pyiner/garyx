@@ -1215,6 +1215,35 @@ async fn test_save_streaming_partial_commits_user_row_without_inflight_content_t
     );
 }
 
+#[test]
+fn test_streaming_preview_never_advances_past_committed_record_prefix() {
+    let authoritative = vec![
+        RunTranscriptRecordDraft::from_message(json!({
+            "role": "user",
+            "content": "first committed question"
+        })),
+        RunTranscriptRecordDraft::from_message(json!({
+            "type": "run_control",
+            "event": "turn_boundary"
+        })),
+        RunTranscriptRecordDraft::from_message(json!({
+            "role": "user",
+            "content": "second uncommitted question"
+        })),
+    ];
+
+    assert_eq!(
+        last_committed_user_preview(&authoritative, 2).as_deref(),
+        Some("first committed question"),
+        "an append failure must not publish a later finalized user row"
+    );
+    assert_eq!(
+        last_committed_user_preview(&authoritative, authoritative.len()).as_deref(),
+        Some("second uncommitted question"),
+        "the preview may advance after the later row commits"
+    );
+}
+
 /// #TASK-1715 guard: a result-time `AssistantSegment` boundary finalizes and
 /// commits the in-flight answer immediately (before Done), and text arriving
 /// during the post-result drain window lands as a NEW committed row afterwards

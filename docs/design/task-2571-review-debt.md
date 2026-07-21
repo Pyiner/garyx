@@ -6,16 +6,15 @@ them.
 
 ## From #TASK-2583 adversarial review of #TASK-2580 (round 1, 2026-07-22)
 
-1. **`recent_threads` projection lacks workspace-membership columns.**
+1. **Resolved by #TASK-2580 round 2: `recent_threads` projection lacked
+   workspace-membership columns.**
    `/api/thread-summaries` projects `root_workspace_path` and
    `workspace_origin`, but `RecentThreadRecord`
    (`garyx-gateway/src/garyx_db/recent.rs`) and the `/api/recent-threads`
-   payload do not. Any client display rule keyed on workspace origin can
-   therefore not be applied uniformly to Recent-route rows. The D3 subtitle
-   blocker reported in the round-1 review is the changed-path symptom; this
-   entry tracks the underlying projection gap that a root-cause fix likely
-   needs (add the columns and their write-path derivation, per the
-   projection contract).
+   payload did not. Round 2 added both columns, shared their canonical-record
+   derivation with `thread_meta`, and added a versioned startup cutover for
+   existing Recent rows. This item remains here as the review record; it no
+   longer needs an independent follow-up.
 
 2. **`thread_preview_user_first_v1` hard-fails boot on legacy orphans.**
    The cutover aborts startup (`GaryxDbError::Configuration`) if a

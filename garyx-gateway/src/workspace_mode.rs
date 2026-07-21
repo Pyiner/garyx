@@ -3,6 +3,12 @@ use std::path::PathBuf;
 use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::gary_home_dir;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ThreadWorkspaceMembership {
+    pub(crate) root_workspace_path: Option<String>,
+    pub(crate) workspace_origin: String,
+}
+
 pub(crate) fn worktree_base_dir_for_config(config: &GaryxConfig) -> PathBuf {
     config
         .sessions
@@ -125,7 +131,7 @@ pub(crate) fn fork_inherited_workspace_origin(
 /// their chosen directory, worktree threads map back to the worktree's
 /// source workspace, implicit threads map to None. This Rust function is
 /// the only derivation — the projection writes its result into the plain
-/// `thread_meta.root_workspace_path` column in the same transaction.
+/// list-projection membership columns in the same transaction.
 pub(crate) fn thread_root_workspace_path(
     origin: &str,
     workspace_dir: Option<&str>,
@@ -142,6 +148,29 @@ pub(crate) fn thread_root_workspace_path(
     source
         .map(ToOwned::to_owned)
         .or_else(|| workspace_dir.map(str::trim).map(ToOwned::to_owned))
+}
+
+/// Project the presentation-safe workspace membership shared by Recent and
+/// Summary from one canonical thread record.
+pub(crate) fn thread_workspace_membership_from_record(
+    thread_id: &str,
+    workspace_dir: Option<&str>,
+    data: &serde_json::Value,
+) -> ThreadWorkspaceMembership {
+    let recorded_origin = data
+        .get("workspace_origin")
+        .and_then(serde_json::Value::as_str);
+    let workspace_origin =
+        effective_workspace_origin(thread_id, workspace_dir, recorded_origin).to_owned();
+    let root_workspace_path = thread_root_workspace_path(
+        &workspace_origin,
+        workspace_dir,
+        data.get("worktree").unwrap_or(&serde_json::Value::Null),
+    );
+    ThreadWorkspaceMembership {
+        root_workspace_path,
+        workspace_origin,
+    }
 }
 
 fn safe_thread_workspace_segment(thread_id: &str) -> String {

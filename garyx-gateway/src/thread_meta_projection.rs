@@ -59,16 +59,10 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     // fall back to inference. Both values are written as plain projected
     // columns in this same transaction — the Rust functions are the only
     // derivation (no SQL twin).
-    let recorded_origin = string_field(data, "workspace_origin");
-    let workspace_origin_value = crate::workspace_mode::effective_workspace_origin(
+    let workspace_membership = crate::workspace_mode::thread_workspace_membership_from_record(
         thread_id,
         workspace_dir.as_deref(),
-        recorded_origin.as_deref(),
-    );
-    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
-        workspace_origin_value,
-        workspace_dir.as_deref(),
-        data.get("worktree").unwrap_or(&Value::Null),
+        data,
     );
     let last_delivery = delivery_context_from_thread_data(data);
     // Runtime-summary columns (list fast path): same extraction as the live
@@ -104,8 +98,8 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         default_list_hidden: is_default_thread_list_hidden(data),
         sort_updated_at_us,
         search_text,
-        root_workspace_path,
-        workspace_origin: Some(workspace_origin_value.to_owned()),
+        root_workspace_path: workspace_membership.root_workspace_path,
+        workspace_origin: Some(workspace_membership.workspace_origin),
     };
     let channel_endpoints = channel_endpoints_from_thread_data(thread_id, data);
     Some(ThreadMetaProjectionDraft {

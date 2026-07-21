@@ -72,6 +72,8 @@ mod tests {
             thread_id: thread_id.to_owned(),
             title: format!("Title for {thread_id}"),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: thread_type.to_owned(),
             provider_type: None,
             agent_id: None,

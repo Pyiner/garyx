@@ -15,6 +15,8 @@ pub struct RecentThreadRecord {
     pub thread_id: String,
     pub title: String,
     pub workspace_dir: Option<String>,
+    pub root_workspace_path: Option<String>,
+    pub workspace_origin: Option<String>,
     pub thread_type: String,
     pub provider_type: Option<String>,
     pub agent_id: Option<String>,
@@ -57,7 +59,8 @@ impl RecentThreadTaskFilter {
     fn page_sql(self) -> &'static str {
         match self {
             Self::Include => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -65,7 +68,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?1 OFFSET ?2"
             }
             Self::Exclude => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -74,7 +78,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?1 OFFSET ?2"
             }
             Self::Only => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -88,7 +93,8 @@ impl RecentThreadTaskFilter {
     fn keyset_page_sql(self, has_cursor: bool) -> &'static str {
         match (self, has_cursor) {
             (Self::Include, false) => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -96,7 +102,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?1"
             }
             (Self::Include, true) => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -105,7 +112,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?2"
             }
             (Self::Exclude, false) => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -114,7 +122,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?1"
             }
             (Self::Exclude, true) => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -123,7 +132,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?2"
             }
             (Self::Only, false) => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -132,7 +142,8 @@ impl RecentThreadTaskFilter {
                   LIMIT ?1"
             }
             (Self::Only, true) => {
-                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                "SELECT thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+                        thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
                         run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
@@ -164,6 +175,8 @@ pub struct RecentThreadDraft {
     pub thread_id: String,
     pub title: String,
     pub workspace_dir: Option<String>,
+    pub root_workspace_path: Option<String>,
+    pub workspace_origin: Option<String>,
     pub thread_type: String,
     pub provider_type: Option<String>,
     pub agent_id: Option<String>,
@@ -223,6 +236,8 @@ pub(super) fn upsert_recent_thread_tx(
     let last_active_at = normalize_required("last_active_at", &draft.last_active_at)?;
     let title = draft.title.trim().to_owned();
     let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
+    let root_workspace_path = normalize_optional(draft.root_workspace_path.as_deref());
+    let workspace_origin = normalize_optional(draft.workspace_origin.as_deref());
     let provider_type = normalize_optional(draft.provider_type.as_deref());
     let agent_id = normalize_optional(draft.agent_id.as_deref());
     let last_message_preview = draft.last_message_preview.trim().to_owned();
@@ -234,14 +249,17 @@ pub(super) fn upsert_recent_thread_tx(
 
     tx.execute(
         "INSERT INTO recent_threads (
-            thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+            thread_id, title, workspace_dir, root_workspace_path, workspace_origin,
+            thread_type, provider_type, agent_id,
             message_count, last_message_preview, recent_run_id, active_run_id, run_state,
             updated_at, last_active_at, activity_seq, recorded_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(thread_id) DO UPDATE SET
             title = excluded.title,
             workspace_dir = excluded.workspace_dir,
+            root_workspace_path = excluded.root_workspace_path,
+            workspace_origin = excluded.workspace_origin,
             thread_type = excluded.thread_type,
             provider_type = excluded.provider_type,
             agent_id = excluded.agent_id,
@@ -258,6 +276,8 @@ pub(super) fn upsert_recent_thread_tx(
             thread_id,
             title,
             workspace_dir,
+            root_workspace_path,
+            workspace_origin,
             thread_type,
             provider_type,
             agent_id,
@@ -277,6 +297,8 @@ pub(super) fn upsert_recent_thread_tx(
         thread_id,
         title,
         workspace_dir,
+        root_workspace_path,
+        workspace_origin,
         thread_type,
         provider_type,
         agent_id,
@@ -333,18 +355,20 @@ pub(super) fn recent_thread_record_from_row(
         thread_id: row.get(0)?,
         title: row.get(1)?,
         workspace_dir: row.get(2)?,
-        thread_type: row.get(3)?,
-        provider_type: row.get(4)?,
-        agent_id: row.get(5)?,
-        message_count: row.get(6)?,
-        last_message_preview: row.get(7)?,
-        recent_run_id: row.get(8)?,
-        active_run_id: row.get(9)?,
-        run_state: row.get(10)?,
-        updated_at: row.get(11)?,
-        last_active_at: row.get(12)?,
-        activity_seq: row.get(13)?,
-        recorded_at: row.get(14)?,
+        root_workspace_path: row.get(3)?,
+        workspace_origin: row.get(4)?,
+        thread_type: row.get(5)?,
+        provider_type: row.get(6)?,
+        agent_id: row.get(7)?,
+        message_count: row.get(8)?,
+        last_message_preview: row.get(9)?,
+        recent_run_id: row.get(10)?,
+        active_run_id: row.get(11)?,
+        run_state: row.get(12)?,
+        updated_at: row.get(13)?,
+        last_active_at: row.get(14)?,
+        activity_seq: row.get(15)?,
+        recorded_at: row.get(16)?,
     })
 }
 

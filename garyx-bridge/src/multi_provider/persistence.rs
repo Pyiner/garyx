@@ -1139,6 +1139,18 @@ fn build_run_record_drafts(
     drafts
 }
 
+fn last_committed_user_preview(
+    authoritative: &[RunTranscriptRecordDraft],
+    committed_len: usize,
+) -> Option<String> {
+    garyx_models::message_preview::last_message_preview_for_role(
+        authoritative[..committed_len.min(authoritative.len())]
+            .iter()
+            .map(|draft| &draft.message),
+        "user",
+    )
+}
+
 /// Run metadata that exists only to configure the provider runtime and must
 /// never be persisted into transcript records or queued pending inputs.
 ///
@@ -1229,10 +1241,6 @@ pub(super) async fn save_streaming_partial(
                 != Some(true)
         })
         .collect();
-    let committed_user_preview = garyx_models::message_preview::last_message_preview_for_role(
-        authoritative_content.iter(),
-        "user",
-    );
     let content_count = authoritative_content.len();
     let authoritative = build_run_record_drafts(
         authoritative_content,
@@ -1306,13 +1314,10 @@ pub(super) async fn save_streaming_partial(
     );
 
     if let Some(obj) = session_data.as_object_mut() {
-        // The synthesized user row is part of the first streaming transcript
-        // append. Once that append has committed, publish its preview in this
-        // same canonical-record patch so the SQLite list projections derive it
-        // atomically instead of waiting for terminal persistence.
-        if appended > 0
-            && let Some(preview) = committed_user_preview
-        {
+        // Publish only from the authoritative prefix known to be committed.
+        // A later user row can already be finalized while its append fails;
+        // reading the full finalized set here would expose that uncommitted row.
+        if let Some(preview) = last_committed_user_preview(&authoritative, appended) {
             obj.insert(
                 garyx_models::message_preview::LAST_USER_PREVIEW_FIELD.to_owned(),
                 Value::String(preview),
