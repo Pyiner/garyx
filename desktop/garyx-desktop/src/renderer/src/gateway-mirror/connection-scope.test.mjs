@@ -573,7 +573,13 @@ test("a background refresh never unsettles a pending foreground owner", async ()
   // Foreground load in flight; a focus revalidation arrives.
   const fg = mirror.refreshAgentCatalog();
   assert.equal(mirror.getCatalogSnapshot().phase, "loading");
-  const bg = await mirror.refreshAgentCatalog({ background: true });
+  // Deadline race: a regression that makes the background call join (or
+  // cancel) the pending foreground request must FAIL fast, not hang the
+  // suite until the runner cancels it.
+  const bg = await Promise.race([
+    mirror.refreshAgentCatalog({ background: true }),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 250)),
+  ]);
   assert.equal(bg, true, "background coalesces while foreground is pending");
   assert.equal(calls, 1, "no second request is issued");
 
