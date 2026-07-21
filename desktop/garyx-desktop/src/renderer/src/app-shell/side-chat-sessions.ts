@@ -93,8 +93,9 @@ export interface SideChatSessionsSnapshot {
 }
 
 export class SideChatSessions {
-  /** Normalized gateway URL partitioning the persisted bindings. */
-  gatewayScope = "";
+  /** Normalized gateway URL partitioning the persisted bindings. Written
+   *  only through {@link setGatewayScope}. */
+  private gatewayScopeValue = "";
   private threadBySource: Record<string, string> = {};
   private composerBySource: Record<string, SideComposerDraft> = {};
   private creatingBySource: Record<string, boolean> = {};
@@ -177,6 +178,33 @@ export class SideChatSessions {
       : null;
   }
 
+  get gatewayScope(): string {
+    return this.gatewayScopeValue;
+  }
+
+  /**
+   * Formal scope transition. In-memory bindings, drafts, in-flight
+   * creation promises, errors, and the shadow refs are all owned by ONE
+   * gateway scope — thread ids are only unique per gateway, so switching
+   * gateways clears the whole domain and publishes a fresh snapshot.
+   * Late async completions from the previous scope compare against this
+   * value and become no-ops.
+   */
+  setGatewayScope(scope: string): void {
+    if (this.gatewayScopeValue === scope) {
+      return;
+    }
+    this.gatewayScopeValue = scope;
+    this.threadBySource = {};
+    this.composerBySource = {};
+    this.creatingBySource = {};
+    this.errorBySource = {};
+    this.creationPromiseBySource = {};
+    this.sideChatThreadIdRef.current = null;
+    this.sideChatThreadIdsRef.current = new Set();
+    this.commit();
+  }
+
   /** Bind a side thread to a source thread (+ sessionStorage write). */
   rememberThread(sourceThreadId: string, sideThreadId: string): void {
     if (this.threadBySource[sourceThreadId] === sideThreadId) {
@@ -186,7 +214,7 @@ export class SideChatSessions {
       ...this.threadBySource,
       [sourceThreadId]: sideThreadId,
     };
-    persistSideChatThreadId(this.gatewayScope, sourceThreadId, sideThreadId);
+    persistSideChatThreadId(this.gatewayScopeValue, sourceThreadId, sideThreadId);
     this.syncShadows();
     this.commit();
   }
@@ -201,7 +229,7 @@ export class SideChatSessions {
       return existing;
     }
     const persisted = readPersistedSideChatThreadId(
-      this.gatewayScope,
+      this.gatewayScopeValue,
       sourceThreadId,
     );
     if (!persisted) {

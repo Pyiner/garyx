@@ -16,6 +16,10 @@ const appShellSource = readFileSync(
   'utf8',
 );
 const hiddenStoreSource = readFileSync(
+  new URL('../../main/hidden-session-store-core.ts', import.meta.url),
+  'utf8',
+);
+const hiddenStoreBindingSource = readFileSync(
   new URL('../../main/hidden-session-store.ts', import.meta.url),
   'utf8',
 );
@@ -41,10 +45,19 @@ test('hidden-session retention is wired at every sessions write point', () => {
 test('hidden sessions have one dedicated scoped owner', () => {
   // Its own file + serialized mutations: the main state file's many
   // independent writers can never race this domain.
-  assert.match(hiddenStoreSource, /garyx-hidden-sessions\.json/);
+  assert.match(hiddenStoreBindingSource, /garyx-hidden-sessions\.json/);
+  // Single-flight initialization: concurrent loads share one read and the
+  // cache installs exactly once (a late duplicate read cannot clobber a
+  // cache that mutations have already advanced).
+  assert.match(hiddenStoreSource, /cachedPartitions \?\?= partitions;/);
   assert.match(
     hiddenStoreSource,
     /let mutationChain: Promise<void> = Promise\.resolve\(\);/,
+  );
+  assert.match(
+    hiddenStoreSource,
+    /const run = mutationChain\.then\(/,
+    'mutations chain on the shared owner, not detached promises',
   );
   assert.match(
     hiddenStoreSource,

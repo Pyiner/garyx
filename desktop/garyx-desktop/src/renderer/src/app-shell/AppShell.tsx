@@ -2851,8 +2851,11 @@ export function AppShell() {
   // busy state (a stale mutation's own cleanup is epoch-guarded and must
   // not touch the new epoch's state).
   const workspaceGatewayKey = desktopState?.entitiesGatewayUrl || "";
-  // Side-chat bindings are gateway-partitioned in sessionStorage.
-  sideChatSessions.gatewayScope = workspaceGatewayKey;
+  // Side-chat state is gateway-scoped: the formal transition clears the
+  // in-memory domain and republishes when the gateway changes.
+  useEffect(() => {
+    sideChatSessions.setGatewayScope(workspaceGatewayKey);
+  }, [sideChatSessions, workspaceGatewayKey]);
   const workspaceGatewayKeyRef = useRef(workspaceGatewayKey);
   const workspaceEpochCounterRef = useRef(0);
   const [workspaceEpoch, setWorkspaceEpoch] = useState("g0");

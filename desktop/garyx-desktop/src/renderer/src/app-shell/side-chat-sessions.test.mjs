@@ -52,7 +52,7 @@ test("snapshot is cached by reference and rebuilt only after writes", () => {
 
 test("rememberThread persists to sessionStorage; restorePersisted reads through", () => {
   const store = new SideChatSessions();
-  store.gatewayScope = "http://gateway-a";
+  store.setGatewayScope("http://gateway-a");
   store.rememberThread(SOURCE, SIDE);
   // Bindings are gateway-partitioned: thread ids are only unique per
   // gateway, so the storage key carries the scope.
@@ -63,7 +63,7 @@ test("rememberThread persists to sessionStorage; restorePersisted reads through"
 
   // A fresh store on the SAME gateway adopts the persisted binding.
   const fresh = new SideChatSessions();
-  fresh.gatewayScope = "http://gateway-a";
+  fresh.setGatewayScope("http://gateway-a");
   assert.equal(fresh.threadFor(SOURCE), null);
   assert.equal(fresh.restorePersisted(SOURCE), SIDE);
   assert.equal(fresh.threadFor(SOURCE), SIDE);
@@ -72,13 +72,13 @@ test("rememberThread persists to sessionStorage; restorePersisted reads through"
 
   // A different gateway never adopts gateway A's binding.
   const otherGateway = new SideChatSessions();
-  otherGateway.gatewayScope = "http://gateway-b";
+  otherGateway.setGatewayScope("http://gateway-b");
   assert.equal(otherGateway.restorePersisted(SOURCE), null);
 });
 
 test("forgetThread drops only the expected binding and keeps storage", () => {
   const store = new SideChatSessions();
-  store.gatewayScope = "http://gateway-a";
+  store.setGatewayScope("http://gateway-a");
   store.rememberThread(SOURCE, SIDE);
   store.forgetThread(SOURCE, "thread::other");
   assert.equal(store.threadFor(SOURCE), SIDE, "mismatched id is a no-op");
@@ -89,6 +89,27 @@ test("forgetThread drops only the expected binding and keeps storage", () => {
     SIDE,
     "storage entry stays (legacy catch only cleared memory)",
   );
+});
+
+test("a live gateway switch clears the scope-owned domain", () => {
+  const store = new SideChatSessions();
+  store.setGatewayScope("http://gateway-a");
+  store.rememberThread(SOURCE, SIDE);
+  assert.equal(store.threadFor(SOURCE), SIDE);
+
+  // The SAME instance switches gateways: every in-memory binding is owned
+  // by the previous scope and must clear — thread ids are only unique per
+  // gateway, so neither threadFor nor restorePersisted may answer with the
+  // previous gateway's child.
+  store.setGatewayScope("http://gateway-b");
+  assert.equal(store.threadFor(SOURCE), null);
+  assert.equal(store.restorePersisted(SOURCE), null);
+  assert.equal(store.sideChatThreadIdRef.current, null);
+  assert.equal(store.sideChatThreadIdsRef.current.size, 0);
+
+  // Switching back to A adopts A's persisted binding again.
+  store.setGatewayScope("http://gateway-a");
+  assert.equal(store.restorePersisted(SOURCE), SIDE);
 });
 
 test("shadow refs track bindings and the active source", () => {

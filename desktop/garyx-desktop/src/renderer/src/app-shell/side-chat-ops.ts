@@ -82,6 +82,10 @@ export async function ensureSideChatThread(
     try {
       const sourceThread =
         threadSummaryById.get(sourceThreadId) || activeThread || null;
+      // Everything below is scoped to the gateway this creation started
+      // on; if the gateway changed while the request was in flight, every
+      // side effect (state commit, mirror seed, bindings) is skipped.
+      const creationScope = sessions.gatewayScope;
       const created = await requestDesktopStateResult(
         () => window.garyxDesktop.createThread({
           title: "Side chat",
@@ -95,6 +99,12 @@ export async function ensureSideChatThread(
         }),
         (response) => response.state,
       );
+      if (sessions.gatewayScope !== creationScope) {
+        // A late completion from a previous gateway: the child exists on
+        // that gateway (its hidden-session partition retains it), but no
+        // side effect may leak into the newly selected gateway's scope.
+        return null;
+      }
       // The main-process snapshot already carries every retained hidden
       // session for the current scope (the dedicated hidden-session store
       // folds them in), so it is committed AS-IS: spreading it would strip
