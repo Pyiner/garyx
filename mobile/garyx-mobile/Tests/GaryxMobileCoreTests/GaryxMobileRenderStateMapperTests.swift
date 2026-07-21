@@ -255,7 +255,13 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
                   "id": "seq:3",
                   "seq": 3,
                   "role": "user",
-                  "presentation": "task_notification"
+                  "presentation": {
+                    "kind": "task_notification",
+                    "event": "ready_for_review",
+                    "status": "in_review",
+                    "task_id": "#TASK-42",
+                    "title": "Test review"
+                  }
                 },
                 "activity": [
                   {
@@ -304,7 +310,15 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         let row = try XCTUnwrap(rows.only)
         XCTAssertEqual(row.id, "user_turn:seq:3")
         XCTAssertTrue(row.userBlock?.message.text.contains("Test review") == true)
-        XCTAssertEqual(row.userBlock?.message.renderPresentation, .taskNotification)
+        XCTAssertEqual(
+            row.userBlock?.message.renderPresentation,
+            .taskNotification(
+                event: "ready_for_review",
+                status: "in_review",
+                taskId: "#TASK-42",
+                title: "Test review"
+            )
+        )
         guard case let .flat(reply) = try XCTUnwrap(row.activityRows.only) else {
             return XCTFail("the task notification should have one ordinary assistant reply")
         }
@@ -332,6 +346,127 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         """#)
 
         XCTAssertTrue(row.capsuleCards.isEmpty)
+    }
+
+    func testUnknownPresentationKindDegradesOnlyTheMessageHint() throws {
+        let row = try decodeRenderUserTurnRow(#"""
+        {
+          "kind": "user_turn",
+          "id": "turn:future-presentation",
+          "user": {
+            "id": "seq:1",
+            "seq": 1,
+            "role": "user",
+            "presentation": {
+              "kind": "future_card",
+              "event": "future_event",
+              "status": "future_status",
+              "task_id": "#TASK-1",
+              "title": "Future title"
+            }
+          },
+          "activity": [],
+          "started_at": null,
+          "finished_at": null
+        }
+        """#)
+
+        let ref = try XCTUnwrap(row.user)
+        XCTAssertEqual(ref.id, "seq:1")
+        XCTAssertNil(ref.presentation)
+
+        let mapped = GaryxMobileRenderStateMapper.rows(
+            snapshot: GaryxRenderSnapshot(
+                basedOnSeq: 1,
+                rows: [.userTurn(row)],
+                tailActivity: .none,
+                activeToolGroupId: nil,
+                progressLocus: .none,
+                filteredPlaceholders: []
+            ),
+            messages: [mobileMessage(index: 0, role: .user, text: "ordinary body")],
+            transcriptMessages: []
+        )
+        XCTAssertNil(mapped.only?.userBlock?.message.renderPresentation)
+    }
+
+    func testFrozenOldIOSFullSnapshotDropsRowWithObjectPresentation() throws {
+        let frame = try JSONDecoder().decode(
+            FrozenStringPresentationFrame.self,
+            from: Data(#"""
+            {
+              "type": "thread_render_frame",
+              "thread_id": "thread::old-ios-full",
+              "render_state": {
+                "based_on_seq": 2,
+                "rows": [
+                  {
+                    "kind": "user_turn",
+                    "id": "turn:task-notification",
+                    "user": {
+                      "id": "seq:1",
+                      "seq": 1,
+                      "role": "user",
+                      "presentation": {
+                        "kind": "task_notification",
+                        "event": "ready_for_review",
+                        "status": "in_review",
+                        "task_id": "#TASK-42",
+                        "title": "Review fixture"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "user_turn",
+                    "id": "turn:ordinary",
+                    "user": { "id": "seq:2", "seq": 2, "role": "user" }
+                  }
+                ]
+              }
+            }
+            """#.utf8)
+        )
+
+        XCTAssertEqual(frame.renderState?.rows.map(\.id), ["turn:ordinary"])
+    }
+
+    func testFrozenOldIOSDeltaWithObjectPresentationTakesGapReplayPath() throws {
+        let frame = try JSONDecoder().decode(
+            FrozenStringPresentationFrame.self,
+            from: Data(#"""
+            {
+              "type": "thread_render_frame",
+              "thread_id": "thread::old-ios-delta",
+              "render_delta": {
+                "from_seq": 1,
+                "from_rows_hash": "11",
+                "based_on_seq": 2,
+                "rows_hash": "22",
+                "row_order": ["turn:task-notification"],
+                "upsert_rows": [
+                  {
+                    "kind": "user_turn",
+                    "id": "turn:task-notification",
+                    "user": {
+                      "id": "seq:2",
+                      "seq": 2,
+                      "role": "user",
+                      "presentation": {
+                        "kind": "task_notification",
+                        "event": "ready_for_review",
+                        "status": "in_review",
+                        "task_id": "#TASK-42",
+                        "title": "Review fixture"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+            """#.utf8)
+        )
+
+        XCTAssertEqual(frame.deltaResolution, .gapReplay)
     }
 
     func testCapsuleCardsDecodeAndMapAsRenderStatePassthrough() throws {
@@ -2411,6 +2546,104 @@ private struct FrozenPreChangeToolEntry: Decodable {
     let status: String
     let projection: FrozenPreChangeProjection
 }
+
+/// Exact presentation/array strictness of the app immediately before the
+/// structured-presentation cutover. This is validation of the accepted rollout
+/// failure shape, not a compatibility decoder used by the product.
+private struct FrozenStringPresentationFrame: Decodable {
+    let renderState: FrozenStringPresentationSnapshot?
+    let renderDelta: FrozenStringPresentationDeltaPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case renderState = "render_state"
+        case renderDelta = "render_delta"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        renderState = try container.decodeIfPresent(FrozenStringPresentationSnapshot.self, forKey: .renderState)
+        do {
+            renderDelta = try container.decodeIfPresent(
+                FrozenStringPresentationDelta.self,
+                forKey: .renderDelta
+            ).map(FrozenStringPresentationDeltaPayload.delta)
+        } catch is DecodingError {
+            renderDelta = .malformed
+        }
+    }
+
+    var deltaResolution: FrozenStringPresentationDeltaResolution {
+        guard let renderDelta else { return .ignored }
+        guard case .delta = renderDelta else { return .gapReplay }
+        return .applied
+    }
+}
+
+private struct FrozenStringPresentationSnapshot: Decodable {
+    let rows: [FrozenStringPresentationRow]
+
+    enum CodingKeys: String, CodingKey {
+        case rows
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rows = try container.decode(
+            FrozenStringPresentationLossyArray<FrozenStringPresentationRow>.self,
+            forKey: .rows
+        ).elements
+    }
+}
+
+private struct FrozenStringPresentationDelta: Decodable {
+    let upsertRows: [FrozenStringPresentationRow]
+
+    enum CodingKeys: String, CodingKey {
+        case upsertRows = "upsert_rows"
+    }
+}
+
+private enum FrozenStringPresentationDeltaPayload {
+    case delta(FrozenStringPresentationDelta)
+    case malformed
+}
+
+private enum FrozenStringPresentationDeltaResolution: Equatable {
+    case applied
+    case gapReplay
+    case ignored
+}
+
+private struct FrozenStringPresentationRow: Decodable {
+    let id: String
+    let user: FrozenStringPresentationMessageRef
+}
+
+private struct FrozenStringPresentationMessageRef: Decodable {
+    let id: String
+    let seq: Int
+    let role: String
+    let presentation: String?
+}
+
+private struct FrozenStringPresentationLossyArray<Element: Decodable>: Decodable {
+    let elements: [Element]
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var elements: [Element] = []
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                elements.append(element)
+            } else {
+                _ = try? container.decode(FrozenStringPresentationDiscard.self)
+            }
+        }
+        self.elements = elements
+    }
+}
+
+private struct FrozenStringPresentationDiscard: Decodable {}
 
 private struct FrozenPreChangeProjection: Decodable {
     enum Kind: String, Decodable {

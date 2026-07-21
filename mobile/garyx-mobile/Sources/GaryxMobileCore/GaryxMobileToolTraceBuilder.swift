@@ -122,7 +122,7 @@ struct GaryxMessageListSignature: Equatable, Sendable {
             hasher.combine(message.statusText)
             hasher.combine(message.clientIntentId)
             hasher.combine(message.pendingInputId)
-            hasher.combine(message.renderPresentation?.rawValue)
+            hasher.combine(message.renderPresentation)
             hasher.combine(message.attachments.count)
             for attachment in message.attachments {
                 hasher.combine(attachment.id)

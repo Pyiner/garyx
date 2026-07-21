@@ -155,8 +155,26 @@ final class GaryxPreparedSelectedThreadTranscriptUpdateTests: XCTestCase {
         XCTAssertNotEqual(base, GaryxMessageListSignature.make(for: [withStatus]))
 
         var withTaskPresentation = mobileMessage("user-1", role: .user, text: "hello")
-        withTaskPresentation.renderPresentation = .taskNotification
+        withTaskPresentation.renderPresentation = .taskNotification(
+            event: "ready_for_review",
+            status: "in_review",
+            taskId: "#TASK-1",
+            title: "First title"
+        )
         XCTAssertNotEqual(base, GaryxMessageListSignature.make(for: [withTaskPresentation]))
+
+        var changedTaskPresentation = withTaskPresentation
+        changedTaskPresentation.renderPresentation = .taskNotification(
+            event: "ready_for_review",
+            status: "needs_changes",
+            taskId: "#TASK-1",
+            title: "Changed title"
+        )
+        XCTAssertNotEqual(
+            GaryxMessageListSignature.make(for: [withTaskPresentation]),
+            GaryxMessageListSignature.make(for: [changedTaskPresentation]),
+            "every presentation field participates in the message signature"
+        )
 
         var withAttachment = mobileMessage("user-1", role: .user, text: "hello")
         withAttachment.attachments = [

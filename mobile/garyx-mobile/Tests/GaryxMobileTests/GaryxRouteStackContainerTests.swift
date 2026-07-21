@@ -188,51 +188,195 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertGreaterThan(installedSnapshot.frame.maxY, openingContainer.bounds.maxY)
     }
 
-    func testTaskNotificationOpeningRowUsesFullReadingWidth() throws {
+    func testTaskNotificationAndLongUserBubbleShareTrailingWidthOwnerAcrossDynamicType() throws {
         let viewportWidth = try XCTUnwrap(
             UIApplication.shared.connectedScenes
                 .compactMap { ($0 as? UIWindowScene)?.screen }
                 .first
         ).bounds.width
         let transcriptWidth = viewportWidth - 32
-        let message = GaryxMobileMessage(
+        let longBody = """
+        阶段一已经完成，下面是用于稳定复现窄列换行的较长说明。This synthetic paragraph is intentionally long enough to fill the ordinary user-message cap at every tested size.
+
+        - 第一项验证进入线程时的消息阅读宽度
+        - 第二项验证长文本与列表共享同一个 trailing edge
+        - 第三项验证 Dynamic Type 分支只由 user-role owner 决定
+        """
+        let taskMessage = GaryxMobileMessage(
             id: "task-notification-width-repro",
             role: .user,
             text: """
-            <garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review">
-            Task #TASK-42 is ready for review: Width reproduction
-
-            阶段一已经完成，下面是用于稳定复现窄列换行的较长说明：
-
-            - 第一项验证进入线程时的消息阅读宽度
-            - 第二项验证长文本与列表不会被用户气泡宽度压缩
-            - 第三项验证转场结束后仍使用完整阅读宽度
-
-            View details:
-            garyx task get #TASK-42
+            <garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review" title="Width reproduction">
+            \(longBody)
             </garyx_task_notification>
+
+            View details: garyx task get #TASK-42
             """,
             timestamp: "00:00",
             isStreaming: false,
-            renderPresentation: .taskNotification
+            renderPresentation: .taskNotification(
+                event: "ready_for_review",
+                status: "in_review",
+                taskId: "#TASK-42",
+                title: "Width reproduction"
+            )
         )
-        XCTAssertNotNil(GaryxTaskNotificationPresentation.parse(message.text))
-        let renderer = ImageRenderer(
-            content: GaryxMessageBubble(message: message)
-                .frame(width: transcriptWidth)
-                .background(Color(red: 1, green: 0, blue: 1))
+        let userMessage = GaryxMobileMessage(
+            id: "ordinary-user-width-repro",
+            role: .user,
+            text: longBody,
+            timestamp: "00:00",
+            isStreaming: false
         )
-        renderer.scale = 1
 
-        let image = try XCTUnwrap(renderer.uiImage)
-        let renderedReadingWidth = try nonMagentaHorizontalSpan(in: image)
+        for (size, fraction, leadingSpacer) in [
+            (DynamicTypeSize.large, CGFloat(0.77), CGFloat(60)),
+            (DynamicTypeSize.xxxLarge, CGFloat(0.94), CGFloat(12)),
+        ] {
+            let taskImage = try renderedMessageImage(
+                message: taskMessage,
+                transcriptWidth: transcriptWidth,
+                dynamicTypeSize: size
+            )
+            let userImage = try renderedMessageImage(
+                message: userMessage,
+                transcriptWidth: transcriptWidth,
+                dynamicTypeSize: size
+            )
+            let taskAttachment = XCTAttachment(image: taskImage)
+            taskAttachment.name = "task-notification-\(size)"
+            taskAttachment.lifetime = .keepAlways
+            add(taskAttachment)
+            let userAttachment = XCTAttachment(image: userImage)
+            userAttachment.name = "ordinary-user-\(size)"
+            userAttachment.lifetime = .keepAlways
+            add(userAttachment)
+            let taskBounds = try nonMagentaBounds(in: taskImage)
+            let userBounds = try nonMagentaBounds(in: userImage)
+            let sharedCap = min(viewportWidth * fraction, transcriptWidth - leadingSpacer)
 
-        XCTAssertEqual(
-            renderedReadingWidth,
-            transcriptWidth,
-            accuracy: 2,
-            "task notifications are system reading surfaces and must not inherit the compact user-bubble width"
+            XCTAssertEqual(taskBounds.maxX, userBounds.maxX, accuracy: 2)
+            XCTAssertEqual(taskBounds.maxX, transcriptWidth, accuracy: 2)
+            XCTAssertEqual(taskBounds.width, userBounds.width, accuracy: 3)
+            XCTAssertEqual(taskBounds.width, sharedCap, accuracy: 3)
+        }
+    }
+
+    func testTaskNotificationClampUsesRealMarkdownLayoutAcrossWidthAndDynamicType() async throws {
+        let short = try await taskNotificationMeasurement(
+            body: "All focused tests pass.",
+            width: 300,
+            dynamicTypeSize: .large
         )
+        XCTAssertFalse(short.overflows, "short measurement: \(short)")
+        XCTAssertLessThan(
+            short.naturalHeight,
+            short.clampHeight,
+            "short measurement: \(short)"
+        )
+
+        let wrappingBody = Array(repeating: "A single source line wraps through the shared card width.", count: 7)
+            .joined(separator: " ")
+        let narrow = try await taskNotificationMeasurement(
+            body: wrappingBody,
+            width: 250,
+            dynamicTypeSize: .large
+        )
+        let wide = try await taskNotificationMeasurement(
+            body: wrappingBody,
+            width: 370,
+            dynamicTypeSize: .large
+        )
+        XCTAssertTrue(narrow.overflows, "narrow measurement: \(narrow)")
+        XCTAssertFalse(wide.overflows, "wide measurement: \(wide)")
+        XCTAssertGreaterThan(narrow.naturalHeight, wide.naturalHeight)
+
+        let explicitLines = (1...11).map { "Explicit line \($0)." }.joined(separator: "\n")
+        let explicit = try await taskNotificationMeasurement(
+            body: explicitLines,
+            width: 300,
+            dynamicTypeSize: .large
+        )
+        XCTAssertTrue(explicit.overflows, "explicit-lines measurement: \(explicit)")
+
+        let richBody = """
+        - Manifest discovery passed
+        - Enable and disable passed
+        - Login-state end-to-end path passed
+
+        ```swift
+        let manifest = await discoverTools()
+        await verify(manifest)
+        ```
+
+        | Surface | Result |
+        | --- | --- |
+        | Desktop | pass |
+        | iOS | pass |
+        """
+        let rich = try await taskNotificationMeasurement(
+            body: richBody,
+            width: 300,
+            dynamicTypeSize: .large
+        )
+        XCTAssertTrue(rich.overflows, "rich measurement: \(rich)")
+
+        let accessibility = try await taskNotificationMeasurement(
+            body: wrappingBody,
+            width: 370,
+            dynamicTypeSize: .xxxLarge
+        )
+        XCTAssertGreaterThan(accessibility.clampHeight, wide.clampHeight)
+        XCTAssertNotEqual(accessibility.naturalHeight, wide.naturalHeight)
+    }
+
+    func testTaskNotificationRemeasuresWhenMarkdownImageSettlesLate() async throws {
+        let preview = try makeTaskNotificationImagePreview(size: CGSize(width: 100, height: 1_000))
+        let sink = TaskNotificationMeasurementSink()
+        let notification = taskNotification(body: "![Late intrinsic image](late-image.png)")
+        let root = AnyView(
+            GaryxTaskNotificationCard(
+                notification: notification,
+                onExpand: {},
+                onFileLinkTap: { _ in },
+                onImageFilePreview: { _ in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    return preview
+                },
+                onMeasurement: { sink.values.append($0) }
+            )
+            .frame(width: 300)
+            .environment(\.dynamicTypeSize, .large)
+        )
+        let controller = UIHostingController(rootView: root)
+        let window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 800))
+        window.rootViewController = controller
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        window.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(150))
+        window.layoutIfNeeded()
+        let loading = try XCTUnwrap(sink.values.last)
+        XCTAssertFalse(loading.overflows)
+
+        let deadline = ContinuousClock.now + .seconds(3)
+        while ContinuousClock.now < deadline,
+              !(sink.values.last?.naturalHeight ?? 0 > loading.naturalHeight + 1) {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let settled = try XCTUnwrap(sink.values.last)
+        XCTAssertTrue(settled.overflows, "settled measurements: \(sink.values)")
+        XCTAssertGreaterThan(
+            settled.naturalHeight,
+            loading.naturalHeight,
+            "all measurements: \(sink.values)"
+        )
+        XCTAssertEqual(settled.clampHeight, loading.clampHeight, accuracy: 0.5)
     }
 
     func testInactiveConversationPreparationDoesNotMutatePathAndPushReusesHost() throws {
@@ -1663,6 +1807,81 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 }
 
 @MainActor
+private final class TaskNotificationMeasurementSink {
+    var values: [GaryxTaskNotificationCardMeasurement] = []
+}
+
+@MainActor
+private func taskNotification(body: String) -> GaryxTaskNotification {
+    GaryxTaskNotification(
+        event: "ready_for_review",
+        status: "in_review",
+        taskId: "#TASK-42",
+        title: "Layout validation",
+        finalMessage: body
+    )
+}
+
+@MainActor
+private func taskNotificationMeasurement(
+    body: String,
+    width: CGFloat,
+    dynamicTypeSize: DynamicTypeSize
+) async throws -> GaryxTaskNotificationCardMeasurement {
+    let sink = TaskNotificationMeasurementSink()
+    let root = AnyView(
+        GaryxTaskNotificationCard(
+            notification: taskNotification(body: body),
+            onExpand: {},
+            onFileLinkTap: { _ in },
+            onImageFilePreview: { _ in nil },
+            onMeasurement: { sink.values.append($0) }
+        )
+        .frame(width: width)
+        .environment(\.dynamicTypeSize, dynamicTypeSize)
+    )
+    let controller = UIHostingController(rootView: root)
+    let window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: width, height: 1_200))
+    window.rootViewController = controller
+    window.isHidden = false
+    defer {
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    for _ in 0..<5 {
+        window.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(40))
+    }
+    return try XCTUnwrap(sink.values.last)
+}
+
+@MainActor
+private func makeTaskNotificationImagePreview(
+    size: CGSize
+) throws -> GaryxWorkspaceFilePreview {
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+        UIColor.systemBlue.setFill()
+        context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
+    let encoded = try XCTUnwrap(image.pngData()).base64EncodedString()
+    let payload: [String: Any] = [
+        "workspace_dir": "/Users/test/workspace",
+        "path": "late-image.png",
+        "name": "late-image.png",
+        "media_type": "image/png",
+        "preview_kind": "image",
+        "size": encoded.count,
+        "truncated": false,
+        "data_base64": encoded,
+    ]
+    return try JSONDecoder().decode(
+        GaryxWorkspaceFilePreview.self,
+        from: JSONSerialization.data(withJSONObject: payload)
+    )
+}
+
+@MainActor
 private func pumpMainRunLoop(duration: TimeInterval) {
     RunLoop.main.run(until: Date().addingTimeInterval(duration))
 }
@@ -1727,7 +1946,23 @@ private func cacheTranscriptSnapshot(threadID: String, size: CGSize) {
     )
 }
 
-private func nonMagentaHorizontalSpan(in image: UIImage) throws -> CGFloat {
+@MainActor
+private func renderedMessageImage(
+    message: GaryxMobileMessage,
+    transcriptWidth: CGFloat,
+    dynamicTypeSize: DynamicTypeSize
+) throws -> UIImage {
+    let renderer = ImageRenderer(
+        content: GaryxMessageBubble(message: message)
+            .frame(width: transcriptWidth)
+            .background(Color(red: 1, green: 0, blue: 1))
+            .environment(\.dynamicTypeSize, dynamicTypeSize)
+    )
+    renderer.scale = 1
+    return try XCTUnwrap(renderer.uiImage)
+}
+
+private func nonMagentaBounds(in image: UIImage) throws -> CGRect {
     let cgImage = try XCTUnwrap(image.cgImage)
     let width = cgImage.width
     let height = cgImage.height
@@ -1745,8 +1980,10 @@ private func nonMagentaHorizontalSpan(in image: UIImage) throws -> CGFloat {
         )
     )
     context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+    let background = Array(pixels[0..<4])
 
-    var maximumSpan = 0
+    var minimumX = width
+    var maximumX = -1
     for y in 0..<height {
         var first: Int?
         var last: Int?
@@ -1755,16 +1992,28 @@ private func nonMagentaHorizontalSpan(in image: UIImage) throws -> CGFloat {
             let red = pixels[index]
             let green = pixels[index + 1]
             let blue = pixels[index + 2]
-            let isMagenta = red > 245 && green < 10 && blue > 245
-            guard !isMagenta else { continue }
+            let alpha = pixels[index + 3]
+            let isBackground = zip([red, green, blue, alpha], background).allSatisfy {
+                abs(Int($0.0) - Int($0.1)) <= 2
+            }
+            guard alpha > 2, !isBackground else { continue }
             first = first ?? x
             last = x
         }
         if let first, let last {
-            maximumSpan = max(maximumSpan, last - first + 1)
+            minimumX = min(minimumX, first)
+            maximumX = max(maximumX, last)
         }
     }
-    return CGFloat(maximumSpan) / image.scale
+    guard maximumX >= minimumX else {
+        return .zero
+    }
+    return CGRect(
+        x: CGFloat(minimumX) / image.scale,
+        y: 0,
+        width: CGFloat(maximumX - minimumX + 1) / image.scale,
+        height: image.size.height
+    )
 }
 
 @MainActor

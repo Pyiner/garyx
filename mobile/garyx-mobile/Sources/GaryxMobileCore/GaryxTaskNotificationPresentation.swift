@@ -1,11 +1,11 @@
 import Foundation
 
-public struct GaryxTaskNotification: Equatable, Sendable {
-    public var event: String
-    public var status: String
-    public var taskId: String
-    public var title: String
-    public var finalMessage: String
+public struct GaryxTaskNotification: Equatable, Hashable, Sendable {
+    public let event: String
+    public let status: String
+    public let taskId: String
+    public let title: String
+    public let finalMessage: String
 
     public init(
         event: String,
@@ -23,27 +23,23 @@ public struct GaryxTaskNotification: Equatable, Sendable {
 }
 
 public enum GaryxTaskNotificationPresentation {
-    public static func parse(_ text: String) -> GaryxTaskNotification? {
-        guard let envelope = stripOuterEnvelope(from: text) else { return nil }
-
-        let lines = envelope.body.components(separatedBy: CharacterSet.newlines)
-        let firstLine = lines.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }?
+    /// Structural decoder only. Semantic identity and header fields come from
+    /// the server-owned presentation object, never from this text envelope.
+    public static func stripEnvelope(from text: String) -> String? {
+        guard let openStart = text.range(of: "<garyx_task_notification") else {
+            return nil
+        }
+        guard let openEnd = text[openStart.lowerBound...].firstIndex(of: ">") else {
+            return nil
+        }
+        guard let closeRange = text.range(
+            of: "</garyx_task_notification>",
+            options: .backwards
+        ), openEnd < closeRange.lowerBound else {
+            return nil
+        }
+        return text[text.index(after: openEnd)..<closeRange.lowerBound]
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? ""
-        let titleParts = readyForReviewTitleParts(from: firstLine)
-        let taskId = envelope.attributes["task_id"] ?? titleParts?.taskId ?? ""
-        let title = titleParts?.title.isEmpty == false
-            ? titleParts?.title ?? ""
-            : (taskId.isEmpty ? "Task ready for review" : taskId)
-        let finalMessage = finalMessage(from: envelope.body, firstLine: firstLine)
-
-        return GaryxTaskNotification(
-            event: envelope.attributes["event"] ?? "ready_for_review",
-            status: envelope.attributes["status"] ?? "in_review",
-            taskId: taskId,
-            title: title,
-            finalMessage: finalMessage
-        )
     }
 
     public static func statusLabel(for status: String) -> String {
@@ -57,107 +53,85 @@ public enum GaryxTaskNotificationPresentation {
             }
             .joined(separator: " ")
     }
+}
 
-    private static func stripOuterEnvelope(
-        from text: String
-    ) -> (attributes: [String: String], body: String)? {
-        guard let openMatch = firstMatch(
-            #"^\s*<garyx_task_notification\b([^>]*)>\s*"#,
-            in: text
-        ) else {
-            return nil
-        }
-        let closeTag = "</garyx_task_notification>"
-        guard let closeRange = text.range(of: closeTag, options: .backwards) else {
-            return nil
-        }
-
-        guard let openRange = Range(openMatch.range, in: text) else { return nil }
-        let openEnd = openRange.upperBound
-        guard openEnd <= closeRange.lowerBound else { return nil }
-
-        let rawAttributes = substring(from: text, range: openMatch.range(at: 1)) ?? ""
-        let body = text[openEnd..<closeRange.lowerBound]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (parseAttributes(rawAttributes), body)
+public enum GaryxTaskNotificationOverflow {
+    public static func overflows(
+        naturalHeight: Double,
+        clampHeight: Double,
+        epsilon: Double
+    ) -> Bool {
+        naturalHeight > clampHeight + epsilon
     }
+}
 
-    private static func readyForReviewTitleParts(
-        from line: String
-    ) -> (taskId: String, title: String)? {
-        guard let match = firstMatch(#"^Task\s+(.+?)\s+is ready for review:\s*(.*)$"#, in: line),
-              let taskId = substring(from: line, range: match.range(at: 1))?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let title = substring(from: line, range: match.range(at: 2))?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-            return nil
-        }
-        return (taskId, title)
-    }
+public struct GaryxTaskNotificationSelection: Identifiable, Equatable, Sendable {
+    public struct ID: Hashable, Sendable {
+        public let messageId: String
+        public let messageSeq: Int?
 
-    private static func finalMessage(from body: String, firstLine: String) -> String {
-        let messageEnd = firstMatch(#"\r?\nView details:"#, in: body).map { match in
-            Range(match.range, in: body)?.lowerBound ?? body.endIndex
-        } ?? body.endIndex
-        let bodyAfterFirstLine: Substring
-        if !firstLine.isEmpty, body.hasPrefix(firstLine) {
-            let start = body.index(body.startIndex, offsetBy: firstLine.count)
-            bodyAfterFirstLine = body[start..<messageEnd]
-        } else {
-            bodyAfterFirstLine = body[..<messageEnd]
-        }
-
-        let final = bodyAfterFirstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !final.isEmpty {
-            return final
-        }
-
-        let fallback = body
-            .dropFirst(firstLine.count)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallback.isEmpty ? "The task is ready for review." : fallback
-    }
-
-    private static func parseAttributes(_ raw: String) -> [String: String] {
-        matches(#"([\w:-]+)\s*=\s*"([^"]*)""#, in: raw).reduce(into: [:]) { result, match in
-            guard let key = substring(from: raw, range: match.range(at: 1)),
-                  let value = substring(from: raw, range: match.range(at: 2)) else {
-                return
-            }
-            result[key] = decodeXMLAttribute(value)
+        public init(messageId: String, messageSeq: Int?) {
+            self.messageId = messageId
+            self.messageSeq = messageSeq
         }
     }
 
-    private static func decodeXMLAttribute(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&apos;", with: "'")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
-    }
+    public let id: ID
+    public let notification: GaryxTaskNotification
 
-    private static func firstMatch(
-        _ pattern: String,
-        in text: String
-    ) -> NSTextCheckingResult? {
-        matches(pattern, in: text).first
+    public init(
+        messageId: String,
+        messageSeq: Int?,
+        notification: GaryxTaskNotification
+    ) {
+        id = ID(messageId: messageId, messageSeq: messageSeq)
+        self.notification = notification
     }
+}
 
-    private static func matches(
-        _ pattern: String,
-        in text: String
-    ) -> [NSTextCheckingResult] {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        return regex.matches(
-            in: text,
-            range: NSRange(text.startIndex..<text.endIndex, in: text)
-        )
+public struct GaryxTaskNotificationPresentationScope: Equatable, Sendable {
+    public let threadIdentity: String
+    public let gatewayIdentity: String
+    public let occurrenceIdentity: String
+
+    public init(
+        threadIdentity: String,
+        gatewayIdentity: String,
+        occurrenceIdentity: String
+    ) {
+        self.threadIdentity = threadIdentity
+        self.gatewayIdentity = gatewayIdentity
+        self.occurrenceIdentity = occurrenceIdentity
     }
+}
 
-    private static func substring(from text: String, range: NSRange) -> String? {
-        guard range.location != NSNotFound,
-              let swiftRange = Range(range, in: text) else {
-            return nil
+public struct GaryxTaskNotificationSelectionState: Equatable, Sendable {
+    public private(set) var scope: GaryxTaskNotificationPresentationScope?
+    public private(set) var selection: GaryxTaskNotificationSelection?
+
+    public init() {}
+
+    @discardableResult
+    public mutating func synchronize(
+        scope nextScope: GaryxTaskNotificationPresentationScope
+    ) -> Bool {
+        let changed = scope != nil && scope != nextScope
+        scope = nextScope
+        if changed {
+            selection = nil
         }
-        return String(text[swiftRange])
+        return changed
+    }
+
+    public mutating func present(
+        _ nextSelection: GaryxTaskNotificationSelection,
+        scope nextScope: GaryxTaskNotificationPresentationScope
+    ) {
+        _ = synchronize(scope: nextScope)
+        selection = nextSelection
+    }
+
+    public mutating func dismiss() {
+        selection = nil
     }
 }

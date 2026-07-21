@@ -140,11 +140,13 @@ struct GaryxMessageBubbleActions {
     var model: GaryxMobileModel?
     var localFilePreview: @MainActor (_ target: String, _ reportsError: Bool) async -> GaryxWorkspaceFilePreview?
     var retryFailedUserMessage: @MainActor (_ messageId: String) async -> Bool
+    var selectTaskNotification: @MainActor (GaryxTaskNotificationSelection) -> Void
 
     static let empty = GaryxMessageBubbleActions(
         model: nil,
         localFilePreview: { _, _ in nil },
-        retryFailedUserMessage: { _ in false }
+        retryFailedUserMessage: { _ in false },
+        selectTaskNotification: { _ in }
     )
 }
 
@@ -186,6 +188,7 @@ struct GaryxConversationView: View {
     @State private var tailThinkingPresentationState = GaryxTailThinkingPresentationState()
     @State private var showsDebouncedTailThinking = false
     @State private var tailThinkingDebounceGeneration = 0
+    @State private var taskNotificationSelectionState = GaryxTaskNotificationSelectionState()
     /// Runtime-panel morph state machine. `Presented` mounts the overlay
     /// surface (collapsed, exactly over the top-bar capsule) and hides the
     /// in-bar capsule; `Expanded` drives the spring morph. Close animates
@@ -375,6 +378,14 @@ struct GaryxConversationView: View {
         // included, so the scrim blocks every control behind the open panel.
         .garyxTaskTreeSidebarSurface()
         .environment(\.garyxMessageBubbleActions, messageBubbleActions)
+        .onChange(of: taskNotificationPresentationScope) { _, scope in
+            _ = taskNotificationSelectionState.synchronize(scope: scope)
+        }
+        .garyxFullScreenCover(item: taskNotificationSelectionBinding) { selection in
+            GaryxTaskNotificationFullScreenView(notification: selection.notification) {
+                taskNotificationSelectionState.dismiss()
+            }
+        }
         // Capsule card tapped in the transcript: present the focused preview
         // above this conversation and dismiss back to it (never switch to the
         // Capsules overview).
@@ -467,6 +478,31 @@ struct GaryxConversationView: View {
             },
             retryFailedUserMessage: { messageId in
                 await model.retryFailedUserMessage(messageId)
+            },
+            selectTaskNotification: { selection in
+                taskNotificationSelectionState.present(
+                    selection,
+                    scope: taskNotificationPresentationScope
+                )
+            }
+        )
+    }
+
+    private var taskNotificationPresentationScope: GaryxTaskNotificationPresentationScope {
+        GaryxTaskNotificationPresentationScope(
+            threadIdentity: liveStore.threadID ?? liveStore.routeIdentity,
+            gatewayIdentity: model.currentGatewayScopeId,
+            occurrenceIdentity: conversationScrollIdentity
+        )
+    }
+
+    private var taskNotificationSelectionBinding: Binding<GaryxTaskNotificationSelection?> {
+        Binding(
+            get: { taskNotificationSelectionState.selection },
+            set: { selection in
+                if selection == nil {
+                    taskNotificationSelectionState.dismiss()
+                }
             }
         )
     }

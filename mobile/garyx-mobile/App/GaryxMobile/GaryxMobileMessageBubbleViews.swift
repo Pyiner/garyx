@@ -2,10 +2,73 @@ import Foundation
 import SwiftUI
 import UIKit
 
+/// The single owner of user-row alignment and Dynamic Type width policy.
+/// Task cards and ordinary user bubbles must both pass through this container.
+struct GaryxUserRoleMessageContainer<Content: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        GaryxUserRoleRowLayout(
+            maximumContentWidth: UIScreen.main.bounds.width
+                * (dynamicTypeSize.garyxUsesExpandedReadingLayout ? 0.94 : 0.77),
+            minimumLeadingSpacing: dynamicTypeSize.garyxUsesExpandedReadingLayout ? 12 : 60
+        ) {
+            content
+        }
+    }
+}
+
+/// Proposes the shared width cap to the row content before it is measured.
+/// A flexible card therefore fills the cap without drawing past it, while an
+/// intrinsically narrower ordinary bubble keeps its natural width.
+private struct GaryxUserRoleRowLayout: Layout {
+    let maximumContentWidth: CGFloat
+    let minimumLeadingSpacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let rowWidth = proposal.width ?? (maximumContentWidth + minimumLeadingSpacing)
+        let contentWidth = min(maximumContentWidth, max(0, rowWidth - minimumLeadingSpacing))
+        let contentSize = content.sizeThatFits(
+            ProposedViewSize(width: contentWidth, height: proposal.height)
+        )
+        return CGSize(width: rowWidth, height: contentSize.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let content = subviews.first else { return }
+        let contentLimit = min(
+            maximumContentWidth,
+            max(0, bounds.width - minimumLeadingSpacing)
+        )
+        let contentSize = content.sizeThatFits(
+            ProposedViewSize(width: contentLimit, height: proposal.height)
+        )
+        content.place(
+            at: CGPoint(x: bounds.maxX - contentSize.width, y: bounds.minY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: contentLimit, height: proposal.height)
+        )
+    }
+}
+
 struct GaryxMessageBubble: View {
     let message: GaryxMobileMessage
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.garyxMessageBubbleActions) private var actions
     @Environment(\.garyxMotion) private var motion
     @ScaledMetric(relativeTo: .body) private var userBubbleVerticalPadding: CGFloat = 8
@@ -41,39 +104,40 @@ struct GaryxMessageBubble: View {
     }
 
     @ViewBuilder
-    private func taskNotificationRow(_ notification: GaryxTaskNotification?) -> some View {
-        VStack(alignment: .leading, spacing: messageSpacing) {
-            if !message.attachments.isEmpty {
-                GaryxMessageAttachmentStack(attachments: message.attachments, isUser: false)
-                    .garyxMessageCopyContext(text: messageCopyText)
-            }
-            if let notification {
-                GaryxTaskNotificationCard(notification: notification)
-                    .garyxMessageInteraction(text: taskNotificationCopyText(notification))
-            } else if message.isStreaming,
-                      displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                GaryxUserMessageLoadingBubble()
-            } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                GaryxMarkdownText(
-                    text: displayText,
-                    foreground: .primary,
-                    allowsRelativeFileLinks: true,
-                    allowsTextSelection: false,
+    private func taskNotificationRow(_ notification: GaryxTaskNotification) -> some View {
+        GaryxUserRoleMessageContainer {
+            VStack(alignment: .trailing, spacing: messageSpacing / 2) {
+                if !message.attachments.isEmpty {
+                    GaryxMessageAttachmentStack(attachments: message.attachments, isUser: true)
+                        .garyxMessageCopyContext(text: messageCopyText, edge: .trailing)
+                }
+                GaryxTaskNotificationCard(
+                    notification: notification,
+                    onExpand: {
+                        actions.selectTaskNotification(
+                            GaryxTaskNotificationSelection(
+                                messageId: message.id,
+                                messageSeq: message.historyIndex.map { $0 + 1 },
+                                notification: notification
+                            )
+                        )
+                    },
                     onFileLinkTap: openMessageFileLink,
                     onImageFilePreview: messageImageFilePreview
                 )
-                .garyxMessageInteraction(text: displayText)
+                    .garyxMessageInteraction(
+                        text: taskNotificationCopyText(notification),
+                        edge: .trailing
+                    )
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var roleMessageRow: some View {
         switch message.role {
         case .user:
-            HStack(alignment: .bottom) {
-                Spacer(minLength: dynamicTypeSize.garyxUsesExpandedReadingLayout ? 12 : 60)
+            GaryxUserRoleMessageContainer {
                 VStack(alignment: .trailing, spacing: messageSpacing / 2) {
                     if !message.attachments.isEmpty {
                         GaryxMessageAttachmentStack(attachments: message.attachments, isUser: true)
@@ -107,13 +171,7 @@ struct GaryxMessageBubble: View {
                         failureStatusRow(statusText: statusText)
                     }
                 }
-                .frame(
-                    maxWidth: UIScreen.main.bounds.width
-                        * (dynamicTypeSize.garyxUsesExpandedReadingLayout ? 0.94 : 0.77),
-                    alignment: .trailing
-                )
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
             VStack(alignment: .leading, spacing: messageSpacing) {
                 if !message.attachments.isEmpty {
@@ -302,36 +360,64 @@ private extension View {
     }
 }
 
-private struct GaryxTaskNotificationCard: View {
+struct GaryxTaskNotificationCardMeasurement: Equatable {
+    let naturalHeight: CGFloat
+    let clampHeight: CGFloat
+    let overflows: Bool
+}
+
+struct GaryxTaskNotificationCard: View {
     let notification: GaryxTaskNotification
+    let onExpand: () -> Void
+    let onFileLinkTap: (String) -> Void
+    let onImageFilePreview: GaryxMarkdownImagePreviewResolver
+    let onMeasurement: (GaryxTaskNotificationCardMeasurement) -> Void
+    @ScaledMetric(relativeTo: .body) private var bodyFontLineHeight: CGFloat = UIFont
+        .preferredFont(forTextStyle: .body).lineHeight
+    @ScaledMetric(relativeTo: .body) private var bodyLineSpacing: CGFloat = 5
+    @State private var naturalBodyHeight: CGFloat = 0
+
+    init(
+        notification: GaryxTaskNotification,
+        onExpand: @escaping () -> Void,
+        onFileLinkTap: @escaping (String) -> Void,
+        onImageFilePreview: @escaping GaryxMarkdownImagePreviewResolver,
+        onMeasurement: @escaping (GaryxTaskNotificationCardMeasurement) -> Void = { _ in }
+    ) {
+        self.notification = notification
+        self.onExpand = onExpand
+        self.onFileLinkTap = onFileLinkTap
+        self.onImageFilePreview = onImageFilePreview
+        self.onMeasurement = onMeasurement
+    }
+
+    private var clampHeight: CGFloat {
+        (bodyFontLineHeight + bodyLineSpacing) * 10
+    }
+
+    private var bodyOverflows: Bool {
+        GaryxTaskNotificationOverflow.overflows(
+            naturalHeight: Double(naturalBodyHeight),
+            clampHeight: Double(clampHeight),
+            epsilon: 0.5
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    if !notification.taskId.isEmpty {
-                        Text(notification.taskId)
-                            .font(GaryxFont.caption(weight: .semibold))
-                            .foregroundStyle(GaryxTheme.secondaryText)
-                    }
-
-                    Text(GaryxTaskNotificationPresentation.statusLabel(for: notification.status))
-                        .font(GaryxFont.caption(weight: .medium))
-                        .foregroundStyle(GaryxTheme.secondaryText)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Color.primary.opacity(0.035), in: Capsule())
-                        .overlay {
-                            Capsule()
-                                .stroke(GaryxTheme.hairline, lineWidth: 1)
-                        }
-                }
-
-                Text(notification.title)
-                    .font(GaryxFont.subheadline(weight: .semibold))
-                    .foregroundStyle(GaryxTheme.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+        GaryxFillProposedWidthLayout {
+            cardSurface
+        }
+        .clipped()
+        .accessibilityActions {
+            if bodyOverflows {
+                Button("Expand task notification", action: onExpand)
             }
+        }
+    }
+
+    private var cardSurface: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GaryxTaskNotificationHeader(notification: notification)
 
             Rectangle()
                 .fill(GaryxTheme.hairline)
@@ -342,19 +428,163 @@ private struct GaryxTaskNotificationCard: View {
                 foreground: GaryxTheme.primaryText,
                 allowsRelativeFileLinks: true,
                 allowsTextSelection: false,
-                onFileLinkTap: nil,
-                onImageFilePreview: nil
+                onFileLinkTap: onFileLinkTap,
+                onImageFilePreview: onImageFilePreview
             )
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGSize.self) { geometry in
+                geometry.size
+            } action: { size in
+                onMeasurement(
+                    GaryxTaskNotificationCardMeasurement(
+                        naturalHeight: size.height,
+                        clampHeight: clampHeight,
+                        overflows: GaryxTaskNotificationOverflow.overflows(
+                            naturalHeight: Double(size.height),
+                            clampHeight: Double(clampHeight),
+                            epsilon: 0.5
+                        )
+                    )
+                )
+                if abs(naturalBodyHeight - size.height) > 0.25 {
+                    naturalBodyHeight = size.height
+                }
+            }
+            .frame(maxHeight: clampHeight, alignment: .top)
+            .clipped()
+
+            if bodyOverflows {
+                Button(action: onExpand) {
+                    Label("Expand", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(GaryxTheme.secondaryText)
+                }
+                .buttonStyle(GaryxPressableRowStyle())
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityLabel("Expand task notification")
+                .accessibilityIdentifier("garyx-task-notification-expand")
+            }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(GaryxTheme.hairline, lineWidth: 1)
         }
-        .accessibilityElement(children: .combine)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard bodyOverflows else { return }
+            onExpand()
+        }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Task ready for review")
+        .accessibilityIdentifier("garyx-task-notification-card")
+    }
+}
+
+/// Makes a flexible card consume exactly the width proposed by the shared
+/// user-row owner. The card owns no width policy or numeric cap of its own.
+private struct GaryxFillProposedWidthLayout: Layout {
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let contentSize = content.sizeThatFits(proposal)
+        return CGSize(
+            width: proposal.width ?? contentSize.width,
+            height: contentSize.height
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let content = subviews.first else { return }
+        content.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height)
+        )
+    }
+}
+
+private struct GaryxTaskNotificationHeader: View {
+    let notification: GaryxTaskNotification
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                if !notification.taskId.isEmpty {
+                    Text(notification.taskId)
+                        .font(GaryxFont.caption(weight: .semibold))
+                        .foregroundStyle(GaryxTheme.secondaryText)
+                }
+
+                Text(GaryxTaskNotificationPresentation.statusLabel(for: notification.status))
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(GaryxTheme.secondaryText)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.035), in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .stroke(GaryxTheme.hairline, lineWidth: 1)
+                    }
+            }
+
+            Text(notification.title)
+                .font(GaryxFont.subheadline(weight: .semibold))
+                .foregroundStyle(GaryxTheme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct GaryxTaskNotificationFullScreenView: View {
+    let notification: GaryxTaskNotification
+    let onDismiss: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    GaryxTaskNotificationHeader(notification: notification)
+
+                    Rectangle()
+                        .fill(GaryxTheme.hairline)
+                        .frame(height: 1)
+
+                    GaryxMarkdownText(
+                        text: notification.finalMessage,
+                        foreground: GaryxTheme.primaryText,
+                        allowsRelativeFileLinks: false,
+                        allowsTextSelection: true,
+                        onFileLinkTap: nil,
+                        onImageFilePreview: nil
+                    )
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .navigationTitle("Task notification")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: onDismiss)
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .tint(GaryxTheme.controlTint)
+        .garyxPageBackground()
+        .accessibilityIdentifier("garyx-task-notification-full-screen")
+        .accessibilityAction(.escape, onDismiss)
     }
 }
 
@@ -739,3 +969,100 @@ struct GaryxMessageFileAttachmentView: View {
         return nil
     }
 }
+
+#if DEBUG
+@MainActor
+struct GaryxTaskNotificationDebugFixture {
+    static var current: Self? {
+        ProcessInfo.processInfo.environment["GARYX_MOBILE_TASK_NOTIFICATION_FIXTURE"] == "1"
+            ? Self()
+            : nil
+    }
+
+    var view: some View {
+        GaryxTaskNotificationDebugFixtureView()
+    }
+}
+
+@MainActor
+private struct GaryxTaskNotificationDebugFixtureView: View {
+    @State private var selection: GaryxTaskNotificationSelection?
+    @State private var interactionStatus = "ready"
+
+    private static let body = """
+    [Open validation file](validation-report.md)
+
+    This synthetic notification verifies the production card on an iOS 26 simulator.
+
+    1. The collapsed body uses ten measured line boxes.
+    2. The shared user-role owner controls the trailing width.
+    3. Relative links retain their own interaction.
+    4. Long press keeps Copy, Select Text, and Share available.
+    5. The full-screen owner retains an immutable snapshot.
+    6. The final lines remain outside the collapsed viewport.
+    7. Dynamic Type changes remeasure the body.
+    8. A repeated task notification is identified by message sequence.
+    9. Row eviction cannot truncate the selected snapshot.
+    10. Gateway and occurrence changes dismiss stale selection.
+    11. This line proves the notification exceeds the clamp.
+
+    Complete body end marker: TASK-NOTIFICATION-E2E-END
+    """
+
+    private static let notification = GaryxTaskNotification(
+        event: "ready_for_review",
+        status: "in_review",
+        taskId: "#TASK-42",
+        title: "Structured notification review",
+        finalMessage: body
+    )
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Task notification fixture")
+                            .font(GaryxFont.title2(weight: .bold))
+
+                        GaryxUserRoleMessageContainer {
+                            GaryxTaskNotificationCard(
+                                notification: Self.notification,
+                                onExpand: present,
+                                onFileLinkTap: { target in
+                                    interactionStatus = "link:\(target)"
+                                },
+                                onImageFilePreview: { _ in nil }
+                            )
+                            .garyxMessageInteraction(text: Self.body, edge: .trailing)
+                        }
+
+                        Text(interactionStatus)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("task-notification.fixture.status")
+                    }
+                    .padding(16)
+                }
+            }
+            .garyxMessageMenuHost()
+            .navigationTitle("Notification fixture")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .garyxPageBackground()
+        .garyxFullScreenCover(item: $selection) { selected in
+            GaryxTaskNotificationFullScreenView(notification: selected.notification) {
+                selection = nil
+            }
+        }
+    }
+
+    private func present() {
+        selection = GaryxTaskNotificationSelection(
+            messageId: "fixture-task-notification",
+            messageSeq: 42,
+            notification: Self.notification
+        )
+    }
+}
+#endif

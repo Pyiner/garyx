@@ -103,7 +103,7 @@ enum GaryxMobileMessagePresentation: Equatable {
     case text(String)
     case thinkingLabel(text: String)
     case historySkeleton
-    case taskNotification(text: String, notification: GaryxTaskNotification?)
+    case taskNotification(text: String, notification: GaryxTaskNotification)
 
     var text: String {
         switch self {
@@ -117,10 +117,18 @@ enum GaryxMobileMessagePresentation: Equatable {
     static func make(for message: GaryxMobileMessage) -> GaryxMobileMessagePresentation {
         let trimmedText = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if message.renderPresentation == .taskNotification {
+        if let presentation = message.renderPresentation,
+           presentation.kind == .taskNotification,
+           let body = GaryxTaskNotificationPresentation.stripEnvelope(from: message.text) {
             return .taskNotification(
                 text: message.text,
-                notification: GaryxTaskNotificationPresentation.parse(message.text)
+                notification: GaryxTaskNotification(
+                    event: presentation.event,
+                    status: presentation.status,
+                    taskId: presentation.taskId,
+                    title: presentation.title,
+                    finalMessage: body
+                )
             )
         }
 

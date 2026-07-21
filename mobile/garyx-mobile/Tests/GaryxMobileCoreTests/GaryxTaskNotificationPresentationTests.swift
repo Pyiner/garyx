@@ -2,63 +2,50 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxTaskNotificationPresentationTests: XCTestCase {
-    func testParsesReadyForReviewNotificationAndOmitsReviewCommands() {
-        let parsed = GaryxTaskNotificationPresentation.parse("""
-        <garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review">
-        Task #TASK-42 is ready for review: Ship task notifications
+    private let presentation = GaryxRenderMessagePresentation.taskNotification(
+        event: "ready_for_review",
+        status: "in_review",
+        taskId: "#TASK-42",
+        title: "Ship task notifications"
+    )
 
-        Done.
+    func testStructurallyStripsOnlyEnvelopeBody() {
+        let text = """
+        <garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review" title="Changed wording">
+        Done with wording that has no prose-parser sentinel.
 
-        View details:
-        garyx task get #TASK-42
-
-        Review next:
-        garyx task update #TASK-42 --status in_progress --note "needs changes: summary"
-        garyx task update #TASK-42 --status done --note "approved by reviewer"
+        - Markdown stays intact.
         </garyx_task_notification>
-        """)
 
-        XCTAssertEqual(parsed?.event, "ready_for_review")
-        XCTAssertEqual(parsed?.status, "in_review")
-        XCTAssertEqual(parsed?.taskId, "#TASK-42")
-        XCTAssertEqual(parsed?.title, "Ship task notifications")
-        XCTAssertEqual(parsed?.finalMessage, "Done.")
-        XCTAssertFalse(parsed?.finalMessage.contains("garyx task update") ?? true)
+        View details: garyx task get #TASK-42
+        Review next: tutorial stays outside.
+        """
+
+        XCTAssertEqual(
+            GaryxTaskNotificationPresentation.stripEnvelope(from: text),
+            "Done with wording that has no prose-parser sentinel.\n\n- Markdown stays intact."
+        )
     }
 
-    func testKeepsMarkdownLikeFinalMessageWithChineseText() {
-        let parsed = GaryxTaskNotificationPresentation.parse("""
-        <garyx_task_notification event="ready_for_review" task_id="#TASK-528" status="in_review">
-        Task #TASK-528 is ready for review: MCP tool review
-
-        528(MCP) 已经跑完：
-
-        - MCP manifest、tool discovery、enable/disable 都过了
-        - 端到端验证覆盖了登录态 app 的真实调用路径
-        - 和 527 的 sandboxAgentService/contracts 改动没有新冲突
-
-        View details:
-        garyx task get #TASK-528
+    func testUsesLastCloseTagForLegacyBodies() {
+        let text = """
+        <garyx_task_notification event="ready_for_review">
+        Body with neutralized </garyx_task_notification > text.
+        Legacy tutorial wording remains readable.
         </garyx_task_notification>
-        """)
+        """
 
-        XCTAssertEqual(parsed?.taskId, "#TASK-528")
-        XCTAssertEqual(parsed?.title, "MCP tool review")
-        XCTAssertTrue(parsed?.finalMessage.contains("528(MCP) 已经跑完") ?? false)
-        XCTAssertTrue(parsed?.finalMessage.contains("端到端验证覆盖了登录态 app") ?? false)
-        XCTAssertFalse(parsed?.finalMessage.contains("garyx task get") ?? true)
+        XCTAssertEqual(
+            GaryxTaskNotificationPresentation.stripEnvelope(from: text),
+            "Body with neutralized </garyx_task_notification > text.\nLegacy tutorial wording remains readable."
+        )
+        XCTAssertNil(GaryxTaskNotificationPresentation.stripEnvelope(from: "<review>done</review>"))
     }
 
-    func testIgnoresOrdinaryXMLSnippets() {
-        XCTAssertNil(GaryxTaskNotificationPresentation.parse("<review>done</review>"))
-    }
-
-    func testMessagePresentationUsesServerIdentityInsteadOfInferringFromText() {
+    func testMessagePresentationUsesServerPayloadInsteadOfInferringFromText() {
         let text = """
         <garyx_task_notification task_id="#TASK-42">
-        Task #TASK-42 is ready for review: Presentation truth
-
-        Ready.
+        Ready without the old English sentence.
         </garyx_task_notification>
         """
         let ordinary = GaryxMobileMessage(
@@ -71,15 +58,102 @@ final class GaryxTaskNotificationPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxMobileMessagePresentation.make(for: ordinary), .text(text))
 
         var classified = ordinary
-        classified.renderPresentation = .taskNotification
+        classified.renderPresentation = presentation
         guard case let .taskNotification(_, notification) = GaryxMobileMessagePresentation.make(for: classified) else {
-            return XCTFail("server presentation must finalize the task-notification identity before role layout")
+            return XCTFail("server presentation must select the card before envelope decoding")
         }
-        XCTAssertEqual(notification?.taskId, "#TASK-42")
+        XCTAssertEqual(
+            notification,
+            GaryxTaskNotification(
+                event: "ready_for_review",
+                status: "in_review",
+                taskId: "#TASK-42",
+                title: "Ship task notifications",
+                finalMessage: "Ready without the old English sentence."
+            )
+        )
+    }
+
+    func testMalformedEnvelopeFallsBackToOrdinaryText() {
+        var message = GaryxMobileMessage(
+            id: "malformed-user",
+            role: .user,
+            text: "<garyx_task_notification>missing close",
+            timestamp: nil,
+            isStreaming: false
+        )
+        message.renderPresentation = presentation
+        XCTAssertEqual(GaryxMobileMessagePresentation.make(for: message), .text(message.text))
     }
 
     func testStatusLabelFormatsKnownAndUnknownStates() {
         XCTAssertEqual(GaryxTaskNotificationPresentation.statusLabel(for: "in_review"), "In review")
         XCTAssertEqual(GaryxTaskNotificationPresentation.statusLabel(for: "needs-changes"), "Needs Changes")
+    }
+
+    func testOverflowDecisionHonorsInjectedEpsilon() {
+        XCTAssertFalse(GaryxTaskNotificationOverflow.overflows(
+            naturalHeight: 200,
+            clampHeight: 200,
+            epsilon: 0.5
+        ))
+        XCTAssertFalse(GaryxTaskNotificationOverflow.overflows(
+            naturalHeight: 200.5,
+            clampHeight: 200,
+            epsilon: 0.5
+        ))
+        XCTAssertTrue(GaryxTaskNotificationOverflow.overflows(
+            naturalHeight: 200.5001,
+            clampHeight: 200,
+            epsilon: 0.5
+        ))
+    }
+
+    func testSelectionSnapshotSurvivesRowEvictionAndClearsOnEveryScopeChange() {
+        let notification = GaryxTaskNotification(
+            event: "ready_for_review",
+            status: "in_review",
+            taskId: "#TASK-42",
+            title: "Immutable title",
+            finalMessage: "Complete immutable body"
+        )
+        let selection = GaryxTaskNotificationSelection(
+            messageId: "seq:42",
+            messageSeq: 42,
+            notification: notification
+        )
+        let initial = GaryxTaskNotificationPresentationScope(
+            threadIdentity: "thread-a",
+            gatewayIdentity: "gateway-a",
+            occurrenceIdentity: "occurrence-a"
+        )
+        var state = GaryxTaskNotificationSelectionState()
+        state.present(selection, scope: initial)
+
+        // Selection owns its complete value snapshot; there is deliberately no
+        // row lookup to invalidate when the server render window evicts it.
+        XCTAssertEqual(state.selection?.notification, notification)
+
+        for changed in [
+            GaryxTaskNotificationPresentationScope(
+                threadIdentity: "thread-b",
+                gatewayIdentity: "gateway-a",
+                occurrenceIdentity: "occurrence-a"
+            ),
+            GaryxTaskNotificationPresentationScope(
+                threadIdentity: "thread-a",
+                gatewayIdentity: "gateway-b",
+                occurrenceIdentity: "occurrence-a"
+            ),
+            GaryxTaskNotificationPresentationScope(
+                threadIdentity: "thread-a",
+                gatewayIdentity: "gateway-a",
+                occurrenceIdentity: "occurrence-b"
+            ),
+        ] {
+            state.present(selection, scope: initial)
+            XCTAssertTrue(state.synchronize(scope: changed))
+            XCTAssertNil(state.selection)
+        }
     }
 }

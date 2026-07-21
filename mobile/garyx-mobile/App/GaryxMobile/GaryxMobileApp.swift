@@ -30,6 +30,8 @@ struct GaryxMobileApp: App {
             fixture.view
         } else if let fixture = GaryxImagePreviewDebugFixture.current {
             fixture.view
+        } else if let fixture = GaryxTaskNotificationDebugFixture.current {
+            fixture.view
         } else if let fixture = GaryxComposerDurableNoticeDebugFixture.current {
             fixture.view
         } else {

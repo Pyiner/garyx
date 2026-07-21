@@ -1085,22 +1085,52 @@ public enum GaryxRenderToolEntryStatus: String, Codable, Equatable, Sendable {
     case failed
 }
 
-public struct GaryxRenderMessagePresentation: RawRepresentable, Codable, Equatable, Sendable {
-    public let rawValue: String
-
-    public init(rawValue: String) {
-        self.rawValue = rawValue
+public struct GaryxRenderMessagePresentation: Codable, Equatable, Hashable, Sendable {
+    public enum Kind: String, Codable, Equatable, Hashable, Sendable {
+        case taskNotification = "task_notification"
     }
 
-    public static let taskNotification = Self(rawValue: "task_notification")
+    public let kind: Kind
+    public let event: String
+    public let status: String
+    public let taskId: String
+    public let title: String
 
-    public init(from decoder: Decoder) throws {
-        rawValue = try decoder.singleValueContainer().decode(String.self)
+    public init(
+        kind: Kind,
+        event: String,
+        status: String,
+        taskId: String,
+        title: String
+    ) {
+        self.kind = kind
+        self.event = event
+        self.status = status
+        self.taskId = taskId
+        self.title = title
     }
 
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(rawValue)
+    public static func taskNotification(
+        event: String,
+        status: String,
+        taskId: String,
+        title: String
+    ) -> Self {
+        Self(
+            kind: .taskNotification,
+            event: event,
+            status: status,
+            taskId: taskId,
+            title: title
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case event
+        case status
+        case taskId = "task_id"
+        case title
     }
 }
 
@@ -1120,6 +1150,34 @@ public struct GaryxRenderMessageRef: Codable, Equatable, Sendable {
         self.seq = seq
         self.role = role
         self.presentation = presentation
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case seq
+        case role
+        case presentation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        seq = try container.decode(Int.self, forKey: .seq)
+        role = try container.decode(String.self, forKey: .role)
+        // Presentation is a row-local display hint. A future kind or malformed
+        // payload must not discard the ref, its row, or the enclosing frame.
+        presentation = (try? container.decodeIfPresent(
+            GaryxRenderMessagePresentation.self,
+            forKey: .presentation
+        )) ?? nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(seq, forKey: .seq)
+        try container.encode(role, forKey: .role)
+        try container.encodeIfPresent(presentation, forKey: .presentation)
     }
 }
 
