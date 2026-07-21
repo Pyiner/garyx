@@ -99,6 +99,61 @@ fn garyx_router_agent_id(record: &Value) -> Option<String> {
     crate::agent_id_from_value(record)
 }
 
+/// Production-wiring half of the task-creation writer contract: drive the
+/// real `create_task` entry against a spy store. The creation write is the
+/// only whole-record `set`; the task-field persist must be the audited
+/// field-scoped patch — a regression that persists task fields through
+/// `set` (or grows the patch beyond its allowlist) turns this red.
+#[tokio::test]
+async fn create_task_persists_task_fields_through_the_audited_patch_writer() {
+    let spy = Arc::new(crate::test_seams::PatchSpyThreadStore::default());
+    let store: Arc<dyn ThreadStore> = spy.clone();
+    let service = TaskService::new(
+        store,
+        Arc::new(InMemoryTaskCounterStore::new()),
+        Arc::new(AllowTestAgents),
+    );
+    let (thread_id, task) = service
+        .create_task(CreateTaskInput {
+            title: Some("Audited patch wiring".to_owned()),
+            body: Some("task body".to_owned()),
+            assignee: None,
+            notification_target: None,
+            source: None,
+            executor: None,
+            start: false,
+            actor: Some(Principal::Human {
+                user_id: "test-user".to_owned(),
+            }),
+            workspace_dir: None,
+            runtime: None,
+        })
+        .await
+        .expect("create task");
+    assert!(task.number >= 1);
+
+    assert_eq!(
+        spy.set_thread_ids(),
+        vec![thread_id.clone()],
+        "exactly one whole-record set (thread creation); task fields must not ride a set"
+    );
+    let patches = spy.patched_field_sets();
+    assert!(
+        patches.iter().flatten().any(|field| field == "task"),
+        "the task overlay must persist through the audited patch writer, got {patches:?}"
+    );
+    for fields in &patches {
+        for field in fields {
+            assert!(
+                TASK_CREATION_PATCH_FIELDS.contains(&field.as_str()),
+                "patched field {field} outside the reviewed allowlist"
+            );
+        }
+    }
+    let record = spy.record(&thread_id).expect("record");
+    assert!(record.get("task").is_some());
+}
+
 #[tokio::test]
 async fn new_task_gate_covers_all_five_agent_sources_and_applies_workspace_default() {
     let base = || CreateTaskInput {

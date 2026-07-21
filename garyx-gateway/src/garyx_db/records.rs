@@ -184,55 +184,57 @@ impl GaryxDbService {
         self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord)?;
-        let key = normalize_required("key", drained_delete.thread_id())?;
-        let settlement = drained_delete.into_settlement();
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        let record_exists = tx
-            .query_row(
-                "SELECT 1 FROM thread_records WHERE key = ?1",
-                params![key],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-        let terminal = if is_thread_key(&key) {
-            read_thread_terminal_state(&tx, &key)?
-        } else {
-            None
-        };
-        if is_thread_key(&key)
-            && (terminal == Some(ThreadTerminalState::Deleted)
-                || (!record_exists && terminal.is_none()))
-        {
-            return Ok((false, settlement));
-        }
-        if is_thread_key(&key) {
-            tx.execute(
-                "INSERT INTO archived_threads (thread_id, archived_at, kind)
+        drained_delete.storage_delete(|target| {
+            let key = normalize_required("key", target)?;
+            let mut conn = self.conn()?;
+            let tx = conn.transaction()?;
+            let record_exists = tx
+                .query_row(
+                    "SELECT 1 FROM thread_records WHERE key = ?1",
+                    params![key],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            let terminal = if is_thread_key(&key) {
+                read_thread_terminal_state(&tx, &key)?
+            } else {
+                None
+            };
+            if is_thread_key(&key)
+                && (terminal == Some(ThreadTerminalState::Deleted)
+                    || (!record_exists && terminal.is_none()))
+            {
+                return Ok(false);
+            }
+            if is_thread_key(&key) {
+                tx.execute(
+                    "INSERT INTO archived_threads (thread_id, archived_at, kind)
                  VALUES (?1, ?2, 'deleted')
                  ON CONFLICT(thread_id) DO UPDATE SET
                     archived_at = excluded.archived_at,
                     kind = 'deleted'",
-                params![key, now_string()],
-            )?;
-        }
-        let removed = tx.execute("DELETE FROM thread_records WHERE key = ?1", params![key])? > 0;
-        remove_thread_meta_projection_tx(&tx, &key)?;
-        remove_task_projection_tx(&tx, &key)?;
-        remove_recent_thread_tx(&tx, &key)?;
-        let removed_pin =
-            tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])? > 0;
-        bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
-        let removed_favorite = tx.execute(
-            "DELETE FROM thread_favorites WHERE thread_id = ?1",
-            params![key],
-        )? > 0;
-        // The terminal tombstone is now the resurrection fence, so the
-        // collection revision changes only when the favorite collection did.
-        bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
-        tx.commit()?;
-        Ok((removed, settlement))
+                    params![key, now_string()],
+                )?;
+            }
+            let removed =
+                tx.execute("DELETE FROM thread_records WHERE key = ?1", params![key])? > 0;
+            remove_thread_meta_projection_tx(&tx, &key)?;
+            remove_task_projection_tx(&tx, &key)?;
+            remove_recent_thread_tx(&tx, &key)?;
+            let removed_pin =
+                tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])? > 0;
+            bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
+            let removed_favorite = tx.execute(
+                "DELETE FROM thread_favorites WHERE thread_id = ?1",
+                params![key],
+            )? > 0;
+            // The terminal tombstone is now the resurrection fence, so the
+            // collection revision changes only when the favorite collection did.
+            bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
+            tx.commit()?;
+            Ok(removed)
+        })
     }
 
     /// Point read of a record body from the reader connection (WAL snapshot

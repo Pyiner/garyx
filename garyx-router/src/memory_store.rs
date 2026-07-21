@@ -106,26 +106,30 @@ impl ThreadStore for InMemoryThreadStore {
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         let prior = drained.prior_terminal();
-        // The delete target derives from the witness, and consuming it at the
-        // destructive write leaves only the settle stage.
-        let target = drained.thread_id().to_owned();
+        // The delete target derives from the witness inside the
+        // storage-delete boundary, which is also the only mint of the
+        // settle-only stage.
         let mut state = self.store.write().await;
-        let removed = state.records.remove(&target).is_some();
-        let upgraded =
-            state.terminal_states.get(target.as_str()) == Some(&ThreadTerminalState::Archived);
-        if removed || upgraded {
-            state
-                .terminal_states
-                .insert(target.clone(), ThreadTerminalState::Deleted);
-        }
+        let (removed_or_upgraded, settlement) = drained
+            .storage_delete(|target| {
+                let removed = state.records.remove(target).is_some();
+                let upgraded =
+                    state.terminal_states.get(target) == Some(&ThreadTerminalState::Archived);
+                if removed || upgraded {
+                    state
+                        .terminal_states
+                        .insert(target.to_owned(), ThreadTerminalState::Deleted);
+                }
+                Ok::<_, ThreadStoreError>(removed || upgraded)
+            })
+            .expect("in-memory delete closure is infallible");
         drop(state);
-        let settlement = drained.into_settlement();
-        if removed || upgraded || prior == Some(ThreadTerminalState::Deleted) {
+        if removed_or_upgraded || prior == Some(ThreadTerminalState::Deleted) {
             settlement.settle_committed(Some(ThreadTerminalState::Deleted));
         } else {
             settlement.settle_decision(None);
         }
-        Ok(removed || upgraded)
+        Ok(removed_or_upgraded)
     }
 
     async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {

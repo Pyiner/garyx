@@ -1168,8 +1168,10 @@ Lives in `garyx-channels/src/plugin.rs`. Method groups:
   The dispatcher core is channel-blind: the built-in sender set is
   injected at construction from
   `builtin_catalog::builtin_outbound_senders()` as a type-erased
-  collection, and a source guard rejects any channel-name string
-  literal in dispatcher code.
+  collection. Channel-blindness (no built-in channel-name literals or
+  downcast vocabulary in dispatcher code) is a review-owned contract
+  recorded in docs/agents/repository-contracts.md; the compile-level
+  boundary is the `outbound_registry` privacy seal.
 
 **Account CRUD** (trait surface only; wire protocol pending)
 - `list_accounts() -> Vec<AccountDescriptor>` — enumerate what the

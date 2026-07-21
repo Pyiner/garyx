@@ -706,13 +706,24 @@ impl DrainedDeleteReservation {
         self.reservation.prior_terminal()
     }
 
-    /// Consume the drain-stage witness at the destructive storage write,
-    /// yielding the settle-only stage. One witness admits at most one
-    /// delete; afterwards only settlement remains.
-    pub fn into_settlement(self) -> DeleteSettlement {
-        DeleteSettlement {
-            reservation: self.reservation,
-        }
+    /// The single storage-delete boundary: consume the drain-stage witness,
+    /// hand the reserved thread id to the destructive closure, and wrap only
+    /// the closure's success in the settle-only stage. `DeleteSettlement`
+    /// has no other production mint, so a settlement in hand means this
+    /// boundary ran (and ran at most once per witness); a closure error
+    /// drops the consumed witness, restoring the calibrated prior
+    /// coordinator state exactly like an early caller return.
+    pub fn storage_delete<T, E>(
+        self,
+        destroy: impl FnOnce(&str) -> Result<T, E>,
+    ) -> Result<(T, DeleteSettlement), E> {
+        let outcome = destroy(self.reservation.thread_id())?;
+        Ok((
+            outcome,
+            DeleteSettlement {
+                reservation: self.reservation,
+            },
+        ))
     }
 }
 

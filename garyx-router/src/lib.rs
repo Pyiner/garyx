@@ -10,7 +10,7 @@ pub mod runtime_context;
 pub mod store;
 pub mod task_counter;
 pub mod tasks;
-#[cfg(feature = "test-seams")]
+#[cfg(any(test, feature = "test-seams"))]
 pub mod test_seams;
 pub mod thread_history;
 pub mod threads;

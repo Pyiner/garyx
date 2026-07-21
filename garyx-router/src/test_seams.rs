@@ -9,7 +9,11 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::store::{ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreError};
+use crate::run_admission::ThreadRunCoordinator;
+use crate::store::{
+    ThreadPatchResult, ThreadRecordPatch, ThreadStore, ThreadStoreDomains, ThreadStoreError,
+    ThreadTerminalState,
+};
 
 /// A [`ThreadStore`] spy for durable existing-record writer contracts: it
 /// records every `patch`'s changed fields and every whole-record `set`.
@@ -56,8 +60,21 @@ impl PatchSpyThreadStore {
     }
 }
 
+impl ThreadStoreDomains for PatchSpyThreadStore {
+    fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+        ThreadRunCoordinator::shared_fallback()
+    }
+}
+
 #[async_trait]
 impl ThreadStore for PatchSpyThreadStore {
+    async fn terminal_state(
+        &self,
+        _thread_id: &str,
+    ) -> Result<Option<ThreadTerminalState>, ThreadStoreError> {
+        Ok(None)
+    }
+
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         Ok(self
             .records
@@ -105,19 +122,6 @@ impl ThreadStore for PatchSpyThreadStore {
             .lock()
             .expect("spy records lock")
             .contains_key(thread_id))
-    }
-
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        let mut records = self.records.lock().expect("spy records lock");
-        let record = records
-            .get_mut(thread_id)
-            .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
-        if let (Some(object), Some(new_fields)) = (record.as_object_mut(), updates.as_object()) {
-            for (key, value) in new_fields {
-                object.insert(key.clone(), value.clone());
-            }
-        }
-        Ok(())
     }
 
     async fn patch(
