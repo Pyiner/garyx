@@ -381,9 +381,18 @@ test("a cancelled trailing refresh settles instead of hanging forever", async ()
   assert.notEqual(trailing, flightOne, "a trailing round was scheduled");
 
   mirror.beginConnectionScope("http://gateway-b");
-  await assert.rejects(
-    trailing,
-    /connection scope changed/,
+  // Explicit settlement deadline: a dropped-reference regression must FAIL
+  // fast here, not hang the suite until the runner cancels it.
+  const outcome = await Promise.race([
+    trailing.then(
+      () => "resolved",
+      (reason) => `rejected:${reason instanceof Error ? reason.message : reason}`,
+    ),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 250)),
+  ]);
+  assert.equal(
+    outcome,
+    "rejected:gateway connection scope changed",
     "the abandoned trailing promise settles with a cancellation",
   );
 });
