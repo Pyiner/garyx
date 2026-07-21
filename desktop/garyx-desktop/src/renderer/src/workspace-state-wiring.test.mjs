@@ -31,14 +31,20 @@ test('hidden-session retention is wired at every sessions write point', () => {
   );
 });
 
-test('thread creation folds the authoritative summary into the remembered main state', () => {
-  // Main is the durable cross-process owner of hidden created threads: the
-  // create response summary must enter the REMEMBERED state, not just the
-  // returned value (renderer-only seeds die on the next full refresh).
+test('thread creation folds the authoritative summary into the persisted main state', () => {
+  // Hydration starts from the PERSISTED local state, so the durable
+  // cross-process owner is the persisted state — the fold must be written
+  // through writeState, not merely remembered or returned (renderer-only
+  // seeds and remembered-only folds both die on the next full refresh).
+  assert.match(
+    storeSource,
+    /await writeState\(withSortedEntities\(stateWithCreatedThread\(local, thread\)\)\)/,
+    'createDesktopThread persists the folded state in the main process',
+  );
   assert.match(
     storeSource,
     /rememberHydratedDesktopState\(stateWithCreatedThread\(state, thread\)\)/,
-    'createDesktopThread remembers the folded state in the main process',
+    'the returned snapshot carries the fold for immediate rendering',
   );
 });
 

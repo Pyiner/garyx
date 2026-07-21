@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { desktopStateWithoutThread, mergeRetainedHiddenSessions } from './desktop-state.ts';
+import { desktopStateWithoutThread, mergeRetainedHiddenSessions, stateWithCreatedThread } from './desktop-state.ts';
 
 function thread(id) {
   return {
@@ -154,4 +154,26 @@ test('hidden session summaries survive full-state refreshes', () => {
   );
   // Regular threads never duplicate.
   assert.equal(refreshed.filter((entry) => entry.id === 'thread-a').length, 1);
+});
+
+test('stateWithCreatedThread folds a hidden child into sessions exactly once', () => {
+  const base = {
+    threads: [{ id: 'thread-a' }],
+    sessions: [{ id: 'thread-a' }],
+  };
+  const child = { id: 'thread-hidden-child' };
+  // Mutating the fold to `return state` kills this assertion.
+  const folded = stateWithCreatedThread(base, child);
+  assert.deepEqual(
+    folded.sessions.map((entry) => entry.id),
+    ['thread-a', 'thread-hidden-child'],
+  );
+  // Already-listed threads and already-folded children are no-ops.
+  const alreadyListed = stateWithCreatedThread(base, { id: 'thread-a' });
+  assert.equal(alreadyListed, base);
+  const refolded = stateWithCreatedThread(folded, child);
+  assert.deepEqual(
+    refolded.sessions.map((entry) => entry.id),
+    ['thread-a', 'thread-hidden-child'],
+  );
 });

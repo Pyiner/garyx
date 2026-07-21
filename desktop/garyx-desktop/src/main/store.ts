@@ -1686,9 +1686,15 @@ export async function createDesktopThread(input?: {
   }
 
   // Hidden session threads (side-chat children) never appear in the
-  // fetched thread list; folding the authoritative create summary into the
-  // REMEMBERED main-process state makes main the durable owner, so every
-  // later hydration retains it through mergeRetainedHiddenSessions.
+  // fetched thread list, and hydration starts from the PERSISTED local
+  // state — not the remembered snapshot — so the durable owner must be the
+  // persisted state: fold the authoritative create summary into it. Every
+  // later hydration then spreads localState.sessions and retains the child
+  // through mergeRetainedHiddenSessions (and it survives restarts).
+  if (!state.threads.some((entry) => entry.id === thread.id)) {
+    const local = await getLocalDesktopState();
+    await writeState(withSortedEntities(stateWithCreatedThread(local, thread)));
+  }
   state = rememberHydratedDesktopState(stateWithCreatedThread(state, thread));
 
   return {
