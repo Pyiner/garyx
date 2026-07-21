@@ -4,6 +4,7 @@ import { dirname, join, basename } from 'node:path';
 
 import { app } from 'electron';
 
+import { mergeRetainedHiddenSessions } from '../shared/desktop-state';
 import {
   DEFAULT_DESKTOP_SETTINGS,
   DEFAULT_SESSION_TITLE,
@@ -510,7 +511,10 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
     pinnedThreadIds: entityScopeMatches ? normalizePinnedThreadIds(value?.pinnedThreadIds) : [],
     pinsRevision: entityScopeMatches ? normalizePinsRevision(value?.pinsRevision) : 0,
     threads,
-    sessions: threads,
+    sessions: mergeRetainedHiddenSessions(
+      threads,
+      entityScopeMatches && Array.isArray(value?.sessions) ? value.sessions : [],
+    ),
     endpoints: [],
     configuredBots: [],
     botConsoles: [],
@@ -629,7 +633,7 @@ function withSortedEntities(
   return {
     ...state,
     threads,
-    sessions: threads,
+    sessions: mergeRetainedHiddenSessions(threads, state.sessions),
     automations,
     workspaces,
     selectedWorkspacePath: preserveMissingSelectedWorkspace

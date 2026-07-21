@@ -104,7 +104,9 @@ import {
   selectedThread,
   selectedWorkspace,
   resolveDefaultDraftWorkspace,
+  resolveStartupDraftSelection,
   visibleWorkspaceList,
+  workspaceCatalogUnavailable,
   workspaceForThread,
   workspaceSuggestionFromPath,
 } from "../thread-model";
@@ -2814,9 +2816,7 @@ export function AppShell() {
     // all: its fallback is an empty list plus a workspaces remote error,
     // and resolving on it would permanently pin `none` before the retry
     // brings the real list. Hydration success is what gates this.
-    const workspacesSliceFailed = Boolean(
-      desktopState?.remoteErrors?.some((error) => error.source === "workspaces"),
-    );
+    const workspacesSliceFailed = workspaceCatalogUnavailable(desktopState);
     if (
       !draftComposerVisible ||
       pendingWorkspaceSelection !== null ||
@@ -2984,17 +2984,10 @@ export function AppShell() {
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspaceSelection(
-            draftSelectionFromRouteWorkspace(startupRoute.workspacePath) ??
-              // A failed catalog hydration (empty fallback + workspaces
-              // remote error) is not an answer: stay unresolved and let
-              // the one-shot effect resolve after a successful fetch.
-              (hydratedState.remoteErrors?.some(
-                (error) => error.source === "workspaces",
-              )
-                ? null
-                : resolveDefaultDraftWorkspace(
-                    visibleWorkspaceList(hydratedState),
-                  )),
+            resolveStartupDraftSelection(
+              draftSelectionFromRouteWorkspace(startupRoute.workspacePath),
+              hydratedState,
+            ),
           );
           setPendingWorkspaceMode("local");
           setPendingAgentId(

@@ -228,6 +228,36 @@ function workspacePathKey(path?: string | null): string {
 }
 
 /**
+ * A failed workspace-catalog hydration is not an answer: its fallback is an
+ * empty list plus a `workspaces` remote error. Both draft-resolution paths
+ * (cold start and the one-shot effect) share this predicate.
+ */
+export function workspaceCatalogUnavailable(state: DesktopState | null): boolean {
+  return Boolean(
+    state?.remoteErrors?.some((error) => error.source === 'workspaces'),
+  );
+}
+
+/**
+ * Cold-start draft resolution: an explicit route selection wins; a failed
+ * catalog stays unresolved (null) so the post-recovery fetch resolves the
+ * real default; otherwise the default resolves immediately (empty catalog →
+ * explicit none).
+ */
+export function resolveStartupDraftSelection(
+  routeSelection: DraftWorkspaceSelection | null,
+  state: DesktopState,
+): DraftWorkspaceSelection | null {
+  if (routeSelection) {
+    return routeSelection;
+  }
+  if (workspaceCatalogUnavailable(state)) {
+    return null;
+  }
+  return resolveDefaultDraftWorkspace(visibleWorkspaceList(state));
+}
+
+/**
  * Resolve the default draft workspace once, at draft creation: the first
  * available row of the gateway's shared total order (pinned, activity,
  * name, path). Never called on list refresh — a live draft's selection

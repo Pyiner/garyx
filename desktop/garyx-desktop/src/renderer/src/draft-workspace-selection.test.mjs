@@ -5,7 +5,10 @@ import {
   draftSelectionFromRouteWorkspace,
   routeWorkspaceFromDraftSelection,
 } from './app-shell/desktop-route.ts';
-import { resolveDefaultDraftWorkspace } from './thread-model.ts';
+import {
+  resolveDefaultDraftWorkspace,
+  resolveStartupDraftSelection,
+} from './thread-model.ts';
 
 function workspace(overrides = {}) {
   return {
@@ -87,4 +90,38 @@ test('resolution is a pure function of its input — refreshes cannot drift it',
   ]);
   assert.deepEqual(first, { kind: 'path', path: '/Users/test/a' });
   assert.deepEqual(refreshed, { kind: 'path', path: '/Users/test/b' });
+});
+
+
+test('cold-start resolution stays unresolved on a failed catalog hydration', () => {
+  const state = (overrides = {}) => ({
+    workspaces: [],
+    remoteErrors: [],
+    threads: [],
+    sessions: [],
+    ...overrides,
+  });
+  // A route selection always wins.
+  assert.deepEqual(
+    resolveStartupDraftSelection({ kind: 'none' }, state()),
+    { kind: 'none' },
+  );
+  // A failed catalog (empty fallback + workspaces remote error) is not an
+  // answer: stay null so the post-recovery fetch resolves the default.
+  // Reverting the startup gate to the old empty→none behavior kills this.
+  assert.equal(
+    resolveStartupDraftSelection(null, state({
+      remoteErrors: [{ source: 'workspaces', label: 'w', message: 'boom' }],
+    })),
+    null,
+  );
+  // A successful empty catalog IS an answer: explicit none.
+  assert.deepEqual(resolveStartupDraftSelection(null, state()), { kind: 'none' });
+  // A successful catalog resolves to its first available row.
+  assert.deepEqual(
+    resolveStartupDraftSelection(null, state({
+      workspaces: [workspace({ path: '/Users/test/first' })],
+    })),
+    { kind: 'path', path: '/Users/test/first' },
+  );
 });

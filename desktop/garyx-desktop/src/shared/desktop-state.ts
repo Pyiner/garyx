@@ -101,3 +101,22 @@ export function desktopStateWithoutThread(
     ),
   };
 }
+
+/**
+ * `sessions` is the summary cache: the regular thread list PLUS hidden
+ * session threads (side-chat children) that never appear in `threads`.
+ * A full-state refresh rebuilds `threads`, so the merge must retain the
+ * hidden entries — they are seeded once at creation from the authoritative
+ * create response and have no other owner. Gateway-scope switches drop the
+ * whole slice, which bounds retention.
+ */
+export function mergeRetainedHiddenSessions<T extends { id: string }>(
+  threads: T[],
+  previousSessions: T[] | undefined,
+): T[] {
+  const known = new Set(threads.map((thread) => thread.id));
+  const retained = (previousSessions || []).filter(
+    (session) => !known.has(session.id),
+  );
+  return retained.length ? [...threads, ...retained] : threads;
+}
