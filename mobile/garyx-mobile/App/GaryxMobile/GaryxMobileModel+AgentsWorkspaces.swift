@@ -441,16 +441,55 @@ extension GaryxMobileModel {
         return selectedAgentTargetId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    func setNewThreadWorkspace(_ path: String) {
+    /// Explicit workspace pick (picker row, workspace-row "New Thread",
+    /// agent one-off target). An empty path is not a choice: it re-seeds the
+    /// default resolution instead.
+    func selectDraftWorkspace(_ path: String) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        newThreadWorkspace = trimmed
-        if trimmed.isEmpty {
+        guard !trimmed.isEmpty else {
+            seedDraftWorkspaceDefault()
+            return
+        }
+        setDraftWorkspaceSelection(.path(trimmed))
+    }
+
+    /// The explicit "No workspace" choice; never overridden by resolution.
+    func selectDraftNoWorkspace() {
+        setDraftWorkspaceSelection(.none)
+    }
+
+    func setDraftWorkspaceSelection(_ selection: GaryxDraftWorkspaceSelection) {
+        newThreadWorkspaceSelection = selection
+        if selection.workspacePath == nil {
             newThreadWorkspaceMode = "local"
         }
         saveGatewayScopedUserState()
-        if !trimmed.isEmpty, workspaceGitStatuses[trimmed] == nil {
-            Task { await refreshWorkspaceGitStatus(for: trimmed) }
+        if let path = selection.workspacePath, workspaceGitStatuses[path] == nil {
+            Task { await refreshWorkspaceGitStatus(for: path) }
         }
+    }
+
+    /// Entry points that carry no workspace re-arm the once-only default
+    /// resolution against the current catalog.
+    func seedDraftWorkspaceDefault() {
+        setDraftWorkspaceSelection(
+            GaryxDraftWorkspaceSelection.unresolved.resolved(
+                against: workspaceCatalog,
+                catalogLoaded: workspaceCatalogState.phase.hasResolved
+            )
+        )
+    }
+
+    /// Runs after every catalog replace: fills the once-only default for
+    /// unresolved drafts and re-resolves only when the selected workspace
+    /// disappeared from the catalog. Resolved selections never drift.
+    func resolveDraftWorkspaceSelectionIfNeeded() {
+        let resolved = newThreadWorkspaceSelection.resolved(
+            against: workspaceCatalog,
+            catalogLoaded: workspaceCatalogState.phase.hasResolved
+        )
+        guard resolved != newThreadWorkspaceSelection else { return }
+        setDraftWorkspaceSelection(resolved)
     }
 
     func refreshWorkspaces() async {
@@ -461,10 +500,10 @@ extension GaryxMobileModel {
         workspaceRefreshRequestId = requestId
         beginWorkspaceCatalogRefresh()
         do {
-            let workspaces = try await client().listWorkspaces()
+            let workspacesPage = try await client().listWorkspaces()
             guard isCurrentWorkspaceRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             workspaceRefreshRequestId = nil
-            applyWorkspaceSummaries(workspaces, persist: true)
+            applyWorkspacesPage(workspacesPage, persist: true)
             ensureSelectedWorkspace()
         } catch {
             guard isCurrentWorkspaceRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
@@ -479,14 +518,18 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    func addUserWorkspacePath(_ path: String) async -> String? {
+    func addUserWorkspacePath(_ path: String, name: String? = nil) async -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        let workspaceName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let runtimeGeneration = gatewayRequestToken
         do {
-            let workspaces = try await client().addWorkspace(path: trimmed, name: trimmed.garyxLastPathComponent)
+            let workspacesPage = try await client().addWorkspace(
+                path: trimmed,
+                name: workspaceName?.isEmpty == false ? workspaceName : trimmed.garyxLastPathComponent
+            )
             guard runtimeGeneration == gatewayRequestToken else { return nil }
-            applyWorkspaceSummaries(workspaces, persist: true)
+            applyWorkspacesPage(workspacesPage, persist: true)
         } catch {
             guard runtimeGeneration == gatewayRequestToken else { return nil }
             lastError = error.localizedDescription
@@ -498,6 +541,43 @@ extension GaryxMobileModel {
         return trimmed
     }
 
+    /// Pin/rename/remove are point mutations; the gateway responds with the
+    /// full re-sorted list, which lands verbatim. Responses issued under a
+    /// stale gateway token are discarded.
+    @discardableResult
+    func setWorkspacePinned(path: String, pinned: Bool) async -> Bool {
+        await applyWorkspaceMutation { try await $0.pinWorkspace(path: path, pinned: pinned) }
+    }
+
+    @discardableResult
+    func renameUserWorkspace(path: String, name: String) async -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return false }
+        return await applyWorkspaceMutation { try await $0.renameWorkspace(path: path, name: trimmedName) }
+    }
+
+    /// Removes the list entry only (server tombstone); never touches files.
+    @discardableResult
+    func removeUserWorkspace(path: String) async -> Bool {
+        await applyWorkspaceMutation { try await $0.removeWorkspace(path: path) }
+    }
+
+    private func applyWorkspaceMutation(
+        _ mutation: (GaryxGatewayClient) async throws -> GaryxWorkspacesPage
+    ) async -> Bool {
+        let runtimeGeneration = gatewayRequestToken
+        do {
+            let page = try await mutation(client())
+            guard runtimeGeneration == gatewayRequestToken else { return false }
+            applyWorkspacesPage(page, persist: true)
+            return true
+        } catch {
+            guard runtimeGeneration == gatewayRequestToken else { return false }
+            lastError = displayMessage(for: error)
+            return false
+        }
+    }
+
     func listWorkspaceDirectories(path: String?) async throws -> GaryxWorkspaceDirectoryListing {
         try await client().listWorkspaceDirectories(path: path)
     }
@@ -507,21 +587,26 @@ extension GaryxMobileModel {
         let normalized = Self.normalizedWorkspaceMode(mode)
         guard normalized != "worktree" || newThreadWorkspaceCanUseWorktree else { return }
         newThreadWorkspaceMode = normalized
-        if newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if newThreadWorkspaceSelection.workspacePath == nil {
             newThreadWorkspaceMode = "local"
         }
         saveGatewayScopedUserState()
     }
 
     var newThreadWorkspaceLabel: String {
-        let workspace = newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = (workspace as NSString).lastPathComponent
-        return workspace.isEmpty ? "No workspace" : (name.isEmpty ? workspace : name)
+        switch newThreadWorkspaceSelection {
+        case .unresolved:
+            return "Workspace"
+        case .none:
+            return "No workspace"
+        case .path(let workspace):
+            let name = (workspace as NSString).lastPathComponent
+            return name.isEmpty ? workspace : name
+        }
     }
 
     var newThreadWorkspaceCanUseWorktree: Bool {
-        let workspace = newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !workspace.isEmpty else { return false }
+        guard let workspace = newThreadWorkspaceSelection.workspacePath else { return false }
         return workspaceGitStatuses[workspace]?.canUseWorktree == true
     }
 
@@ -535,7 +620,7 @@ extension GaryxMobileModel {
         do {
             let status = try await client().workspaceGitStatus(workspaceDir: trimmed)
             workspaceGitStatuses[trimmed] = status
-            if !status.canUseWorktree, newThreadWorkspace == trimmed {
+            if !status.canUseWorktree, newThreadWorkspaceSelection.workspacePath == trimmed {
                 setNewThreadWorkspaceMode("local")
             }
         } catch {

@@ -346,8 +346,15 @@ final class GaryxShellChromeStore: ObservableObject {
 struct GaryxNavigationDrawerWorkspaceRow: Identifiable, Equatable, Sendable {
     var path: String
     var name: String
+    var pinned: Bool
 
     var id: String { path }
+
+    init(path: String, name: String, pinned: Bool = false) {
+        self.path = path
+        self.name = name
+        self.pinned = pinned
+    }
 }
 
 struct GaryxNavigationDrawerSnapshot: Equatable, Sendable {

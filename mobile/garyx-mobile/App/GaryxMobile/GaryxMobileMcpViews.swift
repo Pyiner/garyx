@@ -111,7 +111,6 @@ private struct GaryxMcpServerFormFields: View {
                 GaryxWorkspacePathSelectionRow(
                     title: "Working directory",
                     path: $workingDir,
-                    workspacePaths: workspacePaths,
                     placeholder: "Optional",
                     allowsEmpty: true
                 )

@@ -619,7 +619,7 @@ extension GaryxMobileModel {
             }
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
-                newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
+                newThreadWorkspaceSelection.workspacePath ?? ""
             )
             try await startChatRunViaGateway(
                 threadId: thread.id,
@@ -828,7 +828,7 @@ extension GaryxMobileModel {
             activeAssistantMessageIdsByThread[queued.threadId] = assistantId
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
-                newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
+                newThreadWorkspaceSelection.workspacePath ?? ""
             )
             try await startChatRunViaGateway(
                 threadId: queued.threadId,
@@ -1055,7 +1055,7 @@ extension GaryxMobileModel {
         let pendingAgentId = pendingBotDraft?.agentId ?? ""
         let pendingBotIdForThread = pendingBotDraft?.botId ?? ""
         let workspace = pendingWorkspace.isEmpty
-            ? newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
+            ? (newThreadWorkspaceSelection.createPayloadWorkspaceDir ?? "")
             : pendingWorkspace
         let agentId = pendingAgentId.isEmpty
             ? newThreadAgentTargetId()

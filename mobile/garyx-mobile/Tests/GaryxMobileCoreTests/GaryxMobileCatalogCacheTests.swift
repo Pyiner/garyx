@@ -17,7 +17,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            workspacePaths: [],
+            workspaceCatalog: .empty,
             skills: [],
             automations: [automation],
             slashCommands: [],
@@ -31,7 +31,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
 
         let data = try JSONEncoder().encode(snapshot)
         let decoded = try JSONDecoder().decode(GaryxMobileCatalogCacheSnapshot.self, from: data)
-        XCTAssertEqual(decoded.version, 5)
+        XCTAssertEqual(decoded.version, 6)
         let restored = try XCTUnwrap(decoded.automations.first?.model)
         XCTAssertNil(restored.agentId)
         XCTAssertEqual(restored.agentResolution, .followThread)
@@ -56,7 +56,19 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             agents: [agent],
             gatewayDefaultAgentId: "disabled-agent",
             effectiveDefaultAgentId: "agent-alpha",
-            workspacePaths: ["/Users/test/project-alpha"],
+            workspaceCatalog: GaryxWorkspaceCatalog(
+                gatewayHome: "/Users/test",
+                workspaces: [
+                    GaryxWorkspaceSummary(
+                        name: "project-alpha",
+                        path: "/Users/test/project-alpha",
+                        pinned: true,
+                        threadCount: 4,
+                        lastActivityAt: "2026-07-20T16:44:00Z",
+                        gitRepo: true
+                    )
+                ]
+            ),
             skills: [],
             automations: [],
             slashCommands: [],
@@ -76,7 +88,14 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
 
         let decoded = try JSONDecoder().decode(GaryxMobileCatalogCacheSnapshot.self, from: data)
         XCTAssertEqual(decoded.version, GaryxMobileCatalogCacheSnapshot.currentVersion)
-        XCTAssertEqual(decoded.workspacePaths, ["/Users/test/project-alpha"])
+        XCTAssertEqual(decoded.workspaceCatalog.gatewayHome, "/Users/test")
+        XCTAssertEqual(decoded.workspaceCatalog.paths, ["/Users/test/project-alpha"])
+        let restoredWorkspace = try XCTUnwrap(decoded.workspaceCatalog.workspaces.first)
+        XCTAssertEqual(restoredWorkspace.name, "project-alpha")
+        XCTAssertTrue(restoredWorkspace.pinned)
+        XCTAssertEqual(restoredWorkspace.threadCount, 4)
+        XCTAssertEqual(restoredWorkspace.lastActivityAt, "2026-07-20T16:44:00Z")
+        XCTAssertTrue(restoredWorkspace.gitRepo)
         XCTAssertEqual(decoded.gatewayDefaultAgentId, "disabled-agent")
         XCTAssertEqual(decoded.effectiveDefaultAgentId, "agent-alpha")
         let restoredAgent = try XCTUnwrap(decoded.agents.first?.model)
@@ -125,7 +144,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            workspacePaths: [],
+            workspaceCatalog: .empty,
             skills: [],
             automations: [],
             slashCommands: [],
@@ -180,7 +199,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            workspacePaths: [],
+            workspaceCatalog: .empty,
             skills: [],
             automations: [],
             slashCommands: [],
@@ -222,7 +241,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            workspacePaths: [],
+            workspaceCatalog: .empty,
             skills: [],
             capsules: [capsule],
             automations: [],

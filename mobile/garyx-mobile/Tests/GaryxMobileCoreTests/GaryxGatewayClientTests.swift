@@ -1993,6 +1993,181 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(listing.directoryPath, "Sources")
     }
 
+    private func makeStubbedClient() throws -> (GaryxGatewayClient, URLSession) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session
+        )
+        return (client, session)
+    }
+
+    private static let workspacesPageBody = Data(
+        """
+        {
+          "workspace_state_initialized": true,
+          "gateway_home": "/Users/test",
+          "workspaces": [
+            {
+              "name": "garyx",
+              "path": "/Users/test/repos/garyx",
+              "pinned": true,
+              "thread_count": 3,
+              "last_activity_at": "2026-07-20T16:44:00Z",
+              "git_repo": true
+            }
+          ]
+        }
+        """.utf8
+    )
+
+    func testThreadSummariesRequestSendsRootWorkspacePathParam() async throws {
+        let (client, session) = try makeStubbedClient()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        GaryxURLProtocolStub.requestHandler = { request in
+            let components = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )
+            XCTAssertEqual(components?.percentEncodedPath, "/garyx/api/thread-summaries")
+            let queryItems = components?.queryItems ?? []
+            XCTAssertEqual(
+                queryItems.first(where: { $0.name == "root_workspace_path" })?.value,
+                "/workspace/root"
+            )
+            XCTAssertNil(queryItems.first(where: { $0.name == "workspace_dir" }))
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"threads": [], "has_more": false, "next_cursor": null, "store_incarnation_id": "inc-1", "server_boot_id": "boot-1"}"#.utf8)
+            )
+        }
+        _ = try await client.listThreadSummaries(rootWorkspacePath: "/workspace/root", limit: 5)
+    }
+
+    func testWorkspacePinRenameRemoveArePointMutationsReturningTheFullPage() async throws {
+        let (client, session) = try makeStubbedClient()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/workspaces/pin"
+            )
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(
+                    with: try XCTUnwrap(garyxRequestBodyData(from: request))
+                ) as? [String: Any]
+            )
+            XCTAssertEqual(body["path"] as? String, "/Users/test/repos/garyx")
+            XCTAssertEqual(body["pinned"] as? Bool, true)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Self.workspacesPageBody)
+        }
+        let pinPage = try await client.pinWorkspace(path: "/Users/test/repos/garyx", pinned: true)
+        XCTAssertEqual(pinPage.gatewayHome, "/Users/test")
+        XCTAssertEqual(pinPage.workspaces.first?.pinned, true)
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/workspaces/rename"
+            )
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(
+                    with: try XCTUnwrap(garyxRequestBodyData(from: request))
+                ) as? [String: Any]
+            )
+            XCTAssertEqual(body["path"] as? String, "/Users/test/repos/garyx")
+            XCTAssertEqual(body["name"] as? String, "Garyx Core")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Self.workspacesPageBody)
+        }
+        _ = try await client.renameWorkspace(path: "/Users/test/repos/garyx", name: "Garyx Core")
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            let components = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )
+            XCTAssertEqual(components?.percentEncodedPath, "/garyx/api/workspaces")
+            XCTAssertEqual(
+                components?.queryItems?.first(where: { $0.name == "path" })?.value,
+                "/Users/test/repos/garyx"
+            )
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Self.workspacesPageBody)
+        }
+        _ = try await client.removeWorkspace(path: "/Users/test/repos/garyx")
+    }
+
+    func testDirectoriesTypedFourHundredSurfacesAsTypedError() async throws {
+        let (client, session) = try makeStubbedClient()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        GaryxURLProtocolStub.requestHandler = { request in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 400,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(#"{"error": "no such directory", "code": "not_found"}"#.utf8))
+        }
+        do {
+            _ = try await client.listWorkspaceDirectories(path: "/missing")
+            XCTFail("typed 400 must throw GaryxWorkspaceDirectoryError")
+        } catch let error as GaryxWorkspaceDirectoryError {
+            XCTAssertEqual(error.code, .notFound)
+            XCTAssertEqual(error.message, "no such directory")
+        }
+    }
+
     func testGetThreadUsesMetadataEndpointAndEncodesThreadId() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]

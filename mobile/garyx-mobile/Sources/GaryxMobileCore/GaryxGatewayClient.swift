@@ -401,7 +401,7 @@ public final class GaryxGatewayClient {
     }
 
     public func listThreadSummaries(
-        workspaceDir: String? = nil,
+        rootWorkspacePath: String? = nil,
         tasks: GaryxThreadSummaryTaskFilter = .include,
         query: String? = nil,
         limit: Int = 30,
@@ -411,8 +411,10 @@ public final class GaryxGatewayClient {
             URLQueryItem(name: "tasks", value: tasks.rawValue),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
-        if let workspaceDir {
-            queryItems.append(URLQueryItem(name: "workspace_dir", value: workspaceDir))
+        if let rootWorkspacePath {
+            queryItems.append(
+                URLQueryItem(name: "root_workspace_path", value: rootWorkspacePath)
+            )
         }
         if let query {
             queryItems.append(URLQueryItem(name: "q", value: query))
@@ -977,9 +979,8 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func listWorkspaces() async throws -> [GaryxWorkspaceSummary] {
-        let page: GaryxWorkspacesPage = try await get("/api/workspaces")
-        return page.workspaces
+    public func listWorkspaces() async throws -> GaryxWorkspacesPage {
+        try await get("/api/workspaces")
     }
 
     public func listWorkspaceDirectories(path: String? = nil) async throws -> GaryxWorkspaceDirectoryListing {
@@ -987,16 +988,49 @@ public final class GaryxGatewayClient {
         if let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             queryItems.append(URLQueryItem(name: "path", value: path))
         }
-        return try await get("/api/workspaces/directories", queryItems: queryItems)
+        do {
+            return try await get("/api/workspaces/directories", queryItems: queryItems)
+        } catch {
+            if case GaryxGatewayError.httpStatus(let status, let body, _) = error,
+                let typed = GaryxWorkspaceDirectoryError.decode(
+                    statusCode: status, body: Data(body.utf8)
+                ) {
+                throw typed
+            }
+            throw error
+        }
     }
 
     @discardableResult
-    public func addWorkspace(path: String, name: String? = nil) async throws -> [GaryxWorkspaceSummary] {
-        let page: GaryxWorkspacesPage = try await post(
+    public func addWorkspace(path: String, name: String? = nil) async throws -> GaryxWorkspacesPage {
+        try await post(
             "/api/workspaces",
             body: GaryxWorkspaceUpsertRequest(path: path, name: name)
         )
-        return page.workspaces
+    }
+
+    @discardableResult
+    public func pinWorkspace(path: String, pinned: Bool) async throws -> GaryxWorkspacesPage {
+        try await post(
+            "/api/workspaces/pin",
+            body: GaryxWorkspacePinRequest(path: path, pinned: pinned)
+        )
+    }
+
+    @discardableResult
+    public func renameWorkspace(path: String, name: String) async throws -> GaryxWorkspacesPage {
+        try await post(
+            "/api/workspaces/rename",
+            body: GaryxWorkspaceRenameRequest(path: path, name: name)
+        )
+    }
+
+    @discardableResult
+    public func removeWorkspace(path: String) async throws -> GaryxWorkspacesPage {
+        try await delete(
+            "/api/workspaces",
+            queryItems: [URLQueryItem(name: "path", value: path)]
+        )
     }
 
     public func listWorkspaceFiles(

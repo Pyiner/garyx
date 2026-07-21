@@ -690,9 +690,21 @@ pub(super) fn ensure_thread_meta_membership_columns(conn: &Connection) -> GaryxD
     drop(stmt);
     if root_is_generated {
         // The previous revision indexed the generated column; SQLite refuses
-        // to drop a column an index depends on. The plain-column index is
+        // to drop a column an index depends on. Every root-workspace index is
         // recreated by ensure_thread_meta_indexes right after.
         conn.execute("DROP INDEX IF EXISTS idx_thread_meta_root_workspace", [])?;
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_thread_meta_summary_root_workspace_visible",
+            [],
+        )?;
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_thread_meta_summary_root_workspace_task",
+            [],
+        )?;
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_thread_meta_summary_root_workspace_non_task",
+            [],
+        )?;
         conn.execute(
             "ALTER TABLE thread_meta DROP COLUMN root_workspace_path",
             [],
@@ -751,7 +763,10 @@ pub(super) fn thread_meta_column_names(conn: &Connection) -> GaryxDbResult<Vec<S
 
 pub(super) fn ensure_thread_meta_indexes(conn: &Connection) -> GaryxDbResult<()> {
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_thread_meta_root_workspace
+        "DROP INDEX IF EXISTS idx_thread_meta_summary_workspace_visible;
+         DROP INDEX IF EXISTS idx_thread_meta_summary_workspace_task;
+         DROP INDEX IF EXISTS idx_thread_meta_summary_workspace_non_task;
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_root_workspace
              ON thread_meta(root_workspace_path, sort_updated_at_us DESC)
              WHERE root_workspace_path IS NOT NULL;
          CREATE INDEX IF NOT EXISTS idx_thread_meta_workspace
@@ -772,14 +787,14 @@ pub(super) fn ensure_thread_meta_indexes(conn: &Connection) -> GaryxDbResult<()>
          CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_non_task
              ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
              WHERE default_list_hidden = 0 AND thread_type <> 'task';
-         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_visible
-             ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_root_workspace_visible
+             ON thread_meta(root_workspace_path, sort_updated_at_us DESC, thread_id DESC)
              WHERE default_list_hidden = 0;
-         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_task
-             ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_root_workspace_task
+             ON thread_meta(root_workspace_path, sort_updated_at_us DESC, thread_id DESC)
              WHERE default_list_hidden = 0 AND thread_type = 'task';
-         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_non_task
-             ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_root_workspace_non_task
+             ON thread_meta(root_workspace_path, sort_updated_at_us DESC, thread_id DESC)
              WHERE default_list_hidden = 0 AND thread_type <> 'task';",
     )?;
     Ok(())

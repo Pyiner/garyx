@@ -124,11 +124,13 @@ fn thread_summary_wire_keys() -> BTreeSet<&'static str> {
         "message_count",
         "provider_type",
         "recent_run_id",
+        "root_workspace_path",
         "thread_id",
         "thread_type",
         "title",
         "updated_at",
         "workspace_dir",
+        "workspace_origin",
         "worktree",
     ])
 }
@@ -4237,7 +4239,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
     let scope = urlencoding::encode("/workspace/alpha");
     let (status, first) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=2"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=2"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -4274,7 +4276,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
     let cursor = first["next_cursor"].as_str().unwrap();
     let (_, second) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=2&cursor={cursor}"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=2&cursor={cursor}"),
     )
     .await;
     assert_eq!(
@@ -4289,7 +4291,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
     let cursor = second["next_cursor"].as_str().unwrap();
     let (_, third) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=2&cursor={cursor}"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=2&cursor={cursor}"),
     )
     .await;
     assert_eq!(third["threads"][0]["thread_id"], "thread::summary-null");
@@ -4299,7 +4301,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
 
     let (_, chats) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&tasks=exclude&limit=100"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&tasks=exclude&limit=100"),
     )
     .await;
     assert!(
@@ -4312,7 +4314,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
     assert_eq!(chats["threads"].as_array().unwrap().len(), 4);
     let (_, tasks) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&tasks=only&limit=100"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&tasks=only&limit=100"),
     )
     .await;
     assert_eq!(tasks["threads"].as_array().unwrap().len(), 1);
@@ -4320,7 +4322,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
     let (_, searched_tasks) = authed_get_json(
         &router,
         &format!(
-            "/api/thread-summaries?workspace_dir={scope}&tasks=only&q=TASK%20SUMMARY&limit=100"
+            "/api/thread-summaries?root_workspace_path={scope}&tasks=only&q=TASK%20SUMMARY&limit=100"
         ),
     )
     .await;
@@ -4329,6 +4331,101 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
         searched_tasks["threads"][0]["thread_id"],
         "thread::summary-task"
     );
+}
+
+#[tokio::test]
+async fn thread_summaries_scope_follows_membership_projection_and_emits_provenance() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let rows = [
+        (
+            "thread::membership-root",
+            json!({
+                "thread_id": "thread::membership-root",
+                "label": "Root thread",
+                "workspace_dir": "/workspace/root",
+                "updated_at": "2026-07-17T03:00:00Z"
+            }),
+        ),
+        (
+            "thread::membership-worktree",
+            json!({
+                "thread_id": "thread::membership-worktree",
+                "label": "Worktree thread",
+                "workspace_dir": "/workspace/root-worktrees/wt1",
+                "worktree": {
+                    "path": "/workspace/root-worktrees/wt1",
+                    "source_workspace_dir": "/workspace/root"
+                },
+                "updated_at": "2026-07-17T04:00:00Z"
+            }),
+        ),
+        (
+            "thread::membership-implicit",
+            json!({
+                "thread_id": "thread::membership-implicit",
+                "label": "Implicit thread",
+                "workspace_dir":
+                    "/data/thread-workspaces/thread--membership-implicit",
+                "updated_at": "2026-07-17T05:00:00Z"
+            }),
+        ),
+    ];
+    for (thread_id, row) in rows {
+        state
+            .threads
+            .thread_store
+            .set(thread_id, row)
+            .await
+            .expect("seed membership row");
+    }
+    let router = build_router(state);
+
+    // Worktree threads group under their source root workspace.
+    let scope = urlencoding::encode("/workspace/root");
+    let (status, page) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=10"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["thread_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["thread::membership-worktree", "thread::membership-root"]
+    );
+    assert!(
+        page["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["root_workspace_path"] == "/workspace/root"
+                && row["workspace_origin"] == "explicit")
+    );
+
+    // The private worktree runtime directory is not a membership scope.
+    let worktree_scope = urlencoding::encode("/workspace/root-worktrees/wt1");
+    let (_, empty) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?root_workspace_path={worktree_scope}&limit=10"),
+    )
+    .await;
+    assert_eq!(empty["threads"].as_array().unwrap().len(), 0);
+    assert_eq!(empty["has_more"], false);
+
+    // Implicit threads carry a null root and implicit provenance.
+    let (_, all) = authed_get_json(&router, "/api/thread-summaries?limit=100").await;
+    let implicit = all["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["thread_id"] == "thread::membership-implicit")
+        .expect("implicit row present unscoped");
+    assert_eq!(implicit["root_workspace_path"], Value::Null);
+    assert_eq!(implicit["workspace_origin"], "implicit");
 }
 
 #[tokio::test]
@@ -4358,7 +4455,7 @@ async fn thread_summaries_cursor_binds_scope_tasks_canonical_query_and_incarnati
     let (_, first) = authed_get_json(
         &router,
         &format!(
-            "/api/thread-summaries?workspace_dir={scope}&q={}&limit=1",
+            "/api/thread-summaries?root_workspace_path={scope}&q={}&limit=1",
             urlencoding::encode("  Straße  ")
         ),
     )
@@ -4367,7 +4464,9 @@ async fn thread_summaries_cursor_binds_scope_tasks_canonical_query_and_incarnati
 
     let (status, equivalent) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&q=STRASSE&limit=1&cursor={cursor}"),
+        &format!(
+            "/api/thread-summaries?root_workspace_path={scope}&q=STRASSE&limit=1&cursor={cursor}"
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -4384,15 +4483,17 @@ async fn thread_summaries_cursor_binds_scope_tasks_canonical_query_and_incarnati
     );
     for uri in [
         format!(
-            "/api/thread-summaries?workspace_dir={}&q=STRASSE&limit=1&cursor={cursor}",
+            "/api/thread-summaries?root_workspace_path={}&q=STRASSE&limit=1&cursor={cursor}",
             urlencoding::encode("/workspace/other")
         ),
         format!(
-            "/api/thread-summaries?workspace_dir={scope}&tasks=only&q=STRASSE&limit=1&cursor={cursor}"
+            "/api/thread-summaries?root_workspace_path={scope}&tasks=only&q=STRASSE&limit=1&cursor={cursor}"
         ),
-        format!("/api/thread-summaries?workspace_dir={scope}&q=different&limit=1&cursor={cursor}"),
         format!(
-            "/api/thread-summaries?workspace_dir={scope}&q=STRASSE&limit=1&cursor={wrong_incarnation}"
+            "/api/thread-summaries?root_workspace_path={scope}&q=different&limit=1&cursor={cursor}"
+        ),
+        format!(
+            "/api/thread-summaries?root_workspace_path={scope}&q=STRASSE&limit=1&cursor={wrong_incarnation}"
         ),
     ] {
         let (status, payload) = authed_get_json(&router, &uri).await;
@@ -4444,7 +4545,7 @@ async fn thread_summaries_q_trim_empty_and_scalar_limits_are_server_canonical() 
     for uri in [
         "/api/thread-summaries?limit=0",
         "/api/thread-summaries?limit=101",
-        "/api/thread-summaries?workspace_dir=relative",
+        "/api/thread-summaries?root_workspace_path=relative",
         "/api/thread-summaries?cursor=not-a-cursor",
         "/api/thread-summaries?offset=1",
     ] {
@@ -4593,7 +4694,7 @@ async fn thread_summaries_key_moving_forward_waits_for_head_refresh() {
     let scope = urlencoding::encode("/workspace/move-forward");
     let (_, first) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=1"),
     )
     .await;
     assert_eq!(first["threads"][0]["thread_id"], "thread::move-forward-new");
@@ -4615,7 +4716,7 @@ async fn thread_summaries_key_moving_forward_waits_for_head_refresh() {
         .unwrap();
     let (_, continuation) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1&cursor={cursor}"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=1&cursor={cursor}"),
     )
     .await;
     assert_eq!(
@@ -4624,7 +4725,7 @@ async fn thread_summaries_key_moving_forward_waits_for_head_refresh() {
     );
     let (_, refreshed) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=1"),
     )
     .await;
     assert_eq!(
@@ -4660,7 +4761,7 @@ async fn thread_summaries_key_moving_backward_may_repeat_on_continuation() {
     let scope = urlencoding::encode("/workspace/move-back");
     let (_, first) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=1"),
     )
     .await;
     assert_eq!(first["threads"][0]["thread_id"], "thread::move-back-new");
@@ -4682,7 +4783,7 @@ async fn thread_summaries_key_moving_backward_may_repeat_on_continuation() {
         .unwrap();
     let (_, continuation) = authed_get_json(
         &router,
-        &format!("/api/thread-summaries?workspace_dir={scope}&limit=10&cursor={cursor}"),
+        &format!("/api/thread-summaries?root_workspace_path={scope}&limit=10&cursor={cursor}"),
     )
     .await;
     assert_eq!(

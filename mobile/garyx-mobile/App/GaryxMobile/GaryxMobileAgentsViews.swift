@@ -284,7 +284,6 @@ private struct GaryxAgentFormContent: View {
                     GaryxWorkspacePathSelectionRow(
                         title: "Default workspace",
                         path: $workspace,
-                        workspacePaths: workspacePaths,
                         placeholder: "Optional",
                         allowsEmpty: true
                     )

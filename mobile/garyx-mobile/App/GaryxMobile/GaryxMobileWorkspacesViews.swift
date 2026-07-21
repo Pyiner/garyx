@@ -7,7 +7,6 @@ struct GaryxWorkspacesView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var isPickingFiles = false
     @State private var showsAddWorkspace = false
-    @State private var addWorkspacePath = ""
 
     var body: some View {
         GaryxPanelScaffold(
@@ -22,7 +21,6 @@ struct GaryxWorkspacesView: View {
         } actions: {
             HStack(spacing: 8) {
                 Button {
-                    addWorkspacePath = ""
                     showsAddWorkspace = true
                 } label: {
                     GaryxToolbarIcon(systemName: "plus")
@@ -50,13 +48,11 @@ struct GaryxWorkspacesView: View {
         .garyxSheet(isPresented: $showsAddWorkspace) {
             GaryxWorkspacePathPickerSheet(
                 title: "Add Workspace",
-                path: $addWorkspacePath
-            )
-        }
-        .onChange(of: addWorkspacePath) { _, newValue in
-            let path = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard garyxIsAbsoluteWorkspacePath(path) else { return }
-            Task { await addWorkspace(path) }
+                showsNameField: true
+            ) { path, name in
+                guard garyxIsAbsoluteWorkspacePath(path) else { return }
+                Task { await addWorkspace(path, name: name) }
+            }
         }
         .garyxFileImporter(
             isPresented: $isPickingFiles,
@@ -80,8 +76,8 @@ struct GaryxWorkspacesView: View {
         return directory.isEmpty ? name : "\(name) / \(directory)"
     }
 
-    private func addWorkspace(_ path: String) async {
-        guard let addedPath = await model.addUserWorkspacePath(path) else { return }
+    private func addWorkspace(_ path: String, name: String) async {
+        guard let addedPath = await model.addUserWorkspacePath(path, name: name) else { return }
         await model.selectWorkspace(addedPath)
     }
 }
@@ -154,7 +150,12 @@ struct GaryxWorkspacePathRow: View {
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
                         .garyxReadingLineLimit()
-                    Text(garyxCompactPathLabel(path))
+                    Text(
+                        GaryxMobileWorkspacePresentation.abbreviatedPath(
+                            path,
+                            gatewayHome: model.gatewayHomePath
+                        )
+                    )
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
                         .garyxReadingLineLimit()
@@ -174,7 +175,12 @@ struct GaryxWorkspacePathRow: View {
         }
         .buttonStyle(GaryxPressableRowStyle())
         .accessibilityLabel(path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent)
-        .accessibilityValue(garyxCompactPathLabel(path))
+        .accessibilityValue(
+            GaryxMobileWorkspacePresentation.abbreviatedPath(
+                path,
+                gatewayHome: model.gatewayHomePath
+            )
+        )
     }
 }
 
@@ -384,22 +390,3 @@ private func garyxFormattedFileSize(_ size: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
 }
 
-private func garyxCompactPathLabel(_ path: String) -> String {
-    let normalized = path
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .replacingOccurrences(of: "\\", with: "/")
-    guard !normalized.isEmpty else { return "" }
-    let parts = normalized
-        .split(separator: "/", omittingEmptySubsequences: true)
-        .map(String.init)
-    if parts.count >= 2,
-       parts[0] == "Users" {
-        let remainder = Array(parts.dropFirst(2))
-        guard !remainder.isEmpty else { return "Home folder" }
-        return "~/" + remainder.prefix(2).joined(separator: "/")
-    }
-    if parts.count > 2 {
-        return parts.suffix(2).joined(separator: "/")
-    }
-    return normalized
-}

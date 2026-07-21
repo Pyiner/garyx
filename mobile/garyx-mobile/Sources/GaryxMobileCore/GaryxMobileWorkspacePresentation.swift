@@ -1,11 +1,21 @@
 import Foundation
 
-enum GaryxMobileWorkspacePresentation {
-    static func userWorkspacePaths(
-        savedWorkspacePaths: [String],
-        additionalPaths: [String] = []
-    ) -> [String] {
-        uniqueSortedWorkspacePaths(savedWorkspacePaths + additionalPaths, filtersDynamicPaths: false)
+public enum GaryxMobileWorkspacePresentation {
+    /// Abbreviates an absolute gateway path with the gateway machine's home
+    /// directory (`gateway_home` from `/api/workspaces`). Never uses the
+    /// device-local HOME: iOS paths belong to the gateway machine.
+    public static func abbreviatedPath(_ path: String, gatewayHome: String?) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            let home = gatewayHome?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !home.isEmpty, home != "/"
+        else { return trimmed }
+        let normalizedHome = home.hasSuffix("/") ? String(home.dropLast()) : home
+        if trimmed == normalizedHome { return "~" }
+        if trimmed.hasPrefix(normalizedHome + "/") {
+            return "~" + trimmed.dropFirst(normalizedHome.count)
+        }
+        return trimmed
     }
 
     static func workspacePathSuggestions(

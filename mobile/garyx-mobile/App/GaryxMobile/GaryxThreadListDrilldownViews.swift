@@ -4,12 +4,28 @@ struct GaryxWorkspaceThreadListDrilldown: View {
     let model: GaryxMobileModel
     let path: String
     @ObservedObject var store: GaryxThreadListStore
+    @State private var showsRenameDialog = false
+    @State private var renameDraft = ""
+    @State private var showsRemoveConfirm = false
+
+    private var workspaceSummary: GaryxWorkspaceSummary? {
+        model.workspaceCatalog.summary(forPath: path)
+    }
+
+    private var displayName: String {
+        workspaceSummary?.name
+            ?? (path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent)
+    }
 
     var body: some View {
         GaryxListPanelScaffold(
-            title: path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent,
-            onRefresh: { await model.refreshWorkspaceThreadList(path: path) }
+            title: displayName,
+            onRefresh: {
+                await model.refreshWorkspaces()
+                await model.refreshWorkspaceThreadList(path: path)
+            }
         ) {
+            workspaceHeaderCard
             GaryxThreadListRowsSection(
                 model: model,
                 store: store,
@@ -25,6 +41,8 @@ struct GaryxWorkspaceThreadListDrilldown: View {
                     Task { await model.archiveThread(thread) }
                 }
             )
+        } actions: {
+            workspaceActionsMenu
         }
         // One first-page request per resident scope instance. A gateway reset
         // replaces the store object, which re-arms the task even when the
@@ -32,6 +50,124 @@ struct GaryxWorkspaceThreadListDrilldown: View {
         .task(id: ObjectIdentifier(store)) {
             await model.refreshWorkspaceThreadList(path: path)
         }
+        .task {
+            if model.workspaceGitStatuses[path] == nil {
+                await model.refreshWorkspaceGitStatus(for: path)
+            }
+        }
+        .alert("Rename Workspace", isPresented: $showsRenameDialog) {
+            TextField("Name", text: $renameDraft)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                let name = renameDraft
+                Task { await model.renameUserWorkspace(path: path, name: name) }
+            }
+        }
+        .confirmationDialog(
+            "Remove this workspace from the list? Files on the gateway machine are not touched.",
+            isPresented: $showsRemoveConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Workspace", role: .destructive) {
+                Task { await model.removeUserWorkspace(path: path) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// The iOS adaptation of the desktop workspace hover card: name, pin
+    /// state, thread count, `~`-abbreviated path (tap to copy), git branch.
+    private var workspaceHeaderCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if workspaceSummary?.pinned == true {
+                    Label("Pinned", systemImage: "pin.fill")
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                if let count = workspaceSummary?.threadCount {
+                    Text(count == 1 ? "1 thread" : "\(count) threads")
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                if let branch = model.workspaceGitStatuses[path]?.currentBranch,
+                   !branch.isEmpty {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .garyxReadingLineLimit()
+                }
+                Spacer(minLength: 0)
+            }
+            Button {
+                UIPasteboard.general.string = path
+            } label: {
+                HStack(spacing: 5) {
+                    Text(abbreviatedPath)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .garyxReadingLineLimit()
+                        .truncationMode(.middle)
+                    Image(systemName: "doc.on.doc")
+                        .font(GaryxFont.fixedSystem(size: 10, weight: .regular))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy workspace path")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+        .padding(.bottom, 8)
+    }
+
+    private var abbreviatedPath: String {
+        GaryxMobileWorkspacePresentation.abbreviatedPath(
+            path,
+            gatewayHome: model.gatewayHomePath
+        )
+    }
+
+    private var workspaceActionsMenu: some View {
+        Menu {
+            Button {
+                let pinned = workspaceSummary?.pinned == true
+                Task { await model.setWorkspacePinned(path: path, pinned: !pinned) }
+            } label: {
+                if workspaceSummary?.pinned == true {
+                    Label("Unpin", systemImage: "pin.slash")
+                } else {
+                    Label("Pin", systemImage: "pin")
+                }
+            }
+            Button {
+                renameDraft = displayName
+                showsRenameDialog = true
+            } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
+            Button {
+                model.selectDraftWorkspace(path)
+                model.openNewThreadDraft()
+            } label: {
+                Label("New Thread", systemImage: "square.and.pencil")
+            }
+            Button {
+                UIPasteboard.general.string = path
+            } label: {
+                Label("Copy Path", systemImage: "doc.on.doc")
+            }
+            Divider()
+            Button(role: .destructive) {
+                showsRemoveConfirm = true
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+        } label: {
+            GaryxToolbarIcon(systemName: "ellipsis")
+        }
+        .accessibilityLabel("Workspace actions")
     }
 }
 
@@ -296,9 +432,18 @@ private struct GaryxThreadListRowsSection: View {
     }
 }
 
+enum GaryxWorkspaceRowAction {
+    case togglePin
+    case rename
+    case newThread
+    case copyPath
+    case remove
+}
+
 struct GaryxWorkspaceRootSection: View {
     let groups: [GaryxSidebarWorkspaceThreadGroup]
     let onSelect: (String) -> Void
+    var onAction: ((GaryxWorkspaceRowAction, GaryxSidebarWorkspaceThreadGroup) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -312,8 +457,8 @@ struct GaryxWorkspaceRootSection: View {
                 ForEach(groups) { group in
                     GaryxDisclosureListRow(
                         title: group.name,
-                        systemImage: "folder",
-                        selectedSystemImage: "folder.fill",
+                        systemImage: group.pinned ? "pin.fill" : "folder",
+                        selectedSystemImage: group.pinned ? "pin.fill" : "folder.fill",
                         iconFrame: GaryxSidebarMetrics.iconFrame,
                         horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
                         verticalPadding: 0,
@@ -323,9 +468,51 @@ struct GaryxWorkspaceRootSection: View {
                     )
                     .accessibilityIdentifier("workspace-row-\(group.path)")
                     .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+                    .contextMenu {
+                        if let onAction {
+                            workspaceRowMenu(group: group, onAction: onAction)
+                        }
+                    }
                 }
             }
         }
         .padding(.bottom, 10)
+    }
+
+    @ViewBuilder
+    private func workspaceRowMenu(
+        group: GaryxSidebarWorkspaceThreadGroup,
+        onAction: @escaping (GaryxWorkspaceRowAction, GaryxSidebarWorkspaceThreadGroup) -> Void
+    ) -> some View {
+        Button {
+            onAction(.togglePin, group)
+        } label: {
+            if group.pinned {
+                Label("Unpin", systemImage: "pin.slash")
+            } else {
+                Label("Pin", systemImage: "pin")
+            }
+        }
+        Button {
+            onAction(.rename, group)
+        } label: {
+            Label("Rename…", systemImage: "pencil")
+        }
+        Button {
+            onAction(.newThread, group)
+        } label: {
+            Label("New Thread", systemImage: "square.and.pencil")
+        }
+        Button {
+            onAction(.copyPath, group)
+        } label: {
+            Label("Copy Path", systemImage: "doc.on.doc")
+        }
+        Divider()
+        Button(role: .destructive) {
+            onAction(.remove, group)
+        } label: {
+            Label("Remove", systemImage: "trash")
+        }
     }
 }

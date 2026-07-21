@@ -96,14 +96,12 @@ extension GaryxMobileModel {
     }
 
     var navigationDrawerWorkspaceRows: [GaryxNavigationDrawerWorkspaceRow] {
-        let paths = userWorkspacePaths
-        let duplicateNames = Dictionary(grouping: paths, by: { $0.garyxLastPathComponent })
-            .filter { !$0.key.isEmpty && $0.value.count > 1 }
-        return paths.map { path in
-            let name = path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent
-            return GaryxNavigationDrawerWorkspaceRow(
-                path: path,
-                name: duplicateNames[name] == nil ? name : path.garyxDisambiguatedWorkspaceName
+        // Server order and names verbatim (pinned → activity → name → path).
+        workspaceCatalog.workspaces.map { workspace in
+            GaryxNavigationDrawerWorkspaceRow(
+                path: workspace.path,
+                name: workspace.name,
+                pinned: workspace.pinned
             )
         }
     }
@@ -477,8 +475,18 @@ extension GaryxMobileModel {
         hasGatewaySettings && !remoteStateLoadPhase.hasResolved
     }
 
-    var userWorkspacePaths: [String] {
+    var workspaceCatalog: GaryxWorkspaceCatalog {
         workspaceCatalogState.value
+    }
+
+    /// The gateway machine's home directory for `~` abbreviation. Never the
+    /// device-local HOME.
+    var gatewayHomePath: String? {
+        workspaceCatalog.gatewayHome
+    }
+
+    var userWorkspacePaths: [String] {
+        workspaceCatalog.paths
     }
 
     var isLoadingWorkspaces: Bool {
@@ -586,7 +594,7 @@ extension GaryxMobileModel {
             threadWorktreePaths: residentRecentThreadSummaries.map(\.worktreePath),
             automationWorkspacePaths: automations.map(\.workspacePath),
             savedWorkspacePaths: userWorkspacePaths,
-            additionalPaths: [newThreadWorkspace, selectedWorkspacePath]
+            additionalPaths: [newThreadWorkspaceSelection.workspacePath ?? "", selectedWorkspacePath]
         )
     }
 

@@ -326,13 +326,13 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedAgentTargetId: String?
     @Published var gatewayDefaultAgentId: String?
     @Published var effectiveDefaultAgentId: String?
-    @Published var newThreadWorkspace: String
+    @Published var newThreadWorkspaceSelection: GaryxDraftWorkspaceSelection
     @Published var newThreadWorkspaceMode: String
     /// Per-thread overrides for the new-thread draft; empty means agent default.
     @Published var newThreadModelOverride = ""
     @Published var newThreadReasoningEffortOverride = ""
     @Published var newThreadServiceTierOverride = ""
-    @Published var workspaceCatalogState = GaryxMobileResourceState(value: [String]()) {
+    @Published var workspaceCatalogState = GaryxMobileResourceState(value: GaryxWorkspaceCatalog.empty) {
         didSet { refreshNavigationDrawerSnapshot() }
     }
     @Published var lastAutomationRun: GaryxAutomationActivityEntry?
@@ -643,7 +643,9 @@ final class GaryxMobileModel: ObservableObject {
         selectedAgentTargetId = nil
         gatewayDefaultAgentId = nil
         effectiveDefaultAgentId = nil
-        newThreadWorkspace = defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspace) ?? ""
+        newThreadWorkspaceSelection = GaryxDraftWorkspaceSelection.fromPersistedValue(
+            defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceSelection)
+        )
         newThreadWorkspaceMode = Self.normalizedWorkspaceMode(
             defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode)
         )

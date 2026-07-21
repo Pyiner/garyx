@@ -311,7 +311,9 @@ impl GaryxDbService {
                         meta.created_at, meta.updated_at, meta.message_count,
                         meta.last_user_message, meta.last_assistant_message,
                         meta.last_message_preview, meta.recent_run_id,
-                        meta.active_run_id, meta.worktree_json, meta.sort_updated_at_us
+                        meta.active_run_id, meta.worktree_json,
+                        meta.root_workspace_path, meta.workspace_origin,
+                        meta.sort_updated_at_us
                    FROM summary_window AS member
                    JOIN thread_meta AS meta ON meta.thread_id = member.thread_id
                   WHERE meta.default_list_hidden = 0

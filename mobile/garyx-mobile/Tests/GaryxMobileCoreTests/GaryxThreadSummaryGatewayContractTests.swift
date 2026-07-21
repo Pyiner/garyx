@@ -17,7 +17,7 @@ final class GaryxThreadSummaryGatewayContractTests: XCTestCase {
             let values = Dictionary(
                 uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value) }
             )
-            XCTAssertEqual(values["workspace_dir"]!, "/workspace/project & notes")
+            XCTAssertEqual(values["root_workspace_path"]!, "/workspace/project & notes")
             XCTAssertEqual(values["tasks"]!, "exclude")
             XCTAssertEqual(values["q"]!, "Straße %_\\")
             XCTAssertEqual(values["limit"]!, "42")
@@ -30,7 +30,7 @@ final class GaryxThreadSummaryGatewayContractTests: XCTestCase {
         }
 
         let page = try await client.listThreadSummaries(
-            workspaceDir: "/workspace/project & notes",
+            rootWorkspacePath: "/workspace/project & notes",
             tasks: .exclude,
             query: "Straße %_\\",
             limit: 42,

@@ -274,7 +274,7 @@ final class GaryxCapsuleFavoritesTests: XCTestCase {
     private func snapshot(capsules: [GaryxCapsuleSummary]) -> GaryxMobileCatalogCacheSnapshot {
         GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            workspacePaths: [],
+            workspaceCatalog: .empty,
             skills: [],
             capsules: capsules,
             automations: [],

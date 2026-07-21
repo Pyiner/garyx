@@ -41,21 +41,45 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
         )
     }
 
-    func testUserWorkspacePathsOnlyUseExplicitSavedValues() {
-        let paths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
-            savedWorkspacePaths: [
-                " /workspace/project-beta ",
-                "/workspace/project-alpha",
-                "/workspace/project-beta",
-            ]
-        )
-
+    func testAbbreviatedPathUsesGatewayHomeOnly() {
+        // The gateway machine's home, never the device-local HOME.
         XCTAssertEqual(
-            paths,
-            [
-                "/workspace/project-alpha",
-                "/workspace/project-beta",
-            ]
+            GaryxMobileWorkspacePresentation.abbreviatedPath(
+                "/Users/test/repos/garyx",
+                gatewayHome: "/Users/test"
+            ),
+            "~/repos/garyx"
+        )
+        XCTAssertEqual(
+            GaryxMobileWorkspacePresentation.abbreviatedPath(
+                "/Users/test",
+                gatewayHome: "/Users/test/"
+            ),
+            "~"
+        )
+        // A sibling prefix must not match: /Users/testing is not under home.
+        XCTAssertEqual(
+            GaryxMobileWorkspacePresentation.abbreviatedPath(
+                "/Users/testing/repos",
+                gatewayHome: "/Users/test"
+            ),
+            "/Users/testing/repos"
+        )
+        // No gateway home known -> path passes through untouched.
+        XCTAssertEqual(
+            GaryxMobileWorkspacePresentation.abbreviatedPath(
+                "/Users/test/repos",
+                gatewayHome: nil
+            ),
+            "/Users/test/repos"
+        )
+        // A root home never abbreviates.
+        XCTAssertEqual(
+            GaryxMobileWorkspacePresentation.abbreviatedPath(
+                "/anything",
+                gatewayHome: "/"
+            ),
+            "/anything"
         )
     }
 

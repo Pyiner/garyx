@@ -7,7 +7,7 @@ enum GaryxMobileSettingsKeys {
     static let legacyGatewayURL = "garyx.mobile.gatewayURL"
     static let legacyGatewayToken = "garyx.mobile.gatewayToken"
     static let selectedAgentTargetId = "garyx.mobile.selectedAgentTargetId"
-    static let newThreadWorkspace = "garyx.mobile.newThreadWorkspace"
+    static let newThreadWorkspaceSelection = "garyx.mobile.newThreadWorkspaceSelection"
     static let newThreadWorkspaceMode = "garyx.mobile.newThreadWorkspaceMode"
     static let userWorkspacePaths = "garyx.mobile.userWorkspacePaths"
     static let catalogCacheSnapshot = "garyx.mobile.catalogCacheSnapshot"

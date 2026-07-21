@@ -837,8 +837,8 @@ struct GaryxNavigationDrawerView: View {
                     if !snapshot.workspaceRows.isEmpty {
                         GaryxDrawerSectionLabel(title: GaryxMobilePanel.workspaceBots.label)
                         ForEach(snapshot.workspaceRows) { row in
-                            GaryxDrawerChildRow(title: row.name) {
-                                Image(systemName: "folder")
+                            GaryxDrawerChildRow(title: row.name, pinned: row.pinned) {
+                                Image(systemName: row.pinned ? "pin.fill" : "folder")
                                     .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 22, height: 22)
@@ -908,6 +908,7 @@ private struct GaryxDrawerSectionLabel: View {
 /// Flat drawer row for a bot account or workspace folder.
 private struct GaryxDrawerChildRow<Icon: View>: View {
     let title: String
+    var pinned: Bool = false
     @ViewBuilder var icon: () -> Icon
     let action: () -> Void
 
@@ -977,23 +978,21 @@ struct GaryxSidebarNavigationRow: View {
 struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
     let path: String
     let name: String
+    let pinned: Bool
 
     var id: String { path }
 }
 
 extension GaryxMobileModel {
     var sidebarWorkspaceThreadGroups: [GaryxSidebarWorkspaceThreadGroup] {
-        let paths = userWorkspacePaths
-        let duplicateNames = Dictionary(grouping: paths, by: { $0.garyxLastPathComponent })
-            .filter { !$0.key.isEmpty && $0.value.count > 1 }
-        return paths
-            .map { path in
-                let name = path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent
-                return GaryxSidebarWorkspaceThreadGroup(
-                    path: path,
-                    name: duplicateNames[name] == nil ? name : path.garyxDisambiguatedWorkspaceName
-                )
-            }
+        // Server order and names verbatim.
+        workspaceCatalog.workspaces.map { workspace in
+            GaryxSidebarWorkspaceThreadGroup(
+                path: workspace.path,
+                name: workspace.name,
+                pinned: workspace.pinned
+            )
+        }
     }
 }
 
@@ -1611,7 +1610,9 @@ struct GaryxWorkspaceBotsView: View {
     @Environment(\.garyxMotion) private var motion
     let drilldown: GaryxWorkspaceBotsDrilldown?
     @State private var showsAddWorkspace = false
-    @State private var addWorkspacePath = ""
+    @State private var renameTarget: GaryxSidebarWorkspaceThreadGroup?
+    @State private var renameDraft = ""
+    @State private var removeTarget: GaryxSidebarWorkspaceThreadGroup?
 
     init(drilldown: GaryxWorkspaceBotsDrilldown? = nil) {
         self.drilldown = drilldown
@@ -1668,15 +1669,33 @@ struct GaryxWorkspaceBotsView: View {
             leadingAction: nil,
             contentHorizontalPadding: 0
         ) {
-            GaryxWorkspaceRootSection(groups: model.sidebarWorkspaceThreadGroups) { path in
-                withAnimation(motion.spatialAnimation(.drilldown)) {
-                    model.openWorkspaceBotsDrilldown(.workspace(path), source: .current)
+            GaryxWorkspaceRootSection(
+                groups: model.sidebarWorkspaceThreadGroups,
+                onSelect: { path in
+                    withAnimation(motion.spatialAnimation(.drilldown)) {
+                        model.openWorkspaceBotsDrilldown(.workspace(path), source: .current)
+                    }
+                },
+                onAction: { action, group in
+                    switch action {
+                    case .togglePin:
+                        Task { await model.setWorkspacePinned(path: group.path, pinned: !group.pinned) }
+                    case .rename:
+                        renameDraft = group.name
+                        renameTarget = group
+                    case .newThread:
+                        model.selectDraftWorkspace(group.path)
+                        model.openNewThreadDraft()
+                    case .copyPath:
+                        UIPasteboard.general.string = group.path
+                    case .remove:
+                        removeTarget = group
+                    }
                 }
-            }
+            )
         } actions: {
             if drilldown == nil {
                 Button {
-                    addWorkspacePath = ""
                     showsAddWorkspace = true
                 } label: {
                     GaryxToolbarIcon(systemName: "plus")
@@ -1691,13 +1710,44 @@ struct GaryxWorkspaceBotsView: View {
         .garyxSheet(isPresented: $showsAddWorkspace) {
             GaryxWorkspacePathPickerSheet(
                 title: "Add Workspace",
-                path: $addWorkspacePath
-            )
+                showsNameField: true
+            ) { path, name in
+                guard garyxIsAbsoluteWorkspacePath(path) else { return }
+                Task { await addWorkspace(path, name: name) }
+            }
         }
-        .onChange(of: addWorkspacePath) { _, newValue in
-            let path = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard garyxIsAbsoluteWorkspacePath(path) else { return }
-            Task { await addWorkspace(path) }
+        .alert(
+            "Rename Workspace",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )
+        ) {
+            TextField("Name", text: $renameDraft)
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+            Button("Rename") {
+                if let target = renameTarget {
+                    let name = renameDraft
+                    Task { await model.renameUserWorkspace(path: target.path, name: name) }
+                }
+                renameTarget = nil
+            }
+        }
+        .confirmationDialog(
+            "Remove this workspace from the list? Files on the gateway machine are not touched.",
+            isPresented: Binding(
+                get: { removeTarget != nil },
+                set: { if !$0 { removeTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Workspace", role: .destructive) {
+                if let target = removeTarget {
+                    Task { await model.removeUserWorkspace(path: target.path) }
+                }
+                removeTarget = nil
+            }
+            Button("Cancel", role: .cancel) { removeTarget = nil }
         }
     }
 
@@ -1705,8 +1755,8 @@ struct GaryxWorkspaceBotsView: View {
         model.automations.filter(\.isGeneratedThreadMode)
     }
 
-    private func addWorkspace(_ path: String) async {
-        guard let addedPath = await model.addUserWorkspacePath(path) else { return }
+    private func addWorkspace(_ path: String, name: String) async {
+        guard let addedPath = await model.addUserWorkspacePath(path, name: name) else { return }
         await model.selectWorkspace(addedPath)
         model.openWorkspaceBotsDrilldown(.workspace(addedPath), source: .current)
     }

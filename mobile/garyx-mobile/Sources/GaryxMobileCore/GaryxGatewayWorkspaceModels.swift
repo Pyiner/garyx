@@ -1,43 +1,140 @@
 import Foundation
 
-public struct GaryxWorkspaceSummary: Decodable, Identifiable, Equatable, Sendable {
+public struct GaryxWorkspaceSummary: Codable, Identifiable, Equatable, Sendable {
     public var id: String { path }
     public var name: String
     public var path: String
+    public var pinned: Bool
+    public var threadCount: Int
+    public var lastActivityAt: String?
+    public var gitRepo: Bool
 
     enum CodingKeys: String, CodingKey {
         case name
         case path
         case workspaceDir = "workspaceDir"
         case workspaceDirSnake = "workspace_dir"
+        case pinned
+        case threadCount
+        case threadCountSnake = "thread_count"
+        case lastActivityAt
+        case lastActivityAtSnake = "last_activity_at"
+        case gitRepo
+        case gitRepoSnake = "git_repo"
     }
 
-    public init(name: String, path: String) {
+    public init(
+        name: String,
+        path: String,
+        pinned: Bool = false,
+        threadCount: Int = 0,
+        lastActivityAt: String? = nil,
+        gitRepo: Bool = false
+    ) {
         self.name = name
         self.path = path
+        self.pinned = pinned
+        self.threadCount = threadCount
+        self.lastActivityAt = lastActivityAt
+        self.gitRepo = gitRepo
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         path = try container.garyxDecodeFirstString(.path, .workspaceDir, .workspaceDirSnake) ?? ""
         name = try container.garyxDecodeFirstString(.name) ?? path.garyxLastPathComponent
+        pinned = try container.garyxDecodeFirstBool(.pinned) ?? false
+        threadCount = try container.garyxDecodeFirstInt(.threadCount, .threadCountSnake) ?? 0
+        lastActivityAt = try container.garyxDecodeFirstString(.lastActivityAt, .lastActivityAtSnake)
+        gitRepo = try container.garyxDecodeFirstBool(.gitRepo, .gitRepoSnake) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(path, forKey: .path)
+        try container.encode(pinned, forKey: .pinned)
+        try container.encode(threadCount, forKey: .threadCount)
+        try container.encodeIfPresent(lastActivityAt, forKey: .lastActivityAt)
+        try container.encode(gitRepo, forKey: .gitRepo)
     }
 }
 
 public struct GaryxWorkspacesPage: Decodable, Equatable, Sendable {
     public var workspaces: [GaryxWorkspaceSummary]
+    public var gatewayHome: String?
+    public var workspaceStateInitialized: Bool
 
     enum CodingKeys: String, CodingKey {
         case workspaces
+        case gatewayHome
+        case gatewayHomeSnake = "gateway_home"
+        case workspaceStateInitialized
+        case workspaceStateInitializedSnake = "workspace_state_initialized"
     }
 
-    public init(workspaces: [GaryxWorkspaceSummary]) {
+    public init(
+        workspaces: [GaryxWorkspaceSummary],
+        gatewayHome: String? = nil,
+        workspaceStateInitialized: Bool = true
+    ) {
         self.workspaces = workspaces
+        self.gatewayHome = gatewayHome
+        self.workspaceStateInitialized = workspaceStateInitialized
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         workspaces = try container.decodeIfPresent([GaryxWorkspaceSummary].self, forKey: .workspaces) ?? []
+        gatewayHome = try container.garyxDecodeFirstString(.gatewayHome, .gatewayHomeSnake)
+        workspaceStateInitialized = try container.garyxDecodeFirstBool(
+            .workspaceStateInitialized, .workspaceStateInitializedSnake
+        ) ?? true
+    }
+}
+
+/// The gateway workspace universe as delivered: server-ordered summaries plus
+/// the gateway machine's home directory for `~` abbreviation. Clients render
+/// this verbatim — no re-sorting, no renaming, no path filtering.
+public struct GaryxWorkspaceCatalog: Codable, Equatable, Sendable {
+    public var gatewayHome: String?
+    public var workspaces: [GaryxWorkspaceSummary]
+
+    public static let empty = GaryxWorkspaceCatalog(gatewayHome: nil, workspaces: [])
+
+    public init(gatewayHome: String?, workspaces: [GaryxWorkspaceSummary]) {
+        self.gatewayHome = gatewayHome
+        self.workspaces = workspaces
+    }
+
+    public init(page: GaryxWorkspacesPage) {
+        self.init(gatewayHome: page.gatewayHome, workspaces: page.workspaces)
+    }
+
+    public var paths: [String] { workspaces.map(\.path) }
+
+    public func summary(forPath path: String) -> GaryxWorkspaceSummary? {
+        workspaces.first { $0.path == path }
+    }
+}
+
+public struct GaryxWorkspacePinRequest: Encodable, Equatable, Sendable {
+    public var path: String
+    public var pinned: Bool
+
+    public init(path: String, pinned: Bool) {
+        self.path = path
+        self.pinned = pinned
+    }
+}
+
+public struct GaryxWorkspaceRenameRequest: Encodable, Equatable, Sendable {
+    public var path: String
+    public var name: String
+
+    public init(path: String, name: String) {
+        self.path = path
+        self.name = name
     }
 }
 
@@ -125,10 +222,67 @@ public struct GaryxWorkspaceDirectoryEntry: Decodable, Identifiable, Equatable, 
     public var id: String { path }
     public var name: String
     public var path: String
+    public var gitRepo: Bool
 
     enum CodingKeys: String, CodingKey {
         case name
         case path
+        case gitRepo
+        case gitRepoSnake = "git_repo"
+    }
+
+    public init(name: String, path: String, gitRepo: Bool = false) {
+        self.name = name
+        self.path = path
+        self.gitRepo = gitRepo
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.garyxDecodeFirstString(.name) ?? ""
+        path = try container.garyxDecodeFirstString(.path) ?? ""
+        gitRepo = try container.garyxDecodeFirstBool(.gitRepo, .gitRepoSnake) ?? false
+    }
+}
+
+/// The typed `/api/workspaces/directories` 400 contract. The browser renders
+/// these inline and stays where it was; anything else is a transport failure.
+public enum GaryxWorkspaceDirectoryErrorCode: String, Equatable, Sendable {
+    case invalidPath = "invalid_path"
+    case notFound = "not_found"
+    case notADirectory = "not_a_directory"
+    case permissionDenied = "permission_denied"
+
+    public var userMessage: String {
+        switch self {
+        case .invalidPath: return "Enter an absolute path."
+        case .notFound: return "That directory does not exist on the gateway."
+        case .notADirectory: return "That path is not a directory."
+        case .permissionDenied: return "The gateway cannot read that directory."
+        }
+    }
+}
+
+public struct GaryxWorkspaceDirectoryError: Error, Equatable, Sendable {
+    public var code: GaryxWorkspaceDirectoryErrorCode
+    public var message: String
+
+    public init(code: GaryxWorkspaceDirectoryErrorCode, message: String) {
+        self.code = code
+        self.message = message
+    }
+
+    /// Decodes the typed 400 body `{"error": <message>, "code": <code>}`.
+    /// Returns nil for anything that is not a recognized typed failure.
+    public static func decode(statusCode: Int, body: Data) -> GaryxWorkspaceDirectoryError? {
+        guard statusCode == 400 else { return nil }
+        guard
+            let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+            let rawCode = payload["code"] as? String,
+            let code = GaryxWorkspaceDirectoryErrorCode(rawValue: rawCode)
+        else { return nil }
+        let message = payload["error"] as? String ?? code.userMessage
+        return GaryxWorkspaceDirectoryError(code: code, message: message)
     }
 }
 
@@ -142,6 +296,12 @@ public struct GaryxWorkspaceDirectoryListing: Decodable, Equatable, Sendable {
         case parentPath
         case parentPathSnake = "parent_path"
         case entries
+    }
+
+    public init(path: String, parentPath: String? = nil, entries: [GaryxWorkspaceDirectoryEntry]) {
+        self.path = path
+        self.parentPath = parentPath
+        self.entries = entries
     }
 
     public init(from decoder: Decoder) throws {

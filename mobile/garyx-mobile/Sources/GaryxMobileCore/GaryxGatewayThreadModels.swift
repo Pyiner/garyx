@@ -386,6 +386,8 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var runState: String?
     public var activitySeq: Int64?
     public var worktreePath: String?
+    public var rootWorkspacePath: String?
+    public var workspaceOrigin: String?
     public var automationId: String?
     public var automationThreadMode: String?
     public var threadRuntime: GaryxThreadRuntimeSummary?
@@ -405,6 +407,8 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         runState: String?,
         activitySeq: Int64? = nil,
         worktreePath: String?,
+        rootWorkspacePath: String? = nil,
+        workspaceOrigin: String? = nil,
         automationId: String? = nil,
         automationThreadMode: String? = nil,
         threadRuntime: GaryxThreadRuntimeSummary? = nil
@@ -423,6 +427,8 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.runState = runState
         self.activitySeq = activitySeq
         self.worktreePath = worktreePath
+        self.rootWorkspacePath = rootWorkspacePath
+        self.workspaceOrigin = workspaceOrigin
         self.automationId = automationId
         self.automationThreadMode = automationThreadMode
         self.threadRuntime = threadRuntime
@@ -463,6 +469,10 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case runStateCamel = "runState"
         case activitySeq = "activity_seq"
         case worktree
+        case rootWorkspacePath
+        case rootWorkspacePathSnake = "root_workspace_path"
+        case workspaceOrigin
+        case workspaceOriginSnake = "workspace_origin"
         case automationId = "automation_id"
         case automationIdCamel = "automationId"
         case automationThreadMode = "automation_thread_mode"
@@ -505,6 +515,12 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         worktreePath = try container
             .decodeIfPresent(GaryxThreadWorktreeSummary.self, forKey: .worktree)?
             .visiblePath
+        rootWorkspacePath = try container.garyxDecodeFirstString(
+            .rootWorkspacePath, .rootWorkspacePathSnake
+        )
+        workspaceOrigin = try container.garyxDecodeFirstString(
+            .workspaceOrigin, .workspaceOriginSnake
+        )
         automationId = try container.garyxDecodeFirstString(.automationId, .automationIdCamel)
         automationThreadMode = try container.garyxDecodeFirstString(.automationThreadMode, .automationThreadModeCamel)
         threadRuntime = try container.decodeIfPresent(GaryxThreadRuntimeSummary.self, forKey: .threadRuntime)

@@ -336,7 +336,7 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listThreadSummaries(
-                workspaceDir: ticket.workspacePath,
+                rootWorkspacePath: ticket.workspacePath,
                 limit: provider.pager.pageLimit
             )
             guard runtimeGeneration == gatewayRequestToken,
@@ -375,7 +375,7 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRequestToken
         do {
             let page = try await client().listThreadSummaries(
-                workspaceDir: ticket.workspacePath,
+                rootWorkspacePath: ticket.workspacePath,
                 query: ticket.query,
                 limit: provider.pager.pageLimit,
                 cursor: ticket.cursor

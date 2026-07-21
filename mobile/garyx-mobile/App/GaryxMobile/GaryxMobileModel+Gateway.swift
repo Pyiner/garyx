@@ -129,7 +129,7 @@ extension GaryxMobileModel {
         }
         _ = threadFavoritesProvider.replaceGatewayScope(favoritesScope)
         catalogSnapshotRestored = false
-        let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
+        let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceSelection)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
         selectedAgentTargetId = nil
         gatewayDefaultAgentId = nil
@@ -138,9 +138,9 @@ extension GaryxMobileModel {
         if fallbackToLegacy {
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId)
         }
-        newThreadWorkspace = defaults.string(forKey: workspaceKey)
-            ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspace) : nil)
-            ?? ""
+        newThreadWorkspaceSelection = GaryxDraftWorkspaceSelection.fromPersistedValue(
+            defaults.string(forKey: workspaceKey)
+        )
         newThreadWorkspaceMode = Self.normalizedWorkspaceMode(
             defaults.string(forKey: workspaceModeKey)
                 ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode) : nil)
@@ -148,8 +148,8 @@ extension GaryxMobileModel {
         resetWorkspaceCatalogState()
         restoreCachedCatalogState()
         reloadPinnedOrderDomainForCurrentGateway()
-        let workspace = newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !workspace.isEmpty, workspaceGitStatuses[workspace] == nil {
+        if let workspace = newThreadWorkspaceSelection.workspacePath,
+           workspaceGitStatuses[workspace] == nil {
             Task { await refreshWorkspaceGitStatus(for: workspace) }
         }
         activateCurrentGatewayScope()
@@ -158,10 +158,12 @@ extension GaryxMobileModel {
     func saveGatewayScopedUserState() {
         defaults.removeObject(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId))
         defaults.removeObject(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId)
-        defaults.set(
-            newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines),
-            forKey: scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
-        )
+        let selectionKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceSelection)
+        if let persistedSelection = newThreadWorkspaceSelection.persistedValue {
+            defaults.set(persistedSelection, forKey: selectionKey)
+        } else {
+            defaults.removeObject(forKey: selectionKey)
+        }
         defaults.set(
             Self.normalizedWorkspaceMode(newThreadWorkspaceMode),
             forKey: scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
@@ -708,8 +710,8 @@ extension GaryxMobileModel {
             if workspaceRefreshRequestId == requestId {
                 workspaceRefreshRequestId = nil
                 switch nextWorkspaces {
-                case .success(let workspaces):
-                    applyWorkspaceSummaries(workspaces, persist: true)
+                case .success(let workspacesPage):
+                    applyWorkspacesPage(workspacesPage, persist: true)
                     ensureSelectedWorkspace()
                 case .failure(let error):
                     failWorkspaceCatalogRefresh(displayMessage(for: error))

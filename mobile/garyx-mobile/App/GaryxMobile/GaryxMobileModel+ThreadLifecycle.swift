@@ -477,7 +477,8 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRequestToken
         do {
             saveGatewaySettings()
-            let workspace = (workspaceOverride ?? newThreadWorkspace).trimmingCharacters(in: .whitespacesAndNewlines)
+            let workspace = (workspaceOverride ?? newThreadWorkspaceSelection.createPayloadWorkspaceDir ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let agentId = newThreadAgentTargetId(agentOverride: agentOverride)
             let workspaceMode = workspaceModeForNewThread(workspace: workspace)
             let modelOverride = newThreadModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)

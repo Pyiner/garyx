@@ -206,7 +206,6 @@ struct GaryxBotAccountForm: View {
                 GaryxWorkspacePathSelectionRow(
                     title: "Working directory",
                     path: $workspaceDir,
-                    workspacePaths: model.userWorkspacePaths,
                     placeholder: "Optional",
                     allowsEmpty: true
                 )

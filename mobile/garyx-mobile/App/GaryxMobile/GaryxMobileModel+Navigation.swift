@@ -395,7 +395,7 @@ extension GaryxMobileModel {
                 let path = requestedPath.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !path.isEmpty else { return .userVisibleNotFound }
                 let catalog = try await client().listWorkspaces()
-                guard catalog.contains(where: { $0.path == path }) else {
+                guard catalog.workspaces.contains(where: { $0.path == path }) else {
                     return .userVisibleNotFound
                 }
                 return prepared(.none)
@@ -747,9 +747,14 @@ extension GaryxMobileModel {
         selectedAgentTargetId = nil
         gatewayDefaultAgentId = "codex"
         effectiveDefaultAgentId = "codex"
-        newThreadWorkspace = "/workspace/garyx"
+        newThreadWorkspaceSelection = .path("/workspace/garyx")
         newThreadWorkspaceMode = "local"
-        replaceWorkspaceCatalogPaths(["/workspace/garyx"])
+        replaceWorkspaceCatalog(
+            GaryxWorkspaceCatalog(
+                gatewayHome: "/Users/test",
+                workspaces: [GaryxWorkspaceSummary(name: "garyx", path: "/workspace/garyx")]
+            )
+        )
         seedWorkspaceThreadListForTesting(
             path: "/workspace/garyx",
             summaries: fixtureThreads

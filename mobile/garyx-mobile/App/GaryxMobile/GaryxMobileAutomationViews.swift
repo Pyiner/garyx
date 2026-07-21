@@ -672,7 +672,6 @@ struct GaryxAutomationFormFields: View {
             GaryxWorkspacePathSelectionRow(
                 title: "Workspace",
                 path: workspaceBinding,
-                workspacePaths: workspacePaths,
                 placeholder: "Choose workspace",
                 allowsEmpty: false
             )

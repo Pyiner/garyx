@@ -82,24 +82,28 @@ thread-detail provenance already shipped.
 
 ## 5. UX design (iOS)
 
-### 5.1 Drawer "Workspaces" section
+### 5.1 Workspace list surfaces (drawer + Workspaces panel)
 
 - Rows render the server list verbatim: server `name`, server order. Pinned
-  rows show a small pin glyph after the name (monochrome). Row icon stays
-  the folder glyph; `git_repo` does not change the drawer row.
+  rows show the pin glyph as their icon (monochrome); `git_repo` does not
+  change list rows.
 - Row tap keeps opening the workspace drilldown (the drilldown page is the
   iOS adaptation of desktop's inline thread subtree; no chevron-expansion
   inside the drawer).
-- **Long-press context menu** (iOS action surface, replaces desktop hover
-  `⋯`): `Pin` / `Unpin` · `Rename…` · `New Thread` · `Copy Path` ·
-  `Remove` (destructive, separated). `Remove` confirms with copy stating it
-  only removes the list entry and never touches files on the gateway
-  machine (existing tombstone semantics). `New Thread` opens a new-thread
-  draft seeded with `path(<workspace>)`.
+- The navigation drawer is a perf-isolated snapshot surface (store-driven,
+  deliberately not model-observing), so it stays navigation-only. The
+  management actions live on the model-backed workspace surfaces: the
+  Workspaces panel rows carry the **long-press context menu**, and the
+  drilldown page carries the same set in its toolbar menu (§5.2):
+  `Pin` / `Unpin` · `Rename…` · `New Thread` · `Copy Path` · `Remove`
+  (destructive, separated). `Remove` confirms with copy stating it only
+  removes the list entry and never touches files on the gateway machine
+  (existing tombstone semantics). `New Thread` opens a new-thread draft
+  seeded with `path(<workspace>)`.
 - `Rename…` presents a text-field alert seeded with the current server
   name; submit calls the rename point mutation.
-- Pin/rename/remove refresh the catalog from the mutation response /
-  follow-up fetch; the drawer re-renders whatever order the server returns.
+- Pin/rename/remove apply the mutation response's full re-sorted list;
+  every surface re-renders whatever order the server returns.
 
 ### 5.2 Workspace drilldown
 

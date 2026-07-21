@@ -562,11 +562,60 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                             setPage(.speed)
                         }
                     }
+
+                    if let workspaceContext = threadWorkspaceContextLabel {
+                        Divider().padding(.leading, 16)
+
+                        workspaceContextRow(value: workspaceContext)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
             }
         }
+    }
+
+    /// Server-owned provenance drives the read-only workspace context:
+    /// `implicit` reads as "No workspace"; `explicit` shows the root path
+    /// even when it is no longer in the catalog. The client never infers.
+    private var threadWorkspaceContextLabel: String? {
+        guard let thread = model.selectedThread else { return nil }
+        let rootPath = thread.rootWorkspacePath ?? thread.workspacePath
+        switch thread.workspaceOrigin {
+        case "implicit":
+            return "No workspace"
+        case "explicit":
+            guard let rootPath, !rootPath.isEmpty else { return nil }
+            return abbreviatedWorkspacePath(rootPath)
+        default:
+            // Records predating the provenance field: show what is known.
+            guard let rootPath, !rootPath.isEmpty else { return nil }
+            return abbreviatedWorkspacePath(rootPath)
+        }
+    }
+
+    private func abbreviatedWorkspacePath(_ path: String) -> String {
+        GaryxMobileWorkspacePresentation.abbreviatedPath(
+            path,
+            gatewayHome: model.gatewayHomePath
+        )
+    }
+
+    private func workspaceContextRow(value: String) -> some View {
+        HStack(spacing: 12) {
+            Text("Workspace")
+                .font(GaryxFont.callout())
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+            Text(value)
+                .font(GaryxFont.callout())
+                .foregroundStyle(.secondary)
+                .garyxReadingLineLimit()
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .combine)
     }
 
     private func contentCard<Content: View>(

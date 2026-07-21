@@ -19,6 +19,8 @@ pub struct ThreadSummaryRow {
     pub recent_run_id: Option<String>,
     pub active_run_id: Option<String>,
     pub worktree: Option<Value>,
+    pub root_workspace_path: Option<String>,
+    pub workspace_origin: Option<String>,
     #[serde(skip)]
     pub(crate) sort_updated_at_us: i64,
 }
@@ -60,10 +62,10 @@ macro_rules! thread_summary_sql {
     ("", "", $query:literal, $cursor:literal) => {
         thread_summary_sql!("idx_thread_meta_summary_visible", "", "", $query, $cursor)
     };
-    ("\n   AND workspace_dir = ?", "", $query:literal, $cursor:literal) => {
+    ("\n   AND root_workspace_path = ?", "", $query:literal, $cursor:literal) => {
         thread_summary_sql!(
-            "idx_thread_meta_summary_workspace_visible",
-            "\n   AND workspace_dir = ?",
+            "idx_thread_meta_summary_root_workspace_visible",
+            "\n   AND root_workspace_path = ?",
             "",
             $query,
             $cursor
@@ -79,14 +81,14 @@ macro_rules! thread_summary_sql {
         )
     };
     (
-        "\n   AND workspace_dir = ?",
+        "\n   AND root_workspace_path = ?",
         "\n   AND thread_type <> 'task'",
         $query:literal,
         $cursor:literal
     ) => {
         thread_summary_sql!(
-            "idx_thread_meta_summary_workspace_non_task",
-            "\n   AND workspace_dir = ?",
+            "idx_thread_meta_summary_root_workspace_non_task",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type <> 'task'",
             $query,
             $cursor
@@ -102,14 +104,14 @@ macro_rules! thread_summary_sql {
         )
     };
     (
-        "\n   AND workspace_dir = ?",
+        "\n   AND root_workspace_path = ?",
         "\n   AND thread_type = 'task'",
         $query:literal,
         $cursor:literal
     ) => {
         thread_summary_sql!(
-            "idx_thread_meta_summary_workspace_task",
-            "\n   AND workspace_dir = ?",
+            "idx_thread_meta_summary_root_workspace_task",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type = 'task'",
             $query,
             $cursor
@@ -120,7 +122,8 @@ macro_rules! thread_summary_sql {
             "SELECT thread_id, thread_label, workspace_dir, thread_type, provider_type,\n",
             "       agent_id, created_at, updated_at, message_count, last_user_message,\n",
             "       last_assistant_message, last_message_preview, recent_run_id,\n",
-            "       active_run_id, worktree_json, sort_updated_at_us\n",
+            "       active_run_id, worktree_json, root_workspace_path,\n",
+            "       workspace_origin, sort_updated_at_us\n",
             "  FROM thread_meta INDEXED BY ",
             $index,
             "\n",
@@ -157,22 +160,22 @@ pub(super) fn thread_summary_include_sql(
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
         ),
         (true, false, false) => {
-            thread_summary_sql!("\n   AND workspace_dir = ?", "", "", "")
+            thread_summary_sql!("\n   AND root_workspace_path = ?", "", "", "")
         }
         (true, false, true) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "",
             "",
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
         ),
         (true, true, false) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "",
             "\n   AND instr(search_text, ?) > 0",
             ""
         ),
         (true, true, true) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "",
             "\n   AND instr(search_text, ?) > 0",
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
@@ -208,25 +211,25 @@ pub(super) fn thread_summary_exclude_sql(
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
         ),
         (true, false, false) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type <> 'task'",
             "",
             ""
         ),
         (true, false, true) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type <> 'task'",
             "",
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
         ),
         (true, true, false) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type <> 'task'",
             "\n   AND instr(search_text, ?) > 0",
             ""
         ),
         (true, true, true) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type <> 'task'",
             "\n   AND instr(search_text, ?) > 0",
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
@@ -262,25 +265,25 @@ pub(super) fn thread_summary_only_sql(
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
         ),
         (true, false, false) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type = 'task'",
             "",
             ""
         ),
         (true, false, true) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type = 'task'",
             "",
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
         ),
         (true, true, false) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type = 'task'",
             "\n   AND instr(search_text, ?) > 0",
             ""
         ),
         (true, true, true) => thread_summary_sql!(
-            "\n   AND workspace_dir = ?",
+            "\n   AND root_workspace_path = ?",
             "\n   AND thread_type = 'task'",
             "\n   AND instr(search_text, ?) > 0",
             "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
@@ -308,7 +311,9 @@ pub(super) fn thread_summary_row_from_row(
         recent_run_id: row.get(12)?,
         active_run_id: row.get(13)?,
         worktree: worktree_json.and_then(|value| serde_json::from_str(&value).ok()),
-        sort_updated_at_us: row.get(15)?,
+        root_workspace_path: row.get(15)?,
+        workspace_origin: row.get(16)?,
+        sort_updated_at_us: row.get(17)?,
     })
 }
 
@@ -316,7 +321,7 @@ impl GaryxDbService {
     pub(crate) fn list_thread_summaries_keyset_page(
         &self,
         filter: ThreadSummaryTaskFilter,
-        workspace_dir: Option<&str>,
+        root_workspace_path: Option<&str>,
         query: Option<&str>,
         limit: usize,
         before: Option<(i64, &str)>,
@@ -332,8 +337,8 @@ impl GaryxDbService {
         }
 
         let mut bind = Vec::with_capacity(6);
-        if let Some(workspace_dir) = workspace_dir {
-            bind.push(SqlValue::Text(workspace_dir.to_owned()));
+        if let Some(root_workspace_path) = root_workspace_path {
+            bind.push(SqlValue::Text(root_workspace_path.to_owned()));
         }
         if let Some(query) = query {
             bind.push(SqlValue::Text(query.to_owned()));
@@ -347,7 +352,11 @@ impl GaryxDbService {
             i64::try_from(fetch_limit).unwrap_or(i64::MAX),
         ));
 
-        let sql = filter.page_sql(workspace_dir.is_some(), query.is_some(), before.is_some());
+        let sql = filter.page_sql(
+            root_workspace_path.is_some(),
+            query.is_some(),
+            before.is_some(),
+        );
         let mut stmt = tx.prepare(sql)?;
         let rows = stmt.query_map(params_from_iter(bind.iter()), thread_summary_row_from_row)?;
         let mut records = Vec::with_capacity(fetch_limit);

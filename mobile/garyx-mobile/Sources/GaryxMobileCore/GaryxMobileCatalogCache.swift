@@ -1,14 +1,14 @@
 import Foundation
 
 struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
-    static let currentVersion = 5
+    static let currentVersion = 6
 
     var version: Int
     var savedAt: Date
     var agents: [GaryxCachedAgent]
     var gatewayDefaultAgentId: String?
     var effectiveDefaultAgentId: String?
-    var workspacePaths: [String]
+    var workspaceCatalog: GaryxWorkspaceCatalog
     var skills: [GaryxCachedSkill]
     var capsules: [GaryxCachedCapsule]
     var automations: [GaryxCachedAutomation]
@@ -26,7 +26,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         agents: [GaryxCachedAgent],
         gatewayDefaultAgentId: String? = nil,
         effectiveDefaultAgentId: String? = nil,
-        workspacePaths: [String],
+        workspaceCatalog: GaryxWorkspaceCatalog,
         skills: [GaryxCachedSkill],
         capsules: [GaryxCachedCapsule] = [],
         automations: [GaryxCachedAutomation],
@@ -43,7 +43,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.agents = agents
         self.gatewayDefaultAgentId = gatewayDefaultAgentId
         self.effectiveDefaultAgentId = effectiveDefaultAgentId
-        self.workspacePaths = workspacePaths
+        self.workspaceCatalog = workspaceCatalog
         self.skills = skills
         self.capsules = capsules
         self.automations = automations
@@ -60,7 +60,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         agents: [GaryxAgentSummary],
         gatewayDefaultAgentId: String? = nil,
         effectiveDefaultAgentId: String? = nil,
-        workspacePaths: [String],
+        workspaceCatalog: GaryxWorkspaceCatalog,
         skills: [GaryxSkillSummary],
         capsules: [GaryxCapsuleSummary] = [],
         automations: [GaryxAutomationSummary],
@@ -78,7 +78,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
             agents: agents.map(GaryxCachedAgent.init),
             gatewayDefaultAgentId: gatewayDefaultAgentId,
             effectiveDefaultAgentId: effectiveDefaultAgentId,
-            workspacePaths: workspacePaths,
+            workspaceCatalog: workspaceCatalog,
             skills: skills.map(GaryxCachedSkill.init),
             capsules: capsules.map(GaryxCachedCapsule.init),
             automations: automations.map(GaryxCachedAutomation.init),

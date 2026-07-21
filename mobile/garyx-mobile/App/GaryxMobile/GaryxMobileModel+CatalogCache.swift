@@ -2,15 +2,17 @@ import Foundation
 
 extension GaryxMobileModel {
     func resetWorkspaceCatalogState() {
-        workspaceCatalogState.reset(to: [])
+        workspaceCatalogState.reset(to: .empty)
     }
 
-    func restoreWorkspaceCatalogPaths(_ paths: [String]) {
-        workspaceCatalogState.restore(normalizedWorkspacePaths(paths))
+    func restoreWorkspaceCatalog(_ catalog: GaryxWorkspaceCatalog) {
+        workspaceCatalogState.restore(catalog)
     }
 
-    func replaceWorkspaceCatalogPaths(_ paths: [String], persist: Bool = false) {
-        workspaceCatalogState.replace(normalizedWorkspacePaths(paths))
+    /// Server order and names land verbatim: the catalog is rendered exactly
+    /// as delivered, with no client-side sorting, renaming, or filtering.
+    func replaceWorkspaceCatalog(_ catalog: GaryxWorkspaceCatalog, persist: Bool = false) {
+        workspaceCatalogState.replace(catalog)
         if persist {
             persistCatalogCacheSnapshot()
         }
@@ -21,15 +23,15 @@ extension GaryxMobileModel {
     }
 
     func failWorkspaceCatalogRefresh(_ message: String) {
-        workspaceCatalogState.failRefresh(message, keepingStaleValue: !userWorkspacePaths.isEmpty)
+        workspaceCatalogState.failRefresh(
+            message,
+            keepingStaleValue: !workspaceCatalog.workspaces.isEmpty
+        )
     }
 
-    func applyWorkspaceSummaries(_ workspaces: [GaryxWorkspaceSummary], persist: Bool = false) {
-        replaceWorkspaceCatalogPaths(workspaces.map(\.path), persist: persist)
-    }
-
-    private func normalizedWorkspacePaths(_ paths: [String]) -> [String] {
-        GaryxMobileWorkspacePresentation.userWorkspacePaths(savedWorkspacePaths: paths)
+    func applyWorkspacesPage(_ page: GaryxWorkspacesPage, persist: Bool = false) {
+        replaceWorkspaceCatalog(GaryxWorkspaceCatalog(page: page), persist: persist)
+        resolveDraftWorkspaceSelectionIfNeeded()
     }
 
     func restoreCachedCatalogState() {
@@ -60,7 +62,7 @@ extension GaryxMobileModel {
         }
         botConsoles = snapshot.botConsoles.map(\.model)
         channelPlugins = snapshot.channelPlugins.map(\.model)
-        restoreWorkspaceCatalogPaths(snapshot.workspacePaths)
+        restoreWorkspaceCatalog(snapshot.workspaceCatalog)
         if !agents.isEmpty {
             agentTargetsLoadPhase = .loaded
         }
@@ -75,7 +77,7 @@ extension GaryxMobileModel {
             agents: agents,
             gatewayDefaultAgentId: gatewayDefaultAgentId,
             effectiveDefaultAgentId: effectiveDefaultAgentId,
-            workspacePaths: userWorkspacePaths,
+            workspaceCatalog: workspaceCatalog,
             skills: skills,
             capsules: capsules,
             automations: automations,

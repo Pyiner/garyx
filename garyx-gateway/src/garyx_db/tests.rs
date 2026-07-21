@@ -4636,7 +4636,7 @@ fn thread_summary_keyset_branches_use_scoped_partial_indexes_without_temp_sort()
         for scoped in [false, true] {
             for has_cursor in [false, true] {
                 let expected_index = if scoped {
-                    format!("idx_thread_meta_summary_workspace_{suffix}")
+                    format!("idx_thread_meta_summary_root_workspace_{suffix}")
                 } else {
                     format!("idx_thread_meta_summary_{suffix}")
                 };
@@ -5682,6 +5682,9 @@ fn membership_columns_upgrade_from_the_generated_column_revision() {
         // shape that made a plain DROP COLUMN fail on upgrade).
         conn.execute_batch(
             "DROP INDEX IF EXISTS idx_thread_meta_root_workspace;
+             DROP INDEX IF EXISTS idx_thread_meta_summary_root_workspace_visible;
+             DROP INDEX IF EXISTS idx_thread_meta_summary_root_workspace_task;
+             DROP INDEX IF EXISTS idx_thread_meta_summary_root_workspace_non_task;
              ALTER TABLE thread_meta DROP COLUMN workspace_origin;
              ALTER TABLE thread_meta DROP COLUMN root_workspace_path;
              ALTER TABLE thread_meta ADD COLUMN root_workspace_path TEXT

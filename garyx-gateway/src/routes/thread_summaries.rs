@@ -10,7 +10,7 @@ pub(super) const MAX_THREAD_SUMMARY_LIMIT: usize = 100;
 #[serde(deny_unknown_fields)]
 pub struct ListThreadSummariesParams {
     #[serde(default)]
-    pub workspace_dir: Option<String>,
+    pub root_workspace_path: Option<String>,
     #[serde(default)]
     pub tasks: Option<String>,
     #[serde(default)]
@@ -45,7 +45,7 @@ pub(super) struct ThreadSummariesCursor {
 }
 
 pub(super) struct ParsedThreadSummariesParams {
-    workspace_dir: Option<String>,
+    root_workspace_path: Option<String>,
     filter: ThreadSummaryTaskFilter,
     query: Option<String>,
     scope: String,
@@ -53,9 +53,9 @@ pub(super) struct ParsedThreadSummariesParams {
     cursor: Option<ThreadSummariesCursor>,
 }
 
-pub(super) fn thread_summary_scope(workspace_dir: Option<&str>) -> String {
+pub(super) fn thread_summary_scope(root_workspace_path: Option<&str>) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(workspace_dir.unwrap_or_default().as_bytes());
+    hasher.update(root_workspace_path.unwrap_or_default().as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -110,12 +110,12 @@ pub(super) fn parse_thread_summaries_params(
                 format!("limit must be an integer from 1 through {MAX_THREAD_SUMMARY_LIMIT}")
             })?,
     };
-    let workspace_dir = params.workspace_dir;
-    if workspace_dir
+    let root_workspace_path = params.root_workspace_path;
+    if root_workspace_path
         .as_deref()
-        .is_some_and(|workspace_dir| !FsPath::new(workspace_dir).is_absolute())
+        .is_some_and(|root_workspace_path| !FsPath::new(root_workspace_path).is_absolute())
     {
-        return Err("workspace_dir must be an absolute path".to_owned());
+        return Err("root_workspace_path must be an absolute path".to_owned());
     }
     let filter = parse_thread_summary_task_filter(params.tasks.as_deref())?;
     let query = params
@@ -132,7 +132,7 @@ pub(super) fn parse_thread_summaries_params(
             "q must contain at most 100 Unicode scalar values after normalization".to_owned(),
         );
     }
-    let scope = thread_summary_scope(workspace_dir.as_deref());
+    let scope = thread_summary_scope(root_workspace_path.as_deref());
     let cursor = params
         .cursor
         .as_deref()
@@ -150,7 +150,7 @@ pub(super) fn parse_thread_summaries_params(
         }
     }
     Ok(ParsedThreadSummariesParams {
-        workspace_dir,
+        root_workspace_path,
         filter,
         query,
         scope,
@@ -183,7 +183,7 @@ pub async fn list_thread_summaries(
         Ok(params) => params,
         Err(message) => return thread_summaries_invalid_request(message),
     };
-    let workspace_dir = params.workspace_dir.clone();
+    let root_workspace_path = params.root_workspace_path.clone();
     let normalized_query = params.query.clone();
     let cursor_key = params
         .cursor
@@ -201,7 +201,7 @@ pub async fn list_thread_summaries(
         .run_blocking(move |db| {
             db.list_thread_summaries_keyset_page(
                 filter,
-                workspace_dir.as_deref(),
+                root_workspace_path.as_deref(),
                 normalized_query.as_deref(),
                 limit,
                 cursor_key

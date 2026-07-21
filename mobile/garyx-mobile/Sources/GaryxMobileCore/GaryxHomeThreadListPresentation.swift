@@ -173,6 +173,11 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
 
     private static func subtitle(for thread: GaryxThreadSummary) -> String? {
         let context: String? = {
+            // Server-derived membership first: worktree threads read as their
+            // root workspace, not the private worktree directory.
+            if let rootPath = thread.rootWorkspacePath, !rootPath.isEmpty {
+                return rootPath.garyxLastPathComponent
+            }
             if let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
                 return workspacePath.garyxLastPathComponent
             }
