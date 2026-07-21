@@ -774,7 +774,11 @@ export class DispatchOrchestrator {
           });
         }
         const status = await deps.checkConnection();
-        setConnection(status);
+        // Recheck: the status answer itself may come from the previous
+        // universe when a switch lands during the await.
+        if (this.connectionEpoch === epoch) {
+          setConnection(status);
+        }
       }
     }
   }
@@ -1049,6 +1053,9 @@ export class DispatchOrchestrator {
     }
     scheduleHistoryRefresh(threadId, 2, 500);
     const status = await deps.checkConnection();
+    if (this.connectionEpoch !== epoch) {
+      return;
+    }
     setConnection(status);
   }
 }

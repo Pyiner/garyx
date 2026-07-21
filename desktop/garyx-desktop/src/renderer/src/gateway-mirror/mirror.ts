@@ -127,6 +127,7 @@ export interface GatewayMirrorServices {
    * Optional: omitted in node tests.
    */
   saveThreadTranscriptCache?(
+    scope: string,
     transcript: ThreadTranscript,
     renderState?: RenderState | null,
   ): Promise<void>;
@@ -137,9 +138,10 @@ export interface GatewayMirrorServices {
   startThreadStream?(input: StartThreadStreamInput): Promise<void>;
   stopThreadStream?(input: StopThreadStreamInput): Promise<void>;
   loadThreadTranscriptCache?(
+    scope: string,
     threadId: string,
   ): Promise<CachedThreadTranscript | null>;
-  clearThreadTranscriptCache?(threadId: string): Promise<void>;
+  clearThreadTranscriptCache?(scope: string, threadId: string): Promise<void>;
 }
 
 export interface GatewayRootSnapshot {
@@ -506,6 +508,14 @@ export class GatewayMirror {
    * new-universe snapshot instead of the previous gateway's data (thread
    * ids are only unique per gateway).
    */
+  get currentConnectionEpoch(): number {
+    return this.connectionEpoch;
+  }
+
+  isCurrentConnectionEpoch(epoch: number): boolean {
+    return this.connectionEpoch === epoch;
+  }
+
   beginConnectionScope(key: string): void {
     const previous = this.connectionScopeKey;
     this.connectionScopeKey = key;
@@ -693,7 +703,14 @@ export class GatewayMirror {
     transcript: ThreadTranscript,
     renderState: RenderState | null,
   ): void {
-    void this.services?.saveThreadTranscriptCache?.(transcript, renderState);
+    // The disk cache is partitioned by gateway scope: a persist carries the
+    // universe it belongs to, so even a leaked late save can only ever
+    // write into its OWN gateway's partition.
+    void this.services?.saveThreadTranscriptCache?.(
+      this.connectionScopeKey ?? "",
+      transcript,
+      renderState,
+    );
   }
 
   // Slice 6b-2c MirrorPort accessors: the lifecycle's transport IPC,
@@ -720,11 +737,17 @@ export class GatewayMirror {
   loadThreadTranscriptCache(
     threadId: string,
   ): Promise<CachedThreadTranscript | null> {
-    return this.requireLifecycleService("loadThreadTranscriptCache")(threadId);
+    return this.requireLifecycleService("loadThreadTranscriptCache")(
+      this.connectionScopeKey ?? "",
+      threadId,
+    );
   }
 
   clearThreadTranscriptCache(threadId: string): Promise<void> {
-    return this.requireLifecycleService("clearThreadTranscriptCache")(threadId);
+    return this.requireLifecycleService("clearThreadTranscriptCache")(
+      this.connectionScopeKey ?? "",
+      threadId,
+    );
   }
 
   getThreadHistoryFull(threadId: string): Promise<ThreadTranscript> {
@@ -1151,11 +1174,15 @@ export class GatewayMirror {
         entry.cache.applyOlderPage(transcript);
         return true;
       } finally {
-        const current = entry.cache.getHistoryPagination();
-        entry.cache.setHistoryPagination(
-          current ? { ...current, loadingBefore: false } : current,
-        );
-        this.commitThread(entry);
+        // Only the owning epoch settles the loading flag: a stale fetch's
+        // finally must not clear an in-flight NEW-universe page load.
+        if (this.connectionEpoch === epoch) {
+          const current = entry.cache.getHistoryPagination();
+          entry.cache.setHistoryPagination(
+            current ? { ...current, loadingBefore: false } : current,
+          );
+          this.commitThread(entry);
+        }
       }
     } finally {
       release();

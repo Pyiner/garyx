@@ -236,6 +236,67 @@ test("a stale dispatch failure surfaces nothing in the new universe", async () =
   assert.deepEqual(mirror.getMachineState().intentsById, {});
 });
 
+test("a previous universe's stream event is dropped whole at the listener", () => {
+  const mirror = new GatewayMirror();
+  mirror.beginConnectionScope("http://gateway-a");
+  // A stream opened under universe A embeds its epoch in the request id.
+  const staleRequestId = "desktop-stream-request-e0-7";
+
+  mirror.beginConnectionScope("http://gateway-b");
+  mirror.applyRemoteTranscript(THREAD, transcriptWith("B recent"), {
+    persist: false,
+  });
+  // The late event from A's still-draining stream: committed events
+  // included, nothing may land (this is a cross-connection boundary, not
+  // within-connection request supersession). The drop happens before the
+  // deps/service layer, so no side effect can fire either.
+  mirror.notifyStreamEvent({
+    type: "committed_message",
+    threadId: THREAD,
+    requestId: staleRequestId,
+    seq: 999,
+    message: { role: "assistant", content: "A secret tail" },
+  });
+  assert.deepEqual(
+    mirror.getThreadSnapshot(THREAD).messages.map((message) => message.text),
+    ["B recent"],
+    "the stale committed event does not enter B's transcript",
+  );
+});
+
+test("a stale connection-status answer cannot overwrite the new universe's", async () => {
+  const mirror = new GatewayMirror();
+  mirror.beginConnectionScope("http://gateway-a");
+  const status = deferred();
+  const connections = [];
+  const { deps } = makeDispatchDeps({
+    checkConnection: () => status.promise,
+    setConnection: (value) => {
+      connections.push(value);
+    },
+  });
+  mirror.setDispatchDeps(deps);
+  mirror.dispatchMachineAction({
+    type: "intent/created",
+    intent: {
+      ...seededIntent("intent::from-a", "secret A prompt"),
+      state: "queued_local",
+      source: "composer_queue",
+    },
+    enqueue: true,
+  });
+
+  const pending = mirror.runQueuedBatch(THREAD, "intent::from-a");
+  mirror.beginConnectionScope("http://gateway-b");
+  status.resolve({ ok: false, error: "gateway a is unreachable" });
+  await pending;
+  assert.deepEqual(
+    connections,
+    [],
+    "A's status answer is not written into universe B",
+  );
+});
+
 test("a stale older-history page cannot prepend into the new universe", async () => {
   const history = deferred();
   const mirror = new GatewayMirror({

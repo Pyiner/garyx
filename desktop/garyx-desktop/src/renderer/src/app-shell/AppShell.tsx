@@ -607,12 +607,16 @@ export function AppShell() {
         getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
         getThreadHistoryFull: (threadId) =>
           window.garyxDesktop.getThreadHistory(threadId),
-        saveThreadTranscriptCache: (transcript, renderState) =>
-          window.garyxDesktop.saveThreadTranscriptCache(transcript, renderState),
-        loadThreadTranscriptCache: (threadId) =>
-          window.garyxDesktop.loadThreadTranscriptCache(threadId),
-        clearThreadTranscriptCache: (threadId) =>
-          window.garyxDesktop.clearThreadTranscriptCache(threadId),
+        saveThreadTranscriptCache: (scope, transcript, renderState) =>
+          window.garyxDesktop.saveThreadTranscriptCache(
+            scope,
+            transcript,
+            renderState,
+          ),
+        loadThreadTranscriptCache: (scope, threadId) =>
+          window.garyxDesktop.loadThreadTranscriptCache(scope, threadId),
+        clearThreadTranscriptCache: (scope, threadId) =>
+          window.garyxDesktop.clearThreadTranscriptCache(scope, threadId),
         startThreadStream: (input) =>
           window.garyxDesktop.startThreadStream(input),
         stopThreadStream: (input) => window.garyxDesktop.stopThreadStream(input),
@@ -632,11 +636,24 @@ export function AppShell() {
     React.Dispatch<React.SetStateAction<DesktopState | null>>
   >(
     (action) => {
-      setDesktopStateRaw((current) =>
-        pinnedOrderIngress.commitState(current, action),
-      );
+      setDesktopStateRaw((current) => {
+        const next = pinnedOrderIngress.commitState(current, action);
+        // Connection-scope transition AT the state-commit boundary: by the
+        // time React renders a new gateway's frame, the mirror and the
+        // side-chat domain are already the new (empty) universe — no frame
+        // can paint the previous gateway's data and no effect ordering is
+        // load-bearing. The ingress identity checks above already rejected
+        // cross-gateway deliveries, so `next` carries the accepted
+        // universe; same-key adoption is a no-op, which keeps updater
+        // re-runs (StrictMode, replays) safe. commitState sets the
+        // precedent for idempotent ingress bookkeeping inside the updater.
+        const nextGatewayKey = next?.entitiesGatewayUrl || "";
+        gatewayMirror.beginConnectionScope(nextGatewayKey);
+        sideChatSessions.setGatewayScope(nextGatewayKey);
+        return next;
+      });
     },
-    [pinnedOrderIngress],
+    [pinnedOrderIngress, gatewayMirror, sideChatSessions],
   );
   const [desktopAgentCatalog, setDesktopAgentCatalog] =
     useState<DesktopAgentCatalog>(EMPTY_DESKTOP_AGENT_CATALOG);
@@ -1472,7 +1489,10 @@ export function AppShell() {
     return () => {
       gatewayMirror.cancelSelectedThreadLoad(selectedThreadId);
     };
-  }, [Boolean(desktopState), selectedThreadId]);
+    // Keyed on the gateway universe too: after a switch the same selected
+    // thread id is a DIFFERENT thread, so the load must rerun.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(desktopState), selectedThreadId, desktopState?.entitiesGatewayUrl]);
 
   // Dev-only mirror handle for CDP walkthroughs (the batch-2b parity probe
   // was deleted with the legacy dual-write in batch 6a).
@@ -2191,27 +2211,19 @@ export function AppShell() {
     sideChatSessions.setActiveSource(sideChatSourceThreadId);
   }, [sideChatSourceThreadId]);
 
-  // Connection-scope transition: ONE owner for the renderer's per-gateway
-  // data universe. Declared BEFORE the transcript/history effects so a
-  // switch commit resets the mirror (transcripts, dispatch machine, live
-  // streams, in-flight continuations) and the side-chat domain before any
-  // new-universe load starts in the same commit. Cold start adopts the
-  // first universe without a reset.
+  // The connection-scope transition itself happens synchronously at the
+  // state-commit boundary (see setDesktopState). This effect owns the
+  // universe-scoped POST-transition bookkeeping: the deferred drain refs
+  // reset, and the persisted side-chat binding for the active source is
+  // re-adopted from the NEW gateway's partition.
   useEffect(() => {
-    gatewayMirror.beginConnectionScope(workspaceGatewayKey);
-    sideChatSessions.setGatewayScope(workspaceGatewayKey);
-    // The deferred queue-drain bookkeeping is universe-scoped.
     deferredQueueDrainByThreadRef.current = {};
     queueDrainInFlightByThreadRef.current = {};
-    // Restore runs AFTER the transition clears the domain (the
-    // source-keyed restore effect above fires earlier in the same commit,
-    // against the previous scope). Cold start lands here too: the scope
-    // becoming non-empty is what makes the persisted binding adoptable.
     if (sideChatSourceThreadId && workspaceGatewayKey) {
       sideChatSessions.restorePersisted(sideChatSourceThreadId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gatewayMirror, sideChatSessions, workspaceGatewayKey]);
+  }, [sideChatSessions, workspaceGatewayKey]);
 
   // Load the side thread transcript once per side thread (after state
   // hydration). Depending on `desktopState` identity here is unsafe: applying
@@ -4116,22 +4128,38 @@ export function AppShell() {
     delayMs = 1200,
     canonical = false,
   ) {
+    // The whole timer/fetch/apply loop is owned by the connection epoch it
+    // was scheduled on: a response that lands after a gateway switch must
+    // not replace the new universe's transcript for a colliding thread id.
+    const epoch = gatewayMirror.currentConnectionEpoch;
+    const scopeCurrent = () => gatewayMirror.isCurrentConnectionEpoch(epoch);
     scheduleThreadHistoryRefresh({
       api: getDesktopApi(),
       threadId,
       attempts,
       delayMs,
       canonical,
-      shouldContinue: hasPendingHistoryIntents,
+      shouldContinue: (pendingThreadId) =>
+        scopeCurrent() && hasPendingHistoryIntents(pendingThreadId),
       onCanonicalTranscript: (threadId, transcript) => {
+        if (!scopeCurrent()) {
+          return;
+        }
         requestSelectedThreadMessagesBottomSnap(threadId, true);
         applyCanonicalTranscript(threadId, transcript);
       },
       onRemoteTranscript: (threadId, transcript) => {
+        if (!scopeCurrent()) {
+          return;
+        }
         requestSelectedThreadMessagesBottomSnap(threadId, true);
         applyRemoteTranscript(threadId, transcript);
       },
-      onExhausted: forceReleaseThreadRuntime,
+      onExhausted: (exhaustedThreadId) => {
+        if (scopeCurrent()) {
+          forceReleaseThreadRuntime(exhaustedThreadId);
+        }
+      },
     });
   }
 

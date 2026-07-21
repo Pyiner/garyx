@@ -49,8 +49,19 @@ interface CacheRecord {
   lastAccessAt: number;
 }
 
-function cacheFileName(threadId: string): string {
-  return `${Buffer.from(threadId, "utf8").toString("base64url")}.json`;
+/**
+ * Cache identity is the (gatewayScope, threadId) PAIR: thread ids are only
+ * unique per gateway, so an unpartitioned cache would flash gateway A's
+ * transcript into gateway B's thread of the same id. The scope is encoded
+ * into the file name, so entries from different gateways can never collide
+ * and a gateway switch needs no cache invalidation at all.
+ */
+function cacheKey(scope: string, threadId: string): string {
+  return `${scope}\n${threadId}`;
+}
+
+function cacheFileName(scope: string, threadId: string): string {
+  return `${Buffer.from(cacheKey(scope, threadId), "utf8").toString("base64url")}.json`;
 }
 
 function validTranscript(value: unknown): value is ThreadTranscript {
@@ -80,13 +91,16 @@ export class TranscriptCacheStore {
     this.now = options.now ?? (() => new Date());
   }
 
-  async load(threadId: string): Promise<CachedThreadTranscript | null> {
+  async load(
+    scope: string,
+    threadId: string,
+  ): Promise<CachedThreadTranscript | null> {
     const normalizedThreadId = threadId.trim();
     if (!normalizedThreadId) {
       return null;
     }
     return this.serialize(async () => {
-      const target = this.pathForThread(normalizedThreadId);
+      const target = this.pathForThread(scope, normalizedThreadId);
       try {
         const raw = await readFile(target, "utf8");
         const parsed = JSON.parse(raw) as Partial<CachedThreadTranscriptFile>;
@@ -110,6 +124,7 @@ export class TranscriptCacheStore {
   }
 
   save(
+    scope: string,
     transcript: ThreadTranscript,
     renderState?: RenderState | null,
   ): Promise<void> {
@@ -117,10 +132,10 @@ export class TranscriptCacheStore {
     if (!threadId) {
       return Promise.resolve();
     }
-    return this.enqueueLatestMutation(threadId, async () => {
+    return this.enqueueLatestMutation(cacheKey(scope, threadId), async () => {
       const directory = this.directory();
       await mkdir(directory, { recursive: true });
-      const target = this.pathForThread(threadId);
+      const target = this.pathForThread(scope, threadId);
       const savedAt = this.now();
       const temp = `${target}.tmp-${process.pid}-${savedAt.getTime()}`;
       const payload: CachedThreadTranscriptFile = {
@@ -140,22 +155,27 @@ export class TranscriptCacheStore {
     });
   }
 
-  clear(threadId: string): Promise<void> {
+  clear(scope: string, threadId: string): Promise<void> {
     const normalizedThreadId = threadId.trim();
     if (!normalizedThreadId) {
       return Promise.resolve();
     }
-    return this.enqueueLatestMutation(normalizedThreadId, async () => {
-      await rm(this.pathForThread(normalizedThreadId), { force: true });
-    });
+    return this.enqueueLatestMutation(
+      cacheKey(scope, normalizedThreadId),
+      async () => {
+        await rm(this.pathForThread(scope, normalizedThreadId), {
+          force: true,
+        });
+      },
+    );
   }
 
   prune(): Promise<void> {
     return this.serialize(() => this.pruneToLimits());
   }
 
-  private pathForThread(threadId: string): string {
-    return join(this.directory(), cacheFileName(threadId));
+  private pathForThread(scope: string, threadId: string): string {
+    return join(this.directory(), cacheFileName(scope, threadId));
   }
 
   private enqueueLatestMutation(
@@ -251,20 +271,25 @@ const transcriptCache = new TranscriptCacheStore({
 });
 
 export function loadThreadTranscriptCache(
+  scope: string,
   threadId: string,
 ): Promise<CachedThreadTranscript | null> {
-  return transcriptCache.load(threadId);
+  return transcriptCache.load(scope, threadId);
 }
 
 export function saveThreadTranscriptCache(
+  scope: string,
   transcript: ThreadTranscript,
   renderState?: RenderState | null,
 ): Promise<void> {
-  return transcriptCache.save(transcript, renderState);
+  return transcriptCache.save(scope, transcript, renderState);
 }
 
-export function clearThreadTranscriptCache(threadId: string): Promise<void> {
-  return transcriptCache.clear(threadId);
+export function clearThreadTranscriptCache(
+  scope: string,
+  threadId: string,
+): Promise<void> {
+  return transcriptCache.clear(scope, threadId);
 }
 
 export function pruneThreadTranscriptCache(): Promise<void> {

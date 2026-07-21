@@ -330,7 +330,25 @@ export class TranscriptLifecycle {
 
   private freshStreamRequestId(): string {
     this.nextStreamRequestOrdinal += 1;
-    return `desktop-stream-request-${this.nextStreamRequestOrdinal}`;
+    return `desktop-stream-request-e${this.connectionEpoch}-${this.nextStreamRequestOrdinal}`;
+  }
+
+  /**
+   * Connection identity of a stream event. Stream requests embed the epoch
+   * they were opened on; an event from a previous universe's stream is
+   * dropped WHOLE — committed events included. This is a cross-connection
+   * boundary, not within-connection request supersession: the "committed
+   * events are never filtered by logical request id" contract applies only
+   * inside one gateway connection. Request-less events are locally
+   * synthesized (cache replays, tests) and therefore universe-local.
+   */
+  private streamEventEpochCurrent(event: DesktopChatStreamEvent): boolean {
+    const requestId = event.requestId?.trim() || "";
+    const match = /^desktop-stream-request-e(\d+)-/.exec(requestId);
+    if (!match) {
+      return true;
+    }
+    return Number(match[1]) === this.connectionEpoch;
   }
 
   private seedEffectiveFloorIfCold(
@@ -1175,6 +1193,11 @@ export class TranscriptLifecycle {
    * legacy handler owned.
    */
   notifyStreamEvent(event: DesktopChatStreamEvent): void {
+    if (!this.streamEventEpochCurrent(event)) {
+      // A late event from a previous gateway universe: nothing may land —
+      // no ingest, no persistence, no run-state or machine side effects.
+      return;
+    }
     const { scheduleDesktopStateRefresh } = this.requireDeps();
     const windowState = this.renderWindowStateByThread.get(event.threadId);
     const currentRequest = this.streamEventIsCurrentRequest(event, windowState);
@@ -1776,6 +1799,11 @@ export class TranscriptLifecycle {
           });
           streamStarted = false;
         }
+        if (isCancelled()) {
+          // Superseded (or universe-switched) during the stop: the rest of
+          // the rollback would clear the SUCCESSOR's cache and state.
+          return;
+        }
         if (latestTranscript) {
           this.cancelTranscriptPersistence(threadId);
           void this.port.clearThreadTranscriptCache(threadId);
@@ -1801,6 +1829,11 @@ export class TranscriptLifecycle {
       }
       streamReady = true;
     } catch (historyError) {
+      if (isCancelled()) {
+        // A failure from a superseded load (thread switch or gateway
+        // universe switch) surfaces nothing.
+        return;
+      }
       if (!latestTranscript) {
         setError(
           historyError instanceof Error

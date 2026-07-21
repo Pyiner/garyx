@@ -112,21 +112,38 @@ test('the renderer commits the created state without stripping its envelope', ()
 });
 
 test('side-chat scope ownership is wired at every production boundary', () => {
-  // 1. The scope transition effect owns the post-transition restore: the
-  //    persisted binding is re-adopted AFTER setGatewayScope clears the
-  //    domain (cold-start scope landing and gateway switches alike).
+  // 1. The connection-scope transition happens synchronously AT the
+  //    state-commit boundary (inside the setDesktopState wrapper): mirror
+  //    universe first, then the side-chat domain. No frame can render the
+  //    previous gateway's data and no effect ordering is load-bearing.
   const transitionIdx = appShellSource.indexOf(
-    'sideChatSessions.setGatewayScope(workspaceGatewayKey);',
+    'gatewayMirror.beginConnectionScope(nextGatewayKey);',
   );
-  assert.ok(transitionIdx > 0, 'the scope transition call exists');
-  const transitionWindow = appShellSource.slice(
-    transitionIdx,
-    transitionIdx + 900,
+  assert.ok(transitionIdx > 0, 'the mirror transition call exists');
+  const commitIdx = appShellSource.indexOf(
+    'pinnedOrderIngress.commitState(current, action)',
   );
+  assert.ok(
+    commitIdx > 0 && transitionIdx > commitIdx && transitionIdx - commitIdx < 1200,
+    'the transition is co-located with the ingress state commit',
+  );
+  const domainTransitionIdx = appShellSource.indexOf(
+    'sideChatSessions.setGatewayScope(nextGatewayKey);',
+  );
+  assert.ok(
+    domainTransitionIdx > transitionIdx,
+    'the mirror universe resets before the side-chat domain republishes',
+  );
+  // The persisted binding is re-adopted in the scope-keyed effect AFTER the
+  // commit-boundary transition cleared the domain.
+  const restoreIdx = appShellSource.lastIndexOf(
+    'sideChatSessions.restorePersisted(sideChatSourceThreadId);',
+  );
+  assert.ok(restoreIdx > 0, 'the post-transition restore exists');
   assert.match(
-    transitionWindow,
-    /restorePersisted\(sideChatSourceThreadId\)/,
-    'the transition effect restores the persisted binding after clearing',
+    appShellSource.slice(restoreIdx, restoreIdx + 300),
+    /\}, \[sideChatSessions, workspaceGatewayKey\]\);/,
+    'the restore effect is keyed on the gateway scope',
   );
 
   // 2. EVERY consumer of the sessions snapshot derives through the shared
@@ -149,29 +166,24 @@ test('side-chat scope ownership is wired at every production boundary', () => {
     'the panel never reads raw bindings past the scope identity',
   );
 
-  // 2b. The connection-scope transition owns the WHOLE renderer data
-  //     universe: the mirror machine resets alongside the side-chat domain,
-  //     and the universe-scoped drain bookkeeping is cleared with it.
-  const mirrorTransitionIdx = appShellSource.indexOf(
-    'gatewayMirror.beginConnectionScope(workspaceGatewayKey);',
-  );
-  assert.ok(mirrorTransitionIdx > 0, 'the mirror transition call exists');
-  assert.ok(
-    mirrorTransitionIdx < transitionIdx,
-    'the mirror universe resets before the side-chat domain republishes',
-  );
-  const historyEffectIdx = appShellSource.indexOf(
-    'void loadThreadHistory({',
-  );
-  assert.ok(
-    mirrorTransitionIdx < historyEffectIdx,
-    'the transition effect is declared before the transcript effects, so a ' +
-      'switch commit resets the universe before new-universe loads start',
-  );
+  // 2b. Universe-scoped bookkeeping resets with the scope, and every
+  //     same-thread-id consumer re-keys on the gateway universe: the
+  //     selected loader carries the gateway key in its deps, and the legacy
+  //     history reconcile loop is epoch-owned end to end.
   assert.match(
     appShellSource,
     /deferredQueueDrainByThreadRef\.current = \{\};/,
     'the deferred drain bookkeeping resets on the transition',
+  );
+  assert.match(
+    appShellSource,
+    /\}, \[Boolean\(desktopState\), selectedThreadId, desktopState\?\.entitiesGatewayUrl\]\);/,
+    'the selected-thread loader re-keys on the gateway universe',
+  );
+  assert.match(
+    appShellSource,
+    /const epoch = gatewayMirror\.currentConnectionEpoch;\s*\n\s*const scopeCurrent = \(\) =>\s*gatewayMirror\.isCurrentConnectionEpoch\(epoch\);/,
+    'scheduleHistoryRefresh captures its owning epoch at schedule time',
   );
 
   // 3. The history/stream effect is keyed on the scope generation, so a

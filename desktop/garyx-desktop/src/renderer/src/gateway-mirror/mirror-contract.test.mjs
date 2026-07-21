@@ -1994,7 +1994,8 @@ test("an evicted thread reopens through disk cache, authoritative paging, and st
       };
     },
     getThreadHistoryFull: async () => cachedTranscript,
-    loadThreadTranscriptCache: async (requestedThreadId) => {
+    loadThreadTranscriptCache: async (requestedScope, requestedThreadId) => {
+      assert.equal(requestedScope, "");
       assert.equal(requestedThreadId, threadId);
       return { transcript: cachedTranscript, renderState: cachedRenderState };
     },

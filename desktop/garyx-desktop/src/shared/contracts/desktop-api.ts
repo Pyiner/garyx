@@ -423,13 +423,18 @@ export interface GaryxDesktopApi {
     input: string | GetThreadHistoryInput,
   ) => Promise<ThreadTranscript>;
   loadThreadTranscriptCache: (
+    scope: string,
     threadId: string,
   ) => Promise<CachedThreadTranscript | null>;
   saveThreadTranscriptCache: (
+    scope: string,
     transcript: ThreadTranscript,
     renderState?: RenderState | null,
   ) => Promise<void>;
-  clearThreadTranscriptCache: (threadId: string) => Promise<void>;
+  clearThreadTranscriptCache: (
+    scope: string,
+    threadId: string,
+  ) => Promise<void>;
   startThreadStream: (input: StartThreadStreamInput) => Promise<void>;
   stopThreadStream: (input?: StopThreadStreamInput) => Promise<void>;
   getThreadLogs: (threadId: string, cursor?: number) => Promise<ThreadLogChunk>;

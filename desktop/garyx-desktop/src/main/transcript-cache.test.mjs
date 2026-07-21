@@ -65,6 +65,7 @@ test('bounds the on-disk transcript cache by record count', async () => {
     await Promise.all(
       Array.from({ length: TEST_MAX_CACHE_RECORDS + 1 }, (_, index) =>
         cache.saveThreadTranscriptCache(
+          'http://gateway-a',
           transcript(`thread-${String(index).padStart(4, '0')}`),
         ),
       ),
@@ -94,14 +95,14 @@ test('uses load access time for record-count LRU eviction', async () => {
       now: () => new Date((now += 1_000)),
     });
 
-    await store.save(transcript('thread-a'));
-    await store.save(transcript('thread-b'));
-    assert.ok(await store.load('thread-a'));
-    await store.save(transcript('thread-c'));
+    await store.save('http://gateway-a', transcript('thread-a'));
+    await store.save('http://gateway-a', transcript('thread-b'));
+    assert.ok(await store.load('http://gateway-a', 'thread-a'));
+    await store.save('http://gateway-a', transcript('thread-c'));
 
-    assert.equal(await store.load('thread-b'), null, 'least-recently used record is evicted');
-    assert.ok(await store.load('thread-a'));
-    assert.ok(await store.load('thread-c'));
+    assert.equal(await store.load('http://gateway-a', 'thread-b'), null, 'least-recently used record is evicted');
+    assert.ok(await store.load('http://gateway-a', 'thread-a'));
+    assert.ok(await store.load('http://gateway-a', 'thread-c'));
   } finally {
     await rm(temporaryRoot, { force: true, recursive: true });
   }
@@ -118,10 +119,10 @@ test('evicts records until the transcript-cache byte limit holds', async () => {
       maxRecords: 10,
     });
 
-    await store.save(transcript('thread-large', 'X'.repeat(2_048)));
+    await store.save('http://gateway-a', transcript('thread-large', 'X'.repeat(2_048)));
 
     assert.deepEqual(await cacheRecordNames(cacheDirectory), []);
-    assert.equal(await store.load('thread-large'), null);
+    assert.equal(await store.load('http://gateway-a', 'thread-large'), null);
   } finally {
     await rm(temporaryRoot, { force: true, recursive: true });
   }
@@ -137,9 +138,9 @@ test('startup pruning bounds records written before the current process', async 
       maxBytes: Number.MAX_SAFE_INTEGER,
       maxRecords: 10,
     });
-    await permissiveStore.save(transcript('thread-a'));
-    await permissiveStore.save(transcript('thread-b'));
-    await permissiveStore.save(transcript('thread-c'));
+    await permissiveStore.save('http://gateway-a', transcript('thread-a'));
+    await permissiveStore.save('http://gateway-a', transcript('thread-b'));
+    await permissiveStore.save('http://gateway-a', transcript('thread-c'));
     assert.equal((await cacheRecordNames(cacheDirectory)).length, 3);
 
     const startupStore = new cache.TranscriptCacheStore({
@@ -164,12 +165,12 @@ test('serializes save and clear mutations with the latest call winning', async (
     });
 
     await Promise.all([
-      store.save(transcript('thread-order', 'first')),
-      store.clear('thread-order'),
-      store.save(transcript('thread-order', 'latest')),
+      store.save('http://gateway-a', transcript('thread-order', 'first')),
+      store.clear('http://gateway-a', 'thread-order'),
+      store.save('http://gateway-a', transcript('thread-order', 'latest')),
     ]);
 
-    const loaded = await store.load('thread-order');
+    const loaded = await store.load('http://gateway-a', 'thread-order');
     assert.equal(loaded?.transcript.messages[0]?.text, 'latest');
   } finally {
     await rm(temporaryRoot, { force: true, recursive: true });

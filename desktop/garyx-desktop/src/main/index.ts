@@ -1365,24 +1365,25 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle(
     "garyx:load-thread-transcript-cache",
-    async (_event, threadId: string) => {
-      return loadThreadTranscriptCache(threadId || "");
+    async (_event, scope: string, threadId: string) => {
+      return loadThreadTranscriptCache(scope || "", threadId || "");
     },
   );
   ipcMain.handle(
     "garyx:save-thread-transcript-cache",
     async (
       _event,
+      scope: string,
       transcript: ThreadTranscript,
       renderState?: RenderState | null,
     ) => {
-      await saveThreadTranscriptCache(transcript, renderState ?? null);
+      await saveThreadTranscriptCache(scope || "", transcript, renderState ?? null);
     },
   );
   ipcMain.handle(
     "garyx:clear-thread-transcript-cache",
-    async (_event, threadId: string) => {
-      await clearThreadTranscriptCache(threadId || "");
+    async (_event, scope: string, threadId: string) => {
+      await clearThreadTranscriptCache(scope || "", threadId || "");
     },
   );
   ipcMain.handle(
