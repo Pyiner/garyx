@@ -178,6 +178,28 @@ render_state; clients dumb-render structured fields. No client prose regex.
 - Both clients keep the existing "no presentation → ordinary text" path.
   No client-side sniffing of `<garyx_task_notification` to resurrect cards.
 
+#### Collapsed card + expand (product owner requirement, 2026-07-21)
+
+Notification handoffs are often multi-KB review verdicts; a full-height card
+drowns the conversation. In-transcript cards are compact summaries with an
+expand affordance:
+
+- **Collapsed (default, both platforms)**: header (task id, status, title)
+  plus the card body clamped to **at most 10 text lines**. When the body
+  exceeds the clamp, the card shows a clear expand affordance and the whole
+  card is activatable; when it fits, no affordance and no dead interaction.
+- **Expanded view** renders the same header plus the full envelope-stripped
+  body as markdown — same data path as the card, no separate fetch or
+  re-parse:
+  - **Desktop**: a modal dialog, using the app's existing dialog pattern.
+  - **iOS**: a full-screen presentation, using the existing full-screen
+    cover pattern (route-level chrome rules unaffected — this is a modal
+    presentation, not a route push).
+- The "clamped?" decision lives in a testable layer (e.g. line/height
+  measurement adapter or Core-side estimation), not buried as an
+  untestable visual side effect; existing copy/share interactions on the
+  card keep working in both states.
+
 ### 3.5 History: versioned transcript metadata backfill
 
 One versioned one-shot migration (durable marker, same regime as
@@ -224,6 +246,10 @@ One versioned one-shot migration (durable marker, same regime as
   render_state snapshots; card asserts fields from payload, body from
   envelope strip; zero regex on template wording (grep-level check: the
   "is ready for review" literal appears in no client source).
+- **Collapse/expand**: with a >10-line fixture body the card clamps and
+  exposes the expand affordance (desktop: component/storybook test; iOS:
+  the clamp decision asserted at the testable layer); with a short fixture
+  no affordance renders. Expanded surface shows the complete body.
 - **Migration**: fixture DB with all three historical shapes (legacy keys,
   dropped-marker, already-new) → single boot migration → assert projected
   presentation for all three; marker prevents re-run.
