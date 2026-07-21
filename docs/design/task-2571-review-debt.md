@@ -34,3 +34,13 @@ them.
    `last_active_at` semantics ever diverge from record `updated_at`,
    cross-route freshness decisions silently change. Worth an importable
    contract note or a shared derivation.
+
+## From #TASK-2584 adversarial review of #TASK-2580 (round 2, 2026-07-22)
+
+4. **`meetings::tests::registry_replacement_resets_failure_and_no_client_deadline_recovers_or_aborts` is flaky under full-suite load.**
+   Observed once during a full `cargo test -p garyx-gateway --lib` run at
+   `59dc4fdb6` (`garyx-gateway/src/meetings/tests.rs:2624`, `left: 2, right: 1`);
+   passes 3/3 when rerun in isolation. No task-2571 commit touches meetings
+   code, so this is adjacent test-infra debt: a timing assumption that does
+   not hold when the suite saturates the machine. Worth deflaking so full
+   suite runs stay a reliable review gate.
