@@ -146,33 +146,45 @@ pub(super) fn configured_data_lock_wait() -> GaryxDbResult<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
-/// Typestate witness that the pre-R5 parent handoff barrier completed while
-/// the data-dir lock was held. Minted only by
-/// [`wait_for_pre_r5_parent_handoff`] (which requires the held lock as
-/// evidence) and demanded by the first database open, so the startup order
-/// lock -> parent handoff -> SQLite open is pinned by the compiler instead of
-/// a retired source-scan guard.
-pub(super) struct PreR5HandoffComplete(());
+/// The held data-dir lock plus the first SQLite connection of its database.
+///
+/// Obtainable only through [`acquire_locked_database`], whose body is the
+/// startup sequence lock -> pre-R5 parent handoff -> open. The handoff
+/// barrier itself is private to this module, so code outside `lock.rs` can
+/// neither invoke it out of order nor skip it while still presenting a
+/// locked database. The fail-closed behavior test (failed handoff leaves the
+/// database untouched and releases the lock) pins the observable property.
+pub(super) struct LockedDatabase {
+    pub(super) lock: DataDirLock,
+    pub(super) conn: Connection,
+}
+
+/// The only way to obtain an on-disk SQLite connection under the data-dir
+/// lock: acquire the lock, run the pre-R5 parent handoff barrier, then open.
+pub(super) fn acquire_locked_database(
+    path: &Path,
+    lock_wait: Duration,
+) -> GaryxDbResult<LockedDatabase> {
+    let lock = DataDirLock::acquire(path, lock_wait)?;
+    wait_for_pre_r5_parent_handoff()?;
+    let conn = Connection::open(path)?;
+    Ok(LockedDatabase { lock, conn })
+}
 
 #[cfg(unix)]
-pub(super) fn wait_for_pre_r5_parent_handoff(
-    _lock: &DataDirLock,
-) -> GaryxDbResult<PreR5HandoffComplete> {
+fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
     let parent_pid = unsafe { libc::getppid() };
     if parent_pid <= 1 || !parent_has_same_executable_name(parent_pid as u32)? {
-        return Ok(PreR5HandoffComplete(()));
+        return Ok(());
     }
     wait_for_parent_exit(parent_pid as u32, PRE_R5_PARENT_HANDOFF_WAIT, || {
         process_is_alive(parent_pid as u32)
-    })?;
-    Ok(PreR5HandoffComplete(()))
+    })
 }
 
 #[cfg(not(unix))]
-pub(super) fn wait_for_pre_r5_parent_handoff(
-    _lock: &DataDirLock,
-) -> GaryxDbResult<PreR5HandoffComplete> {
-    Ok(PreR5HandoffComplete(()))
+fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
+    Ok(())
 }
 
 pub(super) fn wait_for_parent_exit(

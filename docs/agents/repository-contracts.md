@@ -276,10 +276,15 @@ reinterpreted in feature code.
   channel-blind — no built-in channel-name literals or downcast vocabulary
   in `dispatcher.rs` (the privacy seal in `outbound_registry` remains the
   compile-level boundary).
-- Startup ordering that used to be text-pinned is typestate-pinned:
-  `garyx_db` opens SQLite only through the `PreR5HandoffComplete` witness
-  (lock -> parent handoff -> open), and migration registration order is
-  enforced by runtime preconditions plus the full-runner tests.
+- Startup ordering that used to be text-pinned is structurally funneled:
+  `garyx_db` obtains an on-disk SQLite connection under the data-dir lock
+  only through `lock.rs::acquire_locked_database`, whose body is
+  lock -> pre-R5 parent handoff (a barrier private to `lock.rs`) -> open;
+  the fail-closed behavior test pins the observable property. Migration
+  dependency edges are runtime preconditions checked by the migrations
+  themselves (and exercised by the full-runner tests); registration order
+  between migrations without a precondition is not a contract — introduce a
+  new dependency as a precondition, never as ordering convention.
 
 ## Time And Timezone
 

@@ -1454,6 +1454,40 @@ mod patch_allowlist_contract {
     //! direct import): growing it means auditing what a concurrent
     //! whole-record write could clobber.
 
+    /// Behavioral half of the writer contract: the creation writer stays a
+    /// field-scoped patch, so a field written concurrently between its
+    /// observation and its persist survives. A regression to whole-record
+    /// `set` clobbers the concurrent field and turns this red.
+    #[tokio::test]
+    async fn task_creation_writer_preserves_concurrent_fields() {
+        use crate::memory_store::InMemoryThreadStore;
+        use crate::store::ThreadStore;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let thread_id = "thread::task-writer";
+        let observed = json!({"label": "old", "thread_kind": "chat"});
+        // Concurrent write lands after the writer observed the record.
+        let mut stored = observed.clone();
+        stored["concurrent_marker"] = json!("survives");
+        store.set(thread_id, stored).await.expect("seed record");
+
+        let mut desired = observed.clone();
+        desired["label"] = json!("Task title");
+        desired["thread_kind"] = json!("task");
+        desired["task"] = json!({"number": 1});
+        super::patch_task_creation_record(&store, thread_id, &observed, &desired)
+            .await
+            .expect("creation patch");
+
+        let record = store.get(thread_id).await.expect("read").expect("record");
+        assert_eq!(record["concurrent_marker"], json!("survives"));
+        assert_eq!(record["label"], json!("Task title"));
+        assert_eq!(record["thread_kind"], json!("task"));
+        assert_eq!(record["task"], json!({"number": 1}));
+    }
+
     #[test]
     fn task_creation_patch_allowlist_is_the_reviewed_contract() {
         assert_eq!(

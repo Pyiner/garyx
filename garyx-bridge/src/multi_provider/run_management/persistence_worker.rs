@@ -573,6 +573,52 @@ pub(super) fn spawn_partial_thread_persistence_worker(
 mod patch_contract_tests {
     use super::*;
 
+    /// Behavioral half of the writer contract: the model-snapshot writer must
+    /// stay a field-scoped patch within its allowlist and never regress to a
+    /// whole-record `set` (which would clobber concurrently written fields).
+    #[tokio::test]
+    async fn model_runtime_snapshot_writer_patches_within_allowlist_never_sets() {
+        use garyx_router::test_seams::PatchSpyThreadStore;
+        use serde_json::json;
+
+        let spy = PatchSpyThreadStore::seeded(
+            "thread::model-snapshot-writer",
+            json!({"concurrent_marker": "survives"}),
+        );
+        let selection = ProviderRuntimeSelection {
+            model: Some("test-model".to_owned()),
+            model_reasoning_effort: None,
+            model_service_tier: None,
+        };
+        persist_thread_runtime_snapshot(
+            Some(spy.clone() as Arc<dyn ThreadStore>),
+            "thread::model-snapshot-writer",
+            &selection,
+        )
+        .await;
+
+        assert!(
+            spy.set_thread_ids().is_empty(),
+            "model-snapshot writer must never issue a whole-record set"
+        );
+        let patches = spy.patched_field_sets();
+        assert!(
+            !patches.is_empty(),
+            "snapshot writer must persist via patch"
+        );
+        for fields in &patches {
+            for field in fields {
+                assert!(
+                    MODEL_RUNTIME_SNAPSHOT_PATCH_FIELDS.contains(&field.as_str()),
+                    "patched field {field} outside the reviewed allowlist"
+                );
+            }
+        }
+        let record = spy.record("thread::model-snapshot-writer").expect("record");
+        assert_eq!(record["concurrent_marker"], json!("survives"));
+        assert_eq!(record["metadata"]["model"], json!("test-model"));
+    }
+
     #[test]
     fn model_runtime_snapshot_patch_allowlist_matches_contract() {
         assert_eq!(

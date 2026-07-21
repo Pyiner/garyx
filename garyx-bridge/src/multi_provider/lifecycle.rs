@@ -619,6 +619,76 @@ impl MultiProviderBridge {
 mod patch_contract_tests {
     use super::*;
 
+    /// Behavioral half of the writer contract: the agent-snapshot backfill
+    /// must stay a field-scoped patch within its allowlist and never regress
+    /// to a whole-record `set` (which would clobber concurrently written
+    /// fields).
+    #[tokio::test]
+    async fn agent_snapshot_backfill_patches_within_allowlist_never_sets() {
+        use garyx_models::agent_availability::AgentAvailabilitySnapshot;
+        use garyx_models::custom_agent::CustomAgentProfile;
+        use garyx_router::test_seams::PatchSpyThreadStore;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let bridge = crate::MultiProviderBridge::new();
+        let spy = PatchSpyThreadStore::seeded(
+            "thread::agent-backfill",
+            json!({"agent_id": "writer-agent", "concurrent_marker": "survives"}),
+        );
+        bridge.set_thread_store_blocking(spy.clone() as Arc<dyn garyx_router::ThreadStore>);
+        bridge
+            .replace_agent_profiles(AgentAvailabilitySnapshot {
+                agents: vec![CustomAgentProfile {
+                    agent_id: "writer-agent".to_owned(),
+                    display_name: "Writer Agent".to_owned(),
+                    provider_type: garyx_models::provider::ProviderType::ClaudeCode,
+                    model: "test-model".to_owned(),
+                    model_reasoning_effort: String::new(),
+                    model_service_tier: String::new(),
+                    provider_env: Default::default(),
+                    default_workspace_dir: None,
+                    avatar_data_url: None,
+                    system_prompt: String::new(),
+                    built_in: false,
+                    enabled: true,
+                    standalone: true,
+                    created_at: "2026-04-19T00:00:00Z".to_owned(),
+                    updated_at: "2026-04-19T00:00:00Z".to_owned(),
+                }],
+                default_agent_id: None,
+                agent_state_revision: 1,
+            })
+            .await;
+
+        let mut metadata = std::collections::HashMap::new();
+        bridge
+            .backfill_bound_agent_runtime_metadata("thread::agent-backfill", &mut metadata)
+            .await;
+        assert_eq!(
+            metadata.get("agent_id").and_then(serde_json::Value::as_str),
+            Some("writer-agent")
+        );
+
+        assert!(
+            spy.set_thread_ids().is_empty(),
+            "agent-snapshot backfill must never issue a whole-record set"
+        );
+        let patches = spy.patched_field_sets();
+        assert!(!patches.is_empty(), "backfill must persist via patch");
+        for fields in &patches {
+            for field in fields {
+                assert!(
+                    AGENT_RUNTIME_SNAPSHOT_PATCH_FIELDS.contains(&field.as_str()),
+                    "patched field {field} outside the reviewed allowlist"
+                );
+            }
+        }
+        let record = spy.record("thread::agent-backfill").expect("record");
+        assert_eq!(record["concurrent_marker"], json!("survives"));
+        assert_eq!(record["metadata"]["model"], json!("test-model"));
+    }
+
     #[test]
     fn agent_runtime_snapshot_patch_allowlist_matches_contract() {
         assert_eq!(

@@ -479,16 +479,16 @@ impl ThreadStore for SqliteThreadStore {
     async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let garyx_db = Arc::clone(&self.garyx_db);
-        let key = thread_id.to_owned();
         let reservation = self
             .run_coordinator
             .reserve_delete(self, thread_id)
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
-        // The drain barrier consumes the reservation and returns the typestate
-        // witness the raw record delete borrows; settlement consumes the
-        // witness afterwards, so drain → delete → settle is the only order
-        // that compiles.
+        // The drain barrier consumes the reservation and mints the typestate
+        // witness; the raw record delete consumes the witness, derives its
+        // target from it, and returns the settle-only stage — so
+        // drain → one delete of the reserved thread → settle is the only
+        // shape that compiles.
         let drained = self
             .run_coordinator
             .abort_and_drain_delete(reservation)
@@ -496,17 +496,14 @@ impl ThreadStore for SqliteThreadStore {
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         let prior = drained.prior_terminal();
         let _guard = lock.lock().await;
-        let (removed, drained) = garyx_db
-            .run_blocking(move |db| {
-                let removed = db.delete_thread_record_with_projections(&key, &drained)?;
-                Ok((removed, drained))
-            })
+        let (removed, settlement) = garyx_db
+            .run_blocking(move |db| db.delete_thread_record_with_projections(drained))
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         if removed || prior.is_some() {
-            drained.settle_committed(Some(ThreadTerminalState::Deleted));
+            settlement.settle_committed(Some(ThreadTerminalState::Deleted));
         } else {
-            drained.settle_decision(None);
+            settlement.settle_decision(None);
         }
         Ok(removed)
     }

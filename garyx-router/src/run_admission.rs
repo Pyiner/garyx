@@ -679,13 +679,16 @@ impl LifecycleCommitWitness {
 }
 
 /// Typestate witness that a delete reservation's abort/drain barrier has
-/// completed.
+/// completed for one specific thread.
 ///
 /// Minted only by [`ThreadRunCoordinator::abort_and_drain_delete`], which
 /// consumes the delete [`LifecycleReservation`]. The storage layer's raw
-/// destructive record delete borrows this witness and settlement consumes it,
-/// so none of the misuse orders compile: delete without reserve, delete
-/// without drain, or settle/drop of the reservation before the delete runs.
+/// destructive record delete consumes this witness, derives its delete
+/// target from [`DrainedDeleteReservation::thread_id`] (there is no separate
+/// key parameter to point at another thread), and hands back a
+/// [`DeleteSettlement`] that only settles. So none of the misuse shapes
+/// compile: delete without reserve, delete without drain, deleting a thread
+/// other than the reserved one, or reusing one witness for a second delete.
 /// This is the compile-time replacement for the retired source-scan guard
 /// over `delete_thread_record_with_projections` call sites.
 pub struct DrainedDeleteReservation {
@@ -693,17 +696,44 @@ pub struct DrainedDeleteReservation {
 }
 
 impl DrainedDeleteReservation {
+    /// The one thread this witness admits deleting. Storage deletes must
+    /// derive their target key from this accessor.
+    pub fn thread_id(&self) -> &str {
+        self.reservation.thread_id()
+    }
+
     pub fn prior_terminal(&self) -> Option<ThreadTerminalState> {
         self.reservation.prior_terminal()
     }
 
-    /// Settle after a committed durable delete. Consumes the witness — the
-    /// storage delete that borrowed it must already have completed.
+    /// Consume the drain-stage witness at the destructive storage write,
+    /// yielding the settle-only stage. One witness admits at most one
+    /// delete; afterwards only settlement remains.
+    pub fn into_settlement(self) -> DeleteSettlement {
+        DeleteSettlement {
+            reservation: self.reservation,
+        }
+    }
+}
+
+/// Settle-only stage of a consumed [`DrainedDeleteReservation`]: the
+/// destructive delete already ran, so the only remaining operations are the
+/// settlement outcomes (or Drop, which restores the calibrated prior state).
+pub struct DeleteSettlement {
+    reservation: LifecycleReservation,
+}
+
+impl DeleteSettlement {
+    pub fn prior_terminal(&self) -> Option<ThreadTerminalState> {
+        self.reservation.prior_terminal()
+    }
+
+    /// Settle after a committed durable delete.
     pub fn settle_committed(mut self, durable_terminal: Option<ThreadTerminalState>) {
         self.reservation.settle_committed(durable_terminal);
     }
 
-    /// Settle a deterministic no-op decision. Consumes the witness.
+    /// Settle a deterministic no-op decision.
     pub fn settle_decision(mut self, durable_terminal: Option<ThreadTerminalState>) {
         self.reservation.settle_decision(durable_terminal);
     }
@@ -712,16 +742,18 @@ impl DrainedDeleteReservation {
 #[cfg(feature = "test-seams")]
 impl DrainedDeleteReservation {
     /// Inert witness for direct storage-layer tests, enabled solely through
-    /// the `test-seams` feature from dev-dependencies. The inner reservation
-    /// is pre-settled against a throwaway coordinator, so dropping the
-    /// witness performs no coordinator restoration. Production builds have
-    /// exactly one mint: [`ThreadRunCoordinator::abort_and_drain_delete`].
-    pub fn test_witness() -> Self {
+    /// the `test-seams` feature from dev-dependencies. Carries the thread id
+    /// the test intends to delete; the inner reservation is pre-settled
+    /// against a throwaway coordinator, so dropping the witness (or its
+    /// settlement stage) performs no coordinator restoration. Production
+    /// builds have exactly one mint:
+    /// [`ThreadRunCoordinator::abort_and_drain_delete`].
+    pub fn test_witness(thread_id: &str) -> Self {
         Self {
             reservation: LifecycleReservation {
                 coordinator: Arc::new(ThreadRunCoordinator::new()),
                 token: ReservationToken {
-                    thread_id: "thread::test-witness".to_owned(),
+                    thread_id: thread_id.to_owned(),
                     epoch: 0,
                     expected_state: OwnedStateKind::Deleting,
                     owner_token: 0,

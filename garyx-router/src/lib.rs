@@ -10,6 +10,8 @@ pub mod runtime_context;
 pub mod store;
 pub mod task_counter;
 pub mod tasks;
+#[cfg(feature = "test-seams")]
+pub mod test_seams;
 pub mod thread_history;
 pub mod threads;
 pub mod worktree;
@@ -78,7 +80,7 @@ pub use router::{
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
 pub use run_admission::{
-    AdmittedRun, ArchiveBarrier, CoordinationError, DrainedDeleteReservation,
+    AdmittedRun, ArchiveBarrier, CoordinationError, DeleteSettlement, DrainedDeleteReservation,
     LifecycleCommitWitness, LifecycleReservation, RunAdmissionError, ThreadRunAborter,
     ThreadRunCoordinator, ThreadRunLease,
 };

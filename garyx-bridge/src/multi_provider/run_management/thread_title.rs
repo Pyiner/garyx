@@ -119,6 +119,43 @@ pub(super) fn forward_applied_thread_title_update(
 mod patch_contract_tests {
     use super::*;
 
+    /// Behavioral half of the writer contract: the title writer must stay a
+    /// field-scoped patch within its allowlist and never regress to a
+    /// whole-record `set` (which would clobber concurrently written fields).
+    #[tokio::test]
+    async fn provider_thread_title_writer_patches_within_allowlist_never_sets() {
+        use garyx_router::test_seams::PatchSpyThreadStore;
+        use serde_json::json;
+
+        let spy = PatchSpyThreadStore::seeded(
+            "thread::title-writer",
+            json!({"label": "", "concurrent_marker": "survives"}),
+        );
+        let store: Arc<dyn ThreadStore> = spy.clone();
+        let applied =
+            persist_provider_thread_title_if_missing(&store, "thread::title-writer", Some("Hello"))
+                .await;
+        assert_eq!(applied.as_deref(), Some("Hello"));
+
+        assert!(
+            spy.set_thread_ids().is_empty(),
+            "title writer must never issue a whole-record set"
+        );
+        let patches = spy.patched_field_sets();
+        assert!(!patches.is_empty(), "title writer must persist via patch");
+        for fields in &patches {
+            for field in fields {
+                assert!(
+                    PROVIDER_THREAD_TITLE_PATCH_FIELDS.contains(&field.as_str()),
+                    "patched field {field} outside the reviewed allowlist"
+                );
+            }
+        }
+        let record = spy.record("thread::title-writer").expect("record");
+        assert_eq!(record["concurrent_marker"], json!("survives"));
+        assert_eq!(record["provider_thread_title"], json!("Hello"));
+    }
+
     #[test]
     fn provider_thread_title_patch_allowlist_matches_contract() {
         assert_eq!(

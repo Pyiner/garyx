@@ -171,20 +171,21 @@ impl GaryxDbService {
     ///
     /// The [`garyx_router::DrainedDeleteReservation`] parameter is a
     /// typestate witness minted only by the coordinator's delete abort/drain
-    /// barrier (or the inert `test-seams` constructor in tests), and
-    /// settlement consumes it after this call — so no call site can reach
-    /// this raw destructive delete without holding a live, drained delete
-    /// reservation.
+    /// barrier (or the inert `test-seams` constructor in tests). The delete
+    /// target derives from the witness itself — there is no separate key
+    /// parameter to point at another thread — and the witness is consumed
+    /// here into its settle-only stage, so one witness admits at most one
+    /// raw destructive delete.
     pub(crate) fn delete_thread_record_with_projections(
         &self,
-        key: &str,
-        _drained_delete: &garyx_router::DrainedDeleteReservation,
-    ) -> GaryxDbResult<bool> {
+        drained_delete: garyx_router::DrainedDeleteReservation,
+    ) -> GaryxDbResult<(bool, garyx_router::DeleteSettlement)> {
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord)?;
-        let key = normalize_required("key", key)?;
+        let key = normalize_required("key", drained_delete.thread_id())?;
+        let settlement = drained_delete.into_settlement();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         let record_exists = tx
@@ -204,7 +205,7 @@ impl GaryxDbService {
             && (terminal == Some(ThreadTerminalState::Deleted)
                 || (!record_exists && terminal.is_none()))
         {
-            return Ok(false);
+            return Ok((false, settlement));
         }
         if is_thread_key(&key) {
             tx.execute(
@@ -231,7 +232,7 @@ impl GaryxDbService {
         // collection revision changes only when the favorite collection did.
         bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
         tx.commit()?;
-        Ok(removed)
+        Ok((removed, settlement))
     }
 
     /// Point read of a record body from the reader connection (WAL snapshot

@@ -106,19 +106,24 @@ impl ThreadStore for InMemoryThreadStore {
             .await
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))?;
         let prior = drained.prior_terminal();
+        // The delete target derives from the witness, and consuming it at the
+        // destructive write leaves only the settle stage.
+        let target = drained.thread_id().to_owned();
         let mut state = self.store.write().await;
-        let removed = state.records.remove(thread_id).is_some();
-        let upgraded = state.terminal_states.get(thread_id) == Some(&ThreadTerminalState::Archived);
+        let removed = state.records.remove(&target).is_some();
+        let upgraded =
+            state.terminal_states.get(target.as_str()) == Some(&ThreadTerminalState::Archived);
         if removed || upgraded {
             state
                 .terminal_states
-                .insert(thread_id.to_owned(), ThreadTerminalState::Deleted);
+                .insert(target.clone(), ThreadTerminalState::Deleted);
         }
         drop(state);
+        let settlement = drained.into_settlement();
         if removed || upgraded || prior == Some(ThreadTerminalState::Deleted) {
-            drained.settle_committed(Some(ThreadTerminalState::Deleted));
+            settlement.settle_committed(Some(ThreadTerminalState::Deleted));
         } else {
-            drained.settle_decision(None);
+            settlement.settle_decision(None);
         }
         Ok(removed || upgraded)
     }

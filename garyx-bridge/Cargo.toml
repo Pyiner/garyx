@@ -29,6 +29,8 @@ toml = "0.8"
 reqwest = { workspace = true }
 
 [dev-dependencies]
+# `test-seams` unlocks the shared writer-contract spy store
+# (garyx_router::test_seams) for unit tests; production builds never see it.
 garyx-router = { workspace = true, features = ["test-seams"] }
 chrono-tz = "0.10"
 tempfile = { workspace = true }

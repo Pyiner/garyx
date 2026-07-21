@@ -1250,6 +1250,52 @@ mod patch_allowlist_contract {
     //! direct import): growing it means auditing what a concurrent
     //! whole-record write could clobber.
 
+    /// Behavioral half of the writer contract: the provider-type writer must
+    /// stay a field-scoped patch within its allowlist and never regress to a
+    /// whole-record `set` (which would clobber concurrently written fields).
+    #[tokio::test]
+    async fn provider_type_writer_patches_within_allowlist_never_sets() {
+        use crate::composition::app_bootstrap::AppStateBuilder;
+        use garyx_models::config::GaryxConfig;
+        use garyx_router::test_seams::PatchSpyThreadStore;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let spy = PatchSpyThreadStore::seeded(
+            "thread::provider-type-writer",
+            json!({"concurrent_marker": "survives"}),
+        );
+        let state = AppStateBuilder::new(GaryxConfig::default())
+            .with_thread_store(spy.clone() as Arc<dyn garyx_router::ThreadStore>)
+            .build();
+        assert!(
+            super::persist_thread_provider_type_if_missing(
+                &state,
+                "thread::provider-type-writer",
+                &garyx_models::provider::ProviderType::ClaudeCode,
+            )
+            .await
+        );
+
+        assert!(
+            spy.set_thread_ids().is_empty(),
+            "provider-type writer must never issue a whole-record set"
+        );
+        let patches = spy.patched_field_sets();
+        assert!(!patches.is_empty(), "writer must persist via patch");
+        for fields in &patches {
+            for field in fields {
+                assert!(
+                    super::PROVIDER_TYPE_PATCH_FIELDS.contains(&field.as_str()),
+                    "patched field {field} outside the reviewed allowlist"
+                );
+            }
+        }
+        let record = spy.record("thread::provider-type-writer").expect("record");
+        assert_eq!(record["concurrent_marker"], json!("survives"));
+        assert!(record["provider_type"].is_string());
+    }
+
     #[test]
     fn provider_type_patch_allowlist_is_the_reviewed_contract() {
         assert_eq!(

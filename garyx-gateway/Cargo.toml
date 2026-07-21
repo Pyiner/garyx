@@ -57,6 +57,9 @@ libc = "0.2"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
+# `test-seams` unlocks router test-only fixtures (the inert
+# DrainedDeleteReservation::test_witness and the writer-contract spy store)
+# for this crate's unit tests; production builds never see the feature.
 garyx-router = { workspace = true, features = ["test-seams"] }
 tempfile.workspace = true
 filetime.workspace = true

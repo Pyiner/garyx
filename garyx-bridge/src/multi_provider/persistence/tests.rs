@@ -112,6 +112,32 @@ fn streaming_and_terminal_patch_allowlist_matches_contract() {
     );
 }
 
+/// Behavioral half of the writer contract: the audited run-persistence
+/// helper stays a field-scoped patch on existing records, so a field written
+/// concurrently between its observation and its persist survives. A
+/// regression to whole-record `set` clobbers the concurrent field and turns
+/// this red.
+#[tokio::test]
+async fn run_persistence_patch_preserves_concurrent_fields() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::run-persistence-writer";
+    let observed = json!({"provider_type": "claude-code", "history": {"source": "none"}});
+    // Concurrent write lands after the writer observed the record.
+    let mut stored = observed.clone();
+    stored["concurrent_marker"] = json!("survives");
+    store.set(thread_id, stored).await.expect("seed record");
+
+    let mut desired = observed.clone();
+    desired["sdk_session_id"] = json!("session-1");
+    desired["last_assistant_preview"] = json!("hello");
+    assert!(persist_run_record_patch(&store, thread_id, &observed, &desired, true).await);
+
+    let record = store.get(thread_id).await.expect("read").expect("record");
+    assert_eq!(record["concurrent_marker"], json!("survives"));
+    assert_eq!(record["sdk_session_id"], json!("session-1"));
+    assert_eq!(record["last_assistant_preview"], json!("hello"));
+}
+
 #[tokio::test]
 async fn streaming_persistence_cannot_resurrect_a_binding_moved_after_its_read() {
     let previous_owner = "thread::previous-owner";
