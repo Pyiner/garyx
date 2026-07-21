@@ -2994,15 +2994,14 @@ export function AppShell() {
 
           // Fast hydration: the threads slice is a recent page (pinned ids
           // repaired by id). The full set follows below, off the paint path.
-          const hydrationEpoch = gatewayMirror.currentConnectionEpoch;
-          const [nextState, nextStatus, nextAgentCatalog] =
-            await Promise.all([
-              requestDesktopState(() => window.garyxDesktop.getStateFast()),
-              window.garyxDesktop.checkConnection(),
-              window.garyxDesktop
-                .listCustomAgents()
-                .catch(() => EMPTY_DESKTOP_AGENT_CATALOG),
-            ]);
+          const [nextState, nextStatus] = await Promise.all([
+            requestDesktopState(() => window.garyxDesktop.getStateFast()),
+            window.garyxDesktop.checkConnection(),
+            // Catalog hydration goes through the single mirror owner: it
+            // fences, orders, and — on failure — publishes an error state
+            // over the last-known content instead of a fake empty catalog.
+            gatewayMirror.refreshAgentCatalog(),
+          ]);
           if (cancelled) {
             return;
           }
@@ -3020,9 +3019,6 @@ export function AppShell() {
             setDesktopState(nextState);
             if (pinOrderSnapshot) {
               setPinnedOrderMainSnapshot(pinOrderSnapshot);
-            }
-            if (gatewayMirror.isCurrentConnectionEpoch(hydrationEpoch)) {
-              gatewayMirror.adoptAgentCatalog(nextAgentCatalog);
             }
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);

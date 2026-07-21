@@ -95,10 +95,22 @@ test("lifecycle mutations stamp their NESTED authoritative state", async () => {
   const appliedState = { pinnedThreadIds: [], pinsRevision: 7 };
   const rawApi = Object.freeze({
     async archiveThread() {
-      return { kind: "applied", value: appliedState };
+      return { kind: "ok", value: appliedState, status: 200 };
     },
     async deleteThread() {
-      return { kind: "rejected", code: "wrong_incarnation" };
+      return { kind: "ambiguous", message: "gateway restarted mid-flight" };
+    },
+    async archiveDefinitive() {
+      return {
+        kind: "definitiveEndpointResponse",
+        status: 409,
+        error: { tag: "conflict" },
+        value: appliedState,
+        body: "{}",
+      };
+    },
+    async archiveNotSent() {
+      return { kind: "notSent", message: "no connection" };
     },
   });
   const selections = [];
@@ -117,11 +129,12 @@ test("lifecycle mutations stamp their NESTED authoritative state", async () => {
   });
 
   const archived = await facade.archiveThread({ threadId: "thread-1" });
-  assert.equal(archived.kind, "applied");
+  assert.equal(archived.kind, "ok");
   assert.strictEqual(archived.value, appliedState);
   const deleted = await facade.deleteThread({ threadId: "thread-1" });
-  assert.equal(deleted.kind, "rejected");
-  // The applied variant selects its nested state; the rejected variant
-  // selects null (nothing to stamp).
+  assert.equal(deleted.kind, "ambiguous");
+  // All four REAL wire discriminants: "ok" and a value-carrying
+  // "definitiveEndpointResponse" select their nested state; "ambiguous"
+  // and "notSent" select null (nothing to stamp).
   assert.deepEqual(selections, [appliedState, null]);
 });

@@ -505,6 +505,58 @@ test("an older catalog response cannot roll back a newer request's publish", asy
   );
 });
 
+test("catalog is a request state machine: failures publish, never blank silently", async () => {
+  const first = deferred();
+  const second = deferred();
+  let calls = 0;
+  const mirror = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: () => {
+      calls += 1;
+      return calls === 1 ? first.promise : second.promise;
+    },
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  mirror.beginConnectionScope("http://gateway-a");
+  assert.equal(mirror.getCatalogSnapshot().phase, "loading");
+
+  // Reviewer counter-example: the NEWER request fails, the OLDER one
+  // succeeds afterwards. Take-latest drops the older success, but the
+  // latest failure must be PUBLISHED — never a silent empty catalog.
+  const older = mirror.refreshAgentCatalog();
+  const newer = mirror.refreshAgentCatalog();
+  second.reject(new Error("gateway hiccup"));
+  assert.equal(await newer, false);
+  assert.equal(mirror.getCatalogSnapshot().phase, "error");
+  first.resolve({
+    agents: [{ id: "agent::old" }],
+    defaultAgentId: "agent::old",
+    effectiveDefaultAgentId: "agent::old",
+  });
+  await older;
+  assert.equal(
+    mirror.getCatalogSnapshot().phase,
+    "error",
+    "the latest request's failure stays published",
+  );
+
+  // A later successful refresh recovers to ready with content (fresh
+  // mirror models the recovery round).
+  const freshOk = new GatewayMirror({
+    getState: () => Promise.reject(new Error("unused")),
+    listCustomAgents: async () => ({
+      agents: [{ id: "agent::fresh" }],
+      defaultAgentId: "agent::fresh",
+      effectiveDefaultAgentId: "agent::fresh",
+    }),
+    getThreadHistory: () => Promise.reject(new Error("unused")),
+  });
+  freshOk.beginConnectionScope("http://gateway-a");
+  await freshOk.refreshAgentCatalog();
+  assert.equal(freshOk.getCatalogSnapshot().phase, "ready");
+  assert.equal(freshOk.getCatalogSnapshot().agents[0].id, "agent::fresh");
+});
+
 test("a stale openability answer reports not-openable without vouching", async () => {
   const refresh = deferred();
   const mirror = new GatewayMirror({

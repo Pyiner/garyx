@@ -104,7 +104,6 @@ export function AgentsHubPanel({
 }: AgentsHubPanelProps) {
   const { t } = useI18n();
   const mirror = useGatewayMirror();
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   // The agent catalog has ONE owner (the GatewayMirror): this panel is a
   // subscriber, never a second fetch path — a gateway switch resets and
@@ -120,9 +119,14 @@ export function AgentsHubPanel({
     [catalogSnapshot],
   );
   const agents = catalog.agents;
+  // Full request state from the owner: loading and failure render honestly
+  // (an empty list is only ever shown for a READY empty catalog).
+  const loading = catalogSnapshot.phase === "loading";
+  const loadError =
+    catalogSnapshot.phase === "error" ? t('Failed to load agents.') : null;
   const [availabilityMutationAgentId, setAvailabilityMutationAgentId] =
     useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+
   const [search, setSearch] = useState('');
 
   const [agentDialogMode, setAgentDialogMode] = useState<AgentDialogMode>(null);
@@ -155,18 +159,9 @@ export function AgentsHubPanel({
     // swaps in fresh data for the fetches that actually succeed and otherwise
     // leaves the currently displayed data untouched.
     const silent = options.silent ?? false;
-    if (!silent) {
-      setLoading(true);
-      setLoadError(null);
-    }
     const refreshed = await mirror.refreshAgentCatalog();
     if (!refreshed && !silent) {
-      const message = 'Failed to load agents.';
-      setLoadError(message);
-      onToast?.(message, 'error');
-    }
-    if (!silent) {
-      setLoading(false);
+      onToast?.('Failed to load agents.', 'error');
     }
   }
 

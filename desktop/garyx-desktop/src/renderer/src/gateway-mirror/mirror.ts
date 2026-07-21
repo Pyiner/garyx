@@ -145,8 +145,15 @@ export interface GatewayRootSnapshot {
   readonly desktopState: DesktopState | null;
 }
 
+export type CatalogPhase = "loading" | "ready" | "error";
+
 export interface CatalogSnapshot {
   readonly version: number;
+  /** Full request state, not just content: consumers must be able to
+   *  distinguish an EMPTY catalog (ready) from one that is still loading
+   *  or whose latest request failed (agents then hold the last-known
+   *  values, never a silently blank list). */
+  readonly phase: CatalogPhase;
   readonly agents: readonly DesktopCustomAgent[];
   readonly defaultAgentId: string | null;
   readonly effectiveDefaultAgentId: string | null;
@@ -263,6 +270,7 @@ export class GatewayMirror {
 
   // Catalog domain: agents.
   private agents: readonly DesktopCustomAgent[] = [];
+  private catalogPhase: CatalogPhase = "loading";
   private defaultAgentId: string | null = null;
   private effectiveDefaultAgentId: string | null = null;
   private catalogVersion = 0;
@@ -341,6 +349,7 @@ export class GatewayMirror {
     if (!this.catalogSnapshot) {
       this.catalogSnapshot = {
         version: this.catalogVersion,
+        phase: this.catalogPhase,
         agents: this.agents,
         defaultAgentId: this.defaultAgentId,
         effectiveDefaultAgentId: this.effectiveDefaultAgentId,
@@ -408,10 +417,14 @@ export class GatewayMirror {
       }
       this.desktopState = nextState;
       this.bumpRoot();
-      if (nextCatalog && this.catalogRequestOrdinal === catalogOrdinal) {
-        // A failed catalog fetch keeps the last-known catalog, and an
-        // older response cannot overwrite a newer request's publish.
-        this.publishAgentCatalog(nextCatalog);
+      if (this.catalogRequestOrdinal === catalogOrdinal) {
+        if (nextCatalog) {
+          this.publishAgentCatalog(nextCatalog);
+        } else {
+          // The LATEST request failed: publish the failure (content keeps
+          // the last-known values) instead of a silent stale snapshot.
+          this.publishAgentCatalogFailure();
+        }
       }
       return nextState;
     });
@@ -426,6 +439,15 @@ export class GatewayMirror {
     this.agents = catalog.agents;
     this.defaultAgentId = catalog.defaultAgentId;
     this.effectiveDefaultAgentId = catalog.effectiveDefaultAgentId;
+    this.catalogPhase = "ready";
+    this.bumpCatalog();
+  }
+
+  /** Take-latest with an honest failure state: dropping an older response
+   *  is only sound when the LATEST request's failure is published (with
+   *  the last-known content retained) instead of leaving a silent blank. */
+  private publishAgentCatalogFailure(): void {
+    this.catalogPhase = "error";
     this.bumpCatalog();
   }
 
@@ -441,6 +463,10 @@ export class GatewayMirror {
     }
     const epoch = this.connectionEpoch;
     const ordinal = ++this.catalogRequestOrdinal;
+    if (this.catalogPhase !== "loading") {
+      this.catalogPhase = "loading";
+      this.bumpCatalog();
+    }
     return Promise.resolve()
       .then(() => services.listCustomAgents())
       .then((catalog) => {
@@ -453,7 +479,15 @@ export class GatewayMirror {
         this.publishAgentCatalog(catalog);
         return true;
       })
-      .catch(() => false);
+      .catch(() => {
+        if (
+          this.connectionEpoch === epoch &&
+          this.catalogRequestOrdinal === ordinal
+        ) {
+          this.publishAgentCatalogFailure();
+        }
+        return false;
+      });
   }
 
   /** Adopt a catalog the caller already fetched (boot hydration): the
@@ -614,6 +648,7 @@ export class GatewayMirror {
     this.agents = [];
     this.defaultAgentId = null;
     this.effectiveDefaultAgentId = null;
+    this.catalogPhase = "loading";
     this.bumpCatalog();
     if (this.services) {
       // Repopulate root + catalog from the NEW gateway.

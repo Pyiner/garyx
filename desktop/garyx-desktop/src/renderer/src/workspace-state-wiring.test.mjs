@@ -152,8 +152,14 @@ test('side-chat scope ownership is wired at every production boundary', () => {
   );
   assert.match(
     appShellSource,
-    /gatewayMirror\.adoptAgentCatalog\(nextAgentCatalog\);/,
-    'boot hydration adopts its catalog through the mirror owner',
+    /gatewayMirror\.refreshAgentCatalog\(\),/,
+    'boot hydration requests its catalog through the mirror owner',
+  );
+  assert.equal(
+    (appShellSource.match(/window\.garyxDesktop\.listCustomAgents/g) || [])
+      .length,
+    1,
+    'the ONLY direct catalog fetch is the mirror services injection',
   );
   // The Agents hub is a SUBSCRIBER of the mirror catalog, never a second
   // fetch/owner path.

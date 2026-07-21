@@ -1,4 +1,8 @@
-import type { DesktopState, GaryxDesktopApi } from '@shared/contracts';
+import type {
+  DesktopGatewayMutationResult,
+  DesktopState,
+  GaryxDesktopApi,
+} from '@shared/contracts';
 
 import {
   requestDesktopState,
@@ -61,7 +65,7 @@ type DesktopApiStateIngress = Readonly<{
   ) => Promise<DesktopState>;
   requestStateResult: <Result>(
     request: () => Promise<Result>,
-    selectState: (result: Result) => DesktopState,
+    selectState: (result: Result) => DesktopState | null,
   ) => Promise<Result>;
 }>;
 
@@ -84,12 +88,15 @@ function createFacadeMethod(
     );
   }
   if (mutationResultMethods.has(property)) {
+    // The facade sees the RAW transport result (shared/contracts/thread.ts):
+    // "ok" carries the authoritative state; "definitiveEndpointResponse"
+    // may carry one too; "ambiguous"/"notSent" carry nothing to stamp.
     return (...args) => ingress.requestStateResult(
-      () => invoke(args) as Promise<
-        { kind: string; value?: DesktopState }
-      >,
-      (result) =>
-        (result.kind === 'applied' ? result.value : null) as DesktopState,
+      () => invoke(args) as Promise<DesktopGatewayMutationResult<DesktopState>>,
+      (result): DesktopState | null =>
+        result.kind === 'ok' || result.kind === 'definitiveEndpointResponse'
+          ? result.value
+          : null,
     );
   }
   return (...args) => invoke(args);

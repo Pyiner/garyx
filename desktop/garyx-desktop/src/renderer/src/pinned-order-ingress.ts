@@ -268,7 +268,7 @@ export class PinnedOrderIngress {
 
   async requestStateResult<Result>(
     request: () => Promise<Result>,
-    selectState: (result: Result) => DesktopState,
+    selectState: (result: Result) => DesktopState | null,
     gatewayIdentityOverride?: string,
   ): Promise<Result> {
     // The complete stamp is captured before invoking/awaiting the request.
@@ -500,7 +500,7 @@ export function requestDesktopState(
 /** Stamps a DesktopState nested inside an async IPC result before awaiting it. */
 export function requestDesktopStateResult<Result>(
   request: () => Promise<Result>,
-  selectState: (result: Result) => DesktopState,
+  selectState: (result: Result) => DesktopState | null,
   gatewayIdentityOverride?: string,
 ): Promise<Result> {
   if (!installedIngress) {

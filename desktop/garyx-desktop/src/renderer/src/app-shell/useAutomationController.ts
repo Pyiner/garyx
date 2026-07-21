@@ -158,8 +158,23 @@ export function useAutomationController({
     };
   }
 
-  async function loadAutomationActivity(automationId: string) {
-    const operation = openAutomationOperation();
+  // Domain transition = implicit revocation of every in-flight operation
+  // (their owners go stale and can no longer settle), so the scope-owned
+  // UI state — busy keys, status line, activity feeds — resets HERE, not
+  // in the operations' own finally blocks.
+  const automationGatewayKey = desktopState?.entitiesGatewayUrl || "";
+  useEffect(() => {
+    setAutomationMutation(null);
+    setAutomationStatus(null);
+    setAutomationActivityById({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [automationGatewayKey]);
+
+  async function loadAutomationActivity(
+    automationId: string,
+    owner?: { isCurrent: () => boolean },
+  ) {
+    const operation = owner ?? openAutomationOperation();
     const feed = await window.garyxDesktop.getAutomationActivity(automationId);
     if (!operation.isCurrent()) {
       return feed;
@@ -546,12 +561,18 @@ export function useAutomationController({
     }
 
     let cancelled = false;
+    // The effect leases ONE owner for the whole load/mark-seen/catch/
+    // finally chain: a gateway-switch window that React has not committed
+    // yet is invisible to `cancelled`, so every write also settles through
+    // the owner.
+    const operation = openAutomationOperation();
+    const live = () => !cancelled && operation.isCurrent();
     setAutomationActivityLoadingId(activeAutomation.id);
     void (async () => {
       try {
-        await loadAutomationActivity(activeAutomation.id);
+        await loadAutomationActivity(activeAutomation.id, operation);
         if (
-          !cancelled
+          live()
           && activeAutomationUnreadAt
           && (!activeAutomationSeenAt || activeAutomationUnreadAt > activeAutomationSeenAt)
         ) {
@@ -561,14 +582,14 @@ export function useAutomationController({
               seenAt: activeAutomationUnreadAt,
             }),
           );
-          if (!cancelled) {
+          if (live()) {
             startTransition(() => {
               setDesktopState(nextState);
             });
           }
         }
       } catch (activityError) {
-        if (!cancelled) {
+        if (live()) {
           setError(
             activityError instanceof Error
               ? activityError.message
@@ -576,7 +597,7 @@ export function useAutomationController({
           );
         }
       } finally {
-        if (!cancelled) {
+        if (live()) {
           setAutomationActivityLoadingId((current) => {
             return current === activeAutomation.id ? null : current;
           });
