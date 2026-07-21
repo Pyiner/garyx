@@ -1020,13 +1020,15 @@ mod tests {
         );
 
         let config = state.config_snapshot();
+        // Adding an account must not change the active selection: the
+        // pre-existing selection (System default here) stays in place.
         assert_eq!(
             config
                 .provider_accounts
                 .claude_code
                 .active_account_id
                 .as_deref(),
-            Some(account_id.as_str())
+            None
         );
         let account = config
             .provider_accounts

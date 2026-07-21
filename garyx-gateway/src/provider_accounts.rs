@@ -400,6 +400,8 @@ pub(crate) async fn complete_auth_target(
                     "The managed Claude account already exists.",
                 ));
             }
+            // Adding an account never changes the active selection; switching
+            // is an explicit user action through the select endpoint.
             accounts.accounts.push(ClaudeCodeManagedAccount {
                 id: account_id.clone(),
                 name,
@@ -410,7 +412,6 @@ pub(crate) async fn complete_auth_target(
                 created_at: now.clone(),
                 updated_at: now,
             });
-            accounts.active_account_id = Some(account_id);
         } else {
             let account = accounts
                 .account_mut(&account_id)
