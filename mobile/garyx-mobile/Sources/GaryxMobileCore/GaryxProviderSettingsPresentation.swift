@@ -106,6 +106,9 @@ public enum GaryxProviderSettingsPresentation {
 
         public var statusText: String
         public var statusTone: Tone
+        /// Compact provider/runtime description used under the shared card
+        /// title. The view must not maintain its own provider switch table.
+        public var providerDescription: String
         public var detailText: String
 
         public static func make(
@@ -163,7 +166,15 @@ public enum GaryxProviderSettingsPresentation {
             } else {
                 detailText = parts.joined(separator: " · ")
             }
-            return RowModel(statusText: statusText, statusTone: statusTone, detailText: detailText)
+            let providerDescription = authSection(for: provider) == .claudeCode
+                ? "Claude Agent SDK"
+                : "CLI"
+            return RowModel(
+                statusText: statusText,
+                statusTone: statusTone,
+                providerDescription: providerDescription,
+                detailText: detailText
+            )
         }
     }
 }

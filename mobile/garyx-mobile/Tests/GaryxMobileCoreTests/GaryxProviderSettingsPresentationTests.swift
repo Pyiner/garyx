@@ -117,6 +117,7 @@ final class GaryxProviderSettingsPresentationTests: XCTestCase {
         )
         XCTAssertEqual(error.statusText, "Error")
         XCTAssertEqual(error.statusTone, .danger)
+        XCTAssertEqual(error.providerDescription, "Claude Agent SDK")
         XCTAssertEqual(error.detailText, "Model metadata unavailable")
 
         let loading = GaryxProviderSettingsPresentation.RowModel.make(
@@ -126,6 +127,7 @@ final class GaryxProviderSettingsPresentationTests: XCTestCase {
         )
         XCTAssertEqual(loading.statusText, "Loading")
         XCTAssertEqual(loading.statusTone, .muted)
+        XCTAssertEqual(loading.providerDescription, "Claude Agent SDK")
         XCTAssertEqual(loading.detailText, "Loading metadata")
     }
 
@@ -157,6 +159,7 @@ final class GaryxProviderSettingsPresentationTests: XCTestCase {
         )
         XCTAssertEqual(row.statusText, "Ready")
         XCTAssertEqual(row.statusTone, .good)
+        XCTAssertEqual(row.providerDescription, "CLI")
         XCTAssertEqual(
             row.detailText,
             "Default configured-model · Thinking high · 2 models · 2 reasoning · 2 tiers"

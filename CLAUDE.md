@@ -140,6 +140,10 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   frame; do not add a fixed delay without a real matching transition.
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
+- Mobile Provider overviews use one expanded identity, quota, and defaults
+  composition for every built-in provider. Claude Code alone inserts the
+  account-selection row; providers without metered usage keep the shared quota
+  row and show `No quota data` instead of falling back to a compressed style.
 - Mobile conversation pushes must present complete, production-identical
   thread chrome from the first destination frame; route-level plain or
   full-page loading covers are forbidden. Keep existing local transcript rows

@@ -17,45 +17,26 @@ struct GaryxSettingsProviderContent: View {
                 GaryxCompactListGroup {
                     let providers = GaryxModelProviderDefaults.providers
                     ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-                        if provider.providerType == "claude_code" {
-                            GaryxClaudeCodeProviderOverview(
-                                provider: provider,
-                                catalog: model.providerModelsByType[provider.providerType],
-                                settings: model.gatewaySettingsDocument,
-                                usage: GaryxModelProviderDefaults.usage(
-                                    in: model.codingUsage,
-                                    provider: provider
-                                ),
-                                usageRefreshedAt: model.codingUsage?.refreshedAt,
-                                accounts: model.claudeCodeAccounts,
-                                accountsLoading: model.isLoadingClaudeCodeAccounts,
-                                accountsError: model.claudeCodeAccountsError,
-                                onEdit: {
-                                    selectedProvider = provider
-                                    Task { await model.loadProviderModels(providerType: provider.providerType) }
-                                },
-                                onManageAccounts: {
-                                    showsClaudeAccounts = true
-                                }
-                            )
-                        } else {
-                            Button {
+                        GaryxModelProviderOverview(
+                            provider: provider,
+                            catalog: model.providerModelsByType[provider.providerType],
+                            settings: model.gatewaySettingsDocument,
+                            usage: GaryxModelProviderDefaults.usage(
+                                in: model.codingUsage,
+                                provider: provider
+                            ),
+                            usageRefreshedAt: model.codingUsage?.refreshedAt,
+                            claudeAccounts: model.claudeCodeAccounts,
+                            claudeAccountsLoading: model.isLoadingClaudeCodeAccounts,
+                            claudeAccountsError: model.claudeCodeAccountsError,
+                            onEdit: {
                                 selectedProvider = provider
                                 Task { await model.loadProviderModels(providerType: provider.providerType) }
-                            } label: {
-                                GaryxProviderModelsRow(
-                                    provider: provider,
-                                    catalog: model.providerModelsByType[provider.providerType],
-                                    settings: model.gatewaySettingsDocument,
-                                    usage: GaryxModelProviderDefaults.usage(
-                                        in: model.codingUsage,
-                                        provider: provider
-                                    ),
-                                    usageRefreshedAt: model.codingUsage?.refreshedAt
-                                )
+                            },
+                            onManageClaudeAccounts: {
+                                showsClaudeAccounts = true
                             }
-                            .buttonStyle(GaryxPressableRowStyle())
-                        }
+                        )
 
                         if index < providers.count - 1 {
                             GaryxCompactRowDivider()
@@ -82,32 +63,35 @@ struct GaryxSettingsProviderContent: View {
     }
 }
 
-/// The selected mobile Quota Console treatment. Claude account identity and
-/// Session / Weekly / scoped limits stay visible on the first Provider screen;
-/// account management and defaults remain one tap away.
-private struct GaryxClaudeCodeProviderOverview: View {
+/// The mobile Provider card shared by every built-in model provider. Identity,
+/// quota and defaults keep one visual hierarchy; Claude Code alone inserts the
+/// managed-account row because the other providers do not support account
+/// selection.
+private struct GaryxModelProviderOverview: View {
     let provider: GaryxModelProviderDefault
     let catalog: GaryxProviderModels?
     let settings: [String: GaryxJSONValue]
     let usage: GaryxProviderUsage?
     var usageRefreshedAt: String?
-    let accounts: GaryxClaudeCodeAccounts?
-    let accountsLoading: Bool
-    let accountsError: String?
+    let claudeAccounts: GaryxClaudeCodeAccounts?
+    let claudeAccountsLoading: Bool
+    let claudeAccountsError: String?
     let onEdit: () -> Void
-    let onManageAccounts: () -> Void
+    let onManageClaudeAccounts: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             providerHeader
-            GaryxCompactRowDivider()
-            currentAccountRow
+            if supportsAccountSelection {
+                GaryxCompactRowDivider()
+                currentAccountRow
+            }
             GaryxCompactRowDivider()
             quotaRows
             GaryxCompactRowDivider()
             defaultsRow
         }
-        .accessibilityIdentifier("provider.claude.overview")
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var providerHeader: some View {
@@ -121,7 +105,7 @@ private struct GaryxClaudeCodeProviderOverview: View {
                 Text(providerPresentation.displayName)
                     .font(GaryxFont.headline())
                     .foregroundStyle(.primary)
-                Text("Claude Agent SDK")
+                Text(providerHeaderDescription)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
             }
@@ -136,14 +120,14 @@ private struct GaryxClaudeCodeProviderOverview: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(GaryxPressableRowStyle())
-            .accessibilityHint("Edits Claude Code defaults")
+            .accessibilityHint("Edits \(providerPresentation.displayName) defaults")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
     }
 
     private var currentAccountRow: some View {
-        Button(action: onManageAccounts) {
+        Button(action: onManageClaudeAccounts) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Current account")
@@ -155,7 +139,7 @@ private struct GaryxClaudeCodeProviderOverview: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Text(accountDetail)
                         .font(GaryxFont.caption())
-                        .foregroundStyle(accountsError == nil ? Color.secondary : GaryxTheme.danger)
+                        .foregroundStyle(claudeAccountsError == nil ? Color.secondary : GaryxTheme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -181,13 +165,29 @@ private struct GaryxClaudeCodeProviderOverview: View {
     @ViewBuilder
     private var quotaRows: some View {
         if let usageDisplay {
-            if usageDisplay.available, !usageDisplay.windows.isEmpty {
+            if usageDisplay.available, !usageDisplay.windows.isEmpty || !usageDisplay.models.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(Array(usageDisplay.windows.enumerated()), id: \.element.id) { index, window in
                         if index > 0 {
                             GaryxCompactRowDivider()
                         }
-                        GaryxClaudeQuotaConsoleRow(window: window)
+                        GaryxProviderQuotaConsoleRow(
+                            label: window.label,
+                            remainingPercent: window.remainingPercent,
+                            remainingText: window.remainingText,
+                            detailText: window.detailText
+                        )
+                    }
+                    ForEach(Array(usageDisplay.models.enumerated()), id: \.element.id) { index, model in
+                        if !usageDisplay.windows.isEmpty || index > 0 {
+                            GaryxCompactRowDivider()
+                        }
+                        GaryxProviderQuotaConsoleRow(
+                            label: model.title,
+                            remainingPercent: model.remainingPercent,
+                            remainingText: model.remainingText,
+                            detailText: model.detailText
+                        )
                     }
                 }
                 .opacity(usageDisplay.stale ? 0.55 : 1)
@@ -195,7 +195,7 @@ private struct GaryxClaudeCodeProviderOverview: View {
                 quotaUnavailable(usageDisplay.summaryText)
             }
         } else {
-            quotaUnavailable(accountsLoading ? "Loading quota…" : "No quota data")
+            quotaUnavailable(supportsAccountSelection && claudeAccountsLoading ? "Loading quota…" : "No quota data")
         }
     }
 
@@ -221,7 +221,7 @@ private struct GaryxClaudeCodeProviderOverview: View {
                 .font(GaryxFont.caption(weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            if accountsLoading {
+            if supportsAccountSelection && claudeAccountsLoading {
                 ProgressView().controlSize(.small)
             }
             Text(text)
@@ -233,17 +233,19 @@ private struct GaryxClaudeCodeProviderOverview: View {
     }
 
     private var selectedAccount: GaryxClaudeCodeAccountPresentation? {
-        guard let accounts, let account = accounts.selectedAccount else { return nil }
+        guard supportsAccountSelection,
+              let claudeAccounts,
+              let account = claudeAccounts.selectedAccount else { return nil }
         return GaryxClaudeCodeAccountPresentation.make(
             account: account,
-            refreshedAt: accounts.refreshedAt
+            refreshedAt: claudeAccounts.refreshedAt
         )
     }
 
     private var accountTitle: String {
         guard let selectedAccount else {
-            if accountsLoading { return "Loading…" }
-            if accountsError != nil { return "Account unavailable" }
+            if claudeAccountsLoading { return "Loading…" }
+            if claudeAccountsError != nil { return "Account unavailable" }
             return "System default"
         }
         return selectedAccount.title
@@ -251,10 +253,9 @@ private struct GaryxClaudeCodeProviderOverview: View {
 
     private var accountDetail: String {
         if let selectedAccount {
-            guard let plan = selectedAccount.planText else { return selectedAccount.detailText }
-            return "\(selectedAccount.detailText) · \(plan)"
+            return selectedAccount.detailText
         }
-        return accountsError ?? "Uses this Mac's default Claude Code login"
+        return claudeAccountsError ?? "Uses this Mac's default Claude Code login"
     }
 
     private var usageDisplay: GaryxProviderUsageDisplayModel? {
@@ -271,44 +272,116 @@ private struct GaryxClaudeCodeProviderOverview: View {
     private var rowModel: GaryxProviderSettingsPresentation.RowModel {
         .make(provider: provider, catalog: catalog, settings: settings)
     }
+
+    private var providerHeaderDescription: String {
+        var parts = [rowModel.providerDescription]
+        if let plan = usageDisplay?.plan {
+            parts.append(plan)
+        }
+        if usageDisplay?.stale == true {
+            parts.append("stale")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var supportsAccountSelection: Bool {
+        GaryxProviderSettingsPresentation.authSection(for: provider) == .claudeCode
+    }
+
+    private var accessibilityIdentifier: String {
+        supportsAccountSelection
+            ? "provider.claude.overview"
+            : "provider.\(provider.providerType).overview"
+    }
 }
 
-private struct GaryxClaudeQuotaConsoleRow: View {
+private struct GaryxProviderQuotaConsoleRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    let window: GaryxProviderUsageWindowDisplayModel
+    let label: String
+    let remainingPercent: Double
+    let remainingText: String
+    let detailText: String
     var horizontalPadding: CGFloat = 12
+
+    init(
+        label: String,
+        remainingPercent: Double,
+        remainingText: String,
+        detailText: String,
+        horizontalPadding: CGFloat = 12
+    ) {
+        self.label = label
+        self.remainingPercent = remainingPercent
+        self.remainingText = remainingText
+        self.detailText = detailText
+        self.horizontalPadding = horizontalPadding
+    }
+
+    init(window: GaryxProviderUsageWindowDisplayModel, horizontalPadding: CGFloat = 12) {
+        self.init(
+            label: window.label,
+            remainingPercent: window.remainingPercent,
+            remainingText: window.remainingText,
+            detailText: window.detailText,
+            horizontalPadding: horizontalPadding
+        )
+    }
 
     var body: some View {
         Group {
             if dynamicTypeSize.garyxUsesExpandedReadingLayout {
-                VStack(alignment: .leading, spacing: 7) {
-                    label
-                    HStack(spacing: 10) {
-                        track
-                        percent
-                    }
-                }
+                stackedLayout
             } else {
-                HStack(spacing: 12) {
-                    label.frame(width: 108, alignment: .leading)
-                    track
-                    percent.frame(minWidth: 42, alignment: .trailing)
+                ViewThatFits(in: .horizontal) {
+                    compactLayout
+                    stackedLayout
                 }
             }
         }
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, 9)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(window.label), \(window.remainingText), \(window.detailText)")
+        .accessibilityLabel("\(label), \(remainingText), \(detailText)")
     }
 
-    private var label: some View {
+    private var compactLayout: some View {
+        HStack(spacing: 12) {
+            labelView
+                .fixedSize(horizontal: true, vertical: true)
+                .frame(minWidth: 108, alignment: .leading)
+            track
+                .frame(minWidth: 80)
+            percent.frame(minWidth: 42, alignment: .trailing)
+        }
+    }
+
+    private var stackedLayout: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(label)
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                percent
+            }
+            if !detailText.isEmpty {
+                Text(detailText)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            track
+        }
+    }
+
+    private var labelView: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(window.label)
+            Text(label)
                 .font(GaryxFont.subheadline(weight: .semibold))
                 .foregroundStyle(.primary)
-            if !window.detailText.isEmpty {
-                Text(window.detailText)
+            if !detailText.isEmpty {
+                Text(detailText)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -322,7 +395,7 @@ private struct GaryxClaudeQuotaConsoleRow: View {
                 Capsule().fill(Color.primary.opacity(0.10))
                 Capsule()
                     .fill(Color.primary.opacity(0.82))
-                    .frame(width: proxy.size.width * max(0, min(window.remainingPercent, 100)) / 100)
+                    .frame(width: proxy.size.width * max(0, min(remainingPercent, 100)) / 100)
             }
         }
         .frame(maxWidth: .infinity)
@@ -330,7 +403,7 @@ private struct GaryxClaudeQuotaConsoleRow: View {
     }
 
     private var percent: some View {
-        Text(window.remainingText)
+        Text(remainingText)
             .font(GaryxFont.subheadline(weight: .semibold))
             .foregroundStyle(.primary)
             .monospacedDigit()
@@ -533,7 +606,7 @@ private struct GaryxClaudeCodeAccountRow: View {
         if let usage = account.usage, usage.available, !usage.windows.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
                 ForEach(usage.windows) { window in
-                    GaryxClaudeQuotaConsoleRow(window: window, horizontalPadding: 0)
+                    GaryxProviderQuotaConsoleRow(window: window, horizontalPadding: 0)
                 }
             }
             .opacity(usage.stale ? 0.55 : 1)
@@ -668,7 +741,7 @@ private struct GaryxClaudeCodeAccountDetailView: View {
         Section {
             if let usage = account.usage, usage.available, !usage.windows.isEmpty {
                 ForEach(usage.windows) { window in
-                    GaryxClaudeQuotaConsoleRow(window: window, horizontalPadding: 0)
+                    GaryxProviderQuotaConsoleRow(window: window, horizontalPadding: 0)
                         .listRowInsets(
                             EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
                         )
@@ -890,79 +963,6 @@ private struct GaryxClaudeCodeRenameAccountSheet: View {
     }
 }
 
-struct GaryxProviderModelsRow: View {
-    let provider: GaryxModelProviderDefault
-    let catalog: GaryxProviderModels?
-    let settings: [String: GaryxJSONValue]
-    let usage: GaryxProviderUsage?
-    var usageRefreshedAt: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 9) {
-                GaryxProviderAgentAvatarView(
-                    providerType: provider.providerType,
-                    diameter: 20
-                )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(providerPresentation.displayName)
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .garyxReadingLineLimit()
-                    Text(rowModel.detailText)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .garyxReadingLineLimit()
-                }
-
-                Spacer(minLength: 8)
-
-                GaryxStatusPill(text: rowModel.statusText, tone: rowModel.statusTone.garyxPillTone)
-                Image(systemName: "chevron.right")
-                    .font(GaryxFont.fixedSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-
-            GaryxProviderUsageInlineBlock(
-                provider: provider,
-                usageDisplay: usageDisplay
-            )
-            .padding(.leading, 29)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .contentShape(Rectangle())
-    }
-
-    private var providerPresentation: GaryxProviderPresentation {
-        GaryxProviderPresentation.make(providerType: provider.providerType)
-    }
-
-    private var usageDisplay: GaryxProviderUsageDisplayModel? {
-        GaryxProviderUsageDisplayModel.make(from: usage, refreshedAt: usageRefreshedAt)
-    }
-
-    private var rowModel: GaryxProviderSettingsPresentation.RowModel {
-        .make(provider: provider, catalog: catalog, settings: settings)
-    }
-}
-
-private extension GaryxProviderSettingsPresentation.RowModel.Tone {
-    /// The single Core-tone → pill-tone mapping (the tone semantics live in
-    /// Core; the pill type is view-layer).
-    var garyxPillTone: GaryxStatusPill.Tone {
-        switch self {
-        case .good:
-            return .good
-        case .muted:
-            return .muted
-        case .danger:
-            return .danger
-        }
-    }
-}
-
 // MARK: - Shared §4 usage visualization
 
 extension GaryxUsageLevel {
@@ -980,8 +980,7 @@ extension GaryxUsageLevel {
 }
 
 /// One labelled remaining-quota meter: `label ····· 73%` over a fill track
-/// with a `resets in 2d 4h` caption. Used inline in the provider list row and
-/// in the detail sheet's Usage section.
+/// with a `resets in 2d 4h` caption. Used in the detail sheet's Usage section.
 private struct GaryxUsageMeterRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .caption) private var readingSpacing: CGFloat = 3
@@ -1069,77 +1068,6 @@ private struct GaryxUsagePillsRow: View {
                         .garyxReadingLineLimit()
                 }
             }
-        }
-    }
-}
-
-/// The inline usage block under a provider list row: plan/stale pills plus
-/// Session/weekly/scoped meters (Claude/Codex) or per-model mini-bars (Antigravity),
-/// dimmed when stale; the five non-metered providers show "No quota data"
-/// rather than hiding (D6).
-private struct GaryxProviderUsageInlineBlock: View {
-    let provider: GaryxModelProviderDefault
-    let usageDisplay: GaryxProviderUsageDisplayModel?
-
-    var body: some View {
-        if provider.usageProviderId == nil {
-            usageCaption("No quota data")
-        } else if let usageDisplay {
-            if !usageDisplay.available {
-                usageCaption(usageDisplay.summaryText)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text("Usage")
-                            .font(GaryxFont.caption(weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        // Stale readings must show their freshness (§4): the
-                        // updated-ago caption joins the stale tag inline.
-                        GaryxUsagePillsRow(display: usageDisplay, showsUpdated: usageDisplay.stale)
-                    }
-                    meters(usageDisplay)
-                }
-                .opacity(usageDisplay.stale ? 0.55 : 1)
-            }
-        } else {
-            usageCaption("Loading")
-        }
-    }
-
-    @ViewBuilder
-    private func meters(_ display: GaryxProviderUsageDisplayModel) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(display.windows) { window in
-                GaryxUsageMeterRow(
-                    label: window.label,
-                    remainingPercent: window.remainingPercent,
-                    remainingText: window.remainingText,
-                    caption: window.detailText,
-                    level: window.level,
-                    compact: true
-                )
-            }
-            ForEach(display.models) { model in
-                GaryxUsageMeterRow(
-                    label: model.title,
-                    remainingPercent: model.remainingPercent,
-                    remainingText: model.remainingText,
-                    caption: model.detailText,
-                    level: model.level,
-                    compact: true
-                )
-            }
-        }
-    }
-
-    private func usageCaption(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Text("Usage")
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(text)
-                .font(GaryxFont.caption())
-                .foregroundStyle(.secondary)
         }
     }
 }
