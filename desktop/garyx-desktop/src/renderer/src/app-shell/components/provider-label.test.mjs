@@ -10,8 +10,9 @@ test('provider labels share one explicit presentation mapping', () => {
       'codex_app_server',
       'antigravity',
       'traex',
+      'grok_build',
       'gemini',
     ].map((provider) => providerLabel(provider)),
-    ['Claude Code', 'Codex', 'Antigravity', 'Traex', 'Gemini'],
+    ['Claude Code', 'Codex', 'Antigravity', 'Traex', 'Grok', 'Gemini'],
   );
 });

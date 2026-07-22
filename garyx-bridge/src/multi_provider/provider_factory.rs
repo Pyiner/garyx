@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{
-    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, ProviderType,
+    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, GrokBuildConfig, ProviderType,
     default_antigravity_model, default_claude_cli_mode,
 };
 
 use crate::antigravity_provider::AntigravityCliProvider;
 use crate::claude_provider::ClaudeCliProvider;
 use crate::codex_provider::CodexAgentProvider;
+use crate::grok_provider::GrokBuildProvider;
 use crate::provider_trait::{BridgeError, ProviderRuntime};
 
 /// Build a `ClaudeCodeConfig` from an agent runtime config.
@@ -104,6 +105,30 @@ fn build_antigravity_config(
     }
 }
 
+fn build_grok_config(
+    agent_cfg: &AgentProviderConfig,
+    default_workspace: &Option<String>,
+) -> GrokBuildConfig {
+    GrokBuildConfig {
+        workspace_dir: agent_cfg
+            .workspace_dir
+            .clone()
+            .or_else(|| default_workspace.clone()),
+        default_model: agent_cfg.default_model.clone(),
+        model: if agent_cfg.model.trim().is_empty() {
+            agent_cfg.default_model.clone()
+        } else {
+            agent_cfg.model.clone()
+        },
+        model_reasoning_effort: agent_cfg.model_reasoning_effort.clone(),
+        max_turns: agent_cfg.max_turns,
+        timeout_seconds: agent_cfg.timeout_seconds,
+        grok_bin: agent_cfg.grok_bin.clone(),
+        env: agent_cfg.env.clone(),
+        ..Default::default()
+    }
+}
+
 pub(super) fn agent_provider_requires_dedicated_key(agent_cfg: &AgentProviderConfig) -> bool {
     if ProviderType::from_slug(&agent_cfg.provider_type).is_none() {
         return false;
@@ -117,6 +142,7 @@ pub(super) fn agent_provider_requires_dedicated_key(agent_cfg: &AgentProviderCon
         || agent_cfg.experimental_api
         || !agent_cfg.antigravity_bin.trim().is_empty()
         || !agent_cfg.antigravity_brain_root.trim().is_empty()
+        || !agent_cfg.grok_bin.trim().is_empty()
 }
 
 /// Compute a stable provider key for the configured local provider type.
@@ -187,6 +213,12 @@ pub(super) async fn create_provider(
         ProviderType::AntigravityCli => {
             let config = build_antigravity_config(agent_cfg, default_workspace);
             let mut provider = AntigravityCliProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::GrokBuild => {
+            let config = build_grok_config(agent_cfg, default_workspace);
+            let mut provider = GrokBuildProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }
@@ -275,5 +307,30 @@ mod tests {
         assert!(cctty_key.starts_with("claude_code:cli:cctty:"));
         assert!(path_key.starts_with("claude_code:cli:native:"));
         assert_ne!(cctty_key, path_key);
+    }
+
+    #[test]
+    fn build_grok_config_carries_standard_provider_fields() {
+        let agent_cfg = AgentProviderConfig {
+            provider_type: ProviderType::GrokBuild.as_slug().to_owned(),
+            default_model: "grok-test".to_owned(),
+            model_reasoning_effort: "high".to_owned(),
+            grok_bin: "/opt/garyx/bin/grok".to_owned(),
+            env: std::collections::HashMap::from([("GROK_TEST_MODE".to_owned(), "1".to_owned())]),
+            ..Default::default()
+        };
+
+        let config = build_grok_config(&agent_cfg, &Some("/tmp/workspace".to_owned()));
+
+        assert_eq!(config.provider_type, ProviderType::GrokBuild);
+        assert_eq!(config.model, "grok-test");
+        assert_eq!(config.model_reasoning_effort, "high");
+        assert_eq!(config.grok_bin, "/opt/garyx/bin/grok");
+        assert_eq!(config.workspace_dir.as_deref(), Some("/tmp/workspace"));
+        assert_eq!(
+            config.env.get("GROK_TEST_MODE").map(String::as_str),
+            Some("1")
+        );
+        assert!(agent_provider_requires_dedicated_key(&agent_cfg));
     }
 }

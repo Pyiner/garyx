@@ -5,6 +5,7 @@ public enum GaryxProviderIdentityKind: String, Equatable {
     case codex
     case traex
     case claude
+    case grok
     case generic
 }
 
@@ -106,6 +107,9 @@ public struct GaryxProviderPresentation: Equatable {
         if source.contains("claude") {
             return .claude
         }
+        if source == "grok" || source.contains("grok_build") || source.contains("grok-build") {
+            return .grok
+        }
         return .generic
     }
 
@@ -119,6 +123,8 @@ public struct GaryxProviderPresentation: Equatable {
             nil
         case .claude:
             "sparkles"
+        case .grok:
+            nil
         case .generic:
             nil
         }
@@ -134,6 +140,8 @@ public struct GaryxProviderPresentation: Equatable {
             "ProviderTrae"
         case .claude:
             "ProviderClaude"
+        case .grok:
+            "ProviderGrok"
         case .generic:
             nil
         }
@@ -147,6 +155,8 @@ public struct GaryxProviderPresentation: Equatable {
             GaryxProviderFallbackRGB(red: 0.08, green: 0.10, blue: 0.12)
         case .claude:
             GaryxProviderFallbackRGB(red: 0.50, green: 0.37, blue: 0.26)
+        case .grok:
+            GaryxProviderFallbackRGB(red: 0.08, green: 0.08, blue: 0.09)
         case .generic:
             GaryxProviderFallbackRGB(red: 0.95, green: 0.95, blue: 0.97)
         }
@@ -159,6 +169,8 @@ public struct GaryxProviderPresentation: Equatable {
         case .codex, .traex:
             0.32
         case .claude:
+            0.40
+        case .grok:
             0.40
         case .generic:
             0.36
@@ -180,6 +192,8 @@ public struct GaryxProviderPresentation: Equatable {
             return "Traex"
         case .claude:
             return "Claude Code"
+        case .grok:
+            return "Grok"
         case .generic:
             let words = normalized
                 .replacingOccurrences(of: "_", with: " ")

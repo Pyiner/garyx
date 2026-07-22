@@ -16,6 +16,7 @@ final class GaryxProviderSettingsPresentationTests: XCTestCase {
             "codex_app_server": .managedOAuth,
             "antigravity": .managedOAuth,
             "traex": .managedOAuth,
+            "grok_build": .managedCLI,
         ]
         XCTAssertEqual(Set(GaryxModelProviderDefaults.providers.map(\.providerType)), Set(expected.keys))
         for provider in GaryxModelProviderDefaults.providers {

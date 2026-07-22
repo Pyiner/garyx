@@ -13,7 +13,7 @@ Each thread carries:
 | --- | --- |
 | `thread_id` | Stable identifier, e.g. `thread::<uuid>`. Used in URLs and the CLI. |
 | `agent_id` | Which agent handles runs on this thread. |
-| `provider_type` | Which provider currently backs the agent (`claude_code`, `codex_app_server`, `traex`, or `antigravity`). |
+| `provider_type` | Which provider currently backs the agent (`claude_code`, `codex_app_server`, `traex`, `antigravity`, or `grok_build`). |
 | `workspace_dir` | Filesystem root the agent operates in. May be `null` for chat-only threads. |
 | `channel_bindings` | Channel endpoints attached to this thread (Telegram chat id, Feishu chat id, etc.). |
 | `recent_run_id` | The last agent run dispatched to this thread; useful for live debugging. |

@@ -16,7 +16,7 @@ export {
 };
 export type { AvatarStyleId };
 
-export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex';
+export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'grok_build';
 export type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 
 export type AgentDraft = {
@@ -82,6 +82,8 @@ export function providerLabel(value: ProviderType | 'gemini'): string {
       return 'Antigravity';
     case 'traex':
       return 'Traex';
+    case 'grok_build':
+      return 'Grok';
     case 'gemini':
       return 'Gemini';
   }

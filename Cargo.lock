@@ -915,6 +915,7 @@ dependencies = [
  "filetime",
  "garyx-models",
  "garyx-router",
+ "grok-agent-sdk",
  "iana-time-zone",
  "regex",
  "reqwest",
@@ -994,6 +995,7 @@ dependencies = [
  "garyx-core",
  "garyx-models",
  "garyx-router",
+ "grok-agent-sdk",
  "iana-time-zone",
  "libc",
  "proptest",
@@ -1104,6 +1106,17 @@ dependencies = [
  "rand_core 0.10.0",
  "wasip2",
  "wasip3",
+]
+
+[[package]]
+name = "grok-agent-sdk"
+version = "0.1.32"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

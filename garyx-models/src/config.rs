@@ -263,6 +263,10 @@ pub struct AgentProviderConfig {
     pub antigravity_bin: String,
     #[serde(default)]
     pub antigravity_brain_root: String,
+
+    // Grok Build ACP specific
+    #[serde(default)]
+    pub grok_bin: String,
 }
 
 fn default_provider_type() -> String {
@@ -295,6 +299,7 @@ impl Default for AgentProviderConfig {
             experimental_api: false,
             antigravity_bin: String::new(),
             antigravity_brain_root: String::new(),
+            grok_bin: String::new(),
         }
     }
 }

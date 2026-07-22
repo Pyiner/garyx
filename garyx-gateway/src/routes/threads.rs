@@ -146,7 +146,7 @@ pub(crate) fn parse_sdk_session_provider_hint(
         .map(Some)
         .ok_or_else(|| {
             format!(
-                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, traex, or antigravity."
+                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, traex, antigravity, or grok."
             )
         })
 }
@@ -157,6 +157,7 @@ pub(crate) fn provider_hint_label(value: &ProviderType) -> &'static str {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::Traex => "Traex",
         ProviderType::AntigravityCli => "Antigravity",
+        ProviderType::GrokBuild => "Grok",
     }
 }
 

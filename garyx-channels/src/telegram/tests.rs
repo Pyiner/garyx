@@ -1135,6 +1135,8 @@ mod e2e_tests {
         let options = ThreadEnsureOptions {
             label: Some(label.to_owned()),
             workspace_dir: None,
+            no_workspace: false,
+            workspace_origin: None,
             workspace_mode: Default::default(),
             worktree_base_dir: None,
             agent_id: None,

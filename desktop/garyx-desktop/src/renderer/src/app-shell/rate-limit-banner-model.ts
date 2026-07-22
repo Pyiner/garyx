@@ -44,6 +44,9 @@ export function normalizeRateLimitProvider(
   if (slug.startsWith("trae")) {
     return "traex";
   }
+  if (slug.startsWith("grok")) {
+    return "grok_build";
+  }
   if (slug.startsWith("gemini")) {
     return "gemini";
   }

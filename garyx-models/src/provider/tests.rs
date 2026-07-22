@@ -17,6 +17,12 @@ fn test_provider_type_serde() {
     assert_eq!(back, ProviderType::AntigravityCli);
     let alias: ProviderType = serde_json::from_str("\"agy\"").unwrap();
     assert_eq!(alias, ProviderType::AntigravityCli);
+
+    let grok = ProviderType::GrokBuild;
+    let json = serde_json::to_string(&grok).unwrap();
+    assert_eq!(json, "\"grok_build\"");
+    let alias: ProviderType = serde_json::from_str("\"grok\"").unwrap();
+    assert_eq!(alias, ProviderType::GrokBuild);
 }
 
 #[test]
@@ -26,6 +32,7 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::CodexAppServer,
         ProviderType::Traex,
         ProviderType::AntigravityCli,
+        ProviderType::GrokBuild,
     ] {
         assert_eq!(
             ProviderType::from_slug(provider_type.as_slug()),
@@ -49,6 +56,10 @@ fn test_provider_type_slug_round_trip() {
     assert_eq!(
         ProviderType::from_slug("agy"),
         Some(ProviderType::AntigravityCli)
+    );
+    assert_eq!(
+        ProviderType::from_slug("grok"),
+        Some(ProviderType::GrokBuild)
     );
 }
 

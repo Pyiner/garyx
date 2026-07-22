@@ -93,6 +93,9 @@ export function normalizeDesktopProviderType(value: unknown): DesktopApiProvider
   if (value === "traex" || value === "trae" || value === "trae_cli" || value === "traecli") {
     return "traex";
   }
+  if (value === "grok_build" || value === "grok" || value === "grok-build") {
+    return "grok_build";
+  }
   return "claude_code";
 }
 
@@ -195,6 +198,7 @@ function mapWireProviderType(value: unknown, path: string): DesktopApiProviderTy
     case "codex_app_server":
     case "traex":
     case "antigravity":
+    case "grok_build":
       return value;
     default:
       throw new GatewayContractError(path, "must be a current provider type");

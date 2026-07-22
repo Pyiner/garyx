@@ -2171,6 +2171,18 @@ impl MultiProviderBridge {
             return false;
         }
 
+        let provider = match provider_key.as_ref() {
+            Some(provider_key) => self
+                .inner
+                .topology
+                .read()
+                .await
+                .provider_pool
+                .get(provider_key)
+                .cloned(),
+            None => None,
+        };
+
         let persistence_handle = if let Some(thread_id) = thread_id_for_run.as_deref() {
             let mut persistence = self.inner.active_thread_persistence.lock().await;
             let should_remove = persistence
@@ -2200,6 +2212,16 @@ impl MultiProviderBridge {
             }
         }
 
+        // Stdio transports that need to flush a protocol-native cancel frame
+        // get a bounded provider abort while the owning task is still alive.
+        let provider_aborted_before_task = if let Some(provider) = provider.as_ref()
+            && provider.abort_before_task_cancel()
+        {
+            provider.abort(run_id).await
+        } else {
+            false
+        };
+
         // Cancel the tokio task.
         let cancelled_task = {
             let mut tasks = self.inner.active_tasks.lock().await;
@@ -2217,19 +2239,11 @@ impl MultiProviderBridge {
             let _ = task.await;
         }
 
-        // Also try provider-level abort.
-        let provider = match provider_key {
-            Some(provider_key) => self
-                .inner
-                .topology
-                .read()
-                .await
-                .provider_pool
-                .get(&provider_key)
-                .cloned(),
-            None => None,
-        };
-        let provider_aborted = if let Some(provider) = provider {
+        // Also try provider-level abort for providers that do not need the
+        // pre-drop ordering above.
+        let provider_aborted = if provider_aborted_before_task {
+            true
+        } else if let Some(provider) = provider {
             provider.abort(run_id).await
         } else {
             false

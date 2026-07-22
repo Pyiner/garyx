@@ -31,6 +31,7 @@ async fn lists_only_provider_builtin_agents() {
     assert!(agents.iter().any(|agent| agent.agent_id == "codex"));
     assert!(agents.iter().any(|agent| agent.agent_id == "traex"));
     assert!(agents.iter().any(|agent| agent.agent_id == "antigravity"));
+    assert!(agents.iter().any(|agent| agent.agent_id == "grok"));
     assert!(agents.iter().filter(|agent| agent.built_in).all(|agent| {
         agent
             .avatar_data_url

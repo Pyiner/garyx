@@ -10,6 +10,7 @@ members = [
     "antigravity-sdk",
     "codex-sdk",
     "claude-agent-sdk",
+    "grok-agent-sdk",
 ]
 resolver = "2"
 
@@ -48,6 +49,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 antigravity-sdk = { path = "antigravity-sdk" }
 claude-agent-sdk = { path = "claude-agent-sdk" }
 codex-sdk = { path = "codex-sdk" }
+grok-agent-sdk = { path = "grok-agent-sdk" }
 cctty = { git = "https://github.com/Pyiner/cctty.git", rev = "04c9b6c16c009f831bca826927c5c5b075513fe7" }
 garyx-models = { path = "garyx-models" }
 garyx-core = { path = "garyx-core" }

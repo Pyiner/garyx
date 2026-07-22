@@ -329,6 +329,7 @@ export function AgentFormDialog({
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="antigravity">Antigravity</SelectItem>
                       <SelectItem value="traex">Trae</SelectItem>
+                      <SelectItem value="grok_build">Grok</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>

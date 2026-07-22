@@ -84,7 +84,7 @@ fn builtin_provider_agents_do_not_get_agent_memory() {
     let temp = tempdir().unwrap();
     let gary_home = temp.path().join(".gary");
     let layout = MemoryContextLayout::from_gary_home(&gary_home);
-    for agent_id in ["claude", "codex", "antigravity"] {
+    for agent_id in ["claude", "codex", "traex", "antigravity", "grok"] {
         let metadata = HashMap::from([("agent_id".to_owned(), json!(agent_id))]);
 
         let message = build_memory_context_user_message_with_layout(&metadata, &layout);

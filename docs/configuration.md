@@ -501,8 +501,8 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `codex_app_server`,
-`traex`, or `antigravity`. `claude_tty` is deprecated and is treated as
-`claude_code` when encountered in older records.
+`traex`, `antigravity`, or `grok_build`. `claude_tty` is deprecated and is
+treated as `claude_code` when encountered in older records.
 
 Claude has one provider path: the Claude Agent SDK. Configure which executable
 the SDK launches with `agents.claude`:
@@ -533,6 +533,29 @@ garyx config claude-cli --mode cctty --path /opt/garyx/bin/custom-cctty
 garyx config provider-model claude_code --claude-cli-mode cctty
 garyx config provider-model claude_code --claude-cli-mode cctty --claude-cli-path /opt/garyx/bin/custom-cctty
 ```
+
+Grok Build uses the installed `grok` executable directly over ACP stdio. The
+optional `grok_bin` field overrides that executable; the ordinary provider
+`env` map is copied unchanged into each Grok process. Garyx does not interpret
+credential values or retry with an alternative environment:
+
+```json
+{
+  "agents": {
+    "grok": {
+      "provider_type": "grok_build",
+      "grok_bin": "grok",
+      "default_model": "",
+      "model_reasoning_effort": "",
+      "env": {}
+    }
+  }
+}
+```
+
+Authenticate with the Grok CLI itself, then configure model/reasoning defaults
+from the provider settings surfaces or, for example,
+`garyx provider set grok_build --model <model-id> --reasoning high`.
 
 Custom agents may also set `model`, `model_reasoning_effort`, and
 `model_service_tier`. These values are injected into the thread runtime metadata
@@ -693,10 +716,10 @@ provider, MCP, channel, and Skill editing on the Mac app where the local
 runtime and secrets live.
 
 The desktop Providers tab shows a fixed provider table rather than an arbitrary
-add-provider form. `Claude Code`, `Codex`, `Traex`, and `Antigravity` are listed
-as built-in provider agents; their Configure dialogs edit provider defaults and
-host-managed runtime settings. Additional named personas belong in the Agents
-tab or CLI custom-agent commands.
+add-provider form. `Claude Code`, `Codex`, `Traex`, `Antigravity`, and `Grok`
+are listed as built-in provider agents; their Configure dialogs edit provider
+defaults and host-managed runtime settings. Additional named personas belong in
+the Agents tab or CLI custom-agent commands.
 
 The desktop app mirrors its current view into the window URL hash. For example,
 thread pages use `#/thread/<thread-id>`, new-thread drafts can use

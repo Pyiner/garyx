@@ -2,9 +2,10 @@ export type DesktopApiProviderType =
   | "claude_code"
   | "codex_app_server"
   | "antigravity"
-  | "traex";
+  | "traex"
+  | "grok_build";
 
-export type DesktopProviderIconKey = "claude" | "codex" | "traex" | "gemini";
+export type DesktopProviderIconKey = "claude" | "codex" | "traex" | "gemini" | "grok";
 
 export interface DesktopProviderIconDescriptor {
   key: DesktopProviderIconKey;

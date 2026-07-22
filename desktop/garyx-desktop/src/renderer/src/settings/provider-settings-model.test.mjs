@@ -77,6 +77,23 @@ test('empty provider draft has no service tier', () => {
   assert.equal(emptyModelProviderConfigDraft('codex_app_server').modelServiceTier, '');
 });
 
+test('Grok is a first-class provider settings row', () => {
+  const row = fixedModelProviderRow('grok_build');
+  assert.deepEqual(
+    { agentId: row.agentId, label: row.label, providerType: row.providerType },
+    { agentId: 'grok', label: 'Grok', providerType: 'grok_build' },
+  );
+  const gatewayConfig = { agents: { grok: { grok_bin: '/usr/local/bin/grok' } } };
+  applyProviderConfigDraftToGatewayConfig(
+    gatewayConfig,
+    row,
+    { ...emptyModelProviderConfigDraft('grok_build'), model: 'grok-test', modelReasoningEffort: 'high' },
+  );
+  assert.equal(gatewayConfig.agents.grok.provider_type, 'grok_build');
+  assert.equal(gatewayConfig.agents.grok.default_model, 'grok-test');
+  assert.equal(gatewayConfig.agents.grok.grok_bin, '/usr/local/bin/grok');
+});
+
 test('saving the provider dialog persists the selected service tier', () => {
   const gatewayConfig = { agents: {} };
   applyProviderConfigDraftToGatewayConfig(

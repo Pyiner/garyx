@@ -94,7 +94,8 @@ function mapAgentProviderType(value: unknown, path: string): DesktopCustomAgent[
     value !== "claude_code" &&
     value !== "codex_app_server" &&
     value !== "traex" &&
-    value !== "antigravity"
+    value !== "antigravity" &&
+    value !== "grok_build"
   ) {
     throw new GatewayContractError(path, "must be a current provider type");
   }

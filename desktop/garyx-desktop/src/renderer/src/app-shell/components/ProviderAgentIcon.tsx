@@ -6,9 +6,10 @@ import type {
 import antigravityAvatarUrl from '../../assets/provider-avatars/antigravity.png';
 import claudeAvatarUrl from '../../assets/provider-avatars/claude.png';
 import codexAvatarUrl from '../../assets/provider-avatars/codex.png';
+import grokAvatarUrl from '../../assets/provider-avatars/grok.png';
 import traeAvatarUrl from '../../assets/provider-avatars/trae.png';
 
-type BuiltInAgentIconKey = 'antigravity' | 'claude' | 'codex' | 'traex' | 'gemini';
+type BuiltInAgentIconKey = 'antigravity' | 'claude' | 'codex' | 'traex' | 'gemini' | 'grok';
 
 const BUILT_IN_AGENT_ICONS = {
   antigravity: antigravityAvatarUrl,
@@ -16,6 +17,7 @@ const BUILT_IN_AGENT_ICONS = {
   codex: codexAvatarUrl,
   traex: traeAvatarUrl,
   gemini: antigravityAvatarUrl,
+  grok: grokAvatarUrl,
 };
 
 function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | null {
@@ -42,6 +44,9 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   }
   if (normalized === 'gemini') {
     return 'gemini';
+  }
+  if (normalized === 'grok' || normalized === 'grok_build' || normalized === 'grok-build') {
+    return 'grok';
   }
   return null;
 }

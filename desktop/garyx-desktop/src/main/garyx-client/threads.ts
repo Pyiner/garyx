@@ -129,7 +129,8 @@ function parseThreadProviderType(
     value === "claude_code" ||
     value === "codex_app_server" ||
     value === "antigravity" ||
-    value === "traex"
+    value === "traex" ||
+    value === "grok_build"
   ) {
     return value;
   }

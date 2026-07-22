@@ -1283,7 +1283,7 @@ async fn test_threadless_durable_chat_atomically_claims_one_thread_and_dispatche
 #[tokio::test]
 async fn test_chat_start_missing_explicit_thread_is_404_before_agent_gate_or_bridge() {
     let (state, bridge, calls, _) =
-        recording_state(None, &["claude", "codex", "traex", "antigravity"]).await;
+        recording_state(None, &["claude", "codex", "traex", "antigravity", "grok"]).await;
     let thread_id = "thread::missing-explicit-all-disabled";
     let req = Request::builder()
         .method("POST")
@@ -1308,7 +1308,7 @@ async fn test_chat_start_missing_explicit_thread_is_404_before_agent_gate_or_bri
 #[tokio::test]
 async fn test_chat_start_implicit_thread_fails_with_no_enabled_agent_before_bridge() {
     let (state, _, calls, _) =
-        recording_state(None, &["claude", "codex", "traex", "antigravity"]).await;
+        recording_state(None, &["claude", "codex", "traex", "antigravity", "grok"]).await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/chat/start")
@@ -1488,7 +1488,7 @@ async fn test_chat_start_existing_disabled_agent_thread_continues() {
 #[tokio::test]
 async fn test_chat_start_legacy_unstamped_thread_keeps_bridge_fallback_when_all_disabled() {
     let (state, _, calls, observed) =
-        recording_state(None, &["claude", "codex", "traex", "antigravity"]).await;
+        recording_state(None, &["claude", "codex", "traex", "antigravity", "grok"]).await;
     let thread_id = "thread::legacy-unstamped-agent";
     state
         .threads

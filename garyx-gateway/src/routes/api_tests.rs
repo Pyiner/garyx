@@ -907,7 +907,7 @@ async fn custom_agent_toggle_default_and_put_enabled_tristate_contract() {
     assert!(listed["default_agent_id"].is_null());
     assert_eq!(listed["effective_default_agent_id"], "claude");
 
-    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+    for agent_id in ["claude", "codex", "traex", "antigravity", "grok"] {
         let disable = Request::builder()
             .method("PATCH")
             .uri(format!("/api/custom-agents/{agent_id}/toggle"))

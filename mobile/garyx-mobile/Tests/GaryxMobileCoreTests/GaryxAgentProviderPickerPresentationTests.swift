@@ -11,12 +11,14 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
             "codex_app_server",
             "traex",
             "antigravity",
+            "grok_build",
         ])
         XCTAssertEqual(options.map(\.label), [
             "Claude Code",
             "Codex",
             "Traex",
             "Antigravity",
+            "Grok",
         ])
     }
 
@@ -57,7 +59,7 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
 
     func testOptionsPrependNonStandardCurrentProvider() {
         let options = GaryxAgentProviderPickerPresentation.options(includingCurrent: "custom_provider")
-        XCTAssertEqual(options.count, 5)
+        XCTAssertEqual(options.count, 6)
         XCTAssertEqual(options.first, GaryxAgentProviderPickerOption(id: "custom_provider", label: "Custom Provider"))
         XCTAssertEqual(Array(options.dropFirst()), GaryxAgentProviderPickerPresentation.standardOptions)
     }
@@ -72,6 +74,7 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "codex_app_server"), "Codex")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "traex"), "Traex")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "antigravity"), "Antigravity")
+        XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "grok_build"), "Grok")
     }
 
     func testLabelForNonStandardProvidersFallsBackToSharedDisplayName() {
@@ -88,11 +91,11 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
 
     func testOptionsKeepCaseVariantIdsButUseSharedLabels() {
         let traex = GaryxAgentProviderPickerPresentation.options(includingCurrent: "TRAE")
-        XCTAssertEqual(traex.count, 5)
+        XCTAssertEqual(traex.count, 6)
         XCTAssertEqual(traex.first, GaryxAgentProviderPickerOption(id: "TRAE", label: "Traex"))
 
         let claude = GaryxAgentProviderPickerPresentation.options(includingCurrent: "Claude_Code")
-        XCTAssertEqual(claude.count, 5)
+        XCTAssertEqual(claude.count, 6)
         // The id stays the case variant while the label uses the same canonical
         // presentation as the standard claude_code entry.
         XCTAssertEqual(claude.first, GaryxAgentProviderPickerOption(id: "Claude_Code", label: "Claude Code"))

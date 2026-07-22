@@ -511,7 +511,8 @@ function inferProviderTypeForThread(
     runtimeProvider === "claude_code" ||
     runtimeProvider === "codex_app_server" ||
     runtimeProvider === "antigravity" ||
-    runtimeProvider === "traex"
+    runtimeProvider === "traex" ||
+    runtimeProvider === "grok_build"
   ) {
     return runtimeProvider;
   }
@@ -529,6 +530,9 @@ function inferProviderTypeForThread(
   }
   if (agentId === "traex") {
     return "traex";
+  }
+  if (agentId === "grok") {
+    return "grok_build";
   }
   if (agentId === "claude") {
     return "claude_code";

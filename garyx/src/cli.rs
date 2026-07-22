@@ -383,7 +383,7 @@ pub(crate) enum ConfigAction {
     },
     /// Set the gateway default model for a model provider
     ProviderModel {
-        /// Provider type: claude_code, codex_app_server, traex, or antigravity
+        /// Provider type: claude_code, codex_app_server, traex, antigravity, or grok_build
         provider: String,
         /// Default model id. Omit to leave unchanged.
         #[arg(long, conflicts_with = "clear_model")]
@@ -441,7 +441,7 @@ pub(crate) enum ProviderAction {
     /// Show one provider default configuration
     #[command(visible_alias = "get")]
     Show {
-        /// Provider type: claude_code, codex_app_server, traex, or antigravity
+        /// Provider type: claude_code, codex_app_server, traex, antigravity, or grok_build
         provider: String,
         /// Output as JSON
         #[arg(long)]
@@ -450,7 +450,7 @@ pub(crate) enum ProviderAction {
     /// Edit one provider's default configuration. Fields you omit keep their current values.
     #[command(visible_alias = "update")]
     Set {
-        /// Provider type: claude_code, codex_app_server, traex, or antigravity
+        /// Provider type: claude_code, codex_app_server, traex, antigravity, or grok_build
         provider: String,
         /// Default model id. Omit to leave unchanged.
         #[arg(long, conflicts_with = "clear_model")]
@@ -974,7 +974,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, codex_app_server, traex, or antigravity
+        /// Provider type: claude_code, codex_app_server, traex, antigravity, or grok_build
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
@@ -1014,7 +1014,7 @@ pub(crate) enum AgentAction {
         /// Display name. Omit to keep the current value.
         #[arg(long, alias = "name")]
         display_name: Option<String>,
-        /// Provider type: claude_code, codex_app_server, traex, or antigravity. Omit to keep the current value.
+        /// Provider type: claude_code, codex_app_server, traex, antigravity, or grok_build. Omit to keep the current value.
         #[arg(long)]
         provider: Option<String>,
         /// Optional model override. Omit to preserve the existing value.
@@ -1057,7 +1057,7 @@ pub(crate) enum AgentAction {
         /// Display name. Required when creating; omit on update to keep the current value.
         #[arg(long, alias = "name")]
         display_name: Option<String>,
-        /// Provider type: claude_code, codex_app_server, traex, or antigravity. Omit to keep the current value (claude_code when creating).
+        /// Provider type: claude_code, codex_app_server, traex, antigravity, or grok_build. Omit to keep the current value (claude_code when creating).
         #[arg(long)]
         provider: Option<String>,
         /// Optional model override. Omit to preserve an existing value, or use the provider default on create.
