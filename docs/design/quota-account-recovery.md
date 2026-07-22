@@ -205,7 +205,9 @@ started another run supersedes the recovery instead of queueing an extra
 
 Manual Continue is moved from a generic client send to a quota-recovery retry
 endpoint. It claims the same SQL row and therefore shares the same duplicate
-fence as reset and account-switch recovery.
+fence as reset and account-switch recovery. Clients distinguish an accepted
+wake from a settled-generation 404 and an unknown-route 404 from an older
+gateway; the card renders all terminal and transport failures inline.
 
 The internal message remains the literal `continue`, with internal metadata:
 
@@ -259,9 +261,11 @@ started:
 4. delete the cron only after the SQL insert commits.
 
 Stale cron jobs whose thread has already started another run are deleted
-without import. New code never creates quota cron jobs. A legacy cron executor
-that encounters a surviving job must claim the matching SQL generation before
-dispatch and otherwise no-op.
+without import. New code never creates quota cron jobs. Startup ordering makes
+the SQL import authoritative before the scheduler starts; the generic cron
+executor therefore treats any surviving system `quota-resend:` job as an
+already-migrated no-op. This closes the SQL-commit/cron-delete crash window
+without a second dispatch path.
 
 Startup also scans canonical thread records and projects any still-current
 committed rate-limit terminal into SQLite. This closes the crash window between

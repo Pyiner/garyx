@@ -673,7 +673,9 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
         expeditedThreads: 2,
         alreadyClaimedThreads: 1,
       });
-      await retryThreadQuotaRecovery(settings, "thread::quota");
+      assert.deepEqual(await retryThreadQuotaRecovery(settings, "thread::quota"), {
+        status: "accepted",
+      });
       const auth = await startClaudeCodeAuth(settings, { managedAccountName: "Work" });
       assert.equal(auth.loginId, "login-1");
       assert.equal(auth.authorizationUrl, "https://claude.ai/oauth/authorize?state=test");
@@ -681,6 +683,26 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
       assert.equal(cancelled.status, "failed");
       assert.equal(cancelled.error, "Claude Code sign-in was cancelled.");
       await deleteClaudeCodeAccount(settings, "account-1");
+    },
+  );
+});
+
+test("quota recovery retry distinguishes a settled generation from an old gateway", async () => {
+  await withGatewayFetch(
+    async () => jsonResponse({ error: "quota_recovery_not_found" }, 404),
+    async () => {
+      assert.deepEqual(await retryThreadQuotaRecovery(settings, "thread::settled"), {
+        status: "settled",
+      });
+    },
+  );
+
+  await withGatewayFetch(
+    async () => jsonResponse({ error: "not_found" }, 404),
+    async () => {
+      assert.deepEqual(await retryThreadQuotaRecovery(settings, "thread::old-gateway"), {
+        status: "unsupported",
+      });
     },
   );
 });

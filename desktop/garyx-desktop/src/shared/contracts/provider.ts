@@ -112,6 +112,10 @@ export interface DesktopClaudeCodeAccountSelection {
   recoveryWarning?: string | null;
 }
 
+export interface DesktopQuotaRecoveryRetryResult {
+  status: "accepted" | "settled" | "unsupported";
+}
+
 export type DesktopClaudeAuthStatus =
   | "starting"
   | "waiting_for_code"

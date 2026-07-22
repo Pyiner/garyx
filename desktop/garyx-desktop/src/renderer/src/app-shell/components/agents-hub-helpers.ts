@@ -75,7 +75,7 @@ export function deriveId(name: string): string {
 export function providerLabel(value: ProviderType | 'gemini'): string {
   switch (value) {
     case 'claude_code':
-      return 'Claude';
+      return 'Claude Code';
     case 'codex_app_server':
       return 'Codex';
     case 'antigravity':

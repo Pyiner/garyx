@@ -933,7 +933,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("garyx:retry-thread-quota-recovery", async (_event, input) => {
     const settings = await resolveSettings();
-    await retryThreadQuotaRecovery(settings, input.threadId);
+    return retryThreadQuotaRecovery(settings, input.threadId);
   });
 
   ipcMain.handle("garyx:rename-claude-code-account", async (_event, input) => {

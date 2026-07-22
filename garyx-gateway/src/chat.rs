@@ -619,6 +619,32 @@ async fn run_durable_chat_start(
     };
     let requested_run_id = plan.requested_run_id().to_owned();
     let planned_outcome = plan.outcome();
+    if matches!(
+        planned_outcome,
+        AgentDispatchOutcome::QueuedToActiveRun { .. }
+    ) && let Some(claim) = quota_recovery_claim.as_ref()
+    {
+        match state
+            .ops
+            .garyx_db
+            .supersede_claimed_quota_recovery(&claim.job_id, &claim.claim_token)
+        {
+            Ok(_) => {
+                return durable_failure(
+                    StatusCode::CONFLICT,
+                    "quota_recovery_active_run",
+                    "A newer run is already active; this quota recovery generation was superseded.",
+                );
+            }
+            Err(error) => {
+                return durable_failure(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "quota_recovery_settlement_failed",
+                    error.to_string(),
+                );
+            }
+        }
+    }
     let (outcome, effective_run_id, planned_pending_input_id) =
         durable_outcome_fields(&planned_outcome, &requested_run_id);
 

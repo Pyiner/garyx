@@ -132,17 +132,15 @@ fn recovery_plan_from_control(
         .get("will_auto_resend")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let parsed_reset_at = match rate_limit.get("reset_at").and_then(Value::as_str) {
-        Some(value) => Some(
-            DateTime::parse_from_rfc3339(value)
-                .ok()?
-                .with_timezone(&Utc),
-        ),
-        None => None,
-    };
-    if will_auto_resend && parsed_reset_at.is_none() {
-        return None;
-    }
+    // A missing or malformed provider deadline is not permission to forget
+    // the blocked generation. Keep it parked so account switch and manual
+    // Continue can still recover it; only a trustworthy timestamp arms the
+    // timer worker.
+    let parsed_reset_at = rate_limit
+        .get("reset_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
     let reset_at = if will_auto_resend {
         parsed_reset_at
     } else {
@@ -176,6 +174,14 @@ fn recovery_plan_from_control(
         window,
         reset_at,
     })
+}
+
+/// Legacy quota cron files can survive a successful SQL import when their
+/// best-effort deletion fails. The SQL recovery worker exclusively owns these
+/// generations after startup migration, so the generic cron executor must
+/// never dispatch them independently.
+pub(crate) fn is_legacy_quota_recovery_job(job_id: &str) -> bool {
+    job_id.starts_with(LEGACY_JOB_PREFIX)
 }
 
 pub(crate) fn canonical_quota_provider(provider: &str) -> String {
@@ -395,7 +401,10 @@ async fn process_claimed_job(state: &Arc<AppState>, job: QuotaRecoveryJob, claim
             if status == StatusCode::NOT_FOUND {
                 settle_claim_as_cancelled(state, &job, &claim_token).await;
             } else if status == StatusCode::CONFLICT
-                && matches!(code, "dispatch_ambiguous" | "idempotency_conflict")
+                && matches!(
+                    code,
+                    "dispatch_ambiguous" | "idempotency_conflict" | "quota_recovery_active_run"
+                )
             {
                 // Reissuing an ambiguous durable admission could duplicate a
                 // user turn. Settle the recovery generation; the durable
@@ -779,9 +788,29 @@ mod tests {
     }
 
     #[test]
-    fn ignores_rate_limit_with_an_invalid_reset_time() {
+    fn parks_rate_limit_with_an_invalid_reset_time() {
         let raw = raw_rate_limit_event("run::one", "bad-time");
-        assert!(parse_recovery_plan(&raw).is_none());
+        let plan = parse_recovery_plan(&raw).expect("the generation should remain switchable");
+        assert_eq!(plan.run_id, "run::one");
+        assert!(plan.reset_at.is_none());
+    }
+
+    #[test]
+    fn parks_auto_resend_rate_limit_without_a_reset_time() {
+        let mut raw: Value = serde_json::from_str(&raw_rate_limit_event(
+            "run::missing-reset",
+            "2099-01-01T00:00:00Z",
+        ))
+        .unwrap();
+        raw["message"]["control"]["rate_limit"]
+            .as_object_mut()
+            .unwrap()
+            .remove("reset_at");
+
+        let plan = parse_recovery_plan(&raw.to_string())
+            .expect("an untrusted reset must park instead of dropping the generation");
+        assert_eq!(plan.run_id, "run::missing-reset");
+        assert!(plan.reset_at.is_none());
     }
 
     #[test]
@@ -870,7 +899,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_retry_projects_then_wakes_a_fresh_terminal() {
+    async fn manual_retry_projects_then_wakes_an_untrusted_reset_terminal() {
         let state = crate::server::AppStateBuilder::new(Default::default()).build();
         state
             .ops
@@ -883,8 +912,7 @@ mod tests {
             .write_thread_record_with_projections("thread::quota-manual", "{}", None, None)
             .unwrap();
         let raw: Value =
-            serde_json::from_str(&raw_rate_limit_event("run::manual", "2099-01-01T00:00:00Z"))
-                .unwrap();
+            serde_json::from_str(&raw_rate_limit_event("run::manual", "bad-time")).unwrap();
         state
             .threads
             .history
@@ -918,6 +946,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(job.blocked_run_id, "run::manual");
+        assert!(job.reset_at.is_none());
         assert_eq!(
             job.wake_reason,
             crate::garyx_db::QuotaRecoveryWakeReason::Manual

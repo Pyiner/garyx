@@ -577,6 +577,23 @@ impl CronService {
         let mut record_run_id = run_id.clone();
         let (status, error) = match &job.kind {
             CronJobKind::InternalDispatch { payload } => {
+                if job.system && crate::quota_resend::is_legacy_quota_recovery_job(&job.id) {
+                    cron_info!(
+                        job_id = %job.id,
+                        run_id = %run_id,
+                        "legacy quota cron ignored because durable SQL recovery owns the generation"
+                    );
+                    return RunRecord {
+                        job_id: job.id.clone(),
+                        run_id,
+                        started_at,
+                        finished_at: Some(Utc::now()),
+                        duration_ms: Some(0),
+                        status: JobRunStatus::Success,
+                        thread_id: Self::trimmed_non_empty(job.thread_id.as_deref()),
+                        error: None,
+                    };
+                }
                 // Boundary fallback: classify drop-vs-transient and
                 // retry transient dispatch failures with exponential backoff.
                 // Any terminal failure (thread gone, or retry budget exhausted)

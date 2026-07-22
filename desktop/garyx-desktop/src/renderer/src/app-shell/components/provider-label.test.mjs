@@ -12,6 +12,6 @@ test('provider labels share one explicit presentation mapping', () => {
       'traex',
       'gemini',
     ].map((provider) => providerLabel(provider)),
-    ['Claude', 'Codex', 'Antigravity', 'Traex', 'Gemini'],
+    ['Claude Code', 'Codex', 'Antigravity', 'Traex', 'Gemini'],
   );
 });

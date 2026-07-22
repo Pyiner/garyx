@@ -11,6 +11,7 @@ import type {
   DesktopProviderModels,
   DesktopProviderRecentSession,
   DesktopProviderUsage,
+  DesktopQuotaRecoveryRetryResult,
   DesktopScopedUsageLimit,
   DesktopSettings,
   DesktopUsageWindow,
@@ -19,6 +20,7 @@ import type {
 } from "@shared/contracts";
 import {
   GatewayContractError,
+  GatewayRequestError,
   hasContractField,
   requestJson,
   requireContractArray,
@@ -582,13 +584,30 @@ export async function selectClaudeCodeAccount(
 export async function retryThreadQuotaRecovery(
   settings: DesktopSettings,
   threadId: string,
-): Promise<void> {
-  await requestJson<unknown>(
-    settings,
-    `/api/threads/${encodeURIComponent(threadId)}/quota-recovery/retry`,
-    "mutationSingleAttempt",
-    { method: "POST", signal: AbortSignal.timeout(15000) },
-  );
+): Promise<DesktopQuotaRecoveryRetryResult> {
+  try {
+    await requestJson<unknown>(
+      settings,
+      `/api/threads/${encodeURIComponent(threadId)}/quota-recovery/retry`,
+      "mutationSingleAttempt",
+      { method: "POST", signal: AbortSignal.timeout(15000) },
+    );
+    return { status: "accepted" };
+  } catch (error) {
+    if (error instanceof GatewayRequestError && error.status === 404) {
+      let code: string | null = null;
+      try {
+        const body = JSON.parse(error.body) as { error?: unknown };
+        code = typeof body.error === "string" ? body.error : null;
+      } catch {
+        // An older gateway may return plain text or HTML for the unknown route.
+      }
+      return {
+        status: code === "quota_recovery_not_found" ? "settled" : "unsupported",
+      };
+    }
+    throw error;
+  }
 }
 
 export async function renameClaudeCodeAccount(

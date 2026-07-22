@@ -161,6 +161,12 @@ public enum GaryxGatewayError: Error, Equatable, LocalizedError {
     }
 }
 
+public enum GaryxQuotaRecoveryRetryResult: String, Equatable, Sendable {
+    case accepted
+    case settled
+    case unsupported
+}
+
 public struct GaryxGatewayRetryPolicy: Equatable, Sendable {
     public var maxAttempts: Int
     public var initialDelay: TimeInterval
@@ -779,11 +785,21 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func retryThreadQuotaRecovery(threadId: String) async throws {
-        let _: GaryxJSONValue = try await post(
-            "/api/threads/\(threadId.urlPathEncoded)/quota-recovery/retry",
-            body: GaryxEmptyBody()
-        )
+    public func retryThreadQuotaRecovery(
+        threadId: String
+    ) async throws -> GaryxQuotaRecoveryRetryResult {
+        do {
+            let _: GaryxJSONValue = try await post(
+                "/api/threads/\(threadId.urlPathEncoded)/quota-recovery/retry",
+                body: GaryxEmptyBody()
+            )
+            return .accepted
+        } catch GaryxGatewayError.httpStatus(404, let body, _) {
+            let code: String? = body.data(using: .utf8)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                .flatMap { $0["error"] as? String }
+            return code == "quota_recovery_not_found" ? .settled : .unsupported
+        }
     }
 
     public func renameClaudeCodeAccount(accountId: String, name: String) async throws {

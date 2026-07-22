@@ -604,7 +604,9 @@ export function ProviderSettingsPanel({
     try {
       const result = await window.garyxDesktop.selectClaudeCodeAccount({ accountId: account.id });
       await Promise.all([refreshClaudeAccounts(), refreshCodingUsage()]);
-      if (result.recoveryWarning) {
+      if (!result.selectionChanged) {
+        setAccountRecoveryNotice(null);
+      } else if (result.recoveryWarning) {
         setAccountRecoveryNotice(t('Account switched. Retry the paused threads manually.'));
       } else if (result.recovery.matchedThreads > 0) {
         setAccountRecoveryNotice(t('Resuming {count} paused threads…', {

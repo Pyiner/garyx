@@ -1721,12 +1721,8 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
     }
 
     static func providerLabel(_ provider: String?) -> String {
-        let slug = (provider ?? "").trimmingCharacters(in: .whitespaces).lowercased()
-        if slug.hasPrefix("claude") { return "Claude Code" }
-        if slug.hasPrefix("codex") { return "Codex" }
-        if slug.hasPrefix("trae") { return "TRAE" }
         let trimmed = provider?.trimmingCharacters(in: .whitespaces) ?? ""
-        return trimmed.isEmpty ? "Provider" : trimmed
+        return GaryxProviderPresentation.displayName(for: trimmed)
     }
 
     static func windowLabel(_ window: String?) -> String? {

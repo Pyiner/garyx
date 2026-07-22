@@ -2311,6 +2311,88 @@ async fn test_internal_dispatch_kind_serde_roundtrip() {
 }
 
 #[tokio::test]
+async fn surviving_legacy_quota_cron_is_owned_by_sql_and_never_dispatches() {
+    struct CountingSuccessPort {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl AutomationDispatchPort for CountingSuccessPort {
+        fn provider_runtime_ready(&self) -> bool {
+            true
+        }
+
+        async fn invalidate_gateway_sync_caches(&self) {}
+
+        async fn dispatch_internal_message(
+            &self,
+            _thread_id: &str,
+            _run_id: &str,
+            _message: &str,
+            _extra_metadata: std::collections::HashMap<String, serde_json::Value>,
+        ) -> Result<garyx_models::provider::AgentDispatchOutcome, AutomationDispatchError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(garyx_models::provider::AgentDispatchOutcome::Started)
+        }
+    }
+
+    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::quota",
+            serde_json::json!({"thread_id": "thread::quota"}),
+        )
+        .await
+        .unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut env = stateless_exec_env(store);
+    env.port = Arc::new(CountingSuccessPort {
+        calls: calls.clone(),
+    });
+    let job = CronJob::from_config(&CronJobConfig {
+        id: "quota-resend:thread::quota:run::blocked".to_owned(),
+        kind: CronJobKind::InternalDispatch {
+            payload: garyx_models::config::InternalDispatchJobPayload {
+                prompt: "continue".to_owned(),
+                reason: Some("legacy quota reset".to_owned()),
+                originating_run_id: Some("run::blocked".to_owned()),
+                scheduled_at: Utc::now(),
+                delay_seconds_requested: 60,
+            },
+        },
+        label: None,
+        schedule: CronSchedule::Once {
+            at: Utc::now().to_rfc3339(),
+        },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some("thread::quota".to_owned()),
+        delete_after_run: true,
+        enabled: true,
+        system: true,
+    });
+
+    let record = CronService::execute_job(
+        &job,
+        &Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        &env,
+        "run::legacy-cron",
+    )
+    .await;
+
+    assert_eq!(record.status, JobRunStatus::Success);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the SQL recovery worker exclusively owns migrated quota generations"
+    );
+}
+
+#[tokio::test]
 async fn test_list_hides_system_jobs_by_default() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());

@@ -92,13 +92,10 @@ extension GaryxMobileModel {
         }
     }
 
-    func retryThreadQuotaRecovery(threadId: String) async {
-        do {
-            try await client().retryThreadQuotaRecovery(threadId: threadId)
-        } catch {
-            guard !GaryxGatewayRetryClassifier.isCancellation(error) else { return }
-            lastError = displayMessage(for: error)
-        }
+    func retryThreadQuotaRecovery(
+        threadId: String
+    ) async throws -> GaryxQuotaRecoveryRetryResult {
+        try await client().retryThreadQuotaRecovery(threadId: threadId)
     }
 
     /// Begins a Claude Code sign-in with the chosen advanced options. Never

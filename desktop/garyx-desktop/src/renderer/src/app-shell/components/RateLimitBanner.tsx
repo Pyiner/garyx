@@ -9,6 +9,7 @@ import {
 import type {
   DesktopClaudeCodeAccount,
   DesktopClaudeCodeAccounts,
+  DesktopQuotaRecoveryRetryResult,
   RenderRateLimit,
 } from "@shared/contracts";
 
@@ -46,7 +47,7 @@ export function RateLimitBanner({
    * sending state until the request settles, so an already-claimed generation
    * or failed wake re-arms the button instead of leaving it stuck.
    */
-  onContinue?: () => void | Promise<unknown>;
+  onContinue?: () => Promise<DesktopQuotaRecoveryRetryResult>;
 }) {
   const { t, locale } = useI18n();
   const [now, setNow] = useState(() => Date.now());
@@ -59,6 +60,7 @@ export function RateLimitBanner({
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [accountMutationId, setAccountMutationId] = useState<string | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   const resetMs = rateLimit?.resetAt ? Date.parse(rateLimit.resetAt) : Number.NaN;
   const hasReset = Number.isFinite(resetMs);
@@ -74,6 +76,7 @@ export function RateLimitBanner({
   // A fresh rate-limit context re-arms the Continue action.
   useEffect(() => {
     setSending(false);
+    setRecoveryError(null);
   }, [rateLimit?.resetAt, rateLimit?.provider, rateLimit?.message]);
 
   const rawProvider = rateLimit?.provider?.trim() ?? "";
@@ -92,9 +95,7 @@ export function RateLimitBanner({
   }
 
   const provider = normalizedProvider
-    ? normalizedProvider === "claude_code"
-      ? "Claude Code"
-      : sharedProviderLabel(normalizedProvider)
+    ? sharedProviderLabel(normalizedProvider)
     : rawProvider || "Provider";
   const windowText = windowLabel(rateLimit.window, t);
   const message = rateLimit.message?.trim() ?? "";
@@ -193,7 +194,9 @@ export function RateLimitBanner({
       });
       await refreshAccounts();
       setAccountSwitcherOpen(false);
-      if (result.recoveryWarning) {
+      if (!result.selectionChanged) {
+        setRecoveryNotice(null);
+      } else if (result.recoveryWarning) {
         setRecoveryNotice(t("Account switched. Retry the paused threads manually."));
       } else if (result.recovery.matchedThreads > 0) {
         setRecoveryNotice(
@@ -212,18 +215,30 @@ export function RateLimitBanner({
       setAccountMutationId(null);
     }
   }
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (sending || !onContinue) {
       return;
     }
     setSending(true);
-    // Re-arm when the wake request settles: an already-claimed generation or
-    // failed request leaves the card mounted, while a successful recovery run
-    // clears the rate-limit state and unmounts the card.
-    void Promise.resolve()
-      .then(() => onContinue())
-      .catch(() => {})
-      .then(() => setSending(false));
+    setRecoveryError(null);
+    try {
+      const result = await onContinue();
+      if (result.status === "settled") {
+        setRecoveryError(
+          t("This recovery already finished. Send a new message to continue."),
+        );
+      } else if (result.status === "unsupported") {
+        setRecoveryError(
+          t("Update the Garyx gateway to resume from this quota card."),
+        );
+      }
+    } catch {
+      setRecoveryError(t("Couldn't resume this thread. Try again."));
+    } finally {
+      // A failed or terminal wake leaves the card mounted. A successful run
+      // clears the rate-limit projection and unmounts it.
+      setSending(false);
+    }
   };
 
   return (
@@ -247,6 +262,9 @@ export function RateLimitBanner({
           <span style={textColumnStyle}>
             <span style={titleStyle}>{title}</span>
             <span style={detailStyle}>{detail}</span>
+            {recoveryError ? (
+              <span style={errorStyle}>{recoveryError}</span>
+            ) : null}
           </span>
           {showContinue ? (
             <button
@@ -446,6 +464,13 @@ const detailStyle: CSSProperties = {
   lineHeight: 1.45,
   color: "#78746b",
   fontVariantNumeric: "tabular-nums",
+};
+
+const errorStyle: CSSProperties = {
+  marginTop: 3,
+  color: "#6e7378",
+  fontSize: 12,
+  lineHeight: 1.4,
 };
 
 const strongStyle: CSSProperties = {

@@ -31,6 +31,25 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
         )
     }
 
+    func testProviderPresentationCanonicalizesRuntimeAliases() {
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "claude_sdk").displayName,
+            "Claude Code"
+        )
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "codex_app_server_v2").displayName,
+            "Codex"
+        )
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "agy_local").displayName,
+            "Antigravity"
+        )
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "trae_cli").displayName,
+            "Traex"
+        )
+    }
+
     func testProviderPresentationUsesAgentAndProviderForAvatarFallbacks() {
         let presentation = GaryxProviderPresentation.make(
             agentId: "assistant-codex",

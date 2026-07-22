@@ -4624,7 +4624,9 @@ export function AppShell() {
         showTailThinking={showTailThinking}
         rateLimit={activeRateLimit}
         onRateLimitContinue={() => {
-          if (!selectedThreadId) return Promise.resolve();
+          if (!selectedThreadId) {
+            return Promise.resolve({ status: "settled" as const });
+          }
           return window.garyxDesktop.retryThreadQuotaRecovery({
             threadId: selectedThreadId,
           });

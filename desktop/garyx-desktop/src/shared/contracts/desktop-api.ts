@@ -90,6 +90,7 @@ import type {
   DesktopCodingUsage,
   DesktopProviderModels,
   DesktopProviderRecentSession,
+  DesktopQuotaRecoveryRetryResult,
   ListProviderRecentSessionsInput,
   StartDesktopClaudeAuthInput,
 } from "./provider.ts";
@@ -311,7 +312,9 @@ export interface GaryxDesktopApi {
   selectClaudeCodeAccount: (
     input: { accountId: string | null },
   ) => Promise<DesktopClaudeCodeAccountSelection>;
-  retryThreadQuotaRecovery: (input: { threadId: string }) => Promise<void>;
+  retryThreadQuotaRecovery: (
+    input: { threadId: string },
+  ) => Promise<DesktopQuotaRecoveryRetryResult>;
   renameClaudeCodeAccount: (input: { accountId: string; name: string }) => Promise<void>;
   deleteClaudeCodeAccount: (input: { accountId: string }) => Promise<void>;
   startClaudeCodeAuth: (

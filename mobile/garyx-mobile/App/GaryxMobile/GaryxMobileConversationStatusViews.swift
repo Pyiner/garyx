@@ -239,12 +239,13 @@ struct GaryxRateLimitBanner: View {
     let rateLimit: GaryxRenderRateLimit
     /// Makes the same durable SQL recovery generation due immediately. The
     /// button never creates an independent ordinary user message.
-    var onContinue: (() async -> Void)?
+    var onContinue: (() async throws -> GaryxQuotaRecoveryRetryResult)?
 
     @EnvironmentObject private var mobileModel: GaryxMobileModel
     @State private var sending = false
     @State private var showsAccountSwitcher = false
     @State private var recoveryNotice: String?
+    @State private var recoveryFeedback: String?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -253,14 +254,17 @@ struct GaryxRateLimitBanner: View {
                 card(for: model)
             }
         }
-        .onChange(of: rateLimit) { _, _ in
+        .onChange(of: recoveryContextID) { _, _ in
             // A fresh rate-limit context re-arms the Continue action.
             sending = false
             recoveryNotice = nil
+            recoveryFeedback = nil
         }
         .garyxSheet(isPresented: $showsAccountSwitcher) {
             GaryxClaudeCodeAccountsSheet(selectionOnly: true) { result in
-                if result.recoveryWarning != nil {
+                if !result.selectionChanged {
+                    recoveryNotice = nil
+                } else if result.recoveryWarning != nil {
                     recoveryNotice = "Account switched. Retry paused threads manually."
                 } else if result.recovery.matchedThreads > 0 {
                     recoveryNotice = "Resuming \(result.recovery.matchedThreads) paused threads…"
@@ -278,7 +282,7 @@ struct GaryxRateLimitBanner: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 GaryxProviderAgentAvatarView(
-                    providerType: normalizedProviderType,
+                    providerType: rateLimit.provider ?? "",
                     diameter: 36
                 )
 
@@ -299,6 +303,13 @@ struct GaryxRateLimitBanner: View {
                 .monospacedDigit()
                 .foregroundStyle(GaryxTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let recoveryFeedback {
+                Text(recoveryFeedback)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(GaryxTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if isAccessibilitySize, model.showContinue, onContinue != nil {
                 continueButton
@@ -365,10 +376,24 @@ struct GaryxRateLimitBanner: View {
         Button {
             guard !sending else { return }
             sending = true
+            recoveryFeedback = nil
             Task {
-                await onContinue?()
-                // Re-arm once the dispatch settles: a failed send leaves the
-                // card mounted and the button must come back.
+                do {
+                    if let onContinue {
+                        switch try await onContinue() {
+                        case .settled:
+                            recoveryFeedback = "This recovery already finished. Send a new message to continue."
+                        case .unsupported:
+                            recoveryFeedback = "Update the Garyx gateway to resume from this quota card."
+                        case .accepted:
+                            break
+                        }
+                    }
+                } catch {
+                    recoveryFeedback = "Couldn't resume this thread. Try again."
+                }
+                // Re-arm once the dispatch settles: a terminal or failed send
+                // leaves the card mounted and the button must come back.
                 sending = false
             }
         } label: {
@@ -402,23 +427,20 @@ struct GaryxRateLimitBanner: View {
     }
 
     private var isClaudeCode: Bool {
-        (rateLimit.provider ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .hasPrefix("claude")
+        providerPresentation.kind == .claude
     }
 
-    private var normalizedProviderType: String {
-        let provider = (rateLimit.provider ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if provider.hasPrefix("claude") { return "claude_code" }
-        if provider.hasPrefix("codex") { return "codex_app_server" }
-        if provider.hasPrefix("trae") { return "traex" }
-        if provider.hasPrefix("antigravity") || provider.hasPrefix("agy") {
-            return "antigravity"
-        }
-        return provider
+    private var providerPresentation: GaryxProviderPresentation {
+        GaryxProviderPresentation.make(providerType: rateLimit.provider ?? "")
+    }
+
+    private var recoveryContextID: String {
+        [
+            rateLimit.provider ?? "",
+            rateLimit.window ?? "",
+            rateLimit.resetAt ?? "",
+            rateLimit.recoveryGeneration ?? ""
+        ].joined(separator: "|")
     }
 
     private var selectedAccountName: String {
