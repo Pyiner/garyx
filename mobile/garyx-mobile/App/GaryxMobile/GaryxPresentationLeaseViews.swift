@@ -10,11 +10,12 @@ final class GaryxPresentationLeaseCoordinator {
 
     func attach(
         container: GaryxRouteStackContainer,
-        routeStore: GaryxProductionRouteStore
+        routeStore: GaryxProductionRouteStore,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
     ) {
         self.container = container
         self.routeStore = routeStore
-        synchronizeBarrier()
+        synchronizeBarrier(observableSettlement: observableSettlement)
     }
 
     func detach(container: GaryxRouteStackContainer) {
@@ -91,9 +92,12 @@ final class GaryxPresentationLeaseCoordinator {
         container?.presentationLeaseRecord(token)
     }
 
-    private func synchronizeBarrier() {
+    private func synchronizeBarrier(
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
+    ) {
         routeStore?.presentationBarrierStateChanged(
-            container?.hasPresentationBarrier ?? false
+            container?.hasPresentationBarrier ?? false,
+            observableSettlement: observableSettlement
         )
     }
 }

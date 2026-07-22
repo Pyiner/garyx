@@ -391,6 +391,211 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         )
     }
 
+    func testProductionCanvasLifecycleReplacementDefersObservableSettlement() throws {
+        let model = routePreparationModel(session: .shared)
+        model.connectionState = .ready(version: "lifecycle-replacement")
+        guard case .navigationShell(let firstRootOccurrenceID) =
+            model.homeObservationStore.rootSurface else {
+            return XCTFail("the production route canvas requires a navigation-shell occurrence")
+        }
+        let store = model.productionRouteStore
+
+        func rootView(
+            identity: Int,
+            occurrenceID: GaryxRootSurfaceOccurrenceID
+        ) -> AnyView {
+            AnyView(
+                GaryxProductionRouteLifecycleReplacementProbeRoot(
+                    canvasIdentity: identity,
+                    rootSurfaceOccurrenceID: occurrenceID,
+                    store: store,
+                    model: model
+                )
+            )
+        }
+
+        let hostingController = UIHostingController(
+            rootView: rootView(identity: 0, occurrenceID: firstRootOccurrenceID)
+        )
+        let hostingWindow = makeRouteDismantleTestWindow()
+        hostingWindow.rootViewController = hostingController
+        hostingWindow.isHidden = false
+        defer {
+            hostingWindow.isHidden = true
+            hostingWindow.rootViewController = nil
+        }
+        hostingController.view.frame = hostingWindow.bounds
+        hostingController.view.layoutIfNeeded()
+        pumpRouteDismantleRunLoop()
+
+        let firstContainer = try XCTUnwrap(
+            routeStackContainers(in: hostingController).first
+        )
+        model.drawerRevealInteraction.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: firstRootOccurrenceID
+        )
+        let firstDrawerInteraction = try XCTUnwrap(
+            firstContainer.homeLeadingEdgeInteraction
+        )
+        XCTAssertTrue(firstDrawerInteraction.isEligible())
+        XCTAssertTrue(store.presentationCoordinator.acquire(
+            .init(rawValue: "lifecycle-replacement-barrier"),
+            parent: nil,
+            resultBearing: false
+        ))
+        XCTAssertTrue(firstContainer.hasPresentationBarrier)
+        XCTAssertTrue(store.hasPresentationBarrier)
+
+        var lifecycleMutation: String?
+        var synchronousPublications: [(
+            phase: String,
+            source: String,
+            stack: [String]
+        )] = []
+        let barrierPublication = store.objectWillChange.sink {
+            guard let lifecycleMutation else { return }
+            synchronousPublications.append((
+                lifecycleMutation,
+                "routeStore.hasPresentationBarrier",
+                Thread.callStackSymbols
+            ))
+        }
+        let revealPublication = model.drawerRevealInteraction.objectWillChange.sink {
+            guard let lifecycleMutation else { return }
+            synchronousPublications.append((
+                lifecycleMutation,
+                "drawerReveal.presentation",
+                Thread.callStackSymbols
+            ))
+        }
+        let taskTreePublication = model.taskTreeRevealInteraction.objectWillChange.sink {
+            guard let lifecycleMutation else { return }
+            synchronousPublications.append((
+                lifecycleMutation,
+                "taskTreeReveal.presentation",
+                Thread.callStackSymbols
+            ))
+        }
+
+        model.connectionState = .checking
+        model.connectionState = .ready(version: "lifecycle-replacement-second")
+        guard case .navigationShell(let secondRootOccurrenceID) =
+            model.homeObservationStore.rootSurface else {
+            return XCTFail("the replacement navigation shell did not begin")
+        }
+        XCTAssertNotEqual(secondRootOccurrenceID, firstRootOccurrenceID)
+        XCTAssertFalse(firstDrawerInteraction.isEligible())
+
+        lifecycleMutation = "update"
+        hostingController.rootView = rootView(
+            identity: 0,
+            occurrenceID: secondRootOccurrenceID
+        )
+        hostingController.view.layoutIfNeeded()
+        XCTAssertTrue(
+            firstDrawerInteraction.isEligible(),
+            "the in-place representable update must complete inside the observed window"
+        )
+        lifecycleMutation = nil
+        XCTAssertTrue(synchronousPublications.isEmpty)
+
+        lifecycleMutation = "active-barrier identity replacement"
+        hostingController.rootView = rootView(
+            identity: 1,
+            occurrenceID: secondRootOccurrenceID
+        )
+        hostingController.view.layoutIfNeeded()
+        let barrierReplacementContainer = try XCTUnwrap(
+            routeStackContainers(in: hostingController).first
+        )
+        XCTAssertFalse(barrierReplacementContainer === firstContainer)
+        lifecycleMutation = nil
+
+        XCTAssertFalse(store.semanticPresentationBarrierIsActive)
+        XCTAssertTrue(
+            store.hasPresentationBarrier,
+            "only the observable projection remains active until the graph update exits"
+        )
+        XCTAssertTrue(synchronousPublications.isEmpty, publicationFailure(
+            synchronousPublications
+        ))
+
+        pumpRouteDismantleRunLoop()
+        XCTAssertFalse(store.hasPresentationBarrier)
+        XCTAssertTrue(store.isAttached)
+
+        model.drawerRevealInteraction.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: secondRootOccurrenceID
+        )
+        model.taskTreeRevealInteraction.configure(
+            extent: 300,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: secondRootOccurrenceID
+        )
+        let replacementDrawerInteraction = try XCTUnwrap(
+            barrierReplacementContainer.homeLeadingEdgeInteraction
+        )
+        XCTAssertTrue(replacementDrawerInteraction.isEligible())
+        replacementDrawerInteraction.began()
+        replacementDrawerInteraction.changed(120, 0)
+        model.taskTreeRevealInteraction.setTarget(.open, animated: true)
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+        XCTAssertEqual(
+            model.taskTreeRevealInteraction.presentation.phase,
+            .settling(.open)
+        )
+
+        lifecycleMutation = "active-reveal identity replacement"
+        hostingController.rootView = rootView(
+            identity: 2,
+            occurrenceID: secondRootOccurrenceID
+        )
+        hostingController.view.layoutIfNeeded()
+        let revealReplacementContainer = try XCTUnwrap(
+            routeStackContainers(in: hostingController).first
+        )
+        XCTAssertFalse(revealReplacementContainer === barrierReplacementContainer)
+        lifecycleMutation = nil
+
+        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        XCTAssertFalse(model.taskTreeRevealInteraction.diagnostics.hasTerminalResidue)
+        XCTAssertEqual(
+            model.drawerRevealInteraction.presentation.phase,
+            .dragging,
+            "the observable reveal projection must not settle inside make or dismantle"
+        )
+        XCTAssertEqual(
+            model.taskTreeRevealInteraction.presentation.phase,
+            .settling(.open),
+            "both model-lived reveal projections must stay inert during graph mutation"
+        )
+        XCTAssertTrue(synchronousPublications.isEmpty, publicationFailure(
+            synchronousPublications
+        ))
+
+        pumpRouteDismantleRunLoop()
+        XCTAssertEqual(model.drawerRevealInteraction.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .closed
+        ))
+        XCTAssertEqual(model.taskTreeRevealInteraction.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .closed
+        ))
+        XCTAssertTrue(store.isAttached)
+        withExtendedLifetime((
+            barrierPublication,
+            revealPublication,
+            taskTreePublication
+        )) {}
+    }
+
     func testBuild158BackgroundSceneTeardownDoesNotPublishDuringDismantle() throws {
         let barrierScheduler = GaryxManualObservableSettlementScheduler()
         let barrierProbeStore = GaryxProductionRouteStore(
@@ -804,6 +1009,25 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         )
     }
 
+    private func routeStackContainers(
+        in controller: UIViewController
+    ) -> [GaryxRouteStackContainer] {
+        let current = (controller as? GaryxRouteStackContainer).map { [$0] } ?? []
+        return current + controller.children.flatMap { routeStackContainers(in: $0) }
+    }
+
+    private func publicationFailure(
+        _ publications: [(phase: String, source: String, stack: [String])]
+    ) -> String {
+        guard let first = publications.first else { return "" }
+        return """
+        representable lifecycle synchronously published observable state. \
+        Publications: \(publications.map { "\($0.phase):\($0.source)" })
+        First publication stack:
+        \(first.stack.joined(separator: "\n"))
+        """
+    }
+
     private func operationContext(_ operationID: String) -> GaryxPresentationOperationContext {
         let scope = GaryxGatewayScope(identity: "gateway", epoch: 1)
         let entryID = GaryxComposerPayloadEntryID(rawValue: "entry")
@@ -967,6 +1191,25 @@ private struct GaryxProductionRouteDismantleCrashReproRoot: View {
             onOpenDrawer: {}
         )
         .offset(x: revealInteraction.presentation.reveal)
+    }
+}
+
+private struct GaryxProductionRouteLifecycleReplacementProbeRoot: View {
+    let canvasIdentity: Int
+    let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
+    let store: GaryxProductionRouteStore
+    let model: GaryxMobileModel
+
+    var body: some View {
+        GaryxProductionRouteCanvas(
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
+            store: store,
+            model: model,
+            homeContent: AnyView(Color.clear),
+            routeContent: { _ in AnyView(Color.clear) },
+            onOpenDrawer: {}
+        )
+        .id(canvasIdentity)
     }
 }
 

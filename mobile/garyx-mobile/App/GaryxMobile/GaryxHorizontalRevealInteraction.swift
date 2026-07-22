@@ -334,7 +334,8 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
 
     func attachHostOccurrence(
         _ occurrenceID: GaryxHorizontalRevealHostOccurrenceID,
-        position: GaryxHorizontalRevealPosition
+        position: GaryxHorizontalRevealPosition,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
     ) {
         guard var hostOwnership else {
             assertionFailure("host occurrence attached to a surface-local reveal")
@@ -348,7 +349,11 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         case .alreadyAttached:
             break
         case .superseded:
-            forceTerminal(.hostOccurrenceEnded, position: position)
+            forceTerminal(
+                .hostOccurrenceEnded,
+                position: position,
+                observableSettlement: observableSettlement
+            )
         case .rejected:
             assertionFailure("reveal host attached outside its root surface occurrence")
         }
@@ -497,15 +502,18 @@ extension GaryxMobileModel {
     }
 
     func attachGlobalRevealHostOccurrence(
-        _ occurrenceID: GaryxHorizontalRevealHostOccurrenceID
+        _ occurrenceID: GaryxHorizontalRevealHostOccurrenceID,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
     ) {
         drawerRevealInteraction.attachHostOccurrence(
             occurrenceID,
-            position: sidebarVisible ? .open : .closed
+            position: sidebarVisible ? .open : .closed,
+            observableSettlement: observableSettlement
         )
         taskTreeRevealInteraction.attachHostOccurrence(
             occurrenceID,
-            position: isTaskTreeSidebarOpen ? .open : .closed
+            position: isTaskTreeSidebarOpen ? .open : .closed,
+            observableSettlement: observableSettlement
         )
     }
 

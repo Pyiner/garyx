@@ -75,9 +75,16 @@ final class GaryxProductionRouteStore: ObservableObject {
         hasNavigationScopeProvider = true
     }
 
-    func attach(_ container: GaryxRouteStackContainer) {
+    func attach(
+        _ container: GaryxRouteStackContainer,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
+    ) {
         self.container = container
-        presentationCoordinator.attach(container: container, routeStore: self)
+        presentationCoordinator.attach(
+            container: container,
+            routeStore: self,
+            observableSettlement: observableSettlement
+        )
         if container.path != path {
             _ = container.requestHardSnap(to: path)
         }
@@ -549,7 +556,10 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> GaryxRouteStackContainer {
         let revealCoordinator = context.coordinator
-        model.attachGlobalRevealHostOccurrence(revealCoordinator.revealHostOccurrenceID)
+        model.attachGlobalRevealHostOccurrence(
+            revealCoordinator.revealHostOccurrenceID,
+            observableSettlement: .afterViewGraphUpdate
+        )
         let pushProbe = GaryxRoutePushPerformanceProbe.shared
         let sendJitterProbe = GaryxConversationSendJitterProbe.shared
         let routeLifecycleRegistry = GaryxRouteLifecycleRegistry()
@@ -812,7 +822,10 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             )
         }
         #endif
-        store.attach(container)
+        store.attach(
+            container,
+            observableSettlement: .afterViewGraphUpdate
+        )
         let initialPath = store.path
         DispatchQueue.main.async { [weak model] in
             guard let model else { return }
@@ -838,7 +851,8 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         ) {
             model.detachGlobalRevealHostOccurrence(previousHostOccurrenceID)
             model.attachGlobalRevealHostOccurrence(
-                context.coordinator.revealHostOccurrenceID
+                context.coordinator.revealHostOccurrenceID,
+                observableSettlement: .afterViewGraphUpdate
             )
         }
         context.coordinator.preferences = currentPreferences
