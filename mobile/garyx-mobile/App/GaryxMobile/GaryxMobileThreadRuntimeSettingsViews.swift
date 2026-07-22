@@ -615,9 +615,9 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     private func workspaceContextRow(context: ThreadWorkspaceContext) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Text("Workspace")
-                .font(GaryxFont.callout())
+                .font(GaryxFont.callout(weight: .medium))
                 .foregroundStyle(.primary)
             Spacer(minLength: 0)
             if context.isWorktree {
@@ -638,8 +638,9 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                 .garyxReadingLineLimit()
                 .truncationMode(.middle)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 44)
+        .padding(.horizontal, 8)
+        .padding(.vertical, settingsRowVerticalPadding)
+        .frame(minHeight: 48)
         .accessibilityElement(children: .combine)
     }
 
