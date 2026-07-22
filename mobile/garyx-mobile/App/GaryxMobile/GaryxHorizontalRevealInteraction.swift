@@ -34,6 +34,7 @@ struct GaryxHorizontalRevealInteractionDiagnostics: Equatable {
 final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     @Published private(set) var presentation: GaryxHorizontalRevealPresentation
 
+    private let observableSettlementScheduler: any GaryxObservableSettlementScheduling
     private let projection: GaryxMotionPhysics.ProjectionPolicy
     private let releaseCurve: GaryxMotionPhysics.SpringCurve
     private let nonMomentumCurve: GaryxMotionPhysics.SpringCurve
@@ -44,6 +45,13 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     private var requestedPosition: GaryxHorizontalRevealPosition
     private var isConfigured = false
     private var hostOwnership: GaryxHorizontalRevealHostOwnership?
+    private lazy var presentationSettlement = GaryxObservableStateSettler(
+        initialValue: presentation,
+        scheduler: observableSettlementScheduler,
+        publish: { [weak self] next in
+            self?.presentation = next
+        }
+    )
 
     init(
         initialPosition: GaryxHorizontalRevealPosition = .closed,
@@ -51,7 +59,8 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         bindsToRootSurfaceHost: Bool = false,
         releaseCurve: GaryxMotionPhysics.SpringCurve = GaryxMotion.springCurve(for: .settle),
         nonMomentumCurve: GaryxMotionPhysics.SpringCurve = GaryxMotion.springCurve(for: .snapBack),
-        settleDriver: GaryxGestureSettleDriver? = nil
+        settleDriver: GaryxGestureSettleDriver? = nil,
+        observableSettlementScheduler: (any GaryxObservableSettlementScheduling)? = nil
     ) {
         requestedPosition = initialPosition
         state = GaryxHorizontalRevealState(position: initialPosition)
@@ -62,6 +71,8 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         self.releaseCurve = releaseCurve
         self.nonMomentumCurve = nonMomentumCurve
         self.settleDriver = settleDriver ?? .displayLinked()
+        self.observableSettlementScheduler = observableSettlementScheduler
+            ?? GaryxNextMainQueueObservableSettlementScheduler.shared
         presentation = GaryxHorizontalRevealPresentation(
             reveal: 0,
             phase: .idle,
@@ -69,14 +80,14 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         )
     }
 
-    var reveal: CGFloat { presentation.reveal }
+    var reveal: CGFloat { state.reveal }
     var progress: CGFloat {
         guard extent > 0 else { return requestedPosition == .open ? 1 : 0 }
         return min(max(reveal / extent, 0), 1)
     }
-    var isDragging: Bool { presentation.phase == .dragging }
+    var isDragging: Bool { state.phase == .dragging }
     var isSettling: Bool {
-        if case .settling = presentation.phase { return true }
+        if case .settling = state.phase { return true }
         return false
     }
     var isGestureEligible: Bool {
@@ -84,21 +95,29 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     }
     var diagnostics: GaryxHorizontalRevealInteractionDiagnostics {
         GaryxHorizontalRevealInteractionDiagnostics(
-            presentation: presentation,
+            presentation: semanticPresentation,
             extent: extent,
             settleDriverIsActive: settleDriver.isSettling
         )
     }
     var requiresEdgeZone: Bool {
-        presentation.phase == .idle && presentation.target == .closed
+        state.phase == .idle && state.targetPosition == .closed
     }
     var acceptedDirection: GaryxRouteGestureDirection {
-        switch presentation.phase {
+        switch state.phase {
         case .settling, .dragging:
             .either
         case .idle:
-            presentation.target == .open ? .negative : .positive
+            state.targetPosition == .open ? .negative : .positive
         }
+    }
+
+    private var semanticPresentation: GaryxHorizontalRevealPresentation {
+        GaryxHorizontalRevealPresentation(
+            reveal: state.reveal,
+            phase: state.phase,
+            target: state.targetPosition
+        )
     }
 
     func configure(extent newExtent: CGFloat, restingPosition: GaryxHorizontalRevealPosition) {
@@ -337,7 +356,8 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
 
     func detachHostOccurrence(
         _ occurrenceID: GaryxHorizontalRevealHostOccurrenceID,
-        position: GaryxHorizontalRevealPosition
+        position: GaryxHorizontalRevealPosition,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
     ) {
         guard var hostOwnership else {
             assertionFailure("host occurrence detached from a surface-local reveal")
@@ -346,7 +366,11 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         let detachedCurrentOwner = hostOwnership.detachHost(occurrenceID)
         self.hostOwnership = hostOwnership
         if detachedCurrentOwner {
-            forceTerminal(.hostOccurrenceEnded, position: position)
+            forceTerminal(
+                .hostOccurrenceEnded,
+                position: position,
+                observableSettlement: observableSettlement
+            )
         }
     }
 
@@ -360,14 +384,15 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
 
     func forceTerminal(
         _ event: GaryxHorizontalRevealInvalidation,
-        position: GaryxHorizontalRevealPosition? = nil
+        position: GaryxHorizontalRevealPosition? = nil,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
     ) {
         let terminalPosition = position ?? requestedPosition
         requestedPosition = terminalPosition
         settleDriver.invalidate()
         activeCurve = nil
         _ = state.forceTerminal(event, to: terminalPosition, extent: extent)
-        publish()
+        publish(observableSettlement: observableSettlement)
         assertTerminalHasZeroResidue()
     }
 
@@ -376,7 +401,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         line: UInt = #line
     ) {
         assert(
-            presentation.phase == .idle,
+            state.phase == .idle,
             "terminal reveal retained interaction ownership",
             file: file,
             line: line
@@ -421,21 +446,19 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         )
     }
 
-    private func publish() {
+    private func publish(
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
+    ) {
         if hostOwnership?.hasActiveHost == false {
             assert(
                 state.phase == .idle && !settleDriver.isSettling,
                 "hostless reveal retained interaction ownership"
             )
         }
-        let next = GaryxHorizontalRevealPresentation(
-            reveal: state.reveal,
-            phase: state.phase,
-            target: state.targetPosition
+        presentationSettlement.settle(
+            semanticPresentation,
+            timing: observableSettlement
         )
-        if presentation != next {
-            presentation = next
-        }
     }
 }
 
@@ -491,11 +514,13 @@ extension GaryxMobileModel {
     ) {
         drawerRevealInteraction.detachHostOccurrence(
             occurrenceID,
-            position: sidebarVisible ? .open : .closed
+            position: sidebarVisible ? .open : .closed,
+            observableSettlement: .afterViewGraphUpdate
         )
         taskTreeRevealInteraction.detachHostOccurrence(
             occurrenceID,
-            position: isTaskTreeSidebarOpen ? .open : .closed
+            position: isTaskTreeSidebarOpen ? .open : .closed,
+            observableSettlement: .afterViewGraphUpdate
         )
     }
 

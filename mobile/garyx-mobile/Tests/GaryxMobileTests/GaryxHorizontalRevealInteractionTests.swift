@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import GaryxMobile
 
@@ -333,6 +334,120 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         XCTAssertTrue(harness.store.presentation.phase.allowsSurfaceHitTesting)
     }
 
+    func testDeferredHostDetachStopsDriverNowAndPublishesTerminalProjectionLater() {
+        let scheduler = GaryxManualObservableSettlementScheduler()
+        let harness = Harness(
+            projection: .fullScreenNavigation,
+            bindsToRootSurfaceHost: true,
+            observableSettlementScheduler: scheduler
+        )
+        let root = GaryxRootSurfaceOccurrenceID(rawValue: 10)
+        let host = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "deferred-host"
+        )
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellBegan(root),
+            position: .closed
+        )
+        harness.store.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: root
+        )
+        harness.store.attachHostOccurrence(host, position: .closed)
+        harness.store.setTarget(.open, animated: true)
+        XCTAssertTrue(harness.frames.isRunning)
+
+        var publicationCount = 0
+        let publication = harness.store.objectWillChange.sink {
+            publicationCount += 1
+        }
+        harness.store.detachHostOccurrence(
+            host,
+            position: .closed,
+            observableSettlement: .afterViewGraphUpdate
+        )
+
+        XCTAssertFalse(harness.frames.isRunning, "driver ownership settles synchronously")
+        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        XCTAssertEqual(harness.store.diagnostics.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .closed
+        ))
+        XCTAssertEqual(
+            harness.store.presentation.phase,
+            .settling(.open),
+            "the observable projection is deliberately unchanged in the lifecycle callback"
+        )
+        XCTAssertEqual(publicationCount, 0)
+        XCTAssertEqual(scheduler.pendingCount, 1)
+
+        scheduler.runNext()
+
+        XCTAssertEqual(harness.store.presentation, .init(
+            reveal: 0,
+            phase: .idle,
+            target: .closed
+        ))
+        XCTAssertEqual(publicationCount, 1)
+        XCTAssertEqual(scheduler.pendingCount, 0)
+        withExtendedLifetime(publication) {}
+    }
+
+    func testDeferredHostDetachCannotOverwriteNewerRemountProjection() {
+        let scheduler = GaryxManualObservableSettlementScheduler()
+        let harness = Harness(
+            projection: .fullScreenNavigation,
+            bindsToRootSurfaceHost: true,
+            observableSettlementScheduler: scheduler
+        )
+        let root = GaryxRootSurfaceOccurrenceID(rawValue: 11)
+        let firstHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "first-host"
+        )
+        let replacementHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "replacement-host"
+        )
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellBegan(root),
+            position: .closed
+        )
+        harness.store.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: root
+        )
+        harness.store.attachHostOccurrence(firstHost, position: .closed)
+        harness.store.setTarget(.open, animated: true)
+        harness.store.detachHostOccurrence(
+            firstHost,
+            position: .closed,
+            observableSettlement: .afterViewGraphUpdate
+        )
+        XCTAssertEqual(scheduler.pendingCount, 1)
+
+        harness.store.attachHostOccurrence(replacementHost, position: .closed)
+        harness.store.setTarget(.open, animated: false)
+        XCTAssertEqual(harness.store.presentation, .init(
+            reveal: 330,
+            phase: .idle,
+            target: .open
+        ))
+
+        scheduler.runNext()
+
+        XCTAssertEqual(harness.store.presentation, .init(
+            reveal: 330,
+            phase: .idle,
+            target: .open
+        ), "an older deferred terminal projection cannot win after remount")
+        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+    }
+
     func testModelConnectionReplacementTerminatesBeforePublishingTheNewRoot() throws {
         let suiteName = "GaryxRootInteractionOwnershipTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -405,7 +520,10 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
 
         init(
             projection: GaryxMotionPhysics.ProjectionPolicy,
-            bindsToRootSurfaceHost: Bool = false
+            bindsToRootSurfaceHost: Bool = false,
+            observableSettlementScheduler: (
+                any GaryxObservableSettlementScheduling
+            )? = nil
         ) {
             store = GaryxHorizontalRevealInteractionStore(
                 projection: projection,
@@ -413,7 +531,8 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
                 settleDriver: GaryxGestureSettleDriver(
                     timeSource: clock,
                     frameSource: frames
-                )
+                ),
+                observableSettlementScheduler: observableSettlementScheduler
             )
         }
 
@@ -437,5 +556,23 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
             guard isRunning else { return }
             onFrame?()
         }
+    }
+}
+
+@MainActor
+final class GaryxManualObservableSettlementScheduler:
+    GaryxObservableSettlementScheduling
+{
+    private var actions: [@MainActor () -> Void] = []
+
+    var pendingCount: Int { actions.count }
+
+    func schedule(_ action: @escaping @MainActor () -> Void) {
+        actions.append(action)
+    }
+
+    func runNext() {
+        precondition(!actions.isEmpty, "no deferred observable settlement is pending")
+        actions.removeFirst()()
     }
 }

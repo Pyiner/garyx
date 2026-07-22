@@ -20,7 +20,10 @@ final class GaryxPresentationLeaseCoordinator {
     func detach(container: GaryxRouteStackContainer) {
         guard self.container === container else { return }
         self.container = nil
-        routeStore?.presentationBarrierStateChanged(false)
+        routeStore?.presentationBarrierStateChanged(
+            false,
+            observableSettlement: .afterViewGraphUpdate
+        )
         routeStore = nil
     }
 

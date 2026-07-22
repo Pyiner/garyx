@@ -356,8 +356,46 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
+    func testDeferredBarrierDetachCannotOverwriteNewerAttachment() {
+        let scheduler = GaryxManualObservableSettlementScheduler()
+        let store = GaryxProductionRouteStore(
+            observableSettlementScheduler: scheduler
+        )
+        let firstContainer = makeContainer(path: [], store: store)
+        store.attach(firstContainer)
+        XCTAssertTrue(store.presentationCoordinator.acquire(
+            .init(rawValue: "first-barrier"),
+            parent: nil,
+            resultBearing: false
+        ))
+        XCTAssertTrue(store.hasPresentationBarrier)
+
+        store.detach(firstContainer)
+
+        XCTAssertFalse(store.semanticPresentationBarrierIsActive)
+        XCTAssertTrue(store.hasPresentationBarrier)
+        XCTAssertEqual(scheduler.pendingCount, 1)
+
+        let replacementContainer = makeContainer(path: [], store: store)
+        XCTAssertTrue(replacementContainer.acquirePresentationLease(
+            .init(rawValue: "replacement-barrier")
+        ))
+        store.attach(replacementContainer)
+
+        XCTAssertTrue(store.semanticPresentationBarrierIsActive)
+        XCTAssertTrue(store.hasPresentationBarrier)
+        scheduler.runNext()
+        XCTAssertTrue(
+            store.hasPresentationBarrier,
+            "an older deferred detach cannot clear a replacement container's barrier"
+        )
+    }
+
     func testBuild158BackgroundSceneTeardownDoesNotPublishDuringDismantle() throws {
-        let barrierProbeStore = GaryxProductionRouteStore()
+        let barrierScheduler = GaryxManualObservableSettlementScheduler()
+        let barrierProbeStore = GaryxProductionRouteStore(
+            observableSettlementScheduler: barrierScheduler
+        )
         let barrierProbeContainer = makeContainer(path: [], store: barrierProbeStore)
         barrierProbeStore.attach(barrierProbeContainer)
         let barrierProbeLease = GaryxPresentationLeaseSession()
@@ -373,9 +411,21 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         barrierProbeStore.detach(barrierProbeContainer)
         XCTAssertEqual(
             barrierDetachPublicationCount,
-            1,
-            "store.detach synchronously clears an active @Published presentation barrier"
+            0,
+            "store.detach must not publish while a representable graph may be invalidating"
         )
+        XCTAssertFalse(
+            barrierProbeStore.semanticPresentationBarrierIsActive,
+            "the barrier's semantic terminal decision is synchronous"
+        )
+        XCTAssertTrue(
+            barrierProbeStore.hasPresentationBarrier,
+            "the observable projection remains unchanged until the deferred settle"
+        )
+        XCTAssertEqual(barrierScheduler.pendingCount, 1)
+        barrierScheduler.runNext()
+        XCTAssertFalse(barrierProbeStore.hasPresentationBarrier)
+        XCTAssertEqual(barrierDetachPublicationCount, 1)
 
         let model = routePreparationModel(session: .shared)
         model.connectionState = .ready(version: "build-158-dismantle-repro")
@@ -453,6 +503,14 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         XCTAssertFalse(
             model.productionRouteStore.isAttached,
             "the released hosting graph must run the production representable dismantle callback"
+        )
+        XCTAssertFalse(model.productionRouteStore.semanticPresentationBarrierIsActive)
+        XCTAssertFalse(model.productionRouteStore.hasPresentationBarrier)
+        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        XCTAssertEqual(
+            model.drawerRevealInteraction.presentation,
+            .init(reveal: 330, phase: .idle, target: .open),
+            "the deferred reveal projection must converge to the synchronous terminal decision"
         )
         XCTAssertEqual(
             synchronousPublications.count,

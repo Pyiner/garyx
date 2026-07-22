@@ -31,6 +31,7 @@ final class GaryxProductionRouteStore: ObservableObject {
     @Published private(set) var hasPresentationBarrier = false
     let presentationCoordinator = GaryxPresentationLeaseCoordinator()
 
+    private let observableSettlementScheduler: any GaryxObservableSettlementScheduling
     private weak var container: GaryxRouteStackContainer?
     private var canonicalProjection = GaryxCanonicalRouteState()
     private var intentCoordinator = GaryxNavigationIntentCoordinator()
@@ -47,8 +48,25 @@ final class GaryxProductionRouteStore: ObservableObject {
     private var lastKnownNavigationScopes = GaryxGatewayScopeRegistry(
         initialActiveScope: GaryxGatewayScope(identity: "route-runtime", epoch: 1)
     )
+    private lazy var presentationBarrierSettlement = GaryxObservableStateSettler(
+        initialValue: hasPresentationBarrier,
+        scheduler: observableSettlementScheduler,
+        publish: { [weak self] active in
+            self?.hasPresentationBarrier = active
+        }
+    )
+
+    init(
+        observableSettlementScheduler: (any GaryxObservableSettlementScheduling)? = nil
+    ) {
+        self.observableSettlementScheduler = observableSettlementScheduler
+            ?? GaryxNextMainQueueObservableSettlementScheduler.shared
+    }
 
     var isAttached: Bool { container != nil }
+    var semanticPresentationBarrierIsActive: Bool {
+        presentationBarrierSettlement.semanticValue
+    }
 
     func configureNavigationScopes(
         _ provider: @escaping @MainActor () -> GaryxGatewayScopeRegistry
@@ -330,17 +348,21 @@ final class GaryxProductionRouteStore: ObservableObject {
 
     func presentationBarrierDidChange() {
         let active = container?.hasPresentationBarrier ?? false
-        if hasPresentationBarrier != active {
-            hasPresentationBarrier = active
-        }
+        presentationBarrierStateChanged(active)
         guard !active else { return }
         drainAdmissiblePlans()
     }
 
-    func presentationBarrierStateChanged(_ active: Bool) {
-        guard hasPresentationBarrier != active else { return }
-        hasPresentationBarrier = active
-        if active {
+    func presentationBarrierStateChanged(
+        _ active: Bool,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
+    ) {
+        let activated = active && !presentationBarrierSettlement.semanticValue
+        presentationBarrierSettlement.settle(
+            active,
+            timing: observableSettlement
+        )
+        if activated {
             presentationBarrierActivated()
         }
     }
@@ -708,7 +730,8 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                       taskTreeInteraction.isGestureEligible(in: occurrenceID),
                       !drawerInteraction.isDragging,
                       store.path.last?.destination.composerKey != nil else { return false }
-                if taskTreeInteraction.presentation.phase != .idle
+                if taskTreeInteraction.isDragging
+                    || taskTreeInteraction.isSettling
                     || abs(taskTreeInteraction.reveal) > 0.5 {
                     return true
                 }
@@ -774,8 +797,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             guard let model else { return false }
             let taskTree = model.taskTreeRevealInteraction
             return !model.isTaskTreeSidebarOpen
-                && taskTree.presentation.phase == .idle
-                && taskTree.presentation.target == .closed
+                && taskTree.requiresEdgeZone
                 && abs(taskTree.reveal) <= 0.5
         }
         #if DEBUG
