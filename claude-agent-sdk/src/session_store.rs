@@ -538,9 +538,10 @@ impl LocalDirectorySessionStore {
         };
 
         if winner.canonical {
-            // Validate the winning transcript now. Stale corrupt profile
-            // copies do not poison a healthy, newer canonical lineage.
-            Self::read_entries_at(&self.root, key).await?;
+            // Reconciliation has nothing to write when canonical already
+            // wins. `load()` parses it immediately on a real resume; sweeps
+            // intentionally stay O(stat) for untouched canonical sessions.
+            // Stale corrupt profile copies are never parsed.
             return Ok(ReconcileKeyOutcome::Unchanged);
         }
 
@@ -1605,6 +1606,32 @@ mod tests {
         assert_eq!(summary.keys_promoted, 2);
         assert!(store.load(&main).await.unwrap().is_some());
         assert!(store.load(&sub).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn sweep_does_not_parse_a_canonical_winner_but_resume_still_does() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let empty_profile = temp.path().join("profile");
+        let session_id = "11111111-2222-4333-8444-555555555555";
+        let main = SessionKey::main("project", session_id);
+        let canonical_path = canonical
+            .join("project")
+            .join(format!("{session_id}.jsonl"));
+        tokio::fs::create_dir_all(canonical_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(&empty_profile).await.unwrap();
+        tokio::fs::write(&canonical_path, b"{broken\n")
+            .await
+            .unwrap();
+
+        let store = LocalDirectorySessionStore::new(canonical).with_legacy_roots([empty_profile]);
+        let summary = store.reconcile_all().await.unwrap();
+        assert_eq!(summary.sessions_scanned, 1);
+        assert_eq!(summary.sessions_failed, 0);
+        assert_eq!(summary.keys_unchanged, 1);
+        assert!(store.load(&main).await.is_err());
     }
 
     #[tokio::test]
