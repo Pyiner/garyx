@@ -809,10 +809,7 @@ fn advertised_auth_method(initialized: &Value) -> Result<Option<String>, GrokErr
     if methods.is_empty() {
         return Ok(None);
     }
-    // The ordinary Grok process owns its authentication choices. Use its
-    // first advertised ACP method without inspecting the launch environment
-    // or applying a Garyx credential preference policy.
-    let method_id = methods[0]
+    let first_method_id = methods[0]
         .as_str()
         .or_else(|| methods[0].get("id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
@@ -821,7 +818,31 @@ fn advertised_auth_method(initialized: &Value) -> Result<Option<String>, GrokErr
                 "Grok advertised an authentication method without an id".to_owned(),
             )
         })?;
-    Ok(Some(method_id))
+    // The ordinary Grok process owns its authentication choice. ACP metadata
+    // carries that choice separately because authMethods ordering preserves
+    // compatibility (for example xai.api_key can remain first while a cached
+    // OAuth session is the declared default). Garyx must follow the declared
+    // method without inspecting credentials or applying its own preference.
+    let declared_default = initialized
+        .get("_meta")
+        .and_then(|meta| value_string(meta, &["defaultAuthMethodId", "default_auth_method_id"]))
+        .or_else(|| {
+            value_string(
+                initialized,
+                &["defaultAuthMethodId", "default_auth_method_id"],
+            )
+        });
+    if let Some(default) = declared_default
+        && methods.iter().any(|method| {
+            method
+                .as_str()
+                .or_else(|| method.get("id").and_then(Value::as_str))
+                == Some(default.as_str())
+        })
+    {
+        return Ok(Some(default));
+    }
+    Ok(Some(first_method_id))
 }
 
 pub fn parse_model_catalog(initialized: &Value) -> GrokModelCatalog {
@@ -969,17 +990,33 @@ mod tests {
     }
 
     #[test]
-    fn authentication_uses_groks_first_advertised_acp_method() {
+    fn authentication_uses_groks_declared_default_acp_method() {
         let initialized = json!({
             "authMethods": [
-                {"id": "cached_token"},
-                {"id": "xai.api_key"}
-            ]
+                {"id": "xai.api_key"},
+                {"id": "cached_token"}
+            ],
+            "_meta": {"defaultAuthMethodId": "cached_token"}
         });
 
         assert_eq!(
             advertised_auth_method(&initialized).expect("valid auth method"),
             Some("cached_token".to_owned())
+        );
+    }
+
+    #[test]
+    fn authentication_falls_back_to_first_method_without_a_declared_default() {
+        let initialized = json!({
+            "authMethods": [
+                {"id": "xai.api_key"},
+                {"id": "cached_token"}
+            ]
+        });
+
+        assert_eq!(
+            advertised_auth_method(&initialized).expect("valid auth method"),
+            Some("xai.api_key".to_owned())
         );
     }
 
