@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::sync::{Arc, Weak};
 
 use crate::garyx_db::RecentThreadDraft;
+use crate::thread_preview_projection::thread_message_previews;
 use crate::thread_type::thread_summary_type_from_record;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
@@ -94,6 +95,11 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
         .unwrap_or("New Thread")
         .to_owned();
     let workspace_dir = workspace_dir_from_value(data);
+    let workspace_membership = crate::workspace_mode::thread_workspace_membership_from_record(
+        thread_id,
+        workspace_dir.as_deref(),
+        data,
+    );
     let thread_type = thread_summary_type_from_record(data);
     let provider_type = data
         .get("provider_type")
@@ -139,11 +145,15 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
         thread_id: thread_id.to_owned(),
         title,
         workspace_dir,
+        root_workspace_path: workspace_membership.root_workspace_path,
+        workspace_origin: Some(workspace_membership.workspace_origin),
         thread_type,
         provider_type,
         agent_id,
         message_count,
-        last_message_preview: last_message_preview(data).unwrap_or_default(),
+        last_message_preview: thread_message_previews(data)
+            .user_first()
+            .unwrap_or_default(),
         recent_run_id,
         active_run_id,
         run_state,
@@ -166,22 +176,6 @@ fn recent_thread_run_state(active_run_id: Option<&str>, recent_run_id: Option<&s
         return "completed".to_owned();
     }
     "idle".to_owned()
-}
-
-fn last_message_preview(data: &Value) -> Option<String> {
-    last_message_preview_for_role(data, "user")
-        .or_else(|| last_message_preview_for_role(data, "assistant"))
-}
-
-fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
-    // Write-time preview fields are the source (#TASK-1864 batch 1).
-    if let Some(preview) = garyx_models::message_preview::preview_field_for_role(role)
-        .and_then(|field| data.get(field))
-        .and_then(Value::as_str)
-    {
-        return Some(preview.to_owned());
-    }
-    None
 }
 
 #[cfg(test)]

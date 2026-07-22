@@ -305,7 +305,9 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
             recentRunId: nil,
             activeRunId: activeRunId,
             runState: runState,
-            worktreePath: nil
+            worktreePath: nil,
+            rootWorkspacePath: workspacePath,
+            workspaceOrigin: workspacePath == nil ? nil : "explicit"
         )
     }
 }

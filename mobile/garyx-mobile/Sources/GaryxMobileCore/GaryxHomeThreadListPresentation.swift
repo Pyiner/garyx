@@ -91,6 +91,38 @@ struct GaryxSidebarThreadRowAvatar: Equatable, Sendable {
     let builtIn: Bool
 }
 
+/// Pure subtitle policy shared by every home thread row. Only the gateway's
+/// root-workspace projection is presentation-safe; raw implicit/private
+/// workspace paths are runtime implementation details.
+enum GaryxThreadSubtitlePresentation {
+    static func subtitle(for thread: GaryxThreadSummary) -> String? {
+        let origin = thread.workspaceOrigin?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let workspace: String? = {
+            guard origin != "implicit" else { return nil }
+            let root = thread.rootWorkspacePath?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return root.isEmpty ? nil : root.garyxLastPathComponent
+        }()
+        let parts = [workspace, compactedPreview(thread.lastMessagePreview)].compactMap {
+            part -> String? in
+            let trimmed = part?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+    }
+
+    /// Last-message previews can span lines; collapse to one display line.
+    private static func compactedPreview(_ raw: String) -> String? {
+        let collapsed = raw
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return collapsed.isEmpty ? nil : collapsed
+    }
+}
+
 struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
     let title: String
     let subtitle: String?
@@ -109,7 +141,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
         showsRunningState: Bool = true
     ) {
         self.title = thread.title.isEmpty ? "Untitled" : thread.title
-        self.subtitle = Self.subtitle(for: thread)
+        self.subtitle = GaryxThreadSubtitlePresentation.subtitle(for: thread)
         self.trailingTimestamp = trailingTimestamp
         self.isSelected = isSelected
         self.isPinned = isPinned
@@ -169,34 +201,6 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
             isFavorite: isFavorite,
             isRunning: isRunning
         )
-    }
-
-    private static func subtitle(for thread: GaryxThreadSummary) -> String? {
-        let context: String? = {
-            // Server-derived membership first: worktree threads read as their
-            // root workspace, not the private worktree directory.
-            if let rootPath = thread.rootWorkspacePath, !rootPath.isEmpty {
-                return rootPath.garyxLastPathComponent
-            }
-            if let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
-                return workspacePath.garyxLastPathComponent
-            }
-            return thread.agentId
-        }()
-        let parts = [context, compactedPreview(thread.lastMessagePreview)].compactMap { part -> String? in
-            let trimmed = part?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
-    }
-
-    /// Last-message previews can span lines; collapse to one display line.
-    private static func compactedPreview(_ raw: String) -> String? {
-        let collapsed = raw
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        return collapsed.isEmpty ? nil : collapsed
     }
 
     private static func isRunning(_ thread: GaryxThreadSummary) -> Bool {

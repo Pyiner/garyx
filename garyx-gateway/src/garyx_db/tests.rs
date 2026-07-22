@@ -289,6 +289,8 @@ fn read_only_handle_queries_during_a_writer_lock_and_rejects_writes() {
             thread_id: "thread::read-only-snapshot".to_owned(),
             title: "Read only snapshot".to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: "chat".to_owned(),
             provider_type: None,
             agent_id: None,
@@ -335,6 +337,8 @@ fn sample_recent_draft(thread_id: &str) -> RecentThreadDraft {
         thread_id: thread_id.to_owned(),
         title: "Sample".to_owned(),
         workspace_dir: None,
+        root_workspace_path: None,
+        workspace_origin: None,
         thread_type: "chat".to_owned(),
         provider_type: None,
         agent_id: None,
@@ -391,15 +395,17 @@ fn recent_activity_schema_initializes_before_writes_and_reopens_stably() {
             |row| row.get(0),
         )
         .expect("meta initialized during schema open");
-    let legacy_seq: i64 = conn
-        .query_row(
-            "SELECT activity_seq FROM recent_threads
+    let (legacy_seq, root_workspace_path, workspace_origin): (i64, Option<String>, Option<String>) =
+        conn.query_row(
+            "SELECT activity_seq, root_workspace_path, workspace_origin FROM recent_threads
                   WHERE thread_id = 'thread::legacy-before-seq'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .expect("legacy column added during schema open");
+        .expect("legacy columns added during schema open");
     assert_eq!((meta, legacy_seq), (0, 0));
+    assert_eq!(root_workspace_path, None);
+    assert_eq!(workspace_origin, None);
     drop(conn);
     drop(db);
 
@@ -2498,6 +2504,8 @@ fn clear_stale_active_runs_settles_by_recent_run_presence() {
                 thread_id: thread_id.to_owned(),
                 title: "Orphan".to_owned(),
                 workspace_dir: None,
+                root_workspace_path: None,
+                workspace_origin: None,
                 thread_type: "chat".to_owned(),
                 provider_type: None,
                 agent_id: None,
@@ -4277,6 +4285,8 @@ fn recent_threads_upsert_list_and_remove() {
         thread_id: "thread::older".to_owned(),
         title: "Older Thread".to_owned(),
         workspace_dir: Some("/work/test-older".to_owned()),
+        root_workspace_path: Some("/work/test-older".to_owned()),
+        workspace_origin: Some("explicit".to_owned()),
         thread_type: "chat".to_owned(),
         provider_type: Some("claude".to_owned()),
         agent_id: Some("agent::test".to_owned()),
@@ -4293,6 +4303,8 @@ fn recent_threads_upsert_list_and_remove() {
         thread_id: "thread::newer".to_owned(),
         title: "Newer Thread".to_owned(),
         workspace_dir: None,
+        root_workspace_path: None,
+        workspace_origin: None,
         thread_type: "chat".to_owned(),
         provider_type: None,
         agent_id: None,
@@ -4309,6 +4321,8 @@ fn recent_threads_upsert_list_and_remove() {
         thread_id: "thread::older".to_owned(),
         title: "Older Thread Renamed".to_owned(),
         workspace_dir: Some("/work/test-older-renamed".to_owned()),
+        root_workspace_path: Some("/work/test-older-renamed".to_owned()),
+        workspace_origin: Some("explicit".to_owned()),
         thread_type: "task".to_owned(),
         provider_type: Some("codex".to_owned()),
         agent_id: None,
@@ -4385,6 +4399,8 @@ fn recent_threads_filtered_page_filters_before_pagination() {
             thread_id: thread_id.to_owned(),
             title: thread_id.to_owned(),
             workspace_dir: None,
+            root_workspace_path: None,
+            workspace_origin: None,
             thread_type: thread_type.to_owned(),
             provider_type: None,
             agent_id: None,
@@ -4548,6 +4564,8 @@ fn recent_threads_filtered_page_uses_one_read_snapshot() {
         thread_id: "thread::snapshot-before".to_owned(),
         title: "Before".to_owned(),
         workspace_dir: None,
+        root_workspace_path: None,
+        workspace_origin: None,
         thread_type: "chat".to_owned(),
         provider_type: None,
         agent_id: None,
@@ -4768,6 +4786,84 @@ fn thread_meta_summary_cutover_backfills_all_columns_once_and_is_idempotent() {
     assert_eq!(second.updated_row_count, 0);
     assert!(second.already_completed);
     assert_eq!(db.list_thread_meta().unwrap(), rows);
+}
+
+#[test]
+fn thread_preview_user_first_cutover_repairs_both_stored_routes_once() {
+    let db = GaryxDbService::memory().expect("db opens");
+    let thread_id = "thread::preview-user-first-cutover";
+    {
+        let conn = db.conn().expect("writer");
+        conn.execute(
+            "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+                 VALUES (?1, ?2, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')",
+            params![
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": "Preview cutover",
+                    "updated_at": "2026-07-21T00:00:00Z",
+                    "last_user_preview": "Latest user sentence",
+                    "last_assistant_preview": "Assistant answer",
+                })
+                .to_string(),
+            ],
+        )
+        .expect("seed canonical record");
+        conn.execute(
+            "INSERT INTO thread_meta (
+                    thread_id, thread_label, last_user_message,
+                    last_assistant_message, last_message_preview, search_text, projected_at
+                 ) VALUES (?1, 'Preview cutover', 'Latest user sentence',
+                           'Assistant answer', 'Assistant answer', 'assistant answer',
+                           '2026-07-21T00:00:00Z')",
+            params![thread_id],
+        )
+        .expect("seed assistant-first summary projection");
+        conn.execute(
+            "INSERT INTO recent_threads (
+                    thread_id, title, thread_type, last_message_preview,
+                    run_state, last_active_at, recorded_at
+                 ) VALUES (?1, 'Preview cutover', 'chat', 'stale recent',
+                           'idle', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')",
+            params![thread_id],
+        )
+        .expect("seed stale recent projection");
+    }
+
+    let first = db
+        .migrate_thread_preview_user_first_v1()
+        .expect("preview cutover");
+    assert_eq!(first.source_row_count, 1);
+    assert_eq!(first.updated_row_count, 1);
+    assert!(!first.already_completed);
+
+    let meta = db
+        .list_thread_meta()
+        .expect("meta read")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("meta row");
+    let recent = db
+        .list_recent_threads(100, 0)
+        .expect("recent read")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("recent row");
+    assert_eq!(
+        meta.last_message_preview.as_deref(),
+        Some("Latest user sentence")
+    );
+    assert_eq!(recent.last_message_preview, "Latest user sentence");
+    assert!(meta.search_text.contains("latest user sentence"));
+    assert!(!meta.search_text.contains("assistant answer"));
+
+    let second = db
+        .migrate_thread_preview_user_first_v1()
+        .expect("idempotent preview cutover");
+    assert_eq!(second.source_row_count, 1);
+    assert_eq!(second.updated_row_count, 0);
+    assert!(second.already_completed);
 }
 
 #[test]
@@ -5670,6 +5766,111 @@ fn membership_projection_handles_unusual_thread_ids_and_cutover_backfills() {
         )
         .expect("row");
     assert_eq!(origin.as_deref(), Some("implicit"));
+}
+
+#[test]
+fn recent_workspace_membership_cutover_repairs_explicit_implicit_and_worktree_rows_once() {
+    let db = GaryxDbService::memory().expect("db opens");
+    let fixtures = [
+        (
+            "thread::recent-membership-explicit",
+            "/workspace/explicit",
+            json!({
+                "workspace_dir": "/workspace/explicit",
+                "workspace_origin": "explicit",
+            }),
+        ),
+        (
+            "thread::recent-membership-implicit",
+            "/Users/test/.garyx/thread-workspaces/thread--recent-membership-implicit",
+            json!({
+                "workspace_dir": "/Users/test/.garyx/thread-workspaces/thread--recent-membership-implicit",
+                "workspace_origin": "implicit",
+            }),
+        ),
+        (
+            "thread::recent-membership-worktree",
+            "/Users/test/.garyx/worktrees/thread-recent-membership-worktree",
+            json!({
+                "workspace_dir": "/Users/test/.garyx/worktrees/thread-recent-membership-worktree",
+                "workspace_origin": "explicit",
+                "worktree": {
+                    "mode": "worktree",
+                    "source_workspace_dir": "/workspace/source",
+                },
+            }),
+        ),
+    ];
+    {
+        let conn = db.conn().expect("writer");
+        for (thread_id, workspace_dir, body) in fixtures {
+            conn.execute(
+                "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+                     VALUES (?1, ?2, '2026-07-22T00:00:00Z', '2026-07-22T00:00:00Z')",
+                params![thread_id, body.to_string()],
+            )
+            .expect("seed canonical record");
+            conn.execute(
+                "INSERT INTO recent_threads (
+                        thread_id, title, workspace_dir, thread_type,
+                        run_state, last_active_at, recorded_at
+                     ) VALUES (?1, 'Membership cutover', ?2, 'chat',
+                               'idle', '2026-07-22T00:00:00Z', '2026-07-22T00:00:00Z')",
+                params![thread_id, workspace_dir],
+            )
+            .expect("seed legacy recent row");
+        }
+    }
+
+    let first = db
+        .migrate_recent_thread_workspace_membership_v1()
+        .expect("recent membership cutover");
+    assert_eq!(first.source_row_count, 3);
+    assert_eq!(first.updated_row_count, 3);
+    assert!(!first.already_completed);
+
+    let conn = db.read_conn().expect("reader");
+    let mut stmt = conn
+        .prepare(
+            "SELECT thread_id, root_workspace_path, workspace_origin
+               FROM recent_threads
+              ORDER BY thread_id ASC",
+        )
+        .expect("prepare");
+    let rows: Vec<(String, Option<String>, Option<String>)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "thread::recent-membership-explicit".to_owned(),
+                Some("/workspace/explicit".to_owned()),
+                Some("explicit".to_owned()),
+            ),
+            (
+                "thread::recent-membership-implicit".to_owned(),
+                None,
+                Some("implicit".to_owned()),
+            ),
+            (
+                "thread::recent-membership-worktree".to_owned(),
+                Some("/workspace/source".to_owned()),
+                Some("explicit".to_owned()),
+            ),
+        ]
+    );
+    drop(stmt);
+    drop(conn);
+
+    let second = db
+        .migrate_recent_thread_workspace_membership_v1()
+        .expect("idempotent recent membership cutover");
+    assert_eq!(second.source_row_count, 3);
+    assert_eq!(second.updated_row_count, 0);
+    assert!(second.already_completed);
 }
 
 #[test]

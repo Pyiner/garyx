@@ -1139,6 +1139,18 @@ fn build_run_record_drafts(
     drafts
 }
 
+fn last_committed_user_preview(
+    authoritative: &[RunTranscriptRecordDraft],
+    committed_len: usize,
+) -> Option<String> {
+    garyx_models::message_preview::last_message_preview_for_role(
+        authoritative[..committed_len.min(authoritative.len())]
+            .iter()
+            .map(|draft| &draft.message),
+        "user",
+    )
+}
+
 /// Run metadata that exists only to configure the provider runtime and must
 /// never be persisted into transcript records or queued pending inputs.
 ///
@@ -1302,6 +1314,15 @@ pub(super) async fn save_streaming_partial(
     );
 
     if let Some(obj) = session_data.as_object_mut() {
+        // Publish only from the authoritative prefix known to be committed.
+        // A later user row can already be finalized while its append fails;
+        // reading the full finalized set here would expose that uncommitted row.
+        if let Some(preview) = last_committed_user_preview(&authoritative, appended) {
+            obj.insert(
+                garyx_models::message_preview::LAST_USER_PREVIEW_FIELD.to_owned(),
+                Value::String(preview),
+            );
+        }
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
         let sdk_session_update = match run.sdk_session_id {
             Some(sid) => SdkSessionUpdate::Set(sid),

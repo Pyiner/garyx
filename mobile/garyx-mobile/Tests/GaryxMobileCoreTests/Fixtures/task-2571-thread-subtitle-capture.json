@@ -1,0 +1,112 @@
+{
+  "active_recent": {
+    "store_incarnation_id": "00000000-0000-4000-8000-000000002571",
+    "server_boot_id": "00000000-0000-4000-8000-000000002572",
+    "threads": [
+      {
+        "active_run_id": "00000000-0000-4000-8000-000000002573",
+        "activity_seq": 5,
+        "agent_id": "claude",
+        "last_active_at": "2026-07-21T18:50:54.889890+00:00",
+        "last_message_preview": "",
+        "message_count": 2,
+        "provider_type": "claude_code",
+        "recent_run_id": null,
+        "recorded_at": "2026-07-21T18:50:54.890Z",
+        "run_state": "running",
+        "thread_id": "thread::00000000-0000-4000-8000-000000002571",
+        "thread_type": "chat",
+        "title": "New Thread",
+        "updated_at": "2026-07-21T18:50:54.889890+00:00",
+        "workspace_dir": "/Users/test/.garyx/data/thread-workspaces/thread--00000000-0000-4000-8000-000000002571"
+      }
+    ],
+    "count": 1,
+    "limit": 200,
+    "total": 1,
+    "has_more": false,
+    "next_cursor": null
+  },
+  "active_summaries": {
+    "store_incarnation_id": "00000000-0000-4000-8000-000000002571",
+    "server_boot_id": "00000000-0000-4000-8000-000000002572",
+    "threads": [
+      {
+        "active_run_id": "00000000-0000-4000-8000-000000002573",
+        "agent_id": "claude",
+        "created_at": "2026-07-21T18:50:54.879397+00:00",
+        "last_assistant_message": null,
+        "last_message_preview": null,
+        "last_user_message": null,
+        "message_count": 2,
+        "provider_type": "claude_code",
+        "recent_run_id": null,
+        "root_workspace_path": null,
+        "thread_id": "thread::00000000-0000-4000-8000-000000002571",
+        "thread_type": "chat",
+        "title": "New Thread",
+        "updated_at": "2026-07-21T18:50:54.970540+00:00",
+        "workspace_dir": "/Users/test/.garyx/data/thread-workspaces/thread--00000000-0000-4000-8000-000000002571",
+        "workspace_origin": "implicit",
+        "worktree": null
+      }
+    ],
+    "has_more": false,
+    "next_cursor": null
+  },
+  "completed_recent": {
+    "store_incarnation_id": "00000000-0000-4000-8000-000000002571",
+    "server_boot_id": "00000000-0000-4000-8000-000000002572",
+    "threads": [
+      {
+        "active_run_id": null,
+        "activity_seq": 8,
+        "agent_id": "claude",
+        "last_active_at": "2026-07-21T18:50:54.974042+00:00",
+        "last_message_preview": "Latest user sentence",
+        "message_count": 5,
+        "provider_type": "claude_code",
+        "recent_run_id": "00000000-0000-4000-8000-000000002573",
+        "recorded_at": "2026-07-21T18:50:54.974Z",
+        "run_state": "completed",
+        "thread_id": "thread::00000000-0000-4000-8000-000000002571",
+        "thread_type": "chat",
+        "title": "New Thread",
+        "updated_at": "2026-07-21T18:50:54.974042+00:00",
+        "workspace_dir": "/Users/test/.garyx/data/thread-workspaces/thread--00000000-0000-4000-8000-000000002571"
+      }
+    ],
+    "count": 1,
+    "limit": 200,
+    "total": 1,
+    "has_more": false,
+    "next_cursor": null
+  },
+  "completed_summaries": {
+    "store_incarnation_id": "00000000-0000-4000-8000-000000002571",
+    "server_boot_id": "00000000-0000-4000-8000-000000002572",
+    "threads": [
+      {
+        "active_run_id": null,
+        "agent_id": "claude",
+        "created_at": "2026-07-21T18:50:54.879397+00:00",
+        "last_assistant_message": "Assistant answer",
+        "last_message_preview": "Assistant answer",
+        "last_user_message": "Latest user sentence",
+        "message_count": 5,
+        "provider_type": "claude_code",
+        "recent_run_id": "00000000-0000-4000-8000-000000002573",
+        "root_workspace_path": null,
+        "thread_id": "thread::00000000-0000-4000-8000-000000002571",
+        "thread_type": "chat",
+        "title": "New Thread",
+        "updated_at": "2026-07-21T18:50:54.974042+00:00",
+        "workspace_dir": "/Users/test/.garyx/data/thread-workspaces/thread--00000000-0000-4000-8000-000000002571",
+        "workspace_origin": "implicit",
+        "worktree": null
+      }
+    ],
+    "has_more": false,
+    "next_cursor": null
+  }
+}

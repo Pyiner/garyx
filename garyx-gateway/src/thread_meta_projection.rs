@@ -12,6 +12,7 @@ use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::garyx_db::{ThreadMetaDraft, ThreadMetaProjectionDraft};
+use crate::thread_preview_projection::thread_message_previews;
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
 
@@ -30,11 +31,8 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     let created_at = string_field(data, "created_at").or_else(|| string_field(data, "_created_at"));
     let thread_updated_at = string_field(data, "updated_at");
     let message_count = history_message_count(data).min(u32::MAX as usize) as u32;
-    let last_user_message = last_message_preview_for_role(data, "user");
-    let last_assistant_message = last_message_preview_for_role(data, "assistant");
-    let last_message_preview = last_assistant_message
-        .clone()
-        .or_else(|| last_user_message.clone());
+    let previews = thread_message_previews(data);
+    let last_message_preview = previews.user_first();
     let agent_id = agent_id_from_value(data);
     let sort_updated_at_us =
         summary_sort_updated_at_us(thread_updated_at.as_deref(), created_at.as_deref());
@@ -61,16 +59,10 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     // fall back to inference. Both values are written as plain projected
     // columns in this same transaction — the Rust functions are the only
     // derivation (no SQL twin).
-    let recorded_origin = string_field(data, "workspace_origin");
-    let workspace_origin_value = crate::workspace_mode::effective_workspace_origin(
+    let workspace_membership = crate::workspace_mode::thread_workspace_membership_from_record(
         thread_id,
         workspace_dir.as_deref(),
-        recorded_origin.as_deref(),
-    );
-    let root_workspace_path = crate::workspace_mode::thread_root_workspace_path(
-        workspace_origin_value,
-        workspace_dir.as_deref(),
-        data.get("worktree").unwrap_or(&Value::Null),
+        data,
     );
     let last_delivery = delivery_context_from_thread_data(data);
     // Runtime-summary columns (list fast path): same extraction as the live
@@ -93,8 +85,8 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         created_at,
         updated_at: thread_updated_at.clone(),
         message_count,
-        last_user_message,
-        last_assistant_message,
+        last_user_message: previews.last_user,
+        last_assistant_message: previews.last_assistant,
         last_message_preview,
         recent_run_id,
         active_run_id,
@@ -106,8 +98,8 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         default_list_hidden: is_default_thread_list_hidden(data),
         sort_updated_at_us,
         search_text,
-        root_workspace_path,
-        workspace_origin: Some(workspace_origin_value.to_owned()),
+        root_workspace_path: workspace_membership.root_workspace_path,
+        workspace_origin: Some(workspace_membership.workspace_origin),
     };
     let channel_endpoints = channel_endpoints_from_thread_data(thread_id, data);
     Some(ThreadMetaProjectionDraft {
@@ -231,17 +223,6 @@ fn string_field(data: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
-    // Write-time preview fields are the source (#TASK-1864 batch 1).
-    if let Some(preview) = garyx_models::message_preview::preview_field_for_role(role)
-        .and_then(|field| data.get(field))
-        .and_then(Value::as_str)
-    {
-        return Some(preview.to_owned());
-    }
-    None
 }
 
 #[cfg(test)]

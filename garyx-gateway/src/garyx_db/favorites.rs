@@ -269,6 +269,7 @@ impl GaryxDbService {
         let recent_total = usize::try_from(recent_total).unwrap_or(usize::MAX);
         let mut stmt = tx.prepare(
             "SELECT recent.thread_id, recent.title, recent.workspace_dir,
+                    recent.root_workspace_path, recent.workspace_origin,
                     recent.thread_type, recent.provider_type, recent.agent_id,
                     recent.message_count, recent.last_message_preview,
                     recent.recent_run_id, recent.active_run_id, recent.run_state,

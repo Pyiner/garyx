@@ -107,6 +107,8 @@ pub(super) fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             thread_id TEXT PRIMARY KEY,
             title TEXT NOT NULL DEFAULT '',
             workspace_dir TEXT,
+            root_workspace_path TEXT,
+            workspace_origin TEXT,
             thread_type TEXT NOT NULL DEFAULT 'chat',
             provider_type TEXT,
             agent_id TEXT,
@@ -320,6 +322,7 @@ pub(super) fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     meetings::migrate_meetings_pull_era_schema(conn)?;
     conn.execute_batch(meetings::MEETINGS_DDL)?;
     ensure_recent_threads_activity_seq_column(conn)?;
+    ensure_recent_threads_workspace_membership_columns(conn)?;
     ensure_recent_threads_meta_row(conn)?;
     ensure_thread_pins_sort_order_column(conn)?;
     ensure_thread_pins_meta_row(conn)?;
@@ -575,6 +578,24 @@ pub(super) fn ensure_recent_threads_activity_seq_column(conn: &Connection) -> Ga
              )",
         [],
     )?;
+    Ok(())
+}
+
+pub(super) fn ensure_recent_threads_workspace_membership_columns(
+    conn: &Connection,
+) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(recent_threads)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    for name in ["root_workspace_path", "workspace_origin"] {
+        if !columns.contains(name) {
+            conn.execute(
+                &format!("ALTER TABLE recent_threads ADD COLUMN {name} TEXT"),
+                [],
+            )?;
+        }
+    }
     Ok(())
 }
 

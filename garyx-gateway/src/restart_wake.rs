@@ -752,6 +752,8 @@ mod tests {
                 thread_id: thread_id.to_owned(),
                 title: thread_id.to_owned(),
                 workspace_dir: None,
+                root_workspace_path: None,
+                workspace_origin: None,
                 thread_type: "chat".to_owned(),
                 provider_type: None,
                 agent_id: None,
