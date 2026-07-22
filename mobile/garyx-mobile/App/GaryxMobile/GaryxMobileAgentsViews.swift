@@ -850,9 +850,11 @@ private struct GaryxAvatarEditorSection: View {
                     HStack(spacing: 10) {
                         avatarActions
                     }
+                    .labelStyle(.titleOnly)
                     VStack(spacing: 10) {
                         avatarActions
                     }
+                    .labelStyle(.titleAndIcon)
                 }
 
                 if let uploadError {
@@ -901,15 +903,11 @@ private struct GaryxAvatarEditorSection: View {
         Button {
             showsPhotoPicker = true
         } label: {
-            if uploadTask == nil {
-                Label("Upload", systemImage: "photo")
-            } else {
-                HStack(spacing: 7) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Uploading…")
-                }
-            }
+            GaryxAvatarActionLabel(
+                title: uploadTask == nil ? "Upload" : "Uploading…",
+                systemImage: "photo",
+                isLoading: uploadTask != nil
+            )
         }
         .buttonStyle(.bordered)
         .frame(minHeight: 44)
@@ -924,8 +922,8 @@ private struct GaryxAvatarEditorSection: View {
                 onNameValidationFailed()
             }
         } label: {
-            Label(
-                avatarDataUrl.isEmpty ? "Generate avatar" : "Generate new",
+            GaryxAvatarActionLabel(
+                title: avatarDataUrl.isEmpty ? "Generate avatar" : "Generate new",
                 systemImage: "sparkles"
             )
         }
@@ -939,7 +937,10 @@ private struct GaryxAvatarEditorSection: View {
                 uploadError = nil
                 avatarDataUrl = ""
             } label: {
-                Label("Remove avatar", systemImage: "trash")
+                GaryxAvatarActionLabel(
+                    title: "Remove avatar",
+                    systemImage: "trash"
+                )
             }
             .buttonStyle(.bordered)
             .frame(minHeight: 44)
@@ -1078,6 +1079,29 @@ private struct GaryxAvatarEditorSection: View {
     private func useGeneratedAvatar(_ dataUrl: String) {
         uploadError = nil
         avatarDataUrl = dataUrl
+    }
+}
+
+private struct GaryxAvatarActionLabel: View {
+    let title: String
+    let systemImage: String
+    var isLoading = false
+
+    var body: some View {
+        Group {
+            if isLoading {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(title)
+                }
+            } else {
+                Label(title, systemImage: systemImage)
+            }
+        }
+        .font(.footnote)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
