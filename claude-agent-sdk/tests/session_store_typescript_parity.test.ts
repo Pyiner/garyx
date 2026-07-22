@@ -316,6 +316,7 @@ async function officialMirrorTrace(
   result: unknown
   calls: AppendTrace[]
   mirrorErrors: number
+  assistantMessages: number
   events: string[]
   watchdogUsed: boolean
 }> {
@@ -343,11 +344,16 @@ async function officialMirrorTrace(
   const sessionId = '11111111-2222-4333-8444-555555555555'
   const store = new RecordingSessionStore(
     { projectKey, sessionId },
-    scenario === 'retry' ? 2 : scenario === 'failure' ? 3 : 0,
+    scenario === 'retry'
+      ? 2
+      : scenario === 'failure' || scenario === 'eager-failure-partial-line'
+        ? 3
+        : 0,
     scenario,
   )
   let resultValue: unknown
   let mirrorErrors = 0
+  let assistantMessages = 0
   for await (const message of officialSdk.query({
     prompt: 'continue',
     options: {
@@ -365,7 +371,10 @@ async function officialMirrorTrace(
     },
   })) {
     if (message.type === 'result') resultValue = JSON.parse(message.result)
-    if (message.type === 'assistant') store.observeAssistant()
+    if (message.type === 'assistant') {
+      assistantMessages += 1
+      store.observeAssistant()
+    }
     if (message.type === 'system' && message.subtype === 'mirror_error') {
       mirrorErrors += 1
     }
@@ -374,6 +383,7 @@ async function officialMirrorTrace(
     result: resultValue,
     calls: store.calls,
     mirrorErrors,
+    assistantMessages,
     events: store.events,
     watchdogUsed: store.watchdogUsed,
   }
@@ -403,6 +413,7 @@ describe('transcript mirror batch differential', () => {
     'batched',
     'eager',
     'eager-background',
+    'eager-failure-partial-line',
     'bytes',
     'unsafe',
     'retry',
@@ -426,6 +437,9 @@ describe('transcript mirror batch differential', () => {
           'append-end',
         ])
         expect(typescript.watchdogUsed).toBe(false)
+      } else if (scenario === 'eager-failure-partial-line') {
+        expect(typescript.assistantMessages).toBe(1)
+        expect(typescript.mirrorErrors).toBe(1)
       } else if (scenario === 'bytes') {
         expect(typescript.calls.map(call => call.entryCount)).toEqual([2])
       } else if (scenario === 'unsafe') {

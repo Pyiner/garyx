@@ -182,7 +182,7 @@ async fn run() -> Result<(), String> {
         inner,
         failures_remaining: AtomicUsize::new(match scenario.as_str() {
             "retry" => 2,
-            "failure" => 3,
+            "failure" | "eager-failure-partial-line" => 3,
             _ => 0,
         }),
         calls: Mutex::new(Vec::new()),
@@ -219,13 +219,16 @@ async fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     let mut mirror_errors = 0;
+    let mut assistant_messages = 0;
     let result = loop {
         match run.next_message().await {
             Some(Ok(Message::Result(result))) => break result,
-            Some(Ok(Message::Assistant(_))) if background.is_some() => {
-                let background = background.as_ref().unwrap();
-                background.events.lock().await.push("assistant");
-                background.released.send_replace(true);
+            Some(Ok(Message::Assistant(_))) => {
+                assistant_messages += 1;
+                if let Some(background) = background.as_ref() {
+                    background.events.lock().await.push("assistant");
+                    background.released.send_replace(true);
+                }
             }
             Some(Ok(Message::System(message))) if message.subtype == "mirror_error" => {
                 mirror_errors += 1;
@@ -258,6 +261,7 @@ async fn run() -> Result<(), String> {
             "result": result_value,
             "calls": &*store.calls.lock().await,
             "mirrorErrors": mirror_errors,
+            "assistantMessages": assistant_messages,
             "events": events,
             "watchdogUsed": watchdog_used,
         }))

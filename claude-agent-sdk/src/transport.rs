@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::error::{ClaudeSDKError, Result};
 use crate::types::ClaudeAgentOptions;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -109,6 +109,14 @@ fn finish_accumulated(json_buffer: &mut String, max_buffer_size: usize) -> Strea
     }
 }
 
+/// Reader-owned state survives cancellation of read_message. Tokio guarantees
+/// Lines::next_line is cancellation-safe, and the defensive multi-line JSON
+/// accumulator must likewise live beyond any one read future.
+struct TransportReader {
+    lines: Lines<BufReader<tokio::process::ChildStdout>>,
+    json_buffer: String,
+}
+
 /// Spawns the `claude` CLI as a child process and communicates via JSONL on
 /// stdin/stdout.
 ///
@@ -120,7 +128,7 @@ pub struct SubprocessTransport {
     /// Writer half (stdin). Separate lock from reader to prevent deadlock.
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Reader half (stdout). Separate lock from writer to prevent deadlock.
-    reader: Mutex<Option<BufReader<tokio::process::ChildStdout>>>,
+    reader: Mutex<Option<TransportReader>>,
     /// The child process handle.
     process: Mutex<Option<Child>>,
     ready: AtomicBool,
@@ -240,7 +248,10 @@ impl SubprocessTransport {
 
         {
             let mut reader_guard = self.reader.lock().await;
-            *reader_guard = Some(BufReader::new(stdout));
+            *reader_guard = Some(TransportReader {
+                lines: BufReader::new(stdout).lines(),
+                json_buffer: String::new(),
+            });
         }
         {
             let mut writer_guard = self.writer.lock().await;
@@ -275,27 +286,26 @@ impl SubprocessTransport {
         let mut reader_guard = self.reader.lock().await;
         let reader = reader_guard.as_mut().ok_or(ClaudeSDKError::NotReady)?;
 
-        let mut json_buffer = String::new();
-
         loop {
-            let mut line = String::new();
-            let n = reader
-                .read_line(&mut line)
+            let line = reader
+                .lines
+                .next_line()
                 .await
                 .map_err(|e| ClaudeSDKError::Connection(format!("Read error: {e}")))?;
 
-            if n == 0 {
+            let Some(line) = line else {
                 // EOF
-                if !json_buffer.is_empty() {
-                    return match serde_json::from_str::<Value>(&json_buffer) {
+                if !reader.json_buffer.is_empty() {
+                    let buffered = std::mem::take(&mut reader.json_buffer);
+                    return match serde_json::from_str::<Value>(&buffered) {
                         Ok(v) => Ok(Some(v)),
                         Err(_) => Ok(None),
                     };
                 }
                 return Ok(None);
-            }
+            };
 
-            match accept_stream_line(&mut json_buffer, &line, self.max_buffer_size) {
+            match accept_stream_line(&mut reader.json_buffer, &line, self.max_buffer_size) {
                 StreamLineOutcome::Message(value) => return Ok(Some(value)),
                 StreamLineOutcome::Pending => continue,
                 StreamLineOutcome::SkippedNoise => {

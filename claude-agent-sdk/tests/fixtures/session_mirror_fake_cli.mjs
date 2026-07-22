@@ -144,6 +144,25 @@ input.on('line', line => {
         emitScenarioResult()
       }, 50)
       return
+    } else if (scenario === 'eager-failure-partial-line') {
+      mirror(mainPath, [marked('failure-partial-line')])
+      const assistantLine = JSON.stringify({
+        type: 'assistant',
+        session_id: sessionId,
+        message: {
+          model: 'probe',
+          content: [{ type: 'text', text: 'partial line survived' }],
+        },
+      })
+      const splitIndex = assistantLine.indexOf('"content"')
+      setTimeout(() => {
+        process.stdout.write(assistantLine.slice(0, splitIndex))
+      }, 100)
+      setTimeout(() => {
+        process.stdout.write(`${assistantLine.slice(splitIndex)}\n`)
+        emitScenarioResult()
+      }, 1500)
+      return
     } else if (scenario === 'bytes') {
       const empty = [{ type: 'probe', marker: 'bytes', text: '' }]
       const padding = 1024 * 1024 - JSON.stringify(empty).length

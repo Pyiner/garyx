@@ -89,6 +89,13 @@ The reader multiplexes transport messages and the worker's mirror-failure
 channel. A terminal append failure still becomes one synthetic mirror_error
 system message while the query continues.
 
+Because that multiplexing can cancel an in-progress stdout read, transport
+read state must survive cancellation. The transport owns both Tokio's
+cancellation-safe Lines decoder and the defensive multi-line JSON accumulator;
+read_message() borrows that persistent state rather than keeping partial bytes
+in its future. A mirror failure can therefore interrupt delivery timing but
+can never discard a partial Claude protocol line.
+
 Before forwarding result, and on EOF/read error, the reader sends a flush
 barrier and then drains all failures already emitted by that barrier. Explicit
 disconnect also waits for a barrier before tearing down the reader. This pins
@@ -120,6 +127,13 @@ The Rust probe must produce the identical event order and must not use the
 watchdog. Reverting background enqueue to the old awaited implementation makes
 this scenario fail deterministically.
 
+Add a second eager failure differential in which the fake CLI writes half an
+assistant line, the background append exhausts its retries, and the CLI then
+finishes the line. Both the official and Rust SDKs must report one mirror error
+and one assistant message. Add a transport-level cancellation test that aborts
+read_message() with a partial line buffered and verifies the next read returns
+that complete message.
+
 Add a bridge contract test asserting production Claude options choose
 SessionStoreFlush::Eager; it fails on the parent commit, which chooses Batched.
 
@@ -136,6 +150,7 @@ Keep and rerun:
 - Garyx managed Claude runs use eager by default.
 - Generic SDK callers still default to official batched behavior.
 - An eager append cannot delay the next ordinary Claude message.
+- A mirror failure cannot corrupt a partially received protocol line.
 - Outstanding eager appends complete before result is delivered.
 - Every eager frame remains one ordered append() batch.
 - Mirror failures remain best-effort, visible, and non-fatal.
