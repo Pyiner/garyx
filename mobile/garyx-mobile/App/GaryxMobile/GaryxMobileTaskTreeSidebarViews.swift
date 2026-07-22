@@ -188,25 +188,6 @@ private struct GaryxTaskTreeSidebarInteractionSurface<SurfaceContent: View>: Vie
                 in: Rectangle()
             )
             .clipShape(Rectangle())
-            // Pre-baked gradient strip instead of `.shadow`: animated shadow
-            // radii force full-screen offscreen blurs every drag frame (the
-            // left drawer's frame-rate lesson).
-            .overlay(alignment: .leading) {
-                LinearGradient(
-                    gradient: Gradient(stops: [
-                        .init(color: Color.black.opacity(0.16), location: 0),
-                        .init(color: Color.black.opacity(0.04), location: 0.5),
-                        .init(color: Color.black.opacity(0), location: 1),
-                    ]),
-                    startPoint: leadingSign > 0 ? .trailing : .leading,
-                    endPoint: leadingSign > 0 ? .leading : .trailing
-                )
-                .frame(width: 40)
-                .offset(x: -leadingSign * 40)
-                .opacity(Double(progress))
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
             // Reduce Motion: crossfade + scrim only, no interactive slide.
             .opacity(usesCrossFade ? Double(progress) : 1)
             .offset(x: usesCrossFade ? 0 : leadingSign * (panelWidth - reveal))
