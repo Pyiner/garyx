@@ -6,14 +6,14 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::error::{ClaudeSDKError, Result};
@@ -1155,16 +1155,28 @@ struct PendingMirrorState {
     bytes: usize,
 }
 
-/// Batches `transcript_mirror` protocol frames with the official thresholds
-/// and retry policy.
+enum MirrorCommand {
+    Enqueue(PendingMirrorFrame),
+    Flush(oneshot::Sender<()>),
+}
+
+/// Batches transcript mirror protocol frames with the official thresholds
+/// and retry policy. Enqueue is deliberately non-blocking: the official SDK
+/// schedules each drain in the background and only awaits it at a flush
+/// barrier such as a result message or stream shutdown.
 pub(crate) struct TranscriptMirrorBatcher {
+    command_tx: mpsc::UnboundedSender<MirrorCommand>,
+    failure_rx: StdMutex<Option<mpsc::UnboundedReceiver<MirrorFailure>>>,
+}
+
+struct TranscriptMirrorWorker {
     store: Arc<dyn SessionStore>,
     projects_root: PathBuf,
-    pending: Mutex<PendingMirrorState>,
-    flush_lock: Mutex<()>,
+    pending: PendingMirrorState,
     max_pending_entries: usize,
     max_pending_bytes: usize,
     append_timeout: Duration,
+    failure_tx: mpsc::UnboundedSender<MirrorFailure>,
 }
 
 impl TranscriptMirrorBatcher {
@@ -1174,23 +1186,21 @@ impl TranscriptMirrorBatcher {
         flush: SessionStoreFlush,
     ) -> Self {
         let eager = flush == SessionStoreFlush::Eager;
-        Self {
+        Self::spawn(
             store,
             projects_root,
-            pending: Mutex::new(PendingMirrorState::default()),
-            flush_lock: Mutex::new(()),
-            max_pending_entries: if eager {
+            if eager {
                 0
             } else {
                 SESSION_STORE_MAX_PENDING_ENTRIES
             },
-            max_pending_bytes: if eager {
+            if eager {
                 0
             } else {
                 SESSION_STORE_MAX_PENDING_BYTES
             },
-            append_timeout: SESSION_STORE_APPEND_TIMEOUT,
-        }
+            SESSION_STORE_APPEND_TIMEOUT,
+        )
     }
 
     #[cfg(test)]
@@ -1201,53 +1211,105 @@ impl TranscriptMirrorBatcher {
         max_pending_bytes: usize,
         append_timeout: Duration,
     ) -> Self {
-        Self {
+        Self::spawn(
             store,
             projects_root,
-            pending: Mutex::new(PendingMirrorState::default()),
-            flush_lock: Mutex::new(()),
             max_pending_entries,
             max_pending_bytes,
             append_timeout,
+        )
+    }
+
+    fn spawn(
+        store: Arc<dyn SessionStore>,
+        projects_root: PathBuf,
+        max_pending_entries: usize,
+        max_pending_bytes: usize,
+        append_timeout: Duration,
+    ) -> Self {
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (failure_tx, failure_rx) = mpsc::unbounded_channel();
+        let worker = TranscriptMirrorWorker {
+            store,
+            projects_root,
+            pending: PendingMirrorState::default(),
+            max_pending_entries,
+            max_pending_bytes,
+            append_timeout,
+            failure_tx,
+        };
+        tokio::spawn(worker.run(command_rx));
+        Self {
+            command_tx,
+            failure_rx: StdMutex::new(Some(failure_rx)),
         }
     }
 
-    pub(crate) async fn enqueue(
-        &self,
-        file_path: PathBuf,
-        entries: Vec<Value>,
-    ) -> Vec<MirrorFailure> {
+    pub(crate) fn enqueue(&self, file_path: PathBuf, entries: Vec<Value>) {
         let bytes = serde_json::to_string(&entries)
             .map(|json| json.encode_utf16().count())
             .unwrap_or_default();
-        let should_flush = {
-            let mut pending = self.pending.lock().await;
-            pending.entries += entries.len();
-            pending.bytes += bytes;
-            pending.frames.push(PendingMirrorFrame {
+        if self
+            .command_tx
+            .send(MirrorCommand::Enqueue(PendingMirrorFrame {
                 file_path,
                 entries,
                 bytes,
-            });
-            pending.entries > self.max_pending_entries || pending.bytes > self.max_pending_bytes
-        };
-        if should_flush {
-            self.flush().await
-        } else {
-            Vec::new()
+            }))
+            .is_err()
+        {
+            tracing::error!("SessionStore mirror worker stopped before enqueue");
         }
     }
 
-    pub(crate) async fn flush(&self) -> Vec<MirrorFailure> {
-        let _flush_guard = self.flush_lock.lock().await;
-        let frames = {
-            let mut pending = self.pending.lock().await;
-            pending.entries = 0;
-            pending.bytes = 0;
-            std::mem::take(&mut pending.frames)
-        };
+    pub(crate) async fn flush(&self) {
+        let (done_tx, done_rx) = oneshot::channel();
+        if self.command_tx.send(MirrorCommand::Flush(done_tx)).is_err() {
+            tracing::error!("SessionStore mirror worker stopped before flush");
+            return;
+        }
+        if done_rx.await.is_err() {
+            tracing::error!("SessionStore mirror worker stopped during flush");
+        }
+    }
+
+    pub(crate) fn take_failure_receiver(&self) -> Option<mpsc::UnboundedReceiver<MirrorFailure>> {
+        self.failure_rx
+            .lock()
+            .expect("SessionStore failure receiver mutex poisoned")
+            .take()
+    }
+}
+
+impl TranscriptMirrorWorker {
+    async fn run(mut self, mut command_rx: mpsc::UnboundedReceiver<MirrorCommand>) {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                MirrorCommand::Enqueue(frame) => {
+                    self.pending.entries += frame.entries.len();
+                    self.pending.bytes += frame.bytes;
+                    self.pending.frames.push(frame);
+                    if self.pending.entries > self.max_pending_entries
+                        || self.pending.bytes > self.max_pending_bytes
+                    {
+                        self.drain().await;
+                    }
+                }
+                MirrorCommand::Flush(done_tx) => {
+                    self.drain().await;
+                    let _ = done_tx.send(());
+                }
+            }
+        }
+        self.drain().await;
+    }
+
+    async fn drain(&mut self) {
+        self.pending.entries = 0;
+        self.pending.bytes = 0;
+        let frames = std::mem::take(&mut self.pending.frames);
         if frames.is_empty() {
-            return Vec::new();
+            return;
         }
 
         let mut groups: Vec<(PathBuf, Vec<Value>)> = Vec::new();
@@ -1262,7 +1324,6 @@ impl TranscriptMirrorBatcher {
             }
         }
 
-        let mut failures = Vec::new();
         for (file_path, entries) in groups {
             let Some(key) = session_key_from_mirror_path(&file_path, &self.projects_root) else {
                 tracing::warn!(
@@ -1278,13 +1339,12 @@ impl TranscriptMirrorBatcher {
                     error = %error,
                     "SessionStore mirror batch failed after bounded retry"
                 );
-                failures.push(MirrorFailure {
+                let _ = self.failure_tx.send(MirrorFailure {
                     key,
                     error: error.to_string(),
                 });
             }
         }
-        failures
     }
 
     async fn send_with_retry(&self, key: &SessionKey, entries: &[Value]) -> Result<()> {
@@ -1977,17 +2037,24 @@ mod tests {
             usize::MAX,
             Duration::from_secs(60),
         );
+        let mut failure_rx = batcher.take_failure_receiver().unwrap();
+        batcher.enqueue(
+            PathBuf::from("/projects/proj/sess.jsonl"),
+            vec![json!({"type":"a"})],
+        );
         let task = tokio::spawn(async move {
-            batcher
-                .enqueue(
-                    PathBuf::from("/projects/proj/sess.jsonl"),
-                    vec![json!({"type":"a"})],
-                )
-                .await
+            batcher.flush().await;
         });
+        while store.calls.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
         tokio::time::advance(Duration::from_millis(200)).await;
+        while store.calls.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
         tokio::time::advance(Duration::from_millis(800)).await;
-        assert!(task.await.unwrap().is_empty());
+        task.await.unwrap();
+        assert!(failure_rx.try_recv().is_err());
         assert_eq!(store.calls.load(Ordering::SeqCst), 3);
     }
 
@@ -2019,19 +2086,21 @@ mod tests {
             usize::MAX,
             Duration::from_secs(2),
         );
+        let mut failure_rx = batcher.take_failure_receiver().unwrap();
+        batcher.enqueue(
+            PathBuf::from("/projects/proj/sess.jsonl"),
+            vec![json!({"type":"a"})],
+        );
         let task = tokio::spawn(async move {
-            batcher
-                .enqueue(
-                    PathBuf::from("/projects/proj/sess.jsonl"),
-                    vec![json!({"type":"a"})],
-                )
-                .await
+            batcher.flush().await;
         });
-        tokio::task::yield_now().await;
+        while store.calls.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
         tokio::time::advance(Duration::from_secs(2)).await;
-        let failures = task.await.unwrap();
-        assert_eq!(failures.len(), 1);
-        assert!(failures[0].error.contains("timed out"));
+        task.await.unwrap();
+        let failure = failure_rx.try_recv().unwrap();
+        assert!(failure.error.contains("timed out"));
         assert_eq!(store.calls.load(Ordering::SeqCst), 1);
     }
 }

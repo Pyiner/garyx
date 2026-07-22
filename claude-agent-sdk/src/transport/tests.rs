@@ -193,6 +193,45 @@ async fn test_close_terminates_process_before_waiting_for_reader_lock() {
     result.expect("close should succeed");
 }
 
+#[tokio::test]
+async fn test_cancelled_read_preserves_a_partially_received_protocol_line() {
+    let fixture = CliFixture::new_raw(&[(
+        "bin/claude",
+        "#!/bin/sh\nprintf '%s' '{\"type\":\"assistant\",\"message\":{\"model\":\"probe\",'\n: > \"$PARTIAL_READY_FILE\"\nsleep 1\nprintf '%s\\n' '\"content\":[]}}'\nsleep 1\n",
+    )]);
+    let ready_file = fixture.root.join("partial-ready");
+    let opts = ClaudeAgentOptions {
+        cli_path: Some(fixture.root.join("bin/claude")),
+        env: HashMap::from([(
+            "PARTIAL_READY_FILE".to_owned(),
+            ready_file.to_string_lossy().into_owned(),
+        )]),
+        ..ClaudeAgentOptions::default()
+    };
+    let transport = Arc::new(SubprocessTransport::new(opts, true));
+    transport.spawn(None).await.unwrap();
+
+    let first_transport = Arc::clone(&transport);
+    let first_read = tokio::spawn(async move { first_transport.read_message().await });
+    while !ready_file.exists() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    first_read.abort();
+    let _ = first_read.await;
+
+    let message = tokio::time::timeout(Duration::from_secs(2), transport.read_message())
+        .await
+        .expect("the completed line should remain readable after cancellation")
+        .unwrap()
+        .expect("the completed line should parse as one protocol message");
+    assert_eq!(
+        message.get("type").and_then(Value::as_str),
+        Some("assistant")
+    );
+    transport.close().await.unwrap();
+}
+
 struct CliFixture {
     root: PathBuf,
 }

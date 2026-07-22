@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use claude_agent_sdk::{
@@ -15,7 +16,7 @@ use claude_agent_sdk::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 const SESSION_ID: &str = "11111111-2222-4333-8444-555555555555";
 
@@ -33,6 +34,13 @@ struct RecordingStore {
     inner: LocalDirectorySessionStore,
     failures_remaining: AtomicUsize,
     calls: Mutex<Vec<AppendTrace>>,
+    background: Option<Arc<BackgroundState>>,
+}
+
+struct BackgroundState {
+    events: Mutex<Vec<&'static str>>,
+    released: watch::Sender<bool>,
+    watchdog_used: AtomicBool,
 }
 
 impl RecordingStore {
@@ -61,6 +69,19 @@ impl SessionStore for RecordingStore {
             last_marker: Self::marker(entries.last()),
             outcome: if failed { "error" } else { "ok" },
         });
+        if let Some(background) = self.background.as_ref() {
+            background.events.lock().await.push("append-start");
+            let mut released = background.released.subscribe();
+            if !*released.borrow()
+                && tokio::time::timeout(Duration::from_millis(500), released.changed())
+                    .await
+                    .is_err()
+            {
+                background.watchdog_used.store(true, Ordering::SeqCst);
+                background.events.lock().await.push("watchdog");
+            }
+            background.events.lock().await.push("append-end");
+        }
         if failed {
             return Err(claude_agent_sdk::ClaudeSDKError::SessionStore(
                 "intentional parity probe failure".to_owned(),
@@ -149,17 +170,26 @@ async fn run() -> Result<(), String> {
         .append(&main_key, &[json!({"type":"seed"})])
         .await
         .map_err(|error| error.to_string())?;
+    let background = (scenario == "eager-background").then(|| {
+        let (released, _receiver) = watch::channel(false);
+        Arc::new(BackgroundState {
+            events: Mutex::new(Vec::new()),
+            released,
+            watchdog_used: AtomicBool::new(false),
+        })
+    });
     let store = Arc::new(RecordingStore {
         inner,
         failures_remaining: AtomicUsize::new(match scenario.as_str() {
             "retry" => 2,
-            "failure" => 3,
+            "failure" | "eager-failure-partial-line" => 3,
             _ => 0,
         }),
         calls: Mutex::new(Vec::new()),
+        background: background.clone(),
     });
     let store_trait: Arc<dyn SessionStore> = store.clone();
-    let flush = if scenario == "eager" {
+    let flush = if scenario.starts_with("eager") {
         SessionStoreFlush::Eager
     } else {
         SessionStoreFlush::Batched
@@ -189,9 +219,17 @@ async fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
     let mut mirror_errors = 0;
+    let mut assistant_messages = 0;
     let result = loop {
         match run.next_message().await {
             Some(Ok(Message::Result(result))) => break result,
+            Some(Ok(Message::Assistant(_))) => {
+                assistant_messages += 1;
+                if let Some(background) = background.as_ref() {
+                    background.events.lock().await.push("assistant");
+                    background.released.send_replace(true);
+                }
+            }
             Some(Ok(Message::System(message))) if message.subtype == "mirror_error" => {
                 mirror_errors += 1;
             }
@@ -208,6 +246,14 @@ async fn run() -> Result<(), String> {
             .ok_or_else(|| "fake result was empty".to_owned())?,
     )
     .map_err(|error| error.to_string())?;
+    let events = if let Some(background) = background.as_ref() {
+        background.events.lock().await.clone()
+    } else {
+        Vec::new()
+    };
+    let watchdog_used = background
+        .as_ref()
+        .is_some_and(|background| background.watchdog_used.load(Ordering::SeqCst));
 
     println!(
         "{}",
@@ -215,6 +261,9 @@ async fn run() -> Result<(), String> {
             "result": result_value,
             "calls": &*store.calls.lock().await,
             "mirrorErrors": mirror_errors,
+            "assistantMessages": assistant_messages,
+            "events": events,
+            "watchdogUsed": watchdog_used,
         }))
         .map_err(|error| error.to_string())?
     );

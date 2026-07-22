@@ -215,7 +215,14 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
   that account; System default does not self-copy. Mirror during native runs,
   reconcile again after every run, and sweep at startup/account switch so
   terminal Claude sees recovered copies. Storage failures must never clear the
-  native session or trigger the fresh-session fallback.
+  native session or trigger the fresh-session fallback. Keep the reusable SDK
+  default aligned with the official batched policy, but explicitly configure
+  Garyx's local store as eager: enqueue each mirror frame onto a serialized
+  background writer without blocking message delivery, then await that writer
+  before forwarding result or ending the stream. Any select that races Claude
+  stdout against another event must use cancellation-safe, transport-owned
+  line and JSON accumulation state so canceling a read cannot discard partial
+  protocol bytes.
 - Quota recovery is SQL-owned per blocked run generation. Timer, account
   switch, and manual Continue must wake the same durable row and admission
   intent; never queue its synthetic `continue` into an active run, and never
