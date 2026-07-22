@@ -509,6 +509,10 @@ test("coding usage accepts the signed i64 reset interval emitted by Rust", async
             id: "codex",
             name: "Codex",
             available: true,
+            stale: true,
+            error: "temporarily throttled",
+            error_code: "rate_limited",
+            retry_after_seconds: 90,
             weekly: {
               used_percent: 100,
               remaining_percent: 0,
@@ -532,6 +536,8 @@ test("coding usage accepts the signed i64 reset interval emitted by Rust", async
     async () => {
       const usage = await getCodingUsage(settings);
       assert.equal(usage.providers[0].weekly.resetAfterSeconds, -1);
+      assert.equal(usage.providers[0].errorCode, "rate_limited");
+      assert.equal(usage.providers[0].retryAfterSeconds, 90);
       assert.deepEqual(usage.providers[0].scopedLimits, [{
         id: "weekly_scoped:Fable",
         name: "Fable",

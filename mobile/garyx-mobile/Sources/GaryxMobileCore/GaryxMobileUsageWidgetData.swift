@@ -149,6 +149,8 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
     public var scopedLimits: [GaryxScopedUsageLimit]
     public var models: [GaryxModelUsage]
     public var error: String?
+    public var errorCode: String?
+    public var retryAfterSeconds: Int?
 
     public init(
         id: String,
@@ -160,7 +162,9 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         session: GaryxUsageWindow? = nil,
         scopedLimits: [GaryxScopedUsageLimit] = [],
         models: [GaryxModelUsage] = [],
-        error: String? = nil
+        error: String? = nil,
+        errorCode: String? = nil,
+        retryAfterSeconds: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -172,6 +176,8 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         self.scopedLimits = scopedLimits
         self.models = models
         self.error = error
+        self.errorCode = errorCode
+        self.retryAfterSeconds = retryAfterSeconds
     }
 
     enum CodingKeys: String, CodingKey {
@@ -185,6 +191,8 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         case scopedLimits = "scoped_limits"
         case models
         case error
+        case errorCode = "error_code"
+        case retryAfterSeconds = "retry_after_seconds"
     }
 
     public init(from decoder: Decoder) throws {
@@ -199,6 +207,8 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         scopedLimits = try container.decodeIfPresent([GaryxScopedUsageLimit].self, forKey: .scopedLimits) ?? []
         models = try container.decodeIfPresent([GaryxModelUsage].self, forKey: .models) ?? []
         error = try container.decodeIfPresent(String.self, forKey: .error)
+        errorCode = try container.decodeIfPresent(String.self, forKey: .errorCode)
+        retryAfterSeconds = try container.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -217,6 +227,8 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
             try container.encode(models, forKey: .models)
         }
         try container.encodeIfPresent(error, forKey: .error)
+        try container.encodeIfPresent(errorCode, forKey: .errorCode)
+        try container.encodeIfPresent(retryAfterSeconds, forKey: .retryAfterSeconds)
     }
 }
 
@@ -686,10 +698,11 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
         let normalizedPlan = (plan?.isEmpty == false) ? plan : nil
         let updatedText = GaryxUsageGaugeModel.usageUpdatedText(refreshedAt: refreshedAt, now: now)
         if !provider.available {
+            let unavailableCopy = unavailableCopy(for: provider)
             return GaryxProviderUsageDisplayModel(
                 providerId: provider.id,
-                summaryText: "Unavailable",
-                detailText: provider.error?.isEmpty == false ? "Check local credentials" : "No usage data",
+                summaryText: unavailableCopy.summary,
+                detailText: unavailableCopy.detail,
                 available: false,
                 plan: normalizedPlan,
                 stale: provider.stale,
@@ -779,13 +792,38 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
         return GaryxProviderUsageDisplayModel(
             providerId: provider.id,
             summaryText: "No data",
-            detailText: provider.error?.isEmpty == false ? "Check local credentials" : "Usage not reported",
+            detailText: provider.error?.isEmpty == false ? unavailableCopy(for: provider).detail : "Usage not reported",
             available: false,
             plan: normalizedPlan,
             stale: provider.stale,
             updatedText: updatedText,
             models: []
         )
+    }
+
+    private static func unavailableCopy(
+        for provider: GaryxProviderUsage
+    ) -> (summary: String, detail: String) {
+        switch provider.errorCode {
+        case "rate_limited":
+            if let seconds = provider.retryAfterSeconds, seconds > 0 {
+                return (
+                    "Try again in \(GaryxUsageGaugeModel.formatDuration(seconds))",
+                    "Claude quota is temporarily rate limited"
+                )
+            }
+            return ("Temporarily limited", "Claude quota is temporarily rate limited")
+        case "reauth_required":
+            return ("Sign in again", "Claude Code credentials expired")
+        case "credentials_unavailable":
+            return ("Account unavailable", "Claude Code credentials were not found")
+        case "network":
+            return ("Can’t refresh quota", "Check your connection and try again")
+        default:
+            return provider.error?.isEmpty == false
+                ? ("Quota unavailable", "Try again shortly")
+                : ("No data", "No usage data")
+        }
     }
 
     private static func windowDisplayModel(
