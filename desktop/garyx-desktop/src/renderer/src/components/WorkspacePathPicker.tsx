@@ -155,8 +155,17 @@ function LocalDirectoryBrowser({
   const [filter, setFilter] = useState('');
 
   const currentPath = listing?.path || '';
+  // Guards the selected-path sync below: a draft update this browser just
+  // reported (via onCurrentPathChange) must not echo back into
+  // requestedPath, or a blank-path open would reload the default listing
+  // it only just resolved.
+  const lastReportedPathRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const normalized = normalizeWorkspacePath(selectedPath);
+    if (normalized && normalized === lastReportedPathRef.current) {
+      return;
+    }
     setRequestedPath(selectedPath || null);
   }, [selectedPath]);
 
@@ -172,7 +181,9 @@ function LocalDirectoryBrowser({
         setFilter('');
         // The folder in view is the selection; keep the caller's draft in
         // lockstep with every successful navigation.
-        onCurrentPathChange(normalizeWorkspacePath(nextListing.path));
+        const reportedPath = normalizeWorkspacePath(nextListing.path);
+        lastReportedPathRef.current = reportedPath;
+        onCurrentPathChange(reportedPath);
       })
       .catch((nextError) => {
         if (cancelled) return;

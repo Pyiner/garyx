@@ -788,12 +788,17 @@ export function ThreadPage({
     activeThreadSummary?.rootWorkspacePath ||
     activeThreadSummary?.workspacePath ||
     "";
-  // Codex parity: thread surfaces echo only the leaf directory name; the
-  // full path stays available on hover via the title attribute.
+  // Codex parity: thread surfaces echo only the leaf directory name — the
+  // gateway home keeps its `~` spelling — while the full path stays
+  // available on hover via the title attribute.
   const sentWorkspaceLabel = (() => {
     const trimmedPath = sentWorkspacePath.trim();
     if (!trimmedPath) {
       return null;
+    }
+    const home = gatewayHome?.replace(/\/+$/, "");
+    if (home && trimmedPath === home) {
+      return "~";
     }
     return trimmedPath.split("/").filter(Boolean).pop() || trimmedPath;
   })();
@@ -801,7 +806,11 @@ export function ThreadPage({
   // nothing to choose, so the draft controls never render for them and the
   // sent-thread branches below show the inherited workspace read-only.
   // Draft workspace selection lives in the skirt under the composer
-  // (Codex new-task apron), not in the composer footer.
+  // (Codex new-task apron) while the empty state is mounted; when the
+  // skirt is absent but the draft still owns the workspace choice — a
+  // dispatch in flight, or seeded messages retained after a failed thread
+  // creation — the controls fall back to the composer footer so workspace
+  // correction and retry stay possible.
   const draftWorkspaceControls =
     !selectedThreadId && surfaceVariant !== "side-chat" ? (
       <WorkspaceComposerChip
@@ -815,7 +824,9 @@ export function ThreadPage({
         workspaces={draftWorkspaces}
       />
     ) : null;
-  const composerContext = draftWorkspaceControls ? null : composerWorkspaceMode ? (
+  const composerContext = draftWorkspaceControls ? (
+    emptyNewThread ? null : draftWorkspaceControls
+  ) : composerWorkspaceMode ? (
     <div
       aria-label={t("Workspace mode")}
       className="thread-composer-status"

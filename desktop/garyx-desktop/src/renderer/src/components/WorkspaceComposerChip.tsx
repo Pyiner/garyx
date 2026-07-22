@@ -146,6 +146,9 @@ export function WorkspaceComposerChip({
       (selectedWorkspace?.gitRepo || gitStatusRepoPath === selectedPath),
   );
 
+  // Label precedence is intentional: a catalog workspace shows its
+  // user-chosen display name (Codex project rows do the same); the
+  // leaf/`~` path spelling applies only to paths outside the catalog.
   const chipLabel =
     selection?.kind === 'none'
       ? t('No workspace')
