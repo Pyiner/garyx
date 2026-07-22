@@ -589,9 +589,10 @@ struct GaryxConversationView: View {
                             .id(tailThinkingAnchorId)
                             .transition(.opacity)
                     }
-                    if let rateLimit = liveStore.rateLimit(in: model) {
+                    if let rateLimit = liveStore.rateLimit(in: model),
+                       let threadId = liveStore.threadID {
                         GaryxRateLimitBanner(rateLimit: rateLimit) {
-                            await model.send("continue")
+                            try await model.retryThreadQuotaRecovery(threadId: threadId)
                         }
                         .transition(motion.transition(.transcriptAppear))
                     }

@@ -518,6 +518,7 @@ impl AppStateBuilder {
                 skills: self.skills,
                 custom_agents: self.custom_agents,
                 garyx_db: self.garyx_db,
+                quota_recovery_notify: Arc::new(Notify::new()),
                 conversation_admission,
                 prompt_attachments,
                 meetings,

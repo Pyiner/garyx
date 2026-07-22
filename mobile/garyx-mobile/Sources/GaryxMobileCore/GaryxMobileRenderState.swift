@@ -297,44 +297,59 @@ public struct GaryxRenderWindow: Codable, Equatable, Sendable {
 /// Provider quota / rate-limit context surfaced on the render snapshot when the
 /// thread's most recent run terminated because the provider's rolling usage
 /// quota was exhausted. The chat view renders a banner with a live countdown to
-/// `resetAt`; `willAutoResend` indicates the gateway scheduled an automatic
-/// resend of the original message when the window recovers.
+/// `resetAt`; `willAutoResend` indicates that the gateway's durable recovery
+/// generation is still eligible to resume the thread automatically.
 public struct GaryxRenderRateLimit: Codable, Equatable, Sendable {
+    public var recoveryGeneration: String?
     public var provider: String?
     public var resetAt: String?
     public var window: String?
     public var message: String?
     public var willAutoResend: Bool
+    public var recoveryState: String?
+    public var recoveryAt: String?
 
     public init(
+        recoveryGeneration: String? = nil,
         provider: String? = nil,
         resetAt: String? = nil,
         window: String? = nil,
         message: String? = nil,
-        willAutoResend: Bool = false
+        willAutoResend: Bool = false,
+        recoveryState: String? = nil,
+        recoveryAt: String? = nil
     ) {
+        self.recoveryGeneration = recoveryGeneration
         self.provider = provider
         self.resetAt = resetAt
         self.window = window
         self.message = message
         self.willAutoResend = willAutoResend
+        self.recoveryState = recoveryState
+        self.recoveryAt = recoveryAt
     }
 
     enum CodingKeys: String, CodingKey {
+        case recoveryGeneration
         case provider
         case resetAt
         case window
         case message
         case willAutoResend
+        case recoveryState
+        case recoveryAt
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        recoveryGeneration = try container.decodeIfPresent(String.self, forKey: .recoveryGeneration)
         provider = try container.decodeIfPresent(String.self, forKey: .provider)
         resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
         window = try container.decodeIfPresent(String.self, forKey: .window)
         message = try container.decodeIfPresent(String.self, forKey: .message)
         willAutoResend = try container.decodeIfPresent(Bool.self, forKey: .willAutoResend) ?? false
+        recoveryState = try container.decodeIfPresent(String.self, forKey: .recoveryState)
+        recoveryAt = try container.decodeIfPresent(String.self, forKey: .recoveryAt)
     }
 }
 
@@ -1706,11 +1721,8 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
     }
 
     static func providerLabel(_ provider: String?) -> String {
-        let slug = (provider ?? "").trimmingCharacters(in: .whitespaces).lowercased()
-        if slug.hasPrefix("codex") { return "Codex" }
-        if slug.hasPrefix("trae") { return "TRAE" }
         let trimmed = provider?.trimmingCharacters(in: .whitespaces) ?? ""
-        return trimmed.isEmpty ? "Provider" : trimmed
+        return GaryxProviderPresentation.displayName(for: trimmed)
     }
 
     static func windowLabel(_ window: String?) -> String? {

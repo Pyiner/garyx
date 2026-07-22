@@ -173,6 +173,7 @@ import {
   saveGatewaySettings,
   saveSkillFile,
   selectClaudeCodeAccount,
+  retryThreadQuotaRecovery,
   setDefaultCustomAgent,
   setRemoteThreadFavorite,
   sendStreamingInput,
@@ -927,7 +928,12 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("garyx:select-claude-code-account", async (_event, input) => {
     const settings = await resolveSettings();
-    await selectClaudeCodeAccount(settings, input.accountId);
+    return selectClaudeCodeAccount(settings, input.accountId);
+  });
+
+  ipcMain.handle("garyx:retry-thread-quota-recovery", async (_event, input) => {
+    const settings = await resolveSettings();
+    return retryThreadQuotaRecovery(settings, input.threadId);
   });
 
   ipcMain.handle("garyx:rename-claude-code-account", async (_event, input) => {

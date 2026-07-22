@@ -12,6 +12,19 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
         XCTAssertNil(GaryxRateLimitBannerModel.make(from: nil))
     }
 
+    func testProviderTitleUsesSharedIdentityPresentation() {
+        let rateLimit = GaryxRenderRateLimit(
+            provider: "claude_sdk",
+            resetAt: nil,
+            window: nil,
+            willAutoResend: false
+        )
+        XCTAssertEqual(
+            GaryxRateLimitBannerModel.make(from: rateLimit)?.title,
+            "Claude Code usage limit reached"
+        )
+    }
+
     private let utc = TimeZone(identifier: "UTC")!
 
     func testPrimaryWindowAutoResendShowsResetClockAndCountdown() {
@@ -154,11 +167,14 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             "progress_locus": "none",
             "filtered_placeholders": [],
             "rateLimit": {
+                "recoveryGeneration": "run::blocked",
                 "provider": "codex_app_server",
                 "resetAt": "2030-01-01T06:00:00+00:00",
                 "window": "primary",
                 "message": "You've hit your usage limit.",
-                "willAutoResend": true
+                "willAutoResend": true,
+                "recoveryState": "waiting",
+                "recoveryAt": "2030-01-01T06:01:00+00:00"
             }
         }
         """
@@ -169,6 +185,9 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
         XCTAssertEqual(snapshot.rateLimit?.provider, "codex_app_server")
         XCTAssertEqual(snapshot.rateLimit?.window, "primary")
         XCTAssertEqual(snapshot.rateLimit?.willAutoResend, true)
+        XCTAssertEqual(snapshot.rateLimit?.recoveryGeneration, "run::blocked")
+        XCTAssertEqual(snapshot.rateLimit?.recoveryState, "waiting")
+        XCTAssertEqual(snapshot.rateLimit?.recoveryAt, "2030-01-01T06:01:00+00:00")
     }
 
     func testSnapshotWithoutRateLimitDecodesToNil() throws {

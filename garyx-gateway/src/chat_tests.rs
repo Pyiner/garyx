@@ -13,7 +13,8 @@ use garyx_channels::{
 };
 use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{
-    AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
+    AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    StreamEvent,
 };
 use garyx_router::{
     AdmittedRun, AgentDispatcher, ChannelBinding, EndpointBindingMutator, InMemoryThreadStore,
@@ -25,13 +26,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
-use crate::application::chat::contracts::{ChatRequest, InterruptRequest, StreamInputRequest};
+use crate::application::chat::contracts::{
+    ChatRequest, IdempotencyScope, InterruptRequest, StreamInputRequest,
+};
 use crate::server::{AppState, AppStateBuilder};
 
 use super::{
     ChatWsForwardOutcome, chat_health, chat_interrupt, chat_start, chat_stream_input,
     forward_chat_ws_committed_value, is_terminal_bus_record_for_run,
-    spawn_chat_ws_committed_stream,
+    spawn_chat_ws_committed_stream, start_chat_run_with_quota_recovery,
 };
 
 struct ReadyProvider;
@@ -42,6 +45,11 @@ struct BlockingReplyProvider {
     started: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
     text: String,
+}
+struct QueueAcceptingProvider {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    queued_inputs: Arc<AtomicUsize>,
 }
 struct WorkspaceRecordingProvider {
     observed_workspace_dir: Arc<Mutex<Option<Option<String>>>>,
@@ -217,6 +225,62 @@ impl ProviderRuntime for BlockingReplyProvider {
             cost: 0.0,
             duration_ms: 1,
         })
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{thread_id}"))
+    }
+}
+
+#[async_trait]
+impl ProviderRuntime for QueueAcceptingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        _on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(ProviderRunResult {
+            run_id: "queue-accepting-provider".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: String::new(),
+            session_messages: Vec::new(),
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    fn supports_streaming_input(&self) -> bool {
+        true
+    }
+
+    async fn add_streaming_input(&self, _thread_id: &str, _input: QueuedUserInput) -> bool {
+        self.queued_inputs.fetch_add(1, Ordering::SeqCst);
+        true
     }
 
     async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
@@ -971,6 +1035,177 @@ async fn test_chat_start_same_durable_intent_dispatches_provider_exactly_once() 
         admission.state,
         crate::garyx_db::DispatchAdmissionState::Accepted
     );
+}
+
+#[tokio::test]
+async fn quota_recovery_never_queues_continue_into_an_active_run() {
+    let thread_id = "thread::quota-busy-race";
+    let active_run_id = "run::already-active";
+    let blocked_run_id = "run::quota-blocked";
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let queued_inputs = Arc::new(AtomicUsize::new(0));
+    let mut config = GaryxConfig::default();
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: Some("claude".to_owned()),
+            workspace_dir: None,
+            workspace_mode: None,
+        },
+    );
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "queue-accepting-provider",
+            Arc::new(QueueAcceptingProvider {
+                started: started.clone(),
+                release: release.clone(),
+                queued_inputs: queued_inputs.clone(),
+            }),
+        )
+        .await;
+    bridge
+        .set_route("api", "main", "queue-accepting-provider")
+        .await;
+    bridge
+        .set_default_provider_key("queue-accepting-provider")
+        .await;
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "claude",
+                "provider_type": "claude_code"
+            }),
+        )
+        .await
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .run_thread_data_startup_migrations()
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .write_thread_record_with_projections(thread_id, "{}", None, None)
+        .unwrap();
+
+    let active = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        AgentRunRequest::new(
+            thread_id,
+            "user run",
+            active_run_id,
+            "api",
+            "main",
+            Default::default(),
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(active, None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+        .await
+        .expect("the non-durable user run should become active");
+
+    let job = state
+        .ops
+        .garyx_db
+        .register_quota_recovery_job(crate::garyx_db::NewQuotaRecoveryJob {
+            thread_id,
+            provider: "claude_code",
+            blocked_run_id,
+            blocked_seq: 1,
+            quota_window: Some("primary"),
+            reset_at: Some("2026-07-23T00:00:00Z"),
+            due_at: "2026-07-23T00:01:00Z",
+        })
+        .unwrap();
+    let claim_token = "claim::busy-race";
+    state
+        .ops
+        .garyx_db
+        .claim_next_due_quota_recovery("2026-07-23T00:01:01Z", claim_token, "2026-07-23T00:03:01Z")
+        .unwrap()
+        .expect("recovery generation should be claimed");
+    let admission_key = crate::garyx_db::DispatchAdmissionKey {
+        scope_identity: "__quota_recovery__".to_owned(),
+        scope_epoch: 1,
+        thread_id: thread_id.to_owned(),
+        kind: crate::garyx_db::DispatchAdmissionKind::ChatStart,
+        client_intent_id: job.dispatch_intent_id.clone(),
+    };
+    let request = ChatRequest {
+        message: "continue".to_owned(),
+        attachments: Vec::new(),
+        images: Vec::new(),
+        files: Vec::new(),
+        thread_id: Some(thread_id.to_owned()),
+        client_intent_id: Some(job.dispatch_intent_id.clone()),
+        idempotency_scope: Some(IdempotencyScope {
+            identity: "__quota_recovery__".to_owned(),
+            epoch: 1,
+        }),
+        bot: None,
+        from_id: "garyx-quota-recovery".to_owned(),
+        account_id: "main".to_owned(),
+        wait_for_response: false,
+        workspace_path: None,
+        provider_type: None,
+        metadata: HashMap::from([
+            ("internal_dispatch".to_owned(), Value::Bool(true)),
+            ("quota_recovery".to_owned(), Value::Bool(true)),
+        ]),
+    };
+
+    let result = start_chat_run_with_quota_recovery(
+        &state,
+        request,
+        crate::garyx_db::QuotaRecoveryClaimWitness {
+            job_id: job.job_id.clone(),
+            claim_token: claim_token.to_owned(),
+        },
+    )
+    .await;
+
+    let (status, payload) = match result {
+        Ok(_) => panic!("quota recovery must refuse a busy thread"),
+        Err(error) => error,
+    };
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(payload.0["error"], "quota_recovery_active_run");
+    assert_eq!(queued_inputs.load(Ordering::SeqCst), 0);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .dispatch_admission(&admission_key)
+            .unwrap()
+            .is_none(),
+        "refused recovery must not commit a durable admission row"
+    );
+    assert_eq!(
+        state
+            .ops
+            .garyx_db
+            .quota_recovery_job(&job.job_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        crate::garyx_db::QuotaRecoveryState::Superseded
+    );
+
+    release.notify_one();
 }
 
 #[tokio::test]

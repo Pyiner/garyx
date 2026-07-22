@@ -28,7 +28,9 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    func selectClaudeCodeAccount(accountId: String?) async -> Bool {
+    func selectClaudeCodeAccount(
+        accountId: String?
+    ) async -> GaryxClaudeCodeAccountSelection? {
         await mutateClaudeCodeAccount { gateway in
             try await gateway.selectClaudeCodeAccount(accountId: accountId)
         }
@@ -43,20 +45,20 @@ extension GaryxMobileModel {
         }
         return await mutateClaudeCodeAccount(refreshesUsage: false) { gateway in
             try await gateway.renameClaudeCodeAccount(accountId: accountId, name: trimmedName)
-        }
+        } != nil
     }
 
     @discardableResult
     func deleteClaudeCodeAccount(accountId: String) async -> Bool {
         await mutateClaudeCodeAccount { gateway in
             try await gateway.deleteClaudeCodeAccount(accountId: accountId)
-        }
+        } != nil
     }
 
-    private func mutateClaudeCodeAccount(
+    private func mutateClaudeCodeAccount<Result>(
         refreshesUsage: Bool = true,
-        operation: (GaryxGatewayClient) async throws -> Void
-    ) async -> Bool {
+        operation: (GaryxGatewayClient) async throws -> Result
+    ) async -> Result? {
         let runtimeGeneration = gatewayRequestToken
         let mutationGeneration = UUID()
         claudeCodeAccountMutationGeneration = mutationGeneration
@@ -64,9 +66,9 @@ extension GaryxMobileModel {
         claudeCodeAccountsError = nil
         do {
             let gateway = try client()
-            try await operation(gateway)
+            let result = try await operation(gateway)
             guard runtimeGeneration == gatewayRequestToken,
-                  claudeCodeAccountMutationGeneration == mutationGeneration else { return false }
+                  claudeCodeAccountMutationGeneration == mutationGeneration else { return nil }
             async let accountsRefresh: Void = loadClaudeCodeAccounts(runtimeGeneration: runtimeGeneration)
             if refreshesUsage {
                 async let usageRefresh: Void = refreshCodingUsageWidget(runtimeGeneration: runtimeGeneration)
@@ -75,19 +77,25 @@ extension GaryxMobileModel {
                 _ = await accountsRefresh
             }
             guard runtimeGeneration == gatewayRequestToken,
-                  claudeCodeAccountMutationGeneration == mutationGeneration else { return false }
+                  claudeCodeAccountMutationGeneration == mutationGeneration else { return nil }
             isMutatingClaudeCodeAccount = false
-            return true
+            return result
         } catch {
             guard !GaryxGatewayRetryClassifier.isCancellation(error),
                   runtimeGeneration == gatewayRequestToken,
-                  claudeCodeAccountMutationGeneration == mutationGeneration else { return false }
+                  claudeCodeAccountMutationGeneration == mutationGeneration else { return nil }
             let message = displayMessage(for: error)
             claudeCodeAccountsError = message
             lastError = message
             isMutatingClaudeCodeAccount = false
-            return false
+            return nil
         }
+    }
+
+    func retryThreadQuotaRecovery(
+        threadId: String
+    ) async throws -> GaryxQuotaRecoveryRetryResult {
+        try await client().retryThreadQuotaRecovery(threadId: threadId)
     }
 
     /// Begins a Claude Code sign-in with the chosen advanced options. Never

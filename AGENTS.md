@@ -200,6 +200,10 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 - Claude Code account selection is provider-owned runtime state. Do not persist
   `CLAUDE_CONFIG_DIR` in thread or agent metadata; snapshot the provider's
   selected environment only when a new top-level run starts.
+- Quota recovery is SQL-owned per blocked run generation. Timer, account
+  switch, and manual Continue must wake the same durable row and admission
+  intent; never queue its synthetic `continue` into an active run, and never
+  let a surviving legacy `quota-resend:` cron dispatch independently.
 - Anthropic OAuth usage can return a valid Fable `weekly_scoped` allowance with
   `is_active: false`; that flag means the bucket is not currently consuming,
   not that its quota is unavailable. Preserve scoped limits that have a usable

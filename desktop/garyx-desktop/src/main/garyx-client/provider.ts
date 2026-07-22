@@ -3,6 +3,7 @@ import type {
   DesktopClaudeAuthSession,
   DesktopClaudeAuthStatus,
   DesktopClaudeCodeAccount,
+  DesktopClaudeCodeAccountSelection,
   DesktopClaudeCodeAccounts,
   DesktopCodingUsage,
   DesktopModelUsage,
@@ -10,6 +11,7 @@ import type {
   DesktopProviderModels,
   DesktopProviderRecentSession,
   DesktopProviderUsage,
+  DesktopQuotaRecoveryRetryResult,
   DesktopScopedUsageLimit,
   DesktopSettings,
   DesktopUsageWindow,
@@ -18,6 +20,7 @@ import type {
 } from "@shared/contracts";
 import {
   GatewayContractError,
+  GatewayRequestError,
   hasContractField,
   requestJson,
   requireContractArray,
@@ -539,8 +542,8 @@ export async function listClaudeCodeAccounts(
 export async function selectClaudeCodeAccount(
   settings: DesktopSettings,
   accountId: string | null,
-): Promise<void> {
-  await requestJson<unknown>(
+): Promise<DesktopClaudeCodeAccountSelection> {
+  const payload = await requestJson<unknown>(
     settings,
     "/api/providers/claude_code/accounts/active",
     "mutationSingleAttempt",
@@ -550,6 +553,61 @@ export async function selectClaudeCodeAccount(
       body: JSON.stringify({ account_id: accountId }),
     },
   );
+  const path = "Claude Code account selection";
+  const record = requireContractRecord(payload, path);
+  const recovery = hasContractField(record, "recovery")
+    ? requireContractRecord(record.recovery, `${path}.recovery`)
+    : {};
+  return {
+    activeAccountId: optionalContractString(record, "active_account_id", path),
+    selectionChanged: hasContractField(record, "selection_changed")
+      ? requireContractBoolean(record.selection_changed, `${path}.selection_changed`)
+      : true,
+    recovery: {
+      matchedThreads: hasContractField(recovery, "matched_threads")
+        ? requireContractInteger(recovery.matched_threads, `${path}.recovery.matched_threads`)
+        : 0,
+      expeditedThreads: hasContractField(recovery, "expedited_threads")
+        ? requireContractInteger(recovery.expedited_threads, `${path}.recovery.expedited_threads`)
+        : 0,
+      alreadyClaimedThreads: hasContractField(recovery, "already_claimed_threads")
+        ? requireContractInteger(
+          recovery.already_claimed_threads,
+          `${path}.recovery.already_claimed_threads`,
+        )
+        : 0,
+    },
+    recoveryWarning: optionalContractString(record, "recovery_warning", path),
+  };
+}
+
+export async function retryThreadQuotaRecovery(
+  settings: DesktopSettings,
+  threadId: string,
+): Promise<DesktopQuotaRecoveryRetryResult> {
+  try {
+    await requestJson<unknown>(
+      settings,
+      `/api/threads/${encodeURIComponent(threadId)}/quota-recovery/retry`,
+      "mutationSingleAttempt",
+      { method: "POST", signal: AbortSignal.timeout(15000) },
+    );
+    return { status: "accepted" };
+  } catch (error) {
+    if (error instanceof GatewayRequestError && error.status === 404) {
+      let code: string | null = null;
+      try {
+        const body = JSON.parse(error.body) as { error?: unknown };
+        code = typeof body.error === "string" ? body.error : null;
+      } catch {
+        // An older gateway may return plain text or HTML for the unknown route.
+      }
+      return {
+        status: code === "quota_recovery_not_found" ? "settled" : "unsupported",
+      };
+    }
+    throw error;
+  }
 }
 
 export async function renameClaudeCodeAccount(

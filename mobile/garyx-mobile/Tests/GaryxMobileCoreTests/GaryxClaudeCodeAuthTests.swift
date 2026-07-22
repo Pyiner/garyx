@@ -2,6 +2,37 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxClaudeCodeAuthTests: XCTestCase {
+    func testAccountSelectionDecodesRecoverySummaryAndLegacyDefaults() throws {
+        let selection = try JSONDecoder().decode(
+            GaryxClaudeCodeAccountSelection.self,
+            from: Data(
+                """
+                {
+                  "active_account_id": "managed-test",
+                  "selection_changed": true,
+                  "recovery": {
+                    "matched_threads": 4,
+                    "expedited_threads": 3,
+                    "already_claimed_threads": 1
+                  }
+                }
+                """.utf8
+            )
+        )
+        XCTAssertEqual(selection.activeAccountId, "managed-test")
+        XCTAssertTrue(selection.selectionChanged)
+        XCTAssertEqual(selection.recovery.matchedThreads, 4)
+        XCTAssertEqual(selection.recovery.expeditedThreads, 3)
+        XCTAssertEqual(selection.recovery.alreadyClaimedThreads, 1)
+
+        let legacy = try JSONDecoder().decode(
+            GaryxClaudeCodeAccountSelection.self,
+            from: Data(#"{"active_account_id":null}"#.utf8)
+        )
+        XCTAssertTrue(legacy.selectionChanged)
+        XCTAssertEqual(legacy.recovery, GaryxQuotaRecoverySummary())
+    }
+
     func testAuthSessionDecodesGatewaySnakeCaseAndAuthStatus() throws {
         let session = try JSONDecoder().decode(
             GaryxClaudeCodeAuthSession.self,

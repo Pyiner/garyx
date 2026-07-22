@@ -33,6 +33,7 @@ import type {
   MessageFileAttachment,
   MessageImageAttachment,
   DesktopProviderModels,
+  DesktopQuotaRecoveryRetryResult,
   DesktopThreadSummary,
   DesktopWorkspace,
   DesktopWorkspaceMode,
@@ -512,7 +513,7 @@ type ThreadPageProps = {
   showHistoryLoadingPlaceholder: boolean;
   showTailThinking: boolean;
   rateLimit?: RenderRateLimit | null;
-  onRateLimitContinue?: () => void | Promise<unknown>;
+  onRateLimitContinue?: () => Promise<DesktopQuotaRecoveryRetryResult>;
   taskTreeDocked: boolean;
   threadLayoutStyle?: CSSProperties;
   threadAvatarCatalog: ThreadAvatarCatalog;

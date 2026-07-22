@@ -6,7 +6,12 @@ import {
   type ReactNode,
 } from "react";
 
-import type { RenderRateLimit } from "@shared/contracts";
+import type {
+  DesktopClaudeCodeAccount,
+  DesktopClaudeCodeAccounts,
+  DesktopQuotaRecoveryRetryResult,
+  RenderRateLimit,
+} from "@shared/contracts";
 
 import { useI18n } from "../../i18n";
 import {
@@ -17,6 +22,8 @@ import {
   normalizeRateLimitProvider,
 } from "../rate-limit-banner-model";
 import { providerLabel as sharedProviderLabel } from "./agents-hub-helpers";
+import { ClaudeAccountSwitcherDialog } from "./ClaudeAccountSwitcherDialog";
+import { ProviderAgentIcon } from "./ProviderAgentIcon";
 
 /**
  * Quota / rate-limit card rendered at the tail of a thread when its most
@@ -25,10 +32,10 @@ import { providerLabel as sharedProviderLabel } from "./agents-hub-helpers";
  * no streaming updates are required.
  *
  * State derivation lives in `rate-limit-banner-model.ts`; this component maps
- * it onto JSX. When no automatic resend is scheduled, a Continue button
- * dispatches a literal "continue" prompt through the regular send pipeline via
- * `onContinue`; the card disappears once the new run starts and the server
- * clears the rate-limit state.
+ * it onto JSX. When no automatic resend is scheduled, a Continue button asks
+ * the quota-recovery worker to make the same durable SQL generation due now;
+ * the card disappears once the recovered run starts and the server clears the
+ * rate-limit state.
  */
 export function RateLimitBanner({
   rateLimit,
@@ -36,16 +43,24 @@ export function RateLimitBanner({
 }: {
   rateLimit?: RenderRateLimit | null;
   /**
-   * Dispatches the "continue" prompt. The button shows a sending state until
-   * the returned promise settles, so a no-op (busy thread) or failed dispatch
-   * re-arms the button instead of leaving it stuck.
+   * Makes the current durable recovery generation due now. The button shows a
+   * sending state until the request settles, so an already-claimed generation
+   * or failed wake re-arms the button instead of leaving it stuck.
    */
-  onContinue?: () => void | Promise<unknown>;
+  onContinue?: () => Promise<DesktopQuotaRecoveryRetryResult>;
 }) {
   const { t, locale } = useI18n();
   const [now, setNow] = useState(() => Date.now());
   const [sending, setSending] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [accountHovered, setAccountHovered] = useState(false);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [accounts, setAccounts] = useState<DesktopClaudeCodeAccounts | null>(null);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountMutationId, setAccountMutationId] = useState<string | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   const resetMs = rateLimit?.resetAt ? Date.parse(rateLimit.resetAt) : Number.NaN;
   const hasReset = Number.isFinite(resetMs);
@@ -61,14 +76,24 @@ export function RateLimitBanner({
   // A fresh rate-limit context re-arms the Continue action.
   useEffect(() => {
     setSending(false);
+    setRecoveryError(null);
   }, [rateLimit?.resetAt, rateLimit?.provider, rateLimit?.message]);
+
+  const rawProvider = rateLimit?.provider?.trim() ?? "";
+  const normalizedProvider = normalizeRateLimitProvider(rawProvider);
+  const isClaude = normalizedProvider === "claude_code";
+
+  useEffect(() => {
+    if (isClaude) void refreshAccounts();
+    // A new terminal quota context is the only time this card needs a fresh
+    // selected-account snapshot; the selector refreshes again when opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClaude, rateLimit?.resetAt, rateLimit?.message]);
 
   if (!rateLimit) {
     return null;
   }
 
-  const rawProvider = rateLimit.provider?.trim() ?? "";
-  const normalizedProvider = normalizeRateLimitProvider(rawProvider);
   const provider = normalizedProvider
     ? sharedProviderLabel(normalizedProvider)
     : rawProvider || "Provider";
@@ -144,51 +169,169 @@ export function RateLimitBanner({
   }
 
   const showContinue = state.showContinue && Boolean(onContinue);
-  const handleContinue = () => {
+
+  async function refreshAccounts() {
+    setAccountsLoading(true);
+    setAccountsError(null);
+    try {
+      setAccounts(await window.garyxDesktop.listClaudeCodeAccounts());
+    } catch (error) {
+      setAccountsError(
+        error instanceof Error ? error.message : t("Failed to load accounts."),
+      );
+    } finally {
+      setAccountsLoading(false);
+    }
+  }
+
+  async function handleSelectAccount(account: DesktopClaudeCodeAccount) {
+    const mutationId = account.id || "system";
+    setAccountMutationId(mutationId);
+    setAccountsError(null);
+    try {
+      const result = await window.garyxDesktop.selectClaudeCodeAccount({
+        accountId: account.id,
+      });
+      await refreshAccounts();
+      setAccountSwitcherOpen(false);
+      if (!result.selectionChanged) {
+        setRecoveryNotice(null);
+      } else if (result.recoveryWarning) {
+        setRecoveryNotice(t("Account switched. Retry the paused threads manually."));
+      } else if (result.recovery.matchedThreads > 0) {
+        setRecoveryNotice(
+          t("Resuming {count} paused threads…", {
+            count: result.recovery.matchedThreads,
+          }),
+        );
+      } else {
+        setRecoveryNotice(t("Account switched."));
+      }
+    } catch (error) {
+      setAccountsError(
+        error instanceof Error ? error.message : t("Failed to switch account."),
+      );
+    } finally {
+      setAccountMutationId(null);
+    }
+  }
+  const handleContinue = async () => {
     if (sending || !onContinue) {
       return;
     }
     setSending(true);
-    // Re-arm when the dispatch settles: a no-op (busy) or failed send leaves
-    // the card mounted, so the button must come back; on success the run
-    // start clears the rate-limit state and unmounts the card anyway.
-    void Promise.resolve()
-      .then(() => onContinue())
-      .catch(() => {})
-      .then(() => setSending(false));
+    setRecoveryError(null);
+    try {
+      const result = await onContinue();
+      if (result.status === "settled") {
+        setRecoveryError(
+          t("This recovery already finished. Send a new message to continue."),
+        );
+      } else if (result.status === "unsupported") {
+        setRecoveryError(
+          t("Update the Garyx gateway to resume from this quota card."),
+        );
+      }
+    } catch {
+      setRecoveryError(t("Couldn't resume this thread. Try again."));
+    } finally {
+      // A failed or terminal wake leaves the card mounted. A successful run
+      // clears the rate-limit projection and unmounts it.
+      setSending(false);
+    }
   };
 
   return (
-    <article
-      aria-live="polite"
-      className="rate-limit-banner"
-      role="status"
-      style={bannerStyle}
-    >
-      <span aria-hidden="true" style={chipStyle}>
-        {rateLimit.willAutoResend ? autoResendIcon : hourglassIcon}
-      </span>
-      <span style={textColumnStyle}>
-        <span style={titleStyle}>{title}</span>
-        <span style={detailStyle}>{detail}</span>
-      </span>
-      {showContinue ? (
-        <button
-          disabled={sending}
-          onClick={handleContinue}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
-          style={{
-            ...continueButtonStyle,
-            ...(hovered && !sending ? continueButtonHoverStyle : null),
-            ...(sending ? continueButtonSendingStyle : null),
-          }}
-          type="button"
-        >
-          {sending ? t("Sending…") : t("Continue")}
-        </button>
+    <>
+      <article
+        aria-live="polite"
+        className="rate-limit-banner"
+        role="status"
+        style={bannerStyle}
+      >
+        <div style={headerStyle}>
+          <span aria-hidden="true" style={chipStyle}>
+            {normalizedProvider ? (
+              <ProviderAgentIcon agentId={normalizedProvider} size={24} />
+            ) : rateLimit.willAutoResend ? (
+              autoResendIcon
+            ) : (
+              hourglassIcon
+            )}
+          </span>
+          <span style={textColumnStyle}>
+            <span style={titleStyle}>{title}</span>
+            <span style={detailStyle}>{detail}</span>
+            {recoveryError ? (
+              <span style={errorStyle}>{recoveryError}</span>
+            ) : null}
+          </span>
+          {showContinue ? (
+            <button
+              disabled={sending}
+              onClick={handleContinue}
+              onMouseEnter={() => setHovered(true)}
+              onMouseLeave={() => setHovered(false)}
+              style={{
+                ...continueButtonStyle,
+                ...(hovered && !sending ? continueButtonHoverStyle : null),
+                ...(sending ? continueButtonSendingStyle : null),
+              }}
+              type="button"
+            >
+              {sending ? t("Sending…") : t("Continue")}
+            </button>
+          ) : null}
+        </div>
+        {isClaude ? (
+          <div style={accountSectionStyle}>
+            <button
+              aria-label={t("Switch Claude Code account")}
+              onClick={() => {
+                setRecoveryNotice(null);
+                setAccountSwitcherOpen(true);
+                void refreshAccounts();
+              }}
+              onMouseEnter={() => setAccountHovered(true)}
+              onMouseLeave={() => setAccountHovered(false)}
+              style={{
+                ...accountRowStyle,
+                ...(accountHovered ? accountRowHoverStyle : null),
+              }}
+              type="button"
+            >
+              <span style={accountCopyStyle}>
+                <span style={accountEyebrowStyle}>{t("Claude Code account")}</span>
+                <strong style={accountNameStyle}>
+                  {accounts?.accounts.find((account) => account.selected)?.name
+                    || (accountsLoading ? t("Loading account…") : t("Choose account"))}
+                </strong>
+              </span>
+              <span style={switchLabelStyle}>
+                {t("Switch account")}
+                {chevronIcon}
+              </span>
+            </button>
+            <p style={accountHintStyle}>
+              {recoveryNotice
+                || t("Switching accounts resumes every Claude thread paused by quota.")}
+            </p>
+          </div>
+        ) : null}
+      </article>
+      {isClaude ? (
+        <ClaudeAccountSwitcherDialog
+          accounts={accounts}
+          description={t("Choose an account to resume every quota-paused Claude thread.")}
+          error={accountsError}
+          loading={accountsLoading}
+          mutationId={accountMutationId}
+          onOpenChange={setAccountSwitcherOpen}
+          onSelect={handleSelectAccount}
+          open={accountSwitcherOpen}
+        />
       ) : null}
-    </article>
+    </>
   );
 }
 
@@ -254,23 +397,45 @@ const autoResendIcon = (
   </svg>
 );
 
+const chevronIcon = (
+  <svg
+    aria-hidden="true"
+    fill="none"
+    height="14"
+    stroke="currentColor"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    width="14"
+  >
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+);
+
 const bannerStyle: CSSProperties = {
   display: "flex",
-  alignItems: "center",
-  gap: 12,
-  margin: "8px 0",
-  padding: "11px 12px 11px 13px",
-  borderRadius: 12,
+  flexDirection: "column",
+  margin: "12px 0",
+  padding: "18px",
+  width: "min(100%, 620px)",
+  borderRadius: 14,
   border: "1px solid #e7e5e0",
   background: "#ffffff",
-  boxShadow: "0 1px 2px rgba(26, 28, 31, 0.04)",
+  boxShadow: "0 2px 8px rgba(26, 28, 31, 0.05)",
+};
+
+const headerStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
 };
 
 const chipStyle: CSSProperties = {
   flex: "0 0 auto",
-  width: 30,
-  height: 30,
-  borderRadius: 8,
+  width: 38,
+  height: 38,
+  borderRadius: 10,
   background: "#f4f4f2",
   color: "#57534e",
   display: "flex",
@@ -287,7 +452,7 @@ const textColumnStyle: CSSProperties = {
 };
 
 const titleStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 600,
   lineHeight: 1.35,
   color: "#1a1c1f",
@@ -295,10 +460,17 @@ const titleStyle: CSSProperties = {
 };
 
 const detailStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: 13,
   lineHeight: 1.45,
   color: "#78746b",
   fontVariantNumeric: "tabular-nums",
+};
+
+const errorStyle: CSSProperties = {
+  marginTop: 3,
+  color: "#6e7378",
+  fontSize: 12,
+  lineHeight: 1.4,
 };
 
 const strongStyle: CSSProperties = {
@@ -316,7 +488,7 @@ const linkStyle: CSSProperties = {
 const continueButtonStyle: CSSProperties = {
   flex: "0 0 auto",
   marginLeft: 4,
-  height: 28,
+  height: 32,
   padding: "0 14px",
   borderRadius: 9,
   background: "#ffffff",
@@ -327,6 +499,70 @@ const continueButtonStyle: CSSProperties = {
   fontFamily: "inherit",
   boxShadow: "0 1px 2px rgba(26, 28, 31, 0.05)",
   cursor: "pointer",
+};
+
+const accountSectionStyle: CSSProperties = {
+  marginTop: 16,
+  paddingTop: 14,
+  borderTop: "1px solid #eceae6",
+};
+
+const accountRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 16,
+  width: "calc(100% + 20px)",
+  minHeight: 52,
+  padding: "8px 10px",
+  margin: "0 -10px",
+  border: 0,
+  borderRadius: 10,
+  background: "transparent",
+  color: "#1a1c1f",
+  fontFamily: "inherit",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const accountRowHoverStyle: CSSProperties = { background: "#f7f7f5" };
+
+const accountCopyStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  minWidth: 0,
+};
+
+const accountEyebrowStyle: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.3,
+  color: "#8b877f",
+};
+
+const accountNameStyle: CSSProperties = {
+  overflow: "hidden",
+  fontSize: 13,
+  fontWeight: 600,
+  lineHeight: 1.35,
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const switchLabelStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  flex: "0 0 auto",
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const accountHintStyle: CSSProperties = {
+  margin: "5px 0 0",
+  color: "#8b877f",
+  fontSize: 11,
+  lineHeight: 1.45,
 };
 
 const continueButtonHoverStyle: CSSProperties = {

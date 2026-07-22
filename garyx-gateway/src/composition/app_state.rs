@@ -72,6 +72,9 @@ pub struct OpsState {
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
     pub garyx_db: Arc<GaryxDbService>,
+    /// Wakes the SQL-backed quota recovery worker when a new rate-limit row
+    /// lands or an account switch/manual retry moves work forward.
+    pub(crate) quota_recovery_notify: Arc<Notify>,
     pub(crate) conversation_admission: ConversationAdmissionService,
     pub(crate) prompt_attachments: PromptAttachmentLifecycle,
     pub meetings: Arc<MeetingService>,
@@ -528,6 +531,7 @@ impl AppState {
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
+                quota_recovery_notify: self.ops.quota_recovery_notify.clone(),
                 conversation_admission: self.ops.conversation_admission.clone(),
                 prompt_attachments: self.ops.prompt_attachments.clone(),
                 meetings: self.ops.meetings.clone(),

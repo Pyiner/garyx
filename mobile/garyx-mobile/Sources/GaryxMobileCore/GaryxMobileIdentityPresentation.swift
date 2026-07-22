@@ -89,7 +89,10 @@ public struct GaryxProviderPresentation: Equatable {
 
     private static func kind(for value: String) -> GaryxProviderIdentityKind {
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if source.contains("antigravity") || source == "agy" || source.contains("antigravity_cli") {
+        if source.contains("antigravity")
+            || source == "agy"
+            || source.hasPrefix("agy_")
+            || source.hasPrefix("agy-") {
             return .antigravity
         }
         if source.contains("codex") {
@@ -168,16 +171,16 @@ public struct GaryxProviderPresentation: Equatable {
 
     private static func displayName(for providerType: String, kind: GaryxProviderIdentityKind) -> String {
         let normalized = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch normalized {
-        case "antigravity", "agy", "antigravity_cli":
+        switch kind {
+        case .antigravity:
             return "Antigravity"
-        case "codex_app_server":
+        case .codex:
             return "Codex"
-        case "traex":
+        case .traex:
             return "Traex"
-        case "claude_code":
+        case .claude:
             return "Claude Code"
-        default:
+        case .generic:
             let words = normalized
                 .replacingOccurrences(of: "_", with: " ")
                 .replacingOccurrences(of: "-", with: " ")
@@ -188,18 +191,7 @@ public struct GaryxProviderPresentation: Equatable {
             if !words.isEmpty {
                 return words.joined(separator: " ")
             }
-            switch kind {
-            case .antigravity:
-                return "Antigravity"
-            case .codex:
-                return "Codex"
-            case .traex:
-                return "Traex"
-            case .claude:
-                return "Claude"
-            case .generic:
-                return "Provider"
-            }
+            return "Provider"
         }
     }
 }

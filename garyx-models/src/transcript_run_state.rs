@@ -32,6 +32,10 @@ pub struct TranscriptRewriteRange {
 /// indicating the gateway has scheduled an automatic resend at reset time.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TranscriptRateLimit {
+    /// Provider run that produced this terminal quota state. This is the
+    /// generation key used to join the immutable transcript with the mutable
+    /// SQL recovery row.
+    pub blocked_run_id: Option<String>,
     /// Provider identity, e.g. `codex`.
     pub provider: Option<String>,
     /// ISO 8601 timestamp when the exhausted window resets, when known.
@@ -91,7 +95,7 @@ pub fn apply_transcript_record(state: &mut TranscriptRunState, record: &Value) {
     let kind = resolve_message_kind_for_object(&role, message, tool_related);
 
     match kind {
-        "control" => apply_control_record(state, seq, message.get("control")),
+        "control" => apply_control_record(state, seq, message.get("control"), record.get("run_id")),
         "tool_trace" if state.busy && state.activity != TranscriptRunActivity::Reconciling => {
             apply_tool_trace_record(state, &role, message);
         }
@@ -104,7 +108,12 @@ pub fn apply_transcript_record(state: &mut TranscriptRunState, record: &Value) {
     }
 }
 
-fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, control: Option<&Value>) {
+fn apply_control_record(
+    state: &mut TranscriptRunState,
+    seq: Option<u64>,
+    control: Option<&Value>,
+    record_run_id: Option<&Value>,
+) {
     let Some(control) = control.and_then(Value::as_object) else {
         return;
     };
@@ -142,7 +151,10 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
             state.activity = TranscriptRunActivity::Idle;
             state.terminal_status =
                 control_string(control.get("status")).or_else(|| Some("completed".to_owned()));
-            state.rate_limit = parse_rate_limit(control.get("rate_limit"));
+            state.rate_limit = parse_rate_limit(
+                control.get("rate_limit"),
+                control.get("run_id").or(record_run_id),
+            );
         }
         "run_interrupted" | "interrupt_confirmed" => {
             state.busy = false;
@@ -171,9 +183,13 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
     }
 }
 
-fn parse_rate_limit(value: Option<&Value>) -> Option<TranscriptRateLimit> {
+fn parse_rate_limit(
+    value: Option<&Value>,
+    blocked_run_id: Option<&Value>,
+) -> Option<TranscriptRateLimit> {
     let object = value.and_then(Value::as_object)?;
     Some(TranscriptRateLimit {
+        blocked_run_id: control_string(blocked_run_id),
         provider: control_string(object.get("provider")),
         reset_at: control_string(object.get("reset_at"))
             .or_else(|| control_string(object.get("resetAt"))),

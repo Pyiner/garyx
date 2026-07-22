@@ -2582,7 +2582,6 @@ export function AppShell() {
     handleComposerSubmit,
     handleInterrupt,
     handleRetryFailedMessage,
-    handleSendPromptText,
     handleSteerQueuedPrompt,
     ignoreComposerSubmitUntilRef,
     isComposingRef,
@@ -4624,7 +4623,14 @@ export function AppShell() {
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
         showTailThinking={showTailThinking}
         rateLimit={activeRateLimit}
-        onRateLimitContinue={() => handleSendPromptText("continue")}
+        onRateLimitContinue={() => {
+          if (!selectedThreadId) {
+            return Promise.resolve({ status: "settled" as const });
+          }
+          return window.garyxDesktop.retryThreadQuotaRecovery({
+            threadId: selectedThreadId,
+          });
+        }}
         taskTreeDocked={embedded ? false : taskTreeDocked}
         threadLayoutStyle={undefined}
         threadAvatarCatalog={threadAvatarCatalog}

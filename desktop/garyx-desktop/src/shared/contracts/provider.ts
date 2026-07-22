@@ -99,6 +99,23 @@ export interface DesktopClaudeCodeAccounts {
   refreshedAt: string;
 }
 
+export interface DesktopQuotaRecoverySummary {
+  matchedThreads: number;
+  expeditedThreads: number;
+  alreadyClaimedThreads: number;
+}
+
+export interface DesktopClaudeCodeAccountSelection {
+  activeAccountId: string | null;
+  selectionChanged: boolean;
+  recovery: DesktopQuotaRecoverySummary;
+  recoveryWarning?: string | null;
+}
+
+export interface DesktopQuotaRecoveryRetryResult {
+  status: "accepted" | "settled" | "unsupported";
+}
+
 export type DesktopClaudeAuthStatus =
   | "starting"
   | "waiting_for_code"

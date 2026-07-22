@@ -1,246 +1,744 @@
-//! Provider quota auto-resend reactor.
+//! Durable provider-quota recovery.
 //!
-//! When a run terminates because the provider's rolling usage quota was
-//! exhausted, the bridge commits a `run_complete` control record with
-//! `status == "rate_limited"` and a `rate_limit` block carrying the
-//! authoritative reset time (sourced from Codex's own
-//! `account/rateLimits/updated` snapshot). This reactor watches the committed
-//! event stream and, the moment such a record appears, schedules a one-shot
-//! `continue` followup for when the window recovers — the exact prompt the
-//! rate-limit banner's manual Continue button sends, so the auto and manual
-//! recovery paths stay behaviorally identical.
-//!
-//! Scheduling reuses the file-backed `InternalDispatch` cron primitive so a
-//! pending resend survives a gateway restart and is retried on transient
-//! dispatch failures. The job is keyed per-thread, so a fresh rate-limit
-//! (including one produced by a resend that hit the limit again) replaces any
-//! prior pending resend — the thread keeps retrying until it gets through.
+//! A committed `run_complete(status = rate_limited)` is historical transcript
+//! truth. This module projects that terminal generation into SQLite and drives
+//! one synthetic `continue` through the ordinary durable chat-admission path.
+//! Account switch, manual retry, and the quota deadline only make the same SQL
+//! row due; an atomic claim and deterministic dispatch intent keep those
+//! triggers from producing duplicate turns.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, Utc};
-use garyx_models::config::{
-    CronAction, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
+use axum::http::StatusCode;
+use axum::{
+    Json,
+    extract::{Path as AxumPath, State},
+    response::IntoResponse,
 };
-use serde_json::Value;
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use futures_util::stream::{self, StreamExt};
+use garyx_models::config::CronJobKind;
+use garyx_router::ThreadTranscriptRecord;
+use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
+use uuid::Uuid;
 
+use crate::application::chat::contracts::{ChatRequest, IdempotencyScope};
+use crate::garyx_db::{NewQuotaRecoveryJob, QuotaRecoveryClaimWitness, QuotaRecoveryJob};
 use crate::server::AppState;
 
-/// Fire the resend one minute after the reported reset so the provider window
-/// has actually rolled over by the time we resubmit.
 const RESEND_BUFFER_SECS: i64 = 60;
-
-/// The literal prompt dispatched when the quota window recovers. Matches the
-/// rate-limit banner's manual Continue button, which sends the same literal
-/// `continue` through the regular send pipeline; the followup metadata block
-/// prepended by the cron dispatch path carries the "why" (the auto-resend
-/// reason), so the prompt itself stays minimal.
+const CLAIM_LEASE_SECS: i64 = 120;
+const MAX_RETRY_BACKOFF_SECS: i64 = 300;
 const RESEND_PROMPT: &str = "continue";
-
-/// How many recent events to replay after a broadcast lag, to recover any
-/// `rate_limited` record that was dropped from the subscriber buffer. Matches
-/// the hub's retained-history depth.
 const EVENT_HISTORY_REPLAY: usize = 256;
+const QUOTA_ADMISSION_SCOPE: &str = "__quota_recovery__";
+const QUOTA_ADMISSION_EPOCH: i64 = 1;
+const LEGACY_JOB_PREFIX: &str = "quota-resend:";
+const NO_AUTOMATIC_DUE_AT: &str = "9999-12-31T23:59:59.999Z";
 
-/// Spawn the background reactor. No-op when no cron service is configured
-/// (nothing can be scheduled) or when called outside a Tokio runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoveryPlan {
+    thread_id: String,
+    run_id: String,
+    blocked_seq: u64,
+    provider: String,
+    window: Option<String>,
+    /// `None` means the provider supplied no trustworthy reset deadline. The
+    /// generation remains parked for account-switch or manual recovery, but
+    /// must never wake from the timer by itself.
+    reset_at: Option<DateTime<Utc>>,
+}
+
+/// Start the event projection and SQL recovery worker. Both are process-local
+/// drivers over durable state; spawning them more than once for one AppState is
+/// unsupported, matching the rest of gateway lifecycle startup.
 pub(crate) fn spawn_reactor(state: Arc<AppState>) {
-    if state.ops.cron_service.is_none() {
-        return;
-    }
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return;
     };
 
-    let mut rx = state.ops.events.subscribe();
+    let event_state = state.clone();
     handle.spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(raw_event) => {
-                    if let Some(plan) = parse_resend_plan(&raw_event) {
-                        // Schedule inline rather than in a detached task so
-                        // events for the same thread are handled in arrival
-                        // order — a newer rate-limit must replace an older
-                        // pending resend, and concurrent tasks could finish out
-                        // of order and let the stale one win. Scheduling is a
-                        // fast history read + cron upsert.
-                        schedule_resend(&state, plan).await;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // A burst overran the subscriber buffer and a `rate_limited`
-                    // record may have been dropped. Replay recent history so the
-                    // resend is still scheduled; per-thread job ids make
-                    // re-processing idempotent.
-                    for raw_event in state
-                        .ops
-                        .events
-                        .history_snapshot(EVENT_HISTORY_REPLAY)
-                        .await
-                    {
-                        if let Some(plan) = parse_resend_plan(&raw_event) {
-                            schedule_resend(&state, plan).await;
-                        }
-                    }
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
+        run_event_projection(event_state).await;
+    });
+    handle.spawn(async move {
+        run_recovery_worker(state).await;
     });
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResendPlan {
-    thread_id: String,
-    run_id: String,
-    provider: String,
-    window: Option<String>,
-    reset_at: DateTime<Utc>,
+async fn run_event_projection(state: Arc<AppState>) {
+    let mut rx = state.ops.events.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(raw_event) => {
+                if let Some(plan) = parse_recovery_plan(&raw_event) {
+                    register_plan(&state, plan).await;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                for raw_event in state
+                    .ops
+                    .events
+                    .history_snapshot(EVENT_HISTORY_REPLAY)
+                    .await
+                {
+                    if let Some(plan) = parse_recovery_plan(&raw_event) {
+                        register_plan(&state, plan).await;
+                    }
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
 }
 
-/// Parse a committed-event payload into a resend plan, or `None` when the event
-/// is not a rate-limited `run_complete` that opted into auto-resend.
-fn parse_resend_plan(raw_event: &str) -> Option<ResendPlan> {
-    // Cheap prefilter: the vast majority of committed events are not terminal
-    // rate-limit records, so avoid a full JSON parse unless the marker is
-    // present.
+fn parse_recovery_plan(raw_event: &str) -> Option<RecoveryPlan> {
     if !raw_event.contains("rate_limited") {
         return None;
     }
-
     let event: Value = serde_json::from_str(raw_event).ok()?;
     if event.get("type").and_then(Value::as_str) != Some("committed_message") {
         return None;
     }
     let thread_id = non_empty(event.get("thread_id").and_then(Value::as_str))?;
-    let control = event.get("message").and_then(|m| m.get("control"))?;
-    if control.get("kind").and_then(Value::as_str) != Some("run_complete") {
-        return None;
-    }
-    if control.get("status").and_then(Value::as_str) != Some("rate_limited") {
-        return None;
-    }
+    let blocked_seq = event.get("seq").and_then(Value::as_u64)?;
+    let control = event
+        .get("message")
+        .and_then(|message| message.get("control"))?;
+    recovery_plan_from_control(
+        thread_id,
+        blocked_seq,
+        event.get("run_id").and_then(Value::as_str),
+        control,
+    )
+}
 
-    let rate_limit = control.get("rate_limit")?;
-    if !rate_limit
-        .get("will_auto_resend")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+fn recovery_plan_from_control(
+    thread_id: String,
+    blocked_seq: u64,
+    record_run_id: Option<&str>,
+    control: &Value,
+) -> Option<RecoveryPlan> {
+    if control.get("kind").and_then(Value::as_str) != Some("run_complete")
+        || control.get("status").and_then(Value::as_str) != Some("rate_limited")
     {
         return None;
     }
-    let reset_at = rate_limit.get("reset_at").and_then(Value::as_str)?;
-    let reset_at = DateTime::parse_from_rfc3339(reset_at)
-        .ok()?
-        .with_timezone(&Utc);
+    let rate_limit = control.get("rate_limit")?;
+    let will_auto_resend = rate_limit
+        .get("will_auto_resend")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // A missing or malformed provider deadline is not permission to forget
+    // the blocked generation. Keep it parked so account switch and manual
+    // Continue can still recover it; only a trustworthy timestamp arms the
+    // timer worker.
+    let parsed_reset_at = rate_limit
+        .get("reset_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let reset_at = if will_auto_resend {
+        parsed_reset_at
+    } else {
+        None
+    };
     let run_id = non_empty(
         control
             .get("run_id")
             .and_then(Value::as_str)
-            .or_else(|| event.get("run_id").and_then(Value::as_str)),
+            .or(record_run_id),
     )?;
-    let provider = rate_limit
-        .get("provider")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("codex")
-        .to_owned();
+    let provider = canonical_quota_provider(
+        rate_limit
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("codex"),
+    );
     let window = rate_limit
         .get("window")
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-
-    Some(ResendPlan {
+    Some(RecoveryPlan {
         thread_id,
         run_id,
+        blocked_seq,
         provider,
         window,
         reset_at,
     })
 }
 
-async fn schedule_resend(state: &Arc<AppState>, plan: ResendPlan) {
-    let Some(cron) = state.ops.cron_service.as_ref().cloned() else {
-        return;
-    };
+/// Legacy quota cron files can survive a successful SQL import when their
+/// best-effort deletion fails. The SQL recovery worker exclusively owns these
+/// generations after startup migration, so the generic cron executor must
+/// never dispatch them independently.
+pub(crate) fn is_legacy_quota_recovery_job(job_id: &str) -> bool {
+    job_id.starts_with(LEGACY_JOB_PREFIX)
+}
 
-    let now = Utc::now();
-    let earliest = now + Duration::seconds(RESEND_BUFFER_SECS);
-    let fire_at = (plan.reset_at + Duration::seconds(RESEND_BUFFER_SECS)).max(earliest);
-    let delay_seconds = (fire_at - now).num_seconds().max(0) as u64;
+pub(crate) fn canonical_quota_provider(provider: &str) -> String {
+    let normalized = provider.trim().to_ascii_lowercase().replace('-', "_");
+    if normalized.contains("claude") {
+        "claude_code".to_owned()
+    } else if normalized.contains("codex") || normalized == "openai" {
+        "codex_app_server".to_owned()
+    } else if normalized.contains("antigravity") || normalized.contains("gemini") {
+        "antigravity".to_owned()
+    } else {
+        normalized
+    }
+}
 
-    let reason = match &plan.window {
-        Some(window) => format!(
-            "{} usage-limit auto-resend after {} quota window reset",
-            plan.provider, window
-        ),
-        None => format!(
-            "{} usage-limit auto-resend after quota reset",
-            plan.provider
-        ),
-    };
+fn due_at_for_reset(reset_at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    (reset_at + Duration::seconds(RESEND_BUFFER_SECS))
+        .max(now + Duration::seconds(RESEND_BUFFER_SECS))
+}
 
-    let cfg = CronJobConfig {
-        id: resend_job_id(&plan.thread_id),
-        kind: CronJobKind::InternalDispatch {
-            payload: InternalDispatchJobPayload {
-                prompt: RESEND_PROMPT.to_owned(),
-                reason: Some(reason),
-                originating_run_id: Some(plan.run_id.clone()),
-                scheduled_at: now,
-                delay_seconds_requested: delay_seconds,
-            },
-        },
-        label: Some(format!("quota auto-resend ({})", plan.thread_id)),
-        schedule: CronSchedule::Once {
-            at: fire_at.to_rfc3339(),
-        },
-        ui_schedule: None,
-        action: CronAction::Log,
-        target: None,
-        message: None,
-        workspace_dir: None,
-        agent_id: None,
-        thread_id: Some(plan.thread_id.clone()),
-        delete_after_run: true,
-        enabled: true,
-        system: true,
-    };
-
-    match cron.upsert(cfg).await {
-        Ok(_) => info!(
-            thread_id = %plan.thread_id,
-            run_id = %plan.run_id,
-            provider = %plan.provider,
-            window = ?plan.window,
-            fire_at = %fire_at.to_rfc3339(),
-            "scheduled quota auto-resend"
-        ),
+async fn register_plan(state: &Arc<AppState>, plan: RecoveryPlan) {
+    let due_at = plan
+        .reset_at
+        .map(|reset_at| {
+            due_at_for_reset(reset_at, Utc::now()).to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
+        .unwrap_or_else(|| NO_AUTOMATIC_DUE_AT.to_owned());
+    let db = state.ops.garyx_db.clone();
+    let log_thread_id = plan.thread_id.clone();
+    let log_run_id = plan.run_id.clone();
+    let log_provider = plan.provider.clone();
+    let input_thread_id = plan.thread_id;
+    let input_provider = plan.provider;
+    let input_run_id = plan.run_id;
+    let input_blocked_seq = plan.blocked_seq;
+    let input_window = plan.window;
+    let input_reset_at = plan
+        .reset_at
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true));
+    let result = db
+        .run_blocking(move |db| {
+            db.register_quota_recovery_job(NewQuotaRecoveryJob {
+                thread_id: &input_thread_id,
+                provider: &input_provider,
+                blocked_run_id: &input_run_id,
+                blocked_seq: input_blocked_seq,
+                quota_window: input_window.as_deref(),
+                reset_at: input_reset_at.as_deref(),
+                due_at: &due_at,
+            })
+        })
+        .await;
+    match result {
+        Ok(job) => {
+            state.ops.quota_recovery_notify.notify_one();
+            info!(
+                thread_id = %log_thread_id,
+                run_id = %log_run_id,
+                provider = %log_provider,
+                due_at = %job.due_at,
+                "registered quota recovery"
+            );
+        }
         Err(error) => warn!(
-            thread_id = %plan.thread_id,
+            thread_id = %log_thread_id,
+            run_id = %log_run_id,
             error = %error,
-            "failed to schedule quota auto-resend"
+            "failed to register quota recovery"
         ),
     }
 }
 
-/// Deterministic, filesystem-safe, per-thread job id so a newer rate-limit
-/// replaces any prior pending resend for the same thread.
-fn resend_job_id(thread_id: &str) -> String {
-    let sanitized: String = thread_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
+async fn run_recovery_worker(state: Arc<AppState>) {
+    loop {
+        let mut dispatched_any = false;
+        loop {
+            let now = Utc::now();
+            let now_string = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+            let claim_token = Uuid::new_v4().to_string();
+            let claim_expires_at = (now + Duration::seconds(CLAIM_LEASE_SECS))
+                .to_rfc3339_opts(SecondsFormat::Millis, true);
+            let db = state.ops.garyx_db.clone();
+            let claim_token_for_db = claim_token.clone();
+            let job = match db
+                .run_blocking(move |db| {
+                    db.claim_next_due_quota_recovery(
+                        &now_string,
+                        &claim_token_for_db,
+                        &claim_expires_at,
+                    )
+                })
+                .await
+            {
+                Ok(job) => job,
+                Err(error) => {
+                    warn!(error = %error, "failed to claim quota recovery");
+                    break;
+                }
+            };
+            let Some(job) = job else {
+                break;
+            };
+            dispatched_any = true;
+            process_claimed_job(&state, job, claim_token).await;
+        }
+
+        if dispatched_any {
+            continue;
+        }
+
+        let db = state.ops.garyx_db.clone();
+        let next_due = match db.run_blocking(|db| db.next_quota_recovery_due_at()).await {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(error = %error, "failed to read next quota recovery deadline");
+                None
+            }
+        };
+        let notified = state.ops.quota_recovery_notify.notified();
+        match next_due.and_then(|value| DateTime::parse_from_rfc3339(&value).ok()) {
+            Some(next_due) => {
+                let delay = (next_due.with_timezone(&Utc) - Utc::now())
+                    .to_std()
+                    .unwrap_or_default();
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = notified => {}
+                }
+            }
+            None => notified.await,
+        }
+    }
+}
+
+async fn process_claimed_job(state: &Arc<AppState>, job: QuotaRecoveryJob, claim_token: String) {
+    match latest_rate_limited_generation(state, &job.thread_id).await {
+        Ok(Some(run_id)) if run_id == job.blocked_run_id => {}
+        Ok(_) => {
+            settle_claim_as_superseded(state, &job, &claim_token).await;
+            return;
+        }
+        Err(error) if error.starts_with("thread not found") => {
+            settle_claim_as_cancelled(state, &job, &claim_token).await;
+            return;
+        }
+        Err(error) => {
+            retry_claim(state, &job, &claim_token, error).await;
+            return;
+        }
+    }
+
+    let mut metadata = HashMap::new();
+    metadata.insert("internal_dispatch".to_owned(), Value::Bool(true));
+    metadata.insert("quota_recovery".to_owned(), Value::Bool(true));
+    let request = ChatRequest {
+        message: RESEND_PROMPT.to_owned(),
+        attachments: Vec::new(),
+        images: Vec::new(),
+        files: Vec::new(),
+        thread_id: Some(job.thread_id.clone()),
+        client_intent_id: Some(job.dispatch_intent_id.clone()),
+        idempotency_scope: Some(IdempotencyScope {
+            identity: QUOTA_ADMISSION_SCOPE.to_owned(),
+            epoch: QUOTA_ADMISSION_EPOCH,
+        }),
+        bot: None,
+        from_id: "garyx-quota-recovery".to_owned(),
+        account_id: "main".to_owned(),
+        wait_for_response: false,
+        workspace_path: None,
+        provider_type: None,
+        metadata,
+    };
+
+    let claim = QuotaRecoveryClaimWitness {
+        job_id: job.job_id.clone(),
+        claim_token: claim_token.clone(),
+    };
+    match crate::chat::start_chat_run_with_quota_recovery(state, request, claim).await {
+        Ok(_) => {
+            let db = state.ops.garyx_db.clone();
+            let job_id = job.job_id.clone();
+            let token = claim_token.clone();
+            match db
+                .run_blocking(move |db| db.deliver_claimed_quota_recovery(&job_id, &token))
+                .await
+            {
+                Ok(true) => info!(
+                    thread_id = %job.thread_id,
+                    blocked_run_id = %job.blocked_run_id,
+                    wake_reason = %job.wake_reason.as_str(),
+                    "quota recovery dispatched"
+                ),
+                Ok(false) => info!(
+                    thread_id = %job.thread_id,
+                    blocked_run_id = %job.blocked_run_id,
+                    "quota recovery was already settled while dispatching"
+                ),
+                Err(error) => warn!(
+                    thread_id = %job.thread_id,
+                    error = %error,
+                    "quota recovery dispatch succeeded but settlement failed"
+                ),
+            }
+        }
+        Err((status, payload)) => {
+            let body = payload.0;
+            let code = body
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("quota_recovery_dispatch_failed");
+            let message = body
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or(code)
+                .to_owned();
+            if status == StatusCode::NOT_FOUND {
+                settle_claim_as_cancelled(state, &job, &claim_token).await;
+            } else if status == StatusCode::CONFLICT
+                && matches!(
+                    code,
+                    "dispatch_ambiguous" | "idempotency_conflict" | "quota_recovery_active_run"
+                )
+            {
+                // Reissuing an ambiguous durable admission could duplicate a
+                // user turn. Settle the recovery generation; the durable
+                // admission remains the diagnostic truth for that ambiguity.
+                settle_claim_as_superseded(state, &job, &claim_token).await;
             } else {
-                '_'
+                retry_claim(state, &job, &claim_token, message).await;
+            }
+        }
+    }
+}
+
+async fn latest_rate_limited_generation(
+    state: &Arc<AppState>,
+    thread_id: &str,
+) -> Result<Option<String>, String> {
+    if state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
+        return Err(format!("thread not found: {thread_id}"));
+    }
+    let records = state
+        .threads
+        .history
+        .transcript_store()
+        .records(thread_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(latest_rate_limited_plan(&records).map(|plan| plan.run_id))
+}
+
+fn latest_rate_limited_plan(records: &[ThreadTranscriptRecord]) -> Option<RecoveryPlan> {
+    for record in records.iter().rev() {
+        let Some(control) = record.message.get("control") else {
+            continue;
+        };
+        match control.get("kind").and_then(Value::as_str) {
+            Some("run_complete") => {
+                return recovery_plan_from_control(
+                    record.thread_id.clone(),
+                    record.seq,
+                    record.run_id.as_deref(),
+                    control,
+                );
+            }
+            Some("run_start" | "run_error") => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+async fn retry_claim(
+    state: &Arc<AppState>,
+    job: &QuotaRecoveryJob,
+    claim_token: &str,
+    error: String,
+) {
+    let exponent = u32::try_from(job.attempt_count.saturating_sub(1).min(6)).unwrap_or(6);
+    let backoff_secs =
+        (5_i64.saturating_mul(2_i64.saturating_pow(exponent))).min(MAX_RETRY_BACKOFF_SECS);
+    let due_at =
+        (Utc::now() + Duration::seconds(backoff_secs)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let db = state.ops.garyx_db.clone();
+    let job_id = job.job_id.clone();
+    let claim_token = claim_token.to_owned();
+    let error_for_db = error.clone();
+    match db
+        .run_blocking(move |db| {
+            db.retry_claimed_quota_recovery(&job_id, &claim_token, &due_at, &error_for_db)
+        })
+        .await
+    {
+        Ok(true) => {
+            state.ops.quota_recovery_notify.notify_one();
+            warn!(
+                thread_id = %job.thread_id,
+                blocked_run_id = %job.blocked_run_id,
+                backoff_secs,
+                error = %error,
+                "quota recovery dispatch failed; retry scheduled"
+            );
+        }
+        Ok(false) => {}
+        Err(settle_error) => warn!(
+            thread_id = %job.thread_id,
+            error = %settle_error,
+            "failed to release quota recovery claim"
+        ),
+    }
+}
+
+async fn settle_claim_as_superseded(
+    state: &Arc<AppState>,
+    job: &QuotaRecoveryJob,
+    claim_token: &str,
+) {
+    let db = state.ops.garyx_db.clone();
+    let job_id = job.job_id.clone();
+    let claim_token = claim_token.to_owned();
+    if let Err(error) = db
+        .run_blocking(move |db| db.supersede_claimed_quota_recovery(&job_id, &claim_token))
+        .await
+    {
+        warn!(thread_id = %job.thread_id, error = %error, "failed to supersede stale quota recovery");
+    }
+}
+
+async fn settle_claim_as_cancelled(
+    state: &Arc<AppState>,
+    job: &QuotaRecoveryJob,
+    claim_token: &str,
+) {
+    let db = state.ops.garyx_db.clone();
+    let job_id = job.job_id.clone();
+    let claim_token = claim_token.to_owned();
+    if let Err(error) = db
+        .run_blocking(move |db| db.cancel_claimed_quota_recovery(&job_id, &claim_token))
+        .await
+    {
+        warn!(thread_id = %job.thread_id, error = %error, "failed to cancel quota recovery");
+    }
+}
+
+/// Import quota jobs created by the pre-SQL implementation. This runs after
+/// cron files are loaded and before the cron scheduler starts, so a legacy job
+/// cannot fire while it is being fenced by its SQL generation.
+pub async fn migrate_legacy_cron_jobs(state: &Arc<AppState>) {
+    let Some(cron) = state.ops.cron_service.as_ref() else {
+        return;
+    };
+    let jobs = cron.list_all().await;
+    for job in jobs {
+        if !job.system || !job.id.starts_with(LEGACY_JOB_PREFIX) {
+            continue;
+        }
+        let Some(thread_id) = job.thread_id.as_deref() else {
+            continue;
+        };
+        let CronJobKind::InternalDispatch { payload } = &job.kind else {
+            continue;
+        };
+        let Some(originating_run_id) = payload.originating_run_id.as_deref() else {
+            continue;
+        };
+        let records = match state
+            .threads
+            .history
+            .transcript_store()
+            .records(thread_id)
+            .await
+        {
+            Ok(records) => records,
+            Err(error) => {
+                warn!(job_id = %job.id, error = %error, "failed to inspect legacy quota job");
+                continue;
+            }
+        };
+        let plan = latest_rate_limited_plan(&records);
+        let stale = plan
+            .as_ref()
+            .is_none_or(|plan| plan.run_id != originating_run_id);
+        if stale {
+            if let Err(error) = cron.delete(&job.id).await {
+                warn!(job_id = %job.id, error = %error, "failed to delete stale legacy quota job");
+            }
+            continue;
+        }
+        let plan = plan.expect("non-stale legacy quota job has a plan");
+        let db = state.ops.garyx_db.clone();
+        let due_at = job.next_run.to_rfc3339_opts(SecondsFormat::Millis, true);
+        let reset_at = plan
+            .reset_at
+            .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true));
+        let result = db
+            .run_blocking(move |db| {
+                db.register_quota_recovery_job(NewQuotaRecoveryJob {
+                    thread_id: &plan.thread_id,
+                    provider: &plan.provider,
+                    blocked_run_id: &plan.run_id,
+                    blocked_seq: plan.blocked_seq,
+                    quota_window: plan.window.as_deref(),
+                    reset_at: reset_at.as_deref(),
+                    due_at: &due_at,
+                })
+            })
+            .await;
+        match result {
+            Ok(_) => {
+                if let Err(error) = cron.delete(&job.id).await {
+                    warn!(job_id = %job.id, error = %error, "legacy quota job imported but file deletion failed");
+                }
+            }
+            Err(error) => {
+                warn!(job_id = %job.id, error = %error, "failed to import legacy quota job")
+            }
+        }
+    }
+}
+
+/// Repair the narrow crash window between a committed terminal transcript
+/// record and its broadcast projection reaching SQLite. Settled generations
+/// replay idempotently, so this scan only creates work when the SQL row was
+/// genuinely missing.
+pub async fn reconcile_transcript_recovery_jobs(state: &Arc<AppState>) {
+    let db = state.ops.garyx_db.clone();
+    let thread_ids = match db
+        .run_blocking(|db| db.list_thread_record_keys(Some("thread::")))
+        .await
+    {
+        Ok(thread_ids) => thread_ids,
+        Err(error) => {
+            warn!(error = %error, "failed to enumerate threads for quota recovery repair");
+            return;
+        }
+    };
+    stream::iter(thread_ids)
+        .for_each_concurrent(8, |thread_id| {
+            let state = Arc::clone(state);
+            async move {
+                let records = match state
+                    .threads
+                    .history
+                    .transcript_store()
+                    .records(&thread_id)
+                    .await
+                {
+                    Ok(records) => records,
+                    Err(error) => {
+                        warn!(thread_id, error = %error, "failed to inspect transcript for quota recovery repair");
+                        return;
+                    }
+                };
+                if let Some(plan) = latest_rate_limited_plan(&records) {
+                    register_plan(&state, plan).await;
+                }
             }
         })
-        .collect();
-    format!("quota-resend:{sanitized}")
+        .await;
+}
+
+pub(crate) async fn expedite_provider_after_account_switch(
+    state: &Arc<AppState>,
+    provider: &str,
+) -> Result<crate::garyx_db::QuotaRecoveryExpediteSummary, String> {
+    // The transcript terminal is committed before its SQL projection is
+    // broadcast. Close that narrow race so an account switch made from the
+    // freshly rendered card cannot miss the generation it is meant to wake.
+    reconcile_transcript_recovery_jobs(state).await;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let provider = provider.to_owned();
+    let db = state.ops.garyx_db.clone();
+    let summary = db
+        .run_blocking(move |db| db.expedite_quota_recovery_provider(&provider, &now))
+        .await
+        .map_err(|error| error.to_string())?;
+    if summary.expedited_threads > 0 {
+        state.ops.quota_recovery_notify.notify_one();
+    }
+    Ok(summary)
+}
+
+pub(crate) async fn expedite_thread_manual(
+    state: &Arc<AppState>,
+    thread_id: &str,
+) -> Result<bool, String> {
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let thread_id_for_db = thread_id.to_owned();
+    let db = state.ops.garyx_db.clone();
+    let mut changed = db
+        .run_blocking(move |db| db.expedite_quota_recovery_thread(&thread_id_for_db, &now))
+        .await
+        .map_err(|error| error.to_string())?;
+    if !changed {
+        let records = state
+            .threads
+            .history
+            .transcript_store()
+            .records(thread_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(plan) = latest_rate_limited_plan(&records) {
+            register_plan(state, plan).await;
+            let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+            let thread_id_for_db = thread_id.to_owned();
+            let db = state.ops.garyx_db.clone();
+            changed = db
+                .run_blocking(move |db| db.expedite_quota_recovery_thread(&thread_id_for_db, &now))
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if changed {
+        state.ops.quota_recovery_notify.notify_one();
+    }
+    Ok(changed)
+}
+
+pub async fn retry_thread_quota_recovery(
+    State(state): State<Arc<AppState>>,
+    AxumPath(thread_id): AxumPath<String>,
+) -> impl IntoResponse {
+    if !garyx_models::thread_logs::is_canonical_thread_id(thread_id.trim()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "thread_id must be canonical" })),
+        )
+            .into_response();
+    }
+    match expedite_thread_manual(&state, &thread_id).await {
+        Ok(true) => (
+            StatusCode::ACCEPTED,
+            Json(json!({ "status": "accepted", "thread_id": thread_id })),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "quota_recovery_not_found",
+                "thread_id": thread_id,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "quota_recovery_wake_failed", "message": error })),
+        )
+            .into_response(),
+    }
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
@@ -253,128 +751,25 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use garyx_bridge::{BridgeError, MultiProviderBridge, ProviderRuntime};
-    use garyx_models::provider::{
-        AgentDispatchOutcome, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
-        StreamBoundaryKind, StreamEvent,
-    };
-    use serde_json::json;
-    use std::collections::HashMap;
-    use tokio::sync::{Mutex, Notify, mpsc};
 
-    struct QuotaBusyProvider {
-        queued_tx: mpsc::UnboundedSender<QueuedUserInput>,
-        queued_rx: Mutex<Option<mpsc::UnboundedReceiver<QueuedUserInput>>>,
-        active_started: Notify,
-        queued_received: Notify,
-        allow_ack: Notify,
-        release_run: Notify,
-    }
-
-    impl QuotaBusyProvider {
-        fn new() -> Self {
-            let (queued_tx, queued_rx) = mpsc::unbounded_channel();
-            Self {
-                queued_tx,
-                queued_rx: Mutex::new(Some(queued_rx)),
-                active_started: Notify::new(),
-                queued_received: Notify::new(),
-                allow_ack: Notify::new(),
-                release_run: Notify::new(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl ProviderRuntime for QuotaBusyProvider {
-        fn provider_type(&self) -> ProviderType {
-            ProviderType::ClaudeCode
-        }
-
-        fn is_ready(&self) -> bool {
-            true
-        }
-
-        async fn initialize(&mut self) -> Result<(), BridgeError> {
-            Ok(())
-        }
-
-        async fn shutdown(&mut self) -> Result<(), BridgeError> {
-            Ok(())
-        }
-
-        async fn run_streaming(
-            &self,
-            options: &ProviderRunOptions,
-            on_chunk: garyx_bridge::provider_trait::StreamCallback,
-        ) -> Result<ProviderRunResult, BridgeError> {
-            on_chunk(StreamEvent::Delta {
-                text: "active reply".to_owned(),
-            });
-            self.active_started.notify_one();
-
-            let queued = {
-                let mut receiver = self.queued_rx.lock().await;
-                receiver
-                    .as_mut()
-                    .expect("quota busy provider receiver is single-use")
-                    .recv()
-                    .await
-                    .expect("quota followup should reach active provider")
-            };
-            self.queued_received.notify_one();
-            self.allow_ack.notified().await;
-            on_chunk(StreamEvent::Boundary {
-                kind: StreamBoundaryKind::UserAck,
-                pending_input_id: queued.pending_input_id,
-            });
-            self.release_run.notified().await;
-            on_chunk(StreamEvent::Done);
-
-            Ok(ProviderRunResult {
-                run_id: "quota-busy-provider".to_owned(),
-                thread_id: options.thread_id.clone(),
-                response: "active reply".to_owned(),
-                session_messages: Vec::new(),
-                sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
-                actual_model: None,
-                thread_title: None,
-                success: true,
-                error: None,
-                input_tokens: 0,
-                output_tokens: 0,
-                cost: 0.0,
-                duration_ms: 1,
-            })
-        }
-
-        async fn add_streaming_input(&self, _thread_id: &str, input: QueuedUserInput) -> bool {
-            self.queued_tx.send(input).is_ok()
-        }
-
-        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
-            Ok(format!("sdk-{session_key}"))
-        }
-    }
-
-    fn committed_run_complete(rate_limit: Value) -> String {
+    fn raw_rate_limit_event(run_id: &str, reset_at: &str) -> String {
         json!({
             "type": "committed_message",
-            "thread_id": "thread::abc",
-            "run_id": "run::xyz",
+            "thread_id": "thread::quota",
+            "run_id": run_id,
             "seq": 7,
             "message": {
                 "role": "system",
-                "kind": "control",
-                "internal": true,
-                "internal_kind": "control",
                 "control": {
                     "kind": "run_complete",
-                    "thread_id": "thread::abc",
-                    "run_id": "run::xyz",
+                    "run_id": run_id,
                     "status": "rate_limited",
-                    "rate_limit": rate_limit,
+                    "rate_limit": {
+                        "provider": "claude",
+                        "window": "primary",
+                        "reset_at": reset_at,
+                        "will_auto_resend": true
+                    }
                 }
             }
         })
@@ -382,316 +777,194 @@ mod tests {
     }
 
     #[test]
-    fn parses_rate_limited_run_complete_into_plan() {
-        let raw = committed_run_complete(json!({
-            "provider": "codex_app_server",
-            "window": "primary",
-            "reset_at": "2030-01-01T06:00:00+00:00",
-            "will_auto_resend": true
-        }));
-        let plan = parse_resend_plan(&raw).expect("plan parsed");
-        assert_eq!(plan.thread_id, "thread::abc");
-        assert_eq!(plan.run_id, "run::xyz");
-        assert_eq!(plan.provider, "codex_app_server");
+    fn parses_committed_rate_limit_generation() {
+        let plan =
+            parse_recovery_plan(&raw_rate_limit_event("run::one", "2026-07-23T00:00:00Z")).unwrap();
+        assert_eq!(plan.thread_id, "thread::quota");
+        assert_eq!(plan.run_id, "run::one");
+        assert_eq!(plan.blocked_seq, 7);
+        assert_eq!(plan.provider, "claude_code");
         assert_eq!(plan.window.as_deref(), Some("primary"));
-        assert_eq!(plan.reset_at.to_rfc3339(), "2030-01-01T06:00:00+00:00");
     }
 
     #[test]
-    fn ignores_when_auto_resend_disabled_or_no_reset() {
-        let no_resend = committed_run_complete(json!({
-            "provider": "codex",
-            "reset_at": "2030-01-01T06:00:00+00:00",
-            "will_auto_resend": false
-        }));
-        assert!(parse_resend_plan(&no_resend).is_none());
-
-        let no_reset = committed_run_complete(json!({
-            "provider": "codex",
-            "will_auto_resend": true
-        }));
-        assert!(parse_resend_plan(&no_reset).is_none());
+    fn parks_rate_limit_with_an_invalid_reset_time() {
+        let raw = raw_rate_limit_event("run::one", "bad-time");
+        let plan = parse_recovery_plan(&raw).expect("the generation should remain switchable");
+        assert_eq!(plan.run_id, "run::one");
+        assert!(plan.reset_at.is_none());
     }
 
     #[test]
-    fn ignores_non_rate_limited_and_non_committed_events() {
-        let normal = json!({
-            "type": "committed_message",
-            "thread_id": "thread::abc",
-            "message": { "control": { "kind": "run_complete", "status": "completed" } }
-        })
-        .to_string();
-        assert!(parse_resend_plan(&normal).is_none());
-        assert!(parse_resend_plan("not json").is_none());
+    fn parks_auto_resend_rate_limit_without_a_reset_time() {
+        let mut raw: Value = serde_json::from_str(&raw_rate_limit_event(
+            "run::missing-reset",
+            "2099-01-01T00:00:00Z",
+        ))
+        .unwrap();
+        raw["message"]["control"]["rate_limit"]
+            .as_object_mut()
+            .unwrap()
+            .remove("reset_at");
+
+        let plan = parse_recovery_plan(&raw.to_string())
+            .expect("an untrusted reset must park instead of dropping the generation");
+        assert_eq!(plan.run_id, "run::missing-reset");
+        assert!(plan.reset_at.is_none());
     }
 
     #[test]
-    fn resend_job_id_is_filesystem_safe_and_thread_scoped() {
-        assert_eq!(
-            resend_job_id("thread::abc/def"),
-            "quota-resend:thread__abc_def"
-        );
+    fn parks_rate_limit_without_an_automatic_reset() {
+        let mut raw: Value = serde_json::from_str(&raw_rate_limit_event(
+            "run::manual-only",
+            "2099-01-01T00:00:00Z",
+        ))
+        .unwrap();
+        let rate_limit = raw["message"]["control"]["rate_limit"]
+            .as_object_mut()
+            .unwrap();
+        rate_limit.remove("reset_at");
+        rate_limit.insert("will_auto_resend".to_owned(), Value::Bool(false));
+
+        let plan = parse_recovery_plan(&raw.to_string()).unwrap();
+        assert_eq!(plan.run_id, "run::manual-only");
+        assert!(plan.reset_at.is_none());
     }
 
-    /// The scheduled followup dispatches the literal `continue` prompt — the
-    /// same prompt the rate-limit banner's manual Continue button sends — and
-    /// never a copy of the thread's prior user message.
-    #[tokio::test]
-    async fn schedules_literal_continue_followup() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cron = Arc::new(crate::automation::CronService::new(
-            tmp.path().to_path_buf(),
-        ));
-        let state = crate::composition::app_bootstrap::AppStateBuilder::new(
-            garyx_models::config::GaryxConfig::default(),
-        )
-        .with_cron_service(cron.clone())
-        .build();
-
-        schedule_resend(
-            &state,
-            ResendPlan {
-                thread_id: "thread::abc".to_owned(),
-                run_id: "run::xyz".to_owned(),
-                provider: "claude".to_owned(),
-                window: Some("weekly".to_owned()),
-                reset_at: Utc::now() + Duration::seconds(300),
+    #[test]
+    fn latest_generation_is_invalidated_by_new_run_start() {
+        let rate_limit: Value =
+            serde_json::from_str(&raw_rate_limit_event("run::one", "2026-07-23T00:00:00Z"))
+                .unwrap();
+        let records = vec![
+            ThreadTranscriptRecord {
+                seq: 1,
+                thread_id: "thread::quota".to_owned(),
+                run_id: Some("run::one".to_owned()),
+                timestamp: "2026-07-22T00:00:00Z".to_owned(),
+                message: rate_limit["message"].clone(),
             },
-        )
-        .await;
-
-        let job = cron
-            .get("quota-resend:thread__abc")
-            .await
-            .expect("resend job scheduled");
-        let CronJobKind::InternalDispatch { payload } = &job.kind else {
-            panic!("expected internal-dispatch job, got {:?}", job.kind);
-        };
-        assert_eq!(payload.prompt, "continue");
-        assert_eq!(payload.originating_run_id.as_deref(), Some("run::xyz"));
-        assert!(
-            payload
-                .reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("claude usage-limit auto-resend"),
-            "reason should carry the auto-resend context: {:?}",
-            payload.reason
-        );
-        assert_eq!(job.thread_id.as_deref(), Some("thread::abc"));
-        assert!(job.delete_after_run);
+            ThreadTranscriptRecord {
+                seq: 2,
+                thread_id: "thread::quota".to_owned(),
+                run_id: Some("run::two".to_owned()),
+                timestamp: "2026-07-22T00:01:00Z".to_owned(),
+                message: json!({
+                    "role": "system",
+                    "control": { "kind": "run_start", "run_id": "run::two" }
+                }),
+            },
+        ];
+        assert!(latest_rate_limited_plan(&records).is_none());
     }
 
     #[tokio::test]
-    async fn quota_auto_resend_preserves_followup_metadata_through_busy_queue_ack() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cron = Arc::new(crate::automation::CronService::new(
-            tmp.path().to_path_buf(),
-        ));
-        let bridge = Arc::new(MultiProviderBridge::new());
-        let provider = Arc::new(QuotaBusyProvider::new());
-        bridge
-            .register_provider("quota-busy-provider", provider.clone())
-            .await;
-        bridge
-            .set_route("telegram", "bot1", "quota-busy-provider")
-            .await;
-        bridge.set_default_provider_key("quota-busy-provider").await;
-
-        let state = crate::composition::app_bootstrap::AppStateBuilder::new(
-            garyx_models::config::GaryxConfig::default(),
-        )
-        .with_bridge(bridge.clone())
-        .with_cron_service(cron.clone())
-        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
-        .build();
-        bridge
-            .set_thread_store(state.threads.thread_store.clone())
-            .await;
-        bridge.set_event_tx(state.ops.events.sender()).await;
-
-        let thread_id = "thread::quota-resend-busy";
+    async fn startup_repair_projects_a_committed_terminal_generation() {
+        let state = crate::server::AppStateBuilder::new(Default::default()).build();
+        state
+            .ops
+            .garyx_db
+            .run_thread_data_startup_migrations()
+            .unwrap();
+        state
+            .ops
+            .garyx_db
+            .write_thread_record_with_projections("thread::quota", "{}", None, None)
+            .unwrap();
+        let raw: Value =
+            serde_json::from_str(&raw_rate_limit_event("run::repair", "2099-01-01T00:00:00Z"))
+                .unwrap();
         state
             .threads
-            .thread_store
-            .set(
-                thread_id,
-                json!({
-                    "thread_id": thread_id,
-                    "channel": "telegram",
-                    "account_id": "bot1",
-                    "from_id": "test-user",
-                    "is_group": false,
-                    "messages": [],
-                    "channel_bindings": [{
-                        "channel": "telegram",
-                        "account_id": "bot1",
-                        "binding_key": "test-user",
-                        "chat_id": "test-user",
-                        "display_label": "Test User"
-                    }],
-                    "delivery_context": {
-                        "channel": "telegram",
-                        "account_id": "bot1",
-                        "chat_id": "test-user",
-                        "user_id": "test-user",
-                        "delivery_target_type": "chat_id",
-                        "delivery_target_id": "test-user",
-                        "thread_id": "test-user",
-                        "metadata": {}
-                    }
-                }),
+            .history
+            .transcript_store()
+            .append_committed_messages(
+                "thread::quota",
+                Some("run::repair"),
+                &[raw["message"].clone()],
             )
             .await
             .unwrap();
 
-        let active_outcome = crate::internal_inbound::dispatch_internal_message_to_thread(
-            &state,
-            thread_id,
-            "run::active",
-            "active turn",
-            crate::internal_inbound::InternalDispatchOptions::default(),
-        )
-        .await
-        .expect("active turn should start through the production front door");
-        assert_eq!(active_outcome, AgentDispatchOutcome::Started);
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            provider.active_started.notified(),
-        )
-        .await
-        .expect("active provider run should become busy");
+        reconcile_transcript_recovery_jobs(&state).await;
 
-        spawn_reactor(state.clone());
-        let rate_limited_run_id = "run::rate-limited";
-        let event = committed_run_complete(json!({
-            "provider": "claude",
-            "window": "weekly",
-            "reset_at": (Utc::now() + Duration::minutes(5)).to_rfc3339(),
-            "will_auto_resend": true
-        }))
-        .replace("run::xyz", rate_limited_run_id)
-        .replace("thread::abc", thread_id);
+        let job = state
+            .ops
+            .garyx_db
+            .active_quota_recovery_job("thread::quota")
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.blocked_run_id, "run::repair");
+        assert_eq!(job.provider, "claude_code");
+    }
+
+    #[tokio::test]
+    async fn manual_retry_projects_then_wakes_an_untrusted_reset_terminal() {
+        let state = crate::server::AppStateBuilder::new(Default::default()).build();
         state
             .ops
-            .events
-            .sender()
-            .send(event)
-            .expect("quota reactor should be subscribed");
+            .garyx_db
+            .run_thread_data_startup_migrations()
+            .unwrap();
+        state
+            .ops
+            .garyx_db
+            .write_thread_record_with_projections("thread::quota-manual", "{}", None, None)
+            .unwrap();
+        let raw: Value =
+            serde_json::from_str(&raw_rate_limit_event("run::manual", "bad-time")).unwrap();
+        state
+            .threads
+            .history
+            .transcript_store()
+            .append_committed_messages(
+                "thread::quota-manual",
+                Some("run::manual"),
+                &[raw["message"].clone()],
+            )
+            .await
+            .unwrap();
+        assert!(
+            state
+                .ops
+                .garyx_db
+                .active_quota_recovery_job("thread::quota-manual")
+                .unwrap()
+                .is_none()
+        );
 
-        let job_id = resend_job_id(thread_id);
-        let job = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            loop {
-                if let Some(job) = cron.get(&job_id).await {
-                    break job;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("real quota reactor should schedule its internal-dispatch job");
-        let CronJobKind::InternalDispatch { payload } = &job.kind else {
-            panic!(
-                "quota reactor scheduled unexpected job kind: {:?}",
-                job.kind
-            );
-        };
-        let expected = HashMap::from([
-            ("schedule_followup_job_id", Value::String(job_id.clone())),
-            (
-                "schedule_followup_scheduled_at",
-                Value::String(payload.scheduled_at.to_rfc3339()),
-            ),
-            (
-                "schedule_followup_scheduled_for",
-                Value::String(job.next_run.to_rfc3339()),
-            ),
-            (
-                "schedule_followup_reason",
-                Value::String(
-                    payload
-                        .reason
-                        .clone()
-                        .expect("quota resend reason is required"),
-                ),
-            ),
-            (
-                "schedule_followup_originating_run_id",
-                Value::String(rate_limited_run_id.to_owned()),
-            ),
-        ]);
+        assert!(
+            expedite_thread_manual(&state, "thread::quota-manual")
+                .await
+                .unwrap()
+        );
 
-        cron.run_now(
-            &job_id,
-            &crate::composition::automation_wiring::automation_exec_env(&state),
-        )
-        .await
-        .expect("quota resend should dispatch into the busy thread");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            provider.queued_received.notified(),
-        )
-        .await
-        .expect("active provider should receive the quota resend");
+        let job = state
+            .ops
+            .garyx_db
+            .active_quota_recovery_job("thread::quota-manual")
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.blocked_run_id, "run::manual");
+        assert!(job.reset_at.is_none());
+        assert_eq!(
+            job.wake_reason,
+            crate::garyx_db::QuotaRecoveryWakeReason::Manual
+        );
+    }
 
-        let pending = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            loop {
-                let thread = state
-                    .threads
-                    .thread_store
-                    .get(thread_id)
-                    .await
-                    .unwrap()
-                    .expect("thread should remain present");
-                if let Some(pending) = thread["pending_user_inputs"].as_array().and_then(|items| {
-                    items.iter().find(|item| {
-                        item.pointer("/metadata/schedule_followup_job_id")
-                            == Some(&Value::String(job_id.clone()))
-                    })
-                }) {
-                    break pending.clone();
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("quota resend should be persisted pending before ACK");
-        for (key, value) in &expected {
-            assert_eq!(
-                pending.pointer(&format!("/metadata/{key}")),
-                Some(value),
-                "pending quota resend lost {key}: {pending}"
-            );
-        }
-
-        provider.allow_ack.notify_one();
-        let committed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            loop {
-                let snapshot = state
-                    .threads
-                    .history
-                    .thread_snapshot(thread_id, 100)
-                    .await
-                    .expect("thread history should load");
-                if let Some(message) = snapshot.committed_messages.iter().find(|message| {
-                    message.pointer("/metadata/schedule_followup_job_id")
-                        == Some(&Value::String(job_id.clone()))
-                }) {
-                    break message.clone();
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("provider ACK should commit the quota resend user record");
-        for (key, value) in &expected {
-            assert_eq!(
-                committed.pointer(&format!("/metadata/{key}")),
-                Some(value),
-                "committed quota resend lost {key}: {committed}"
-            );
-        }
-
-        provider.release_run.notify_one();
+    #[test]
+    fn reset_deadline_keeps_one_minute_safety_buffer() {
+        let now = DateTime::parse_from_rfc3339("2026-07-22T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            due_at_for_reset(now + Duration::hours(1), now),
+            now + Duration::hours(1) + Duration::seconds(60)
+        );
+        assert_eq!(
+            due_at_for_reset(now - Duration::hours(1), now),
+            now + Duration::seconds(60)
+        );
     }
 }

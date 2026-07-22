@@ -258,11 +258,14 @@ export interface RenderFilteredPlaceholder {
 }
 
 export interface RenderRateLimit {
+  recoveryGeneration?: string;
   provider?: string | null;
   resetAt?: string | null;
   window?: string | null;
   message?: string | null;
   willAutoResend: boolean;
+  recoveryState?: "waiting" | "claimed";
+  recoveryAt?: string;
 }
 
 export interface RenderStateWindow {

@@ -351,6 +351,8 @@ struct GaryxClaudeCodeAccountsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var accountFlow: GaryxClaudeCodeAccountFlow?
+    var selectionOnly = false
+    var onSelection: ((GaryxClaudeCodeAccountSelection) -> Void)?
 
     var body: some View {
         NavigationStack {
@@ -381,23 +383,39 @@ struct GaryxClaudeCodeAccountsSheet: View {
                         }
                     } else {
                         ForEach(accountRows) { account in
-                            NavigationLink {
-                                GaryxClaudeCodeAccountDetailView(accountStableId: account.id)
-                            } label: {
-                                GaryxClaudeCodeAccountRow(account: account)
+                            if selectionOnly {
+                                Button {
+                                    selectImmediately(account)
+                                } label: {
+                                    GaryxClaudeCodeAccountRow(account: account)
+                                }
+                                .buttonStyle(.plain)
+                                // A selected account is a harmless no-op, not
+                                // an unavailable account. Keep its quota at
+                                // full contrast instead of inheriting SwiftUI's
+                                // disabled-row opacity.
+                                .disabled(model.isMutatingClaudeCodeAccount)
+                            } else {
+                                NavigationLink {
+                                    GaryxClaudeCodeAccountDetailView(accountStableId: account.id)
+                                } label: {
+                                    GaryxClaudeCodeAccountRow(account: account)
+                                }
+                                .disabled(model.isMutatingClaudeCodeAccount)
                             }
-                            .disabled(model.isMutatingClaudeCodeAccount)
                         }
                     }
                 } header: {
                     Text("Claude Code accounts")
                         .textCase(nil)
                 } footer: {
-                    Text("The selected account applies to new and restarted Claude runs. Active runs continue unchanged.")
+                    Text(selectionOnly
+                         ? "Choosing an account resumes every Claude thread paused by quota. Active runs continue unchanged."
+                         : "The selected account applies to new and restarted Claude runs. Active runs continue unchanged.")
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Claude Code")
+            .navigationTitle(selectionOnly ? "Switch account" : "Claude Code")
             .navigationBarTitleDisplayMode(.inline)
             .refreshable {
                 await model.loadClaudeCodeAccounts()
@@ -408,14 +426,16 @@ struct GaryxClaudeCodeAccountsSheet: View {
                         .foregroundStyle(.primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        accountFlow = GaryxClaudeCodeAccountFlow(kind: .add)
-                    } label: {
-                        Image(systemName: "plus")
-                            .foregroundStyle(.primary)
+                    if !selectionOnly {
+                        Button {
+                            accountFlow = GaryxClaudeCodeAccountFlow(kind: .add)
+                        } label: {
+                            Image(systemName: "plus")
+                                .foregroundStyle(.primary)
+                        }
+                        .disabled(model.isMutatingClaudeCodeAccount)
+                        .accessibilityLabel("Add Claude Code account")
                     }
-                    .disabled(model.isMutatingClaudeCodeAccount)
-                    .accessibilityLabel("Add Claude Code account")
                 }
             }
         }
@@ -451,6 +471,16 @@ struct GaryxClaudeCodeAccountsSheet: View {
         Task {
             await model.loadClaudeCodeAccounts()
             await model.refreshCodingUsageWidget()
+        }
+    }
+
+    private func selectImmediately(_ account: GaryxClaudeCodeAccountPresentation) {
+        guard !account.selected, !model.isMutatingClaudeCodeAccount else { return }
+        Task {
+            if let result = await model.selectClaudeCodeAccount(accountId: account.accountId) {
+                onSelection?(result)
+                dismiss()
+            }
         }
     }
 }
@@ -706,7 +736,7 @@ private struct GaryxClaudeCodeAccountDetailView: View {
     private func select(_ account: GaryxClaudeCodeAccountPresentation) {
         guard !account.selected, !model.isMutatingClaudeCodeAccount else { return }
         Task {
-            if await model.selectClaudeCodeAccount(accountId: account.accountId) {
+            if await model.selectClaudeCodeAccount(accountId: account.accountId) != nil {
                 dismiss()
             }
         }

@@ -25,10 +25,12 @@ import {
   listWorkspaceFiles,
   openChatStream,
   reorderRemoteThreadPins,
+  retryThreadQuotaRecovery,
   saveGatewaySettings,
   sendStreamingInput,
   setDefaultCustomAgent,
   setGatewayFetch,
+  selectClaudeCodeAccount,
   startClaudeCodeAuth,
   toggleCustomAgent,
 } from "./gary-client.ts";
@@ -591,6 +593,22 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
         assert.equal(init?.method, "DELETE");
         return jsonResponse({ deleted_account_id: "account-1" });
       }
+      if (path.endsWith("/accounts/active")) {
+        assert.equal(init?.method, "PUT");
+        return jsonResponse({
+          active_account_id: "account-1",
+          selection_changed: true,
+          recovery: {
+            matched_threads: 3,
+            expedited_threads: 2,
+            already_claimed_threads: 1,
+          },
+        });
+      }
+      if (path.endsWith("/threads/thread%3A%3Aquota/quota-recovery/retry")) {
+        assert.equal(init?.method, "POST");
+        return jsonResponse({ status: "accepted" }, 202);
+      }
       return jsonResponse({
         active_account_id: "account-1",
         refreshed_at: "2026-07-21T12:00:00Z",
@@ -648,6 +666,16 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
         accounts.accounts[0].usage.scopedLimits[0].window.resetAfterSeconds,
         558000,
       );
+      const selection = await selectClaudeCodeAccount(settings, "account-1");
+      assert.equal(selection.selectionChanged, true);
+      assert.deepEqual(selection.recovery, {
+        matchedThreads: 3,
+        expeditedThreads: 2,
+        alreadyClaimedThreads: 1,
+      });
+      assert.deepEqual(await retryThreadQuotaRecovery(settings, "thread::quota"), {
+        status: "accepted",
+      });
       const auth = await startClaudeCodeAuth(settings, { managedAccountName: "Work" });
       assert.equal(auth.loginId, "login-1");
       assert.equal(auth.authorizationUrl, "https://claude.ai/oauth/authorize?state=test");
@@ -655,6 +683,26 @@ test("Claude account list keeps per-account Fable quota and auth session fields"
       assert.equal(cancelled.status, "failed");
       assert.equal(cancelled.error, "Claude Code sign-in was cancelled.");
       await deleteClaudeCodeAccount(settings, "account-1");
+    },
+  );
+});
+
+test("quota recovery retry distinguishes a settled generation from an old gateway", async () => {
+  await withGatewayFetch(
+    async () => jsonResponse({ error: "quota_recovery_not_found" }, 404),
+    async () => {
+      assert.deepEqual(await retryThreadQuotaRecovery(settings, "thread::settled"), {
+        status: "settled",
+      });
+    },
+  );
+
+  await withGatewayFetch(
+    async () => jsonResponse({ error: "not_found" }, 404),
+    async () => {
+      assert.deepEqual(await retryThreadQuotaRecovery(settings, "thread::old-gateway"), {
+        status: "unsupported",
+      });
     },
   );
 });

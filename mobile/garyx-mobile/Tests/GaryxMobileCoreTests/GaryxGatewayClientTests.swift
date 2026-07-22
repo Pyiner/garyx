@@ -1489,7 +1489,12 @@ final class GaryxGatewayClientTests: XCTestCase {
                     JSONSerialization.jsonObject(with: body) as? [String: Any]
                 )
                 XCTAssertEqual(object["account_id"] as? String, "account/with slash")
-                return (response, Data(#"{"ok":true}"#.utf8))
+                return (
+                    response,
+                    Data(
+                        #"{"active_account_id":"account/with slash","selection_changed":true,"recovery":{"matched_threads":3,"expedited_threads":2,"already_claimed_threads":1}}"#.utf8
+                    )
+                )
             case 3:
                 XCTAssertEqual(request.httpMethod, "PATCH")
                 XCTAssertEqual(
@@ -1521,6 +1526,13 @@ final class GaryxGatewayClientTests: XCTestCase {
                         #"{"login_id":"login/with slash","status":"failed","error":"cancelled"}"#.utf8
                     )
                 )
+            case 6:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(
+                    path,
+                    "/garyx/api/threads/thread%3A%3Aquota/quota-recovery/retry"
+                )
+                return (response, Data(#"{"status":"accepted"}"#.utf8))
             default:
                 XCTFail("unexpected request \(requestIndex)")
                 throw URLError(.badServerResponse)
@@ -1536,16 +1548,67 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         _ = try await client.claudeCodeAccounts()
-        try await client.selectClaudeCodeAccount(accountId: " account/with slash ")
+        let selection = try await client.selectClaudeCodeAccount(
+            accountId: " account/with slash "
+        )
+        XCTAssertEqual(selection.recovery.matchedThreads, 3)
+        XCTAssertEqual(selection.recovery.expeditedThreads, 2)
+        XCTAssertEqual(selection.recovery.alreadyClaimedThreads, 1)
         try await client.renameClaudeCodeAccount(
             accountId: "account/with slash",
             name: " Work "
         )
         try await client.deleteClaudeCodeAccount(accountId: "account/with slash")
         let cancelled = try await client.cancelClaudeCodeAuth(loginId: "login/with slash")
+        let retryResult = try await client.retryThreadQuotaRecovery(threadId: "thread::quota")
+        XCTAssertEqual(retryResult, .accepted)
 
         XCTAssertEqual(cancelled.status, .failed)
-        XCTAssertEqual(requestCounter.value(), 5)
+        XCTAssertEqual(requestCounter.value(), 6)
+    }
+
+    func testQuotaRecoveryRetryDistinguishesSettledGenerationFromOldGateway() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            let url = try XCTUnwrap(request.url)
+            let path = try XCTUnwrap(
+                URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            let settled = path.contains("thread%3A%3Asettled")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: url,
+                    statusCode: 404,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            let body = settled
+                ? #"{"error":"quota_recovery_not_found"}"#
+                : #"{"error":"not_found"}"#
+            return (response, Data(body.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let settled = try await client.retryThreadQuotaRecovery(threadId: "thread::settled")
+        let unsupported = try await client.retryThreadQuotaRecovery(threadId: "thread::old-gateway")
+        XCTAssertEqual(settled, .settled)
+        XCTAssertEqual(unsupported, .unsupported)
     }
 
     func testRecentThreadsPageRejectsLegacyOffsetShapeWithoutCursorIdentity() throws {
