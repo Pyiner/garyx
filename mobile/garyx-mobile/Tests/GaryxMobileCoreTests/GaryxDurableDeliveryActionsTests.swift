@@ -142,8 +142,10 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             hostEntryID: fixture.entryID,
             hasInteractionOwner: true
         )
-        XCTAssertEqual(notices.map(\.kind), [.feedback])
-        XCTAssertEqual(notices.first?.title, "Some attachments could not be restored")
+        XCTAssertTrue(
+            notices.isEmpty,
+            "durable recovery feedback must not become composer status copy"
+        )
 
         let acknowledgement = try XCTUnwrap(
             GaryxFeedbackAcknowledgementPlanner.plan(
@@ -476,7 +478,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         )
     }
 
-    func testNoticeProjectionRequiresExactEntryInteractionOwner() async throws {
+    func testDurableAnomaliesNeverProjectComposerNoticesForAnyOwner() async throws {
         let fixture = try await makeAmbiguousFixture()
         let snapshot = try await fixture.store.load()
         XCTAssertTrue(
@@ -486,15 +488,12 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
                 hasInteractionOwner: false
             ).isEmpty
         )
-        let notices = GaryxComposerDurableNoticeProjector.project(
-            snapshot: snapshot,
-            hostEntryID: fixture.entryID,
-            hasInteractionOwner: true
-        )
-        XCTAssertEqual(notices.first?.title, "Send status unknown")
-        XCTAssertEqual(
-            notices.first?.actions,
-            [.restoreDelivery(fixture.deliveryID), .resendDeliveryCopy(fixture.deliveryID)]
+        XCTAssertTrue(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID,
+                hasInteractionOwner: true
+            ).isEmpty
         )
     }
 

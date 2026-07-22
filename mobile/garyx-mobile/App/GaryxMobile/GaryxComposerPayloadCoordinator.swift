@@ -1243,25 +1243,6 @@ private actor GaryxComposerPayloadPersistenceQueue {
         return .init(snapshot: committed, entry: entry)
     }
 
-    func presentFeedback(
-        hostEntryID: GaryxComposerPayloadEntryID,
-        hasInteractionOwner: Bool
-    ) async throws -> GaryxComposerDurableContext? {
-        await acquireTransactionGate()
-        defer { releaseTransactionGate() }
-        let snapshot = try await durability.load()
-        guard let transaction = GaryxFeedbackPresentationPlanner.plan(
-            snapshot: snapshot,
-            hostEntryID: hostEntryID,
-            hasInteractionOwner: hasInteractionOwner
-        ) else { return nil }
-        let committed = try await durability.commit(transaction)
-        guard let scoped = committed.payloadStore.entriesByScope.first(where: {
-            $0.value[hostEntryID] != nil
-        }), let entry = scoped.value[hostEntryID] else { return nil }
-        return .init(snapshot: committed, entry: entry)
-    }
-
     func acknowledgeFeedback(
         feedbackID: GaryxFeedbackID,
         host: GaryxComposerDurableContext
@@ -1667,7 +1648,6 @@ private actor GaryxComposerPayloadPersistenceQueue {
 final class GaryxComposerPayloadCoordinator: ObservableObject {
     struct Snapshot: Equatable {
         var projection: GaryxComposerPayloadProjection?
-        var notices: [GaryxComposerDurableNotice] = []
         var isReadOnly = true
         var revision: UInt64 = 0
 
@@ -1689,7 +1669,6 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     private var routeActivation: RouteActivation?
     private var finalizationTask: Task<Void, Never>?
     private var sendCommitInFlightSessionID: GaryxComposerInputSessionID?
-    private var feedbackPresentationTask: Task<Void, Never>?
     private var pendingActivation: (scope: GaryxGatewayScope, key: GaryxComposerKey, ticket: UInt64)?
     private var deferredScopeRevocation: GaryxGatewayScope?
     private var deferredRouteActivation: (
@@ -1729,7 +1708,6 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
 
     var currentText: String { snapshot.projection?.text ?? "" }
     var currentAttachments: [GaryxComposerAttachment] { snapshot.projection?.attachments ?? [] }
-    var durableNotices: [GaryxComposerDurableNotice] { snapshot.notices }
     var canSend: Bool {
         sendCommitInFlightSessionID == nil
             && snapshot.projection?.readiness == .ready
@@ -1887,7 +1865,6 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 adapter.makeReadOnly()
             }
             grantPendingFocusIfReady()
-            scheduleFeedbackPresentationIfNeeded()
         } else {
             adapter.makeReadOnly()
         }
@@ -2828,36 +2805,9 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         }
         snapshot = Snapshot(
             projection: projection,
-            notices: GaryxComposerDurableNoticeProjector.project(
-                snapshot: context.snapshot,
-                hostEntryID: entry.id,
-                hasInteractionOwner: liveOccurrenceID != nil && !readOnly
-            ),
             isReadOnly: readOnly,
             revision: snapshot.revision &+ 1
         )
-        scheduleFeedbackPresentationIfNeeded()
-    }
-
-    private func scheduleFeedbackPresentationIfNeeded() {
-        guard feedbackPresentationTask == nil,
-              let context = durableContext,
-              liveOccurrenceID != nil,
-              !snapshot.isReadOnly,
-              context.snapshot.feedback.values.contains(where: {
-                  $0.entryID == context.entry.id && $0.phase == .pending
-              }) else { return }
-        let entryID = context.entry.id
-        feedbackPresentationTask = Task { [weak self] in
-            guard let self else { return }
-            defer { feedbackPresentationTask = nil }
-            guard let updated = try? await persistence.presentFeedback(
-                hostEntryID: entryID,
-                hasInteractionOwner: true
-            ), durableContext?.entry.id == updated.entry.id else { return }
-            durableContext = updated
-            publish(context: updated, readOnly: snapshot.isReadOnly)
-        }
     }
 
     private func advanceRouteActivationIfReady() {
