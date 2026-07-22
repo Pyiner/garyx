@@ -109,12 +109,15 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
 - Mobile may adapt layout and interaction for iOS, but must not invent new
   top-level concepts.
 - Garyx iOS product work targets only the latest iOS release (currently iOS
-  26). Do not add or validate new compatibility behavior for earlier iOS
-  versions unless explicitly requested; leave existing fallback code unchanged
-  when it is outside the task scope.
-- iOS visual QA is light-mode only. Do not add or run dark-mode test passes
-  unless the user explicitly requests them; leave existing dark-mode behavior
+  26). Validate iOS changes against a single reference configuration: the
+  iPhone 17 Pro Max device size on iOS 26.5. Do not add or validate
+  compatibility behavior for earlier iOS versions, other iOS builds, or other
+  device sizes unless explicitly requested; leave existing fallback code
   unchanged when it is outside the task scope.
+- iOS visual QA is light-mode only; dark mode is not a supported target. Do
+  not add dark-mode support or run dark-mode test passes unless the user
+  explicitly requests them; leave existing dark-mode behavior unchanged when
+  it is outside the task scope.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
 - Provider default model and reasoning labels should use the row's available
