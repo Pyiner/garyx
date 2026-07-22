@@ -1144,20 +1144,37 @@ async fn fetch_antigravity_quota(
 }
 
 fn parse_antigravity_usage(value: &Value) -> Result<ProviderUsage, String> {
-    let models: Vec<ModelUsage> = value
-        .get("groups")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|group| {
-            group
-                .get("buckets")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter_map(parse_antigravity_model_usage)
-        .collect();
+    let groups = value.get("groups").and_then(Value::as_array);
+    let mut models = Vec::new();
+
+    if let Some(groups) = groups {
+        for group in groups {
+            let group_name = group
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let group_desc = group
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+
+            if let Some(buckets) = group.get("buckets").and_then(Value::as_array) {
+                for bucket in buckets {
+                    if let Some(mut model_usage) = parse_antigravity_model_usage(bucket) {
+                        if let Some(gname) = group_name {
+                            model_usage.name = format!("{gname} – {}", model_usage.name);
+                        }
+                        if model_usage.description.is_none() {
+                            model_usage.description = group_desc.map(ToOwned::to_owned);
+                        }
+                        models.push(model_usage);
+                    }
+                }
+            }
+        }
+    }
 
     if models.is_empty() {
         return Err("Antigravity usage response had no usable model buckets".to_string());
@@ -1913,6 +1930,7 @@ mod tests {
         let payload = json!({
             "groups": [
                 {
+                    "displayName": "Claude Models",
                     "buckets": [
                         {
                             "bucketId": "claude-opus-4-6-thinking",
@@ -1941,7 +1959,7 @@ mod tests {
         assert_eq!(usage.models.len(), 2);
         let opus = &usage.models[0];
         assert_eq!(opus.id, "claude-opus-4-6-thinking");
-        assert_eq!(opus.name, "Claude Opus 4.6 (Thinking)");
+        assert_eq!(opus.name, "Claude Models – Claude Opus 4.6 (Thinking)");
         assert!((opus.remaining_fraction - 0.98571426).abs() < f64::EPSILON);
         assert!((opus.remaining_percent - 98.571426).abs() < 0.0001);
         assert!((opus.used_percent - 1.428574).abs() < 0.0001);
