@@ -236,15 +236,8 @@ struct GaryxComposer: View {
         composerPresentation.showsSendButton
     }
 
-    private var canChangeWorkspaceMode: Bool {
-        model.selectedThread == nil
-            && !model.isSending
-            && model.activeRunThreadId == nil
-            && model.newThreadWorkspaceSelection.workspacePath != nil
-    }
-
     private var showsWorkspaceModeStrip: Bool {
-        canChangeWorkspaceMode
+        model.canChangeNewThreadWorkspaceMode
     }
 
     var body: some View {
@@ -495,7 +488,7 @@ struct GaryxComposer: View {
 
     private var workspaceModeButton: some View {
         Button {
-                guard canChangeWorkspaceMode else { return }
+                guard model.canChangeNewThreadWorkspaceMode else { return }
                 showsWorkspaceModeSheet = true
             } label: {
                 HStack(spacing: 6) {
@@ -517,7 +510,7 @@ struct GaryxComposer: View {
             // apron; cap it at XXL while the editor remains fully scalable.
             .garyxTypographyBoundary(.composerAccessoryChrome)
             .buttonStyle(GaryxPressableRowStyle())
-            .disabled(!canChangeWorkspaceMode)
+            .disabled(!model.canChangeNewThreadWorkspaceMode)
             .accessibilityLabel("Workspace mode")
     }
 

@@ -599,14 +599,20 @@ extension GaryxMobileModel {
         return listing
     }
 
+    /// Workspace-mode availability is draft-scoped: the draft owns its mode
+    /// until it becomes a thread. Runs in other threads never lock it — the
+    /// create request snapshots the mode at dispatch time, and the Mac
+    /// composer (the semantics source of truth) gates worktree mode only on
+    /// the workspace being a git repo, never on run activity.
+    var canChangeNewThreadWorkspaceMode: Bool {
+        selectedThread == nil && newThreadWorkspaceSelection.workspacePath != nil
+    }
+
     func setNewThreadWorkspaceMode(_ mode: String) {
-        guard selectedThread == nil, !isSending, activeRunThreadId == nil else { return }
+        guard canChangeNewThreadWorkspaceMode else { return }
         let normalized = Self.normalizedWorkspaceMode(mode)
         guard normalized != "worktree" || newThreadWorkspaceCanUseWorktree else { return }
         newThreadWorkspaceMode = normalized
-        if newThreadWorkspaceSelection.workspacePath == nil {
-            newThreadWorkspaceMode = "local"
-        }
         saveGatewayScopedUserState()
     }
 
