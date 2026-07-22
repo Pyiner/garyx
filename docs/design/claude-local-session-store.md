@@ -233,8 +233,9 @@ the source account on the thread.
   reconciliation.
 - A newer corrupt candidate fails that session's pre-resume reconciliation and
   never destroys the valid canonical copy. Startup/account-switch sweeps isolate
-  the failure to that session and continue scanning. A stale corrupt profile is
-  not parsed when a newer canonical copy wins.
+  a corrupt managed winner to that session and continue scanning. A canonical
+  winner is only statted during a sweep and is parsed on actual resume; a stale
+  corrupt profile is never parsed when canonical wins.
 - Malformed/unsafe subkeys are skipped with a warning; they are never joined
   outside the target session directory.
 - File checkpointing remains incompatible with SessionStore, matching the
