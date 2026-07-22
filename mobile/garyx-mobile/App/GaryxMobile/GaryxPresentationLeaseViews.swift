@@ -7,11 +7,13 @@ import UniformTypeIdentifiers
 final class GaryxPresentationLeaseCoordinator {
     private weak var container: GaryxRouteStackContainer?
     private weak var routeStore: GaryxProductionRouteStore?
+    private var attachmentGeneration: UInt64 = 0
 
     func attach(
         container: GaryxRouteStackContainer,
         routeStore: GaryxProductionRouteStore
     ) {
+        attachmentGeneration &+= 1
         self.container = container
         self.routeStore = routeStore
         synchronizeBarrier()
@@ -19,9 +21,21 @@ final class GaryxPresentationLeaseCoordinator {
 
     func detach(container: GaryxRouteStackContainer) {
         guard self.container === container else { return }
+        let detachedRouteStore = routeStore
+        attachmentGeneration &+= 1
+        let generation = attachmentGeneration
         self.container = nil
-        routeStore?.presentationBarrierStateChanged(false)
         routeStore = nil
+        guard let detachedRouteStore else { return }
+        Task { @MainActor [weak self, weak detachedRouteStore] in
+            guard let self,
+                  self.attachmentGeneration == generation,
+                  self.container == nil,
+                  self.routeStore == nil else {
+                return
+            }
+            detachedRouteStore?.presentationBarrierStateChanged(false)
+        }
     }
 
     @discardableResult
