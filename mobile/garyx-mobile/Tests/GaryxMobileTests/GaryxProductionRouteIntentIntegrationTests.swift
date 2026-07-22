@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UIKit
 import XCTest
 @testable import GaryxMobile
 
@@ -355,6 +356,123 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
+    func testBuild158BackgroundSceneTeardownDoesNotPublishDuringDismantle() throws {
+        let barrierProbeStore = GaryxProductionRouteStore()
+        let barrierProbeContainer = makeContainer(path: [], store: barrierProbeStore)
+        barrierProbeStore.attach(barrierProbeContainer)
+        let barrierProbeLease = GaryxPresentationLeaseSession()
+        barrierProbeLease.acquireIfNeeded(
+            coordinator: barrierProbeStore.presentationCoordinator,
+            parent: nil,
+            operationContext: { nil }
+        )
+        var barrierDetachPublicationCount = 0
+        let barrierDetachPublication = barrierProbeStore.objectWillChange.sink {
+            barrierDetachPublicationCount += 1
+        }
+        barrierProbeStore.detach(barrierProbeContainer)
+        XCTAssertEqual(
+            barrierDetachPublicationCount,
+            1,
+            "store.detach synchronously clears an active @Published presentation barrier"
+        )
+
+        let model = routePreparationModel(session: .shared)
+        model.connectionState = .ready(version: "build-158-dismantle-repro")
+        guard case .navigationShell(let rootOccurrenceID) = model.homeObservationStore.rootSurface
+        else {
+            return XCTFail("the production route canvas requires a navigation-shell occurrence")
+        }
+
+        model.drawerRevealInteraction.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: rootOccurrenceID
+        )
+
+        let activeLease = GaryxPresentationLeaseSession()
+        var isReleasingHostingGraph = false
+        var synchronousPublications: [(source: String, stack: [String])] = []
+        let revealPublication = model.drawerRevealInteraction.objectWillChange.sink {
+            guard isReleasingHostingGraph else { return }
+            let stack = Thread.callStackSymbols
+            guard stack.contains(where: { $0.contains("dismantleUIViewController") }) else {
+                return
+            }
+            synchronousPublications.append(("reveal.presentation", stack))
+        }
+        let barrierPublication = model.productionRouteStore.objectWillChange.sink {
+            guard isReleasingHostingGraph else { return }
+            let stack = Thread.callStackSymbols
+            guard stack.contains(where: { $0.contains("dismantleUIViewController") }) else {
+                return
+            }
+            synchronousPublications.append(("routeStore.hasPresentationBarrier", stack))
+        }
+
+        autoreleasepool {
+            var hostingController: UIHostingController<AnyView>? = UIHostingController(
+                rootView: AnyView(
+                    GaryxProductionRouteDismantleCrashReproRoot(
+                        rootSurfaceOccurrenceID: rootOccurrenceID,
+                        store: model.productionRouteStore,
+                        model: model
+                    )
+                )
+            )
+            var hostingWindow: UIWindow? = makeRouteDismantleTestWindow()
+            hostingWindow?.rootViewController = hostingController
+            hostingWindow?.isHidden = false
+            hostingWindow?.layoutIfNeeded()
+            pumpRouteDismantleRunLoop()
+
+            XCTAssertTrue(model.productionRouteStore.isAttached)
+
+            activeLease.acquireIfNeeded(
+                coordinator: model.productionRouteStore.presentationCoordinator,
+                parent: nil,
+                operationContext: { nil }
+            )
+            XCTAssertTrue(model.productionRouteStore.hasPresentationBarrier)
+
+            model.setSidebarVisible(true, animated: true)
+            XCTAssertEqual(
+                model.drawerRevealInteraction.presentation.phase,
+                .settling(.open),
+                "the dismantled owner must be active so detach takes forceTerminal -> publish"
+            )
+
+            isReleasingHostingGraph = true
+            hostingWindow?.windowScene = nil
+            hostingController = nil
+            hostingWindow = nil
+        }
+        pumpRouteDismantleRunLoop(duration: 1)
+        isReleasingHostingGraph = false
+
+        XCTAssertFalse(
+            model.productionRouteStore.isAttached,
+            "the released hosting graph must run the production representable dismantle callback"
+        )
+        XCTAssertEqual(
+            synchronousPublications.count,
+            0,
+            """
+            UIViewControllerRepresentable.dismantle synchronously published into its invalidating \
+            SwiftUI graph. Publications: \(synchronousPublications.map(\.source))
+            First publication stack:
+            \(synchronousPublications.first?.stack.joined(separator: "\n") ?? "<none>")
+            """
+        )
+        withExtendedLifetime((
+            barrierProbeLease,
+            barrierDetachPublication,
+            activeLease,
+            revealPublication,
+            barrierPublication
+        )) {}
+    }
+
     func testSceneInterruptionTerminatesEveryGlobalRevealInteraction() {
         let model = routePreparationModel(session: .shared)
         model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
@@ -681,6 +799,23 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         )
     }
 
+    private func makeRouteDismantleTestWindow() -> UIWindow {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first
+        else { preconditionFailure("hosted iOS tests require an active UIWindowScene") }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        return window
+    }
+
+    private func pumpRouteDismantleRunLoop(duration: TimeInterval = 0.05) {
+        let deadline = Date().addingTimeInterval(duration)
+        repeat {
+            _ = RunLoop.main.run(mode: .default, before: deadline)
+        } while Date() < deadline
+    }
+
     private func routePreparationSession(
         handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) -> URLSession {
@@ -744,6 +879,36 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
           "editable": true
         }
         """.utf8)
+    }
+}
+
+private struct GaryxProductionRouteDismantleCrashReproRoot: View {
+    let rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID
+    let store: GaryxProductionRouteStore
+    let model: GaryxMobileModel
+    @ObservedObject private var revealInteraction: GaryxHorizontalRevealInteractionStore
+
+    init(
+        rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID,
+        store: GaryxProductionRouteStore,
+        model: GaryxMobileModel
+    ) {
+        self.rootSurfaceOccurrenceID = rootSurfaceOccurrenceID
+        self.store = store
+        self.model = model
+        _revealInteraction = ObservedObject(wrappedValue: model.drawerRevealInteraction)
+    }
+
+    var body: some View {
+        GaryxProductionRouteCanvas(
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
+            store: store,
+            model: model,
+            homeContent: AnyView(Color.clear),
+            routeContent: { _ in AnyView(Color.clear) },
+            onOpenDrawer: {}
+        )
+        .offset(x: revealInteraction.presentation.reveal)
     }
 }
 
