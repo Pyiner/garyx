@@ -210,6 +210,38 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["Back"].exists)
     }
 
+    func testTaskTreeOpenKeepsConversationBackdropUniform() throws {
+        let app = launchProductionConversation(taskTreeFixture: true)
+        dragTrailingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.78
+        )
+        XCTAssertTrue(app.staticTexts["Task tree"].waitForExistence(timeout: 5))
+
+        let screenshot = app.screenshot().image
+        let panelWidth = min(max(app.frame.width * 0.55, 300), 420)
+        let panelBoundaryX = app.frame.width - panelWidth
+        let sampleY = app.frame.height * 0.5
+        let farBackdrop = try averageBrightness(
+            in: screenshot,
+            around: CGPoint(x: 40, y: sampleY),
+            appFrame: app.frame
+        )
+        let nearPanelBackdrop = try averageBrightness(
+            in: screenshot,
+            around: CGPoint(x: panelBoundaryX - 5, y: sampleY),
+            appFrame: app.frame
+        )
+
+        XCTAssertEqual(
+            nearPanelBackdrop,
+            farBackdrop,
+            accuracy: 3,
+            "task-tree reveal added a localized moving shadow to the conversation backdrop"
+        )
+    }
+
     func testTaskTreeCancelSettleCanBeRegrabbed() {
         let app = launchProductionConversation(taskTreeFixture: true)
         dragTrailingEdge(
@@ -601,5 +633,41 @@ final class FluidRouteStackInteractionTests: XCTestCase {
             withVelocity: velocity,
             thenHoldForDuration: holdAtEnd
         )
+    }
+
+    private func averageBrightness(
+        in image: UIImage,
+        around point: CGPoint,
+        appFrame: CGRect
+    ) throws -> CGFloat {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let data = try XCTUnwrap(cgImage.dataProvider?.data)
+        let bytes = try XCTUnwrap(CFDataGetBytePtr(data))
+        let bytesPerPixel = cgImage.bitsPerPixel / 8
+        guard bytesPerPixel >= 3 else {
+            XCTFail("screenshot pixel format has fewer than three color bytes")
+            return .nan
+        }
+
+        let scaleX = CGFloat(cgImage.width) / appFrame.width
+        let scaleY = CGFloat(cgImage.height) / appFrame.height
+        let centerX = Int((point.x - appFrame.minX) * scaleX)
+        let centerY = Int((point.y - appFrame.minY) * scaleY)
+        let radius = max(1, Int(scaleX.rounded()))
+        var total: CGFloat = 0
+        var count = 0
+
+        for y in max(0, centerY - radius)...min(cgImage.height - 1, centerY + radius) {
+            for x in max(0, centerX - radius)...min(cgImage.width - 1, centerX + radius) {
+                let index = y * cgImage.bytesPerRow + x * bytesPerPixel
+                total += (
+                    CGFloat(bytes[index])
+                        + CGFloat(bytes[index + 1])
+                        + CGFloat(bytes[index + 2])
+                ) / 3
+                count += 1
+            }
+        }
+        return total / CGFloat(count)
     }
 }
