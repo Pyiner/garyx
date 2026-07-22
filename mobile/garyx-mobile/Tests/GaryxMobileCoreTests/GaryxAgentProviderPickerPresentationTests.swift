@@ -79,22 +79,22 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: " claude_code "), "Claude Code")
     }
 
-    // The table match is an exact, case-sensitive id comparison: case variants
-    // miss the table and resolve through the shared display-name fallback.
-    func testLabelMatchingIsCaseSensitive() {
-        XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "TRAE"), "TRAE")
+    // Picker ids remain exact, but every label resolves through the shared
+    // provider presentation so known case aliases keep the canonical brand.
+    func testLabelFallbackCanonicalizesKnownProviderCaseAliases() {
+        XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "TRAE"), "Traex")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "Claude_Code"), "Claude Code")
     }
 
-    func testOptionsMatchingIsCaseSensitive() {
+    func testOptionsKeepCaseVariantIdsButUseSharedLabels() {
         let traex = GaryxAgentProviderPickerPresentation.options(includingCurrent: "TRAE")
         XCTAssertEqual(traex.count, 5)
-        XCTAssertEqual(traex.first, GaryxAgentProviderPickerOption(id: "TRAE", label: "TRAE"))
+        XCTAssertEqual(traex.first, GaryxAgentProviderPickerOption(id: "TRAE", label: "Traex"))
 
         let claude = GaryxAgentProviderPickerPresentation.options(includingCurrent: "Claude_Code")
         XCTAssertEqual(claude.count, 5)
-        // The label text coincides with the standard claude_code entry, but the
-        // id is the case variant and it goes through the fallback branch.
+        // The id stays the case variant while the label uses the same canonical
+        // presentation as the standard claude_code entry.
         XCTAssertEqual(claude.first, GaryxAgentProviderPickerOption(id: "Claude_Code", label: "Claude Code"))
     }
 }
