@@ -326,6 +326,7 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
     let onOrderedText: @MainActor (String, GaryxComposerInputEventIdentity) -> Void
     let onProducerTerminal: @MainActor (GaryxInputProducerKind) -> Void
     let onSubmit: @MainActor () -> Void
+    var enablesDebugFixtures = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -341,8 +342,14 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         context.coordinator.installCallbacks(on: view)
         view.grantLive(configuration)
         onRegister(view)
-        seedSendJitterFixtureIfNeeded(on: view)
-        requestDebugFocusIfNeeded(on: view)
+        context.coordinator.recordFocusBinding(isFocused.wrappedValue)
+        if isFocused.wrappedValue, !configuration.isReadOnly {
+            view.requestFocus()
+        }
+        if enablesDebugFixtures {
+            seedSendJitterFixtureIfNeeded(on: view)
+            requestDebugFocusIfNeeded(on: view)
+        }
         return view
     }
 
@@ -358,14 +365,13 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
         // Route lifecycle/top ownership arrives through the updated SwiftUI
         // environment while the UIView identity remains stable.
         context.coordinator.parent.onRegister(view)
-        requestDebugFocusIfNeeded(on: view)
-        if isFocused.wrappedValue,
+        if enablesDebugFixtures {
+            requestDebugFocusIfNeeded(on: view)
+        }
+        if context.coordinator.consumeFocusRequest(isFocused.wrappedValue),
            !configuration.isReadOnly,
            !view.isFirstResponder {
-            DispatchQueue.main.async {
-                guard view.window != nil else { return }
-                view.becomeFirstResponder()
-            }
+            view.requestFocus()
         }
     }
 
@@ -419,9 +425,24 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: GaryxComposerUIKitField
+        private var lastFocusBindingValue = false
 
         init(parent: GaryxComposerUIKitField) {
             self.parent = parent
+        }
+
+        func recordFocusBinding(_ value: Bool) {
+            lastFocusBindingValue = value
+        }
+
+        /// Treat SwiftUI focus as an edge-triggered request. UIKit owns an
+        /// active editing session after the request is fulfilled, including
+        /// interactive scroll dismissal; a level-triggered `true` here can
+        /// otherwise immediately reclaim first responder while the scroll
+        /// view is moving the keyboard offscreen.
+        func consumeFocusRequest(_ value: Bool) -> Bool {
+            defer { lastFocusBindingValue = value }
+            return value && !lastFocusBindingValue
         }
 
         func installCallbacks(on view: GaryxComposerOrderedTextView) {

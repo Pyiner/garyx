@@ -1,14 +1,13 @@
 import CoreGraphics
 import Foundation
 
-/// The full-screen conversation surface presented for one route occurrence.
+/// The transcript implementation presented for one conversation occurrence.
 ///
-/// The opening surface is already a complete thread page: navigation chrome,
-/// title, actions, composer, and a transcript-local loading treatment. It is
-/// deliberately not a plain background or a whole-page skeleton. The heavier
-/// live graph materializes only after the moving push reaches terminal, then
-/// replaces the pixel-equivalent opening page after delivered frames are
-/// stable.
+/// Production header and composer chrome are live from the first destination
+/// frame. Only the heavier transcript graph participates in the staged
+/// opening/materialization handoff: cached transcript pixels or the shared
+/// message-local loading treatment cover that region until delivered frames
+/// prove the live transcript stable.
 public enum GaryxConversationRouteRenderPhase: String, Equatable, Sendable {
     case openingPage
     case materializingConversation
@@ -17,10 +16,10 @@ public enum GaryxConversationRouteRenderPhase: String, Equatable, Sendable {
 
 /// Chooses the presentation pipeline once for a conversation route occurrence.
 ///
-/// A draft is a complete local surface, so it mounts the final conversation
-/// graph immediately and never creates the gateway-thread opening state
-/// machine. Existing threads retain their staged opening page, prewarm handoff,
-/// and delivered-frame stability gates. The app keeps this plan stable when a
+/// A draft is a complete local surface, so it mounts the final transcript
+/// immediately and never creates the gateway-thread opening state machine.
+/// Existing threads retain their staged transcript cover, prewarm handoff, and
+/// delivered-frame stability gates. The app keeps this plan stable when a
 /// draft is promoted in place so promotion cannot introduce a loading cover.
 public enum GaryxConversationRoutePresentationPlan: Equatable, Sendable {
     case directLocal
@@ -181,16 +180,17 @@ enum GaryxConversationRouteRenderInputResolver {
 
 /// Core-owned lifecycle and delivered-frame policy for a staged gateway thread.
 ///
-/// The route page is visible from mount. Once terminal, the first delivered
-/// opening-page frame closes the moving transition before conversation runtime
-/// work begins; two delivered opening-page frames separate navigation settle
-/// from the expensive live SwiftUI mount. A short run of consecutive on-budget
-/// frames then proves that mount is composited before the opening page is
-/// removed. This materialization clock deliberately has no network-readiness
-/// input: history refresh may control message-local loading and header chrome,
-/// but can never retain the noninteractive opening cover. Already live
-/// predecessor hosts remain live while inactive so back navigation never
-/// reconstructs them. Local drafts are excluded by
+/// The route page, including its production composer, is visible from mount.
+/// Once terminal, the first delivered opening frame closes the moving
+/// transition before transcript runtime work begins; two delivered opening
+/// frames separate navigation settle from the expensive live transcript mount.
+/// A short run of consecutive on-budget frames then proves that mount is
+/// composited before the transcript cover is removed. This materialization
+/// clock deliberately has no network-readiness input: history refresh may
+/// control message-local loading and header chrome, but can never retain the
+/// transcript cover or lock the composer. Already live predecessor hosts remain
+/// live while inactive so back navigation never reconstructs them. Local drafts
+/// are excluded by
 /// `GaryxConversationRoutePresentationPolicy` and never instantiate this state.
 public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public static let defaultTerminalOpeningFrameCount = 2
@@ -199,7 +199,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public private(set) var lifecycle: GaryxRouteHostLifecyclePhase
     public private(set) var renderPhase: GaryxConversationRouteRenderPhase
     public private(set) var hasBegunContentPreparation: Bool
-    public private(set) var hasPresentedLiveConversation: Bool
+    public private(set) var hasPresentedLiveTranscript: Bool
 
     private let terminalOpeningFrameCount: Int
     private let materializationFrameCount: Int
@@ -218,7 +218,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         self.materializationFrameCount = materializationFrameCount
         renderPhase = .openingPage
         hasBegunContentPreparation = false
-        hasPresentedLiveConversation = false
+        hasPresentedLiveTranscript = false
     }
 
     /// The thread page is always the full-screen route surface. Only the
@@ -228,23 +228,28 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     /// A route-level skeleton or plain cover is forbidden by policy.
     public var showsFullScreenPlaceholder: Bool { false }
 
-    public var mountsLiveConversation: Bool {
+    public var mountsLiveTranscript: Bool {
         renderPhase != .openingPage
     }
 
-    public var showsOpeningPage: Bool {
+    public var showsOpeningTranscriptCover: Bool {
         renderPhase != .live
     }
 
     /// Interaction belongs to the real transcript only after the compositor
-    /// handoff. Before then, the opening page is a brief transition continuity
-    /// layer and must not outlive the materialization stability proof.
-    public var allowsLiveConversationInteraction: Bool {
+    /// handoff. Before then, its cover is a brief transition-continuity layer
+    /// and must not outlive the materialization stability proof.
+    public var allowsTranscriptInteraction: Bool {
         renderPhase == .live
     }
 
+    /// Transcript staging is never a composer lock. Canonical-route ownership
+    /// and durable payload readiness are enforced independently by the route
+    /// and composer coordinators.
+    public var allowsComposerInteraction: Bool { true }
+
     public var needsPresentedFrameClock: Bool {
-        lifecycle == .active && !hasPresentedLiveConversation
+        lifecycle == .active && !hasPresentedLiveTranscript
     }
 
     public mutating func apply(
@@ -253,7 +258,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         guard lifecycle != nextLifecycle else { return }
         lifecycle = nextLifecycle
 
-        if hasPresentedLiveConversation {
+        if hasPresentedLiveTranscript {
             renderPhase = .live
             deliveredFramesInPhase = 0
             return
@@ -274,7 +279,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public mutating func presentedFrame(
         interval: TimeInterval?
     ) -> GaryxConversationRouteRenderPhase {
-        guard lifecycle == .active, !hasPresentedLiveConversation else {
+        guard lifecycle == .active, !hasPresentedLiveTranscript else {
             return renderPhase
         }
 
@@ -321,7 +326,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
                 return renderPhase
             }
             renderPhase = .live
-            hasPresentedLiveConversation = true
+            hasPresentedLiveTranscript = true
             deliveredFramesInPhase = 0
 
         case .live:

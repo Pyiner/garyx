@@ -580,8 +580,8 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         callbacks.hasPresentedFrameDemand = {
             routeLifecycleRegistry.hasPresentedFrameDemand
         }
-        callbacks.presentedFrame = {
-            routeLifecycleRegistry.presentedFrame()
+        callbacks.presentedFrame = { timestamp in
+            routeLifecycleRegistry.presentedFrame(at: timestamp)
         }
         callbacks.transitionWillBegin = { kind in
             pushProbe?.transitionWillBegin(kind: kind)

@@ -1916,8 +1916,8 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             callbacks.hasPresentedFrameDemand = { [routeLifecycleRegistry] in
                 routeLifecycleRegistry?.hasPresentedFrameDemand ?? false
             }
-            callbacks.presentedFrame = { [routeLifecycleRegistry] in
-                routeLifecycleRegistry?.presentedFrame()
+            callbacks.presentedFrame = { [routeLifecycleRegistry] timestamp in
+                routeLifecycleRegistry?.presentedFrame(at: timestamp)
             }
             callbacks.phaseChanged = { [probe] in probe.phases.append($0) }
             callbacks.canonicalPathChanged = { [probe] in probe.paths.append($0) }

@@ -77,13 +77,23 @@ struct GaryxConversationRenderPrewarmer: View {
     var body: some View {
         if driver.rendersWarmupSurface {
             ZStack {
-                GaryxConversationOpeningPageView(metadata: .prewarmLocal)
+                GaryxConversationOpeningTranscriptView(metadata: .prewarmLocal)
 
                 // The local fixture exercises real message rows; this overlay
-                // additionally compiles the exact empty-cache shimmer without
-                // replacing the complete opening-page graph beneath it.
+                // additionally compiles the exact empty-cache shimmer.
                 GaryxThreadHistoryLoadingView()
                     .padding(.horizontal, 16)
+            }
+            .garyxPageBackground()
+            .garyxAdaptiveTopBar {
+                prewarmHeader
+            }
+            .garyxFloatingBottomChrome {
+                // The staged destination now mounts the production composer
+                // on its first frame, so startup prewarming must exercise its
+                // real UIKit input and shared glass card rather than a visual
+                // stand-in.
+                GaryxComposerRenderPrewarmSurface()
             }
             .opacity(0.01)
             .allowsHitTesting(false)
@@ -95,6 +105,29 @@ struct GaryxConversationRenderPrewarmer: View {
                 driver.stop()
             }
         }
+    }
+
+    private var prewarmHeader: some View {
+        GaryxAdaptiveGlassContainer(spacing: 10) {
+            HStack(spacing: 12) {
+                GaryxToolbarIcon(systemName: "chevron.left")
+
+                GaryxThreadRuntimeCompactContentRow(
+                    title: GaryxConversationOpeningMetadata.prewarmLocal.title,
+                    target: GaryxConversationOpeningMetadata.prewarmLocal.agentTarget
+                )
+                .garyxAdaptiveGlass(.regular, isInteractive: false, in: Capsule())
+
+                Spacer(minLength: 0)
+
+                GaryxToolbarIcon {
+                    GaryxInkSpinner()
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
     }
 }
 

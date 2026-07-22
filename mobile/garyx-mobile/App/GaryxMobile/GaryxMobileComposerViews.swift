@@ -66,99 +66,6 @@ private struct GaryxCapturedCameraImage: @unchecked Sendable {
     let image: UIImage
 }
 
-/// Non-interactive first-frame counterpart of an empty thread composer. It
-/// deliberately shares the production composer's geometry, glass recipe, and
-/// controls so route preparation never substitutes a visually different card.
-struct GaryxConversationOpeningComposerChrome: View {
-    var body: some View {
-        GaryxAdaptiveGlassContainer(spacing: GaryxComposerLayout.composerSpacing) {
-            VStack(spacing: 0) {
-                Text("Ask Garyx anything...")
-                    .font(GaryxFont.subheadline())
-                    .foregroundStyle(Color(.placeholderText))
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: GaryxComposerLayout.inputMinHeight,
-                        alignment: .topLeading
-                    )
-                    .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
-                    .padding(.top, GaryxComposerLayout.inputTopPadding + 2)
-                    .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
-
-                HStack(spacing: GaryxComposerLayout.bottomBarSpacing) {
-                    GaryxCircleBadge(
-                        systemName: "plus",
-                        foreground: .primary,
-                        background: GaryxComposerLayout.actionButtonFill,
-                        diameter: GaryxComposerLayout.actionButtonSide,
-                        iconSize: 20,
-                        iconWeight: .regular
-                    )
-                    .frame(width: 44, height: 44)
-
-                    Spacer(minLength: 0)
-
-                    GaryxCircleBadge(
-                        systemName: "arrow.up",
-                        foreground: Color(.systemGray2),
-                        background: Color(.systemGray5)
-                    )
-                    .frame(width: 44, height: 44)
-                }
-                .padding(.horizontal, GaryxComposerLayout.bottomBarHorizontalPadding)
-                .padding(.top, GaryxComposerLayout.bottomBarTopPadding)
-                .padding(.bottom, GaryxComposerLayout.bottomBarBottomPadding)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                GaryxComposerLayout.composerMaterialTint,
-                in: RoundedRectangle(
-                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
-                    style: .continuous
-                )
-            )
-            .background(
-                GaryxComposerLayout.composerOcclusionFill,
-                in: RoundedRectangle(
-                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
-                    style: .continuous
-                )
-            )
-            .garyxAdaptiveGlass(
-                .regular,
-                isInteractive: false,
-                in: RoundedRectangle(
-                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
-                    style: .continuous
-                )
-                .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
-                .blendMode(.plusLighter)
-            }
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: GaryxComposerLayout.composerCornerRadius,
-                    style: .continuous
-                )
-                .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.clear)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Message composer")
-        .accessibilityValue("Ask Garyx anything...")
-    }
-}
-
 /// Non-interactive input chrome used while durable payload activation catches
 /// up with a newly mounted route. Its geometry must remain identical to an
 /// empty live UIKit field so the route's first delivered frame is stable.
@@ -170,6 +77,52 @@ struct GaryxComposerInputFallback: View {
             .frame(maxWidth: .infinity)
             .frame(height: layout.minimumControlHeight)
             .allowsHitTesting(false)
+    }
+}
+
+/// Startup-only materialization of the complete production composer tree.
+/// The injected input configuration keeps its real UIKit adapter writable for
+/// render parity while all coordinator callbacks and debug fixtures remain
+/// inert. The surrounding surface never accepts input.
+struct GaryxComposerRenderPrewarmSurface: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @FocusState private var isFocused: Bool
+
+    private let occurrenceID = GaryxRouteInstanceID(
+        rawValue: "render-prewarm-occurrence"
+    )
+    private let configuration = GaryxComposerInputConfiguration(
+        composerKey: .draft("render-prewarm"),
+        sessionID: GaryxComposerInputSessionID(rawValue: "render-prewarm-session"),
+        epoch: 1,
+        payloadGeneration: 1,
+        reservationID: nil,
+        nextInputSequence: 1,
+        initialText: "",
+        isReadOnly: false
+    )
+
+    var body: some View {
+        GaryxComposer(
+            payload: model.composerPayloadCoordinator,
+            isFocused: $isFocused,
+            renderPrewarmConfiguration: configuration
+        )
+        .environment(
+            \.garyxRouteContext,
+            GaryxRouteContext(
+                node: .entry(
+                    GaryxRouteEntry(
+                        id: occurrenceID,
+                        destination: .conversation(threadID: "render-prewarm-thread")
+                    )
+                ),
+                isCanonicalTop: false,
+                lifecycle: .mounted
+            )
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -187,6 +140,17 @@ struct GaryxComposer: View {
     @State private var showsWorkspaceModeSheet = false
     @State private var showsAddPanel = false
     @State private var isAddingAttachments = false
+    private let renderPrewarmConfiguration: GaryxComposerInputConfiguration?
+
+    init(
+        payload: GaryxComposerPayloadCoordinator,
+        isFocused: FocusState<Bool>.Binding,
+        renderPrewarmConfiguration: GaryxComposerInputConfiguration? = nil
+    ) {
+        self.payload = payload
+        self.isFocused = isFocused
+        self.renderPrewarmConfiguration = renderPrewarmConfiguration
+    }
 
     private var routeProjection: GaryxComposerPayloadProjection? {
         guard let key = routeContext.composerKey else { return payload.snapshot.projection }
@@ -331,7 +295,9 @@ struct GaryxComposer: View {
         }
         .onAppear {
             #if DEBUG
-            presentDebugWorkspaceModeSheetIfNeeded()
+            if renderPrewarmConfiguration == nil {
+                presentDebugWorkspaceModeSheetIfNeeded()
+            }
             #endif
         }
         .onChange(of: model.sidebarVisible) { _, visible in
@@ -379,10 +345,10 @@ struct GaryxComposer: View {
 
     private var composerStack: some View {
         Group {
-            if model.selectedThread == nil {
-                newThreadComposerDeck
-            } else {
+            if case .some(.thread) = routeContext.composerKey {
                 composerCard
+            } else {
+                newThreadComposerDeck
             }
         }
     }
@@ -553,30 +519,39 @@ struct GaryxComposer: View {
         let layout = composerTextLayout
 
         return ZStack(alignment: .topLeading) {
-            if let configuration = payload.inputConfiguration(),
-               routeContext.composerKey.map(payload.routeKeyMatchesActiveSession) ?? true {
+            if let configuration = composerInputConfiguration {
                 GaryxComposerUIKitField(
                     occurrenceID: composerOccurrenceID,
                     configuration: configuration,
                     layout: layout,
                     isFocused: isFocused,
                     onRegister: { adapter in
+                        guard renderPrewarmConfiguration == nil else { return }
                         payload.register(
                             adapter,
                             isCanonicalTop: routeContext.isCanonicalTop
                         )
                     },
-                    onUnregister: payload.unregister,
-                    onOrderedText: payload.acceptText,
+                    onUnregister: { adapter in
+                        guard renderPrewarmConfiguration == nil else { return }
+                        payload.unregister(adapter)
+                    },
+                    onOrderedText: { text, identity in
+                        guard renderPrewarmConfiguration == nil else { return }
+                        payload.acceptText(text, identity: identity)
+                    },
                     onProducerTerminal: { producer in
+                        guard renderPrewarmConfiguration == nil else { return }
                         payload.producerReachedTerminal(
                             producer,
                             occurrenceID: composerOccurrenceID
                         )
                     },
                     onSubmit: {
+                        guard renderPrewarmConfiguration == nil else { return }
                         Task { await sendLocalDraft() }
-                    }
+                    },
+                    enablesDebugFixtures: renderPrewarmConfiguration == nil
                 )
                 .font(GaryxFont.subheadline())
             } else {
@@ -599,6 +574,16 @@ struct GaryxComposer: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var composerInputConfiguration: GaryxComposerInputConfiguration? {
+        if let renderPrewarmConfiguration {
+            return renderPrewarmConfiguration
+        }
+        guard let configuration = payload.inputConfiguration(),
+              routeContext.composerKey.map(payload.routeKeyMatchesActiveSession) ?? true
+        else { return nil }
+        return configuration
     }
 
     private var composerTextLayout: GaryxComposerTextLayout {

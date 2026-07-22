@@ -82,7 +82,7 @@ final class GaryxGestureSettleDriverTests: XCTestCase {
         var supplementalFrameCount = 0
         harness.driver.setSupplementalFrameObserver(
             isActive: { supplementalActive },
-            onFrame: {
+            onFrame: { _ in
                 supplementalFrameCount += 1
                 supplementalActive = false
             }
@@ -116,7 +116,7 @@ final class GaryxGestureSettleDriverTests: XCTestCase {
         var supplementalFrameCount = 0
         harness.driver.setSupplementalFrameObserver(
             isActive: { supplementalActive },
-            onFrame: {
+            onFrame: { _ in
                 supplementalFrameCount += 1
                 supplementalActive = false
             }
@@ -128,6 +128,25 @@ final class GaryxGestureSettleDriverTests: XCTestCase {
         XCTAssertEqual(supplementalFrameCount, 1)
         XCTAssertEqual(harness.frames.startCount, 1)
         XCTAssertFalse(harness.frames.isRunning)
+    }
+
+    func testSupplementalObserverReceivesPresentedFrameTimestamp() {
+        let harness = Harness()
+        var supplementalActive = true
+        var observedTimestamp: TimeInterval?
+        harness.driver.setSupplementalFrameObserver(
+            isActive: { supplementalActive },
+            onFrame: { timestamp in
+                observedTimestamp = timestamp
+                supplementalActive = false
+            }
+        )
+        harness.frames.latestFrameTimestamp = 9.75
+
+        harness.driver.ensureSupplementalFrames()
+        harness.frames.fire()
+
+        XCTAssertEqual(observedTimestamp, 9.75)
     }
 
     func testInvalidateAndDeinitAlwaysStopFrameCallbacks() {
@@ -185,6 +204,7 @@ final class GaryxGestureSettleDriverTests: XCTestCase {
 
     private final class ManualFrameSource: GaryxGestureSettleFrameSource {
         var onFrame: (() -> Void)?
+        var latestFrameTimestamp: TimeInterval?
         private(set) var isRunning = false
         private(set) var invalidationCount = 0
         private(set) var startCount = 0

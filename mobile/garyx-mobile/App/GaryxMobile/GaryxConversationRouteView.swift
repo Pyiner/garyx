@@ -128,8 +128,7 @@ final class GaryxRouteLifecycleRegistry {
         return false
     }
 
-    func presentedFrame() {
-        let timestamp = CACurrentMediaTime()
+    func presentedFrame(at timestamp: TimeInterval = CACurrentMediaTime()) {
         let interval = previousPresentedFrameTimestamp.map { timestamp - $0 }
         previousPresentedFrameTimestamp = timestamp
         let activeSubscriptions = presentedFrameSubscriptions.compactMap {
@@ -164,13 +163,6 @@ struct GaryxConversationOpeningMetadata: Equatable {
     let usesTranscriptSnapshot: Bool
     let localRows: [GaryxMobileTurnRow]
 
-    static let prewarmLoading = GaryxConversationOpeningMetadata(
-        title: "Conversation",
-        agentTarget: nil,
-        transcriptPresentation: .loading,
-        usesTranscriptSnapshot: false,
-        localRows: []
-    )
     static let prewarmLocal = GaryxConversationOpeningMetadata(
         title: "Conversation",
         agentTarget: nil,
@@ -193,6 +185,20 @@ struct GaryxConversationOpeningMetadata: Equatable {
         } else if usesTranscriptSnapshot || !localRows.isEmpty {
             probe?.markConversationLocalMessages()
         }
+    }
+}
+
+/// Immutable staging inputs for one existing-thread transcript. Production
+/// header and composer chrome stay mounted outside this handoff; only the
+/// transcript implementation changes with the render phase.
+struct GaryxConversationTranscriptStaging: Equatable {
+    let metadata: GaryxConversationOpeningMetadata
+    let snapshotThreadID: String
+    let renderPhase: GaryxConversationRouteRenderPhase
+    let allowsTranscriptInteraction: Bool
+
+    var mountsLiveTranscript: Bool {
+        renderPhase != .openingPage
     }
 }
 
@@ -292,10 +298,10 @@ struct GaryxConversationRouteView: View {
     }
 }
 
-/// Existing gateway conversation whose first frame is already the complete
-/// thread page. Before terminal it presents real page chrome and
-/// transcript-local loading only. The heavier live graph mounts behind that
-/// page after terminal and takes over after delivered frames prove it stable.
+/// Existing gateway conversation whose production header and composer are live
+/// from its first frame. Only the transcript is staged: its cached/loading
+/// cover stays above the delayed live transcript until delivered frames prove
+/// the handoff stable.
 private struct GaryxStagedConversationRouteView: View {
     @Environment(\.garyxRouteLifecycleRegistry) private var lifecycleRegistry
     @StateObject private var presentationDriver = GaryxConversationRoutePresentationDriver()
@@ -312,58 +318,45 @@ private struct GaryxStagedConversationRouteView: View {
     }
 
     var body: some View {
-        ZStack {
-            if presentationDriver.renderPhase != .openingPage {
-                // The live page owns the same local-first rule as every
-                // ordinary conversation open: cached rows stay visible while
-                // history refreshes, and only an empty transcript chooses its
-                // message-local skeleton.
-                GaryxConversationView(destination: destination)
-                    .allowsHitTesting(presentationDriver.allowsLiveConversationInteraction)
-                    .onAppear {
-                        GaryxRoutePushPerformanceProbe.shared?.conversationSurfaceMounted()
-                        // This marks local live-graph materialization, not the
-                        // independent network history refresh.
-                        GaryxRoutePushPerformanceProbe.shared?.messagePreparationCompleted()
-                    }
-            }
-
-            GaryxConversationOpeningPageView(
+        GaryxConversationView(
+            destination: destination,
+            transcriptStaging: GaryxConversationTranscriptStaging(
                 metadata: openingMetadata,
-                snapshotThreadID: threadID
+                snapshotThreadID: threadID,
+                renderPhase: presentationDriver.renderPhase,
+                allowsTranscriptInteraction: presentationDriver.allowsTranscriptInteraction
             )
-                // Keep the prepared live tree in the compositor while this
-                // visually opaque page is on top. An alpha of exactly one lets
-                // Core Animation cull that tree and moves its pipeline work to
-                // the reveal frame. Keep this lightweight tree mounted after
-                // reveal: changing a compositor opacity is cheap, while tearing
-                // down the complete SwiftUI chrome can drop the handoff frame.
-                .opacity(presentationDriver.renderPhase == .live ? 0 : 0.999)
-                .allowsHitTesting(!presentationDriver.allowsLiveConversationInteraction)
-                // This is a pixel-continuity layer. The real page owns the
-                // route's semantics throughout their brief overlap.
-                .accessibilityHidden(true)
-        }
+        )
         .onAppear {
+            openingMetadata.markPushPresentation()
             presentationDriver.connect(
                 to: lifecycleRegistry,
                 identity: .entry(occurrenceID)
             )
+            markLiveTranscriptMaterializationIfNeeded()
+        }
+        .onChange(of: presentationDriver.renderPhase) { oldPhase, newPhase in
+            guard oldPhase == .openingPage, newPhase != .openingPage else { return }
+            markLiveTranscriptMaterializationIfNeeded()
         }
         .onDisappear {
             presentationDriver.disconnect()
         }
     }
 
+    private func markLiveTranscriptMaterializationIfNeeded() {
+        guard presentationDriver.renderPhase != .openingPage else { return }
+        GaryxRoutePushPerformanceProbe.shared?.conversationSurfaceMounted()
+        // This marks local transcript-graph materialization, not the
+        // independent network history refresh.
+        GaryxRoutePushPerformanceProbe.shared?.messagePreparationCompleted()
+    }
 }
 
-/// The exact production loading language used before route staging existed:
-/// shared glass chrome, the shared ink spinner, the shared composer surface,
-/// and either real cached rows or the shared transcript skeleton. This view is
-/// intentionally model-free so canonical projection cannot invalidate it
-/// while the push is moving.
-struct GaryxConversationOpeningPageView: View {
-    @Environment(\.garyxRouteNavigationActions) private var routeNavigation
+/// Model-free cached/loading pixels for the transcript viewport. The owning
+/// conversation supplies the production header, composer, page background,
+/// and safe-area geometry from the first destination frame.
+struct GaryxConversationOpeningTranscriptView: View {
     let metadata: GaryxConversationOpeningMetadata
     let snapshotThreadID: String?
 
@@ -385,80 +378,44 @@ struct GaryxConversationOpeningPageView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .garyxPageBackground()
-        .garyxAdaptiveTopBar {
-            openingHeader
-        }
-        .garyxFloatingBottomChrome {
-            GaryxConversationOpeningComposerChrome()
-        }
-        .onAppear {
-            metadata.markPushPresentation()
-        }
     }
 
     private var openingTranscript: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Color.clear.frame(height: 1)
+            ZStack(alignment: .topLeading) {
+                GaryxTranscriptBlankSpaceTapLayer(action: {})
 
-                switch metadata.transcriptPresentation {
-                case .loading:
-                    GaryxThreadHistoryLoadingView()
-                        .padding(.top, 12)
-                case .localMessages:
-                    if !metadata.localRows.isEmpty {
-                        GaryxMobileTurnRowsView(rows: metadata.localRows)
+                VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Color.clear.frame(height: 1)
+
+                        switch metadata.transcriptPresentation {
+                        case .loading:
+                            GaryxThreadHistoryLoadingView()
+                                .padding(.top, 12)
+                        case .localMessages:
+                            if !metadata.localRows.isEmpty {
+                                GaryxMobileTurnRowsView(rows: metadata.localRows)
+                            }
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    .garyxVerticalScrollContentWidth(alignment: .topLeading)
+
+                    Color.clear
+                        .frame(height: 24)
+                        .accessibilityHidden(true)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 18)
-            .padding(.bottom, 24)
-            .garyxVerticalScrollContentWidth(alignment: .topLeading)
-
-            Color.clear
-                .frame(height: 24)
-                .accessibilityHidden(true)
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        // Prewarm the exact production transcript scroll dismissal pipeline;
+        // this continuity surface never receives interaction itself.
+        .scrollDismissesKeyboard(.interactively)
         .scrollDisabled(true)
-    }
-
-    private var openingHeader: some View {
-        GaryxAdaptiveGlassContainer(spacing: 10) {
-            HStack(spacing: 12) {
-                Button {
-                    routeNavigation.dismiss?()
-                } label: {
-                    GaryxToolbarIcon(systemName: "chevron.left")
-                }
-                .buttonStyle(GaryxPressableRowStyle())
-                .accessibilityLabel("Back")
-                .accessibilityHidden(true)
-
-                GaryxThreadRuntimeCompactContentRow(
-                    title: metadata.title,
-                    target: metadata.agentTarget
-                )
-                .garyxAdaptiveGlass(.regular, isInteractive: false, in: Capsule())
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(metadata.title), thread settings")
-                .accessibilityHidden(true)
-
-                Spacer(minLength: 0)
-
-                GaryxToolbarIcon {
-                    GaryxInkSpinner()
-                }
-                .accessibilityLabel("Loading thread")
-                .accessibilityHidden(true)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
     }
 }
 
@@ -471,8 +428,8 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
 
     private var presentation = GaryxConversationRoutePresentationState()
 
-    var allowsLiveConversationInteraction: Bool {
-        presentation.allowsLiveConversationInteraction
+    var allowsTranscriptInteraction: Bool {
+        presentation.allowsTranscriptInteraction
     }
 
     private weak var lifecycleRegistry: GaryxRouteLifecycleRegistry?
@@ -538,7 +495,7 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         fallbackFrameTask?.cancel()
         fallbackFrameTask = nil
         awaitsPresentedLiveReveal = false
-        guard !presentation.hasPresentedLiveConversation else { return }
+        guard !presentation.hasPresentedLiveTranscript else { return }
         var next = presentation
         next.apply(lifecycle: .disappeared)
         commit(next)

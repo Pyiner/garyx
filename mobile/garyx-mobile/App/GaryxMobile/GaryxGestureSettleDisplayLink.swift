@@ -12,12 +12,14 @@ final class GaryxGestureSystemTimeSource: GaryxGestureSettleTimeSource {
 /// trajectory, lifecycle decisions, and interruption semantics.
 final class GaryxGestureDisplayLinkFrameSource: NSObject, GaryxGestureSettleFrameSource {
     var onFrame: (() -> Void)?
+    private(set) var latestFrameTimestamp: TimeInterval?
 
     private var displayLink: CADisplayLink?
 
     func start() {
         displayLink?.invalidate()
-        let displayLink = CADisplayLink(target: self, selector: #selector(handleFrame))
+        latestFrameTimestamp = nil
+        let displayLink = CADisplayLink(target: self, selector: #selector(handleFrame(_:)))
         displayLink.preferredFrameRateRange = CAFrameRateRange(
             minimum: 30,
             maximum: 120,
@@ -30,13 +32,15 @@ final class GaryxGestureDisplayLinkFrameSource: NSObject, GaryxGestureSettleFram
     func invalidate() {
         displayLink?.invalidate()
         displayLink = nil
+        latestFrameTimestamp = nil
     }
 
     deinit {
         displayLink?.invalidate()
     }
 
-    @objc private func handleFrame() {
+    @objc private func handleFrame(_ displayLink: CADisplayLink) {
+        latestFrameTimestamp = displayLink.timestamp
         onFrame?()
     }
 }

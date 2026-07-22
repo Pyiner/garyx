@@ -186,6 +186,135 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         )
     }
 
+    func testExistingThreadComposerIsLiveWhileHistoryLoads() {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SIDEBAR"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] = "empty"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_PROBE"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        app.launch()
+
+        let row = app.staticTexts["Thread History"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 1))
+        XCTAssertEqual(composer.label, "composer-live")
+
+        composer.tap()
+        waitForKeyboard(true, in: app)
+        let previousValue = composer.value as? String
+        let key = app.keys.matching(
+            NSPredicate(format: "label ==[c] %@", "x")
+        ).firstMatch
+        XCTAssertTrue(key.waitForExistence(timeout: 2))
+        key.tap()
+        let inputExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value != %@", previousValue ?? ""),
+            object: composer
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [inputExpectation], timeout: 3), .completed)
+
+        guard let report = waitForRoutePushReport(transaction: 1, in: app) else {
+            XCTFail("route push probe did not finish the first-frame composer validation")
+            return
+        }
+        XCTAssertEqual(
+            report.messageRegionLoadingObserved,
+            1,
+            "the same push must exercise the zero-local-row history-loading state"
+        )
+
+        let send = app.buttons.matching(identifier: "arrow.up").firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 2))
+        XCTAssertTrue(send.isEnabled)
+        XCTAssertTrue(send.isHittable)
+        let typedValue = composer.value as? String ?? ""
+        send.tap()
+        let sendExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value != %@", typedValue),
+            object: composer
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [sendExpectation], timeout: 3), .completed)
+    }
+
+    func testConversationKeyboardDismissesFromBlankBackgroundAndScroll() {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "chat"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        app.launch()
+
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertEqual(composer.label, "composer-live")
+        composer.tap()
+        waitForKeyboard(true, in: app)
+
+        let lastMessage = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Wraps cleanly")
+        ).firstMatch
+        XCTAssertTrue(lastMessage.waitForExistence(timeout: 2))
+        let blankY = (lastMessage.frame.maxY + composer.frame.minY) / 2
+        app.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 0.5,
+                dy: blankY / app.frame.height
+            )
+        ).tap()
+        waitForKeyboard(false, in: app)
+
+        let userMessage = app.staticTexts["Type check"]
+        XCTAssertTrue(userMessage.waitForExistence(timeout: 2))
+        userMessage.press(forDuration: 0.6)
+        for action in ["Copy", "Select Text", "Share"] {
+            XCTAssertTrue(
+                app.buttons[action].waitForExistence(timeout: 2),
+                "the transcript background tap owner must not steal the \(action) long-press action"
+            )
+        }
+
+        app.terminate()
+
+        let scrollingApp = XCUIApplication()
+        scrollingApp.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        scrollingApp.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "chat"
+        scrollingApp.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] = "send-jitter"
+        scrollingApp.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        scrollingApp.launch()
+
+        let scrollingComposer = scrollingApp.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(scrollingComposer.waitForExistence(timeout: 10))
+        scrollingComposer.tap()
+        waitForKeyboard(true, in: scrollingApp)
+        let transcript = scrollingApp.scrollViews["garyx-conversation-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 2))
+        XCTAssertTrue(transcript.isHittable)
+        let keyboardFrame = scrollingApp.keyboards.firstMatch.frame
+        let start = scrollingApp.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 0.5,
+                dy: transcript.frame.midY / scrollingApp.frame.height
+            )
+        )
+        let end = scrollingApp.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 0.5,
+                dy: (keyboardFrame.minY + keyboardFrame.height * 0.6)
+                    / scrollingApp.frame.height
+            )
+        )
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        waitForKeyboard(false, in: scrollingApp)
+    }
+
     /// Sanitized simulator replay of the reported send shape: 21 committed
     /// turns, a four-line composer, optimistic origin insertion, then the same
     /// origin materialized by the captured committed render row. The probe
@@ -236,6 +365,26 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         XCTAssertGreaterThan(report.upwardY, 0)
         XCTAssertEqual(report.downwardY, 0, accuracy: 0.5)
         XCTAssertEqual(report.directionReversals, 0)
+    }
+
+    private func waitForKeyboard(
+        _ expected: Bool,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 3,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == %@", NSNumber(value: expected)),
+            object: app.keyboards.firstMatch
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: timeout),
+            .completed,
+            "software keyboard existence did not become \(expected)",
+            file: file,
+            line: line
+        )
     }
 
     private func assertArchitectureGateThresholds(

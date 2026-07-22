@@ -135,6 +135,25 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.001, frameMessage)
         XCTAssertEqual(actual.width, expected.width, accuracy: 0.001, frameMessage)
         XCTAssertEqual(actual.height, expected.height, accuracy: 0.001, frameMessage)
+
+        XCTAssertTrue(textView.becomeFirstResponder())
+        coordinator.replaceLiveText("Identity check")
+        for _ in 0..<5 {
+            await Task.yield()
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+        }
+        let updatedTextView = try XCTUnwrap(
+            controller.view.firstDescendant(ofType: GaryxComposerOrderedTextView.self)
+        )
+        XCTAssertTrue(
+            updatedTextView === textView,
+            "publishing typed text must update the one mounted UIKit input in place"
+        )
+        XCTAssertTrue(
+            updatedTextView.isFirstResponder,
+            "a payload publication must not drop an active composer focus session"
+        )
     }
 
     func testRealUIKitHostUnmarksCJKBeforeCapturingExactFinalSequence() throws {
