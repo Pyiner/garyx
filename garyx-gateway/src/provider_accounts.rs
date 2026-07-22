@@ -12,6 +12,7 @@ use futures_util::future::join_all;
 use garyx_models::config::{ClaudeCodeManagedAccount, GaryxConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::coding_usage::{self, ProviderUsage};
@@ -65,6 +66,64 @@ struct AccountUsageSpec {
     organization: Option<String>,
     plan: Option<String>,
     auth_method: Option<String>,
+}
+
+#[derive(Debug)]
+struct ClaudeAccountSwitchEffects {
+    session_reconcile: Result<claude_agent_sdk::SessionReconcileSummary, String>,
+    recovery: Result<crate::garyx_db::QuotaRecoveryExpediteSummary, String>,
+}
+
+fn spawn_claude_account_switch_effects(
+    state: Arc<AppState>,
+) -> oneshot::Receiver<ClaudeAccountSwitchEffects> {
+    let (response_tx, response_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let session_reconcile = state.reconcile_local_claude_sessions().await;
+        if let Err(error) = session_reconcile.as_ref() {
+            tracing::warn!(
+                error,
+                "Claude account changed but local session reconciliation failed"
+            );
+        }
+
+        // Wake rows that are already durable before repairing the narrow
+        // transcript-to-SQL projection window. This is the ordinary path and
+        // keeps account selection fast even with a large transcript library.
+        let recovery =
+            crate::quota_resend::expedite_waiting_provider_recoveries(&state, "claude_code").await;
+        if let Err(error) = recovery.as_ref() {
+            tracing::warn!(
+                error,
+                "Claude account changed but quota recovery wake failed"
+            );
+        }
+
+        // Sending the HTTP response is best-effort. Dropping its receiver must
+        // never cancel the provider-owned side effect after selection changed.
+        let _ = response_tx.send(ClaudeAccountSwitchEffects {
+            session_reconcile,
+            recovery,
+        });
+
+        match crate::quota_resend::repair_and_expedite_provider_recoveries(&state, "claude_code")
+            .await
+        {
+            Ok(summary) => {
+                tracing::debug!(
+                    matched_threads = summary.matched_threads,
+                    expedited_threads = summary.expedited_threads,
+                    already_claimed_threads = summary.already_claimed_threads,
+                    "repaired quota recovery projections after Claude account switch"
+                );
+            }
+            Err(error) => tracing::warn!(
+                error,
+                "Claude account changed but repaired quota recovery wake failed"
+            ),
+        }
+    });
+    response_rx
 }
 
 pub(crate) fn managed_accounts_root(config_path: Option<&Path>) -> PathBuf {
@@ -239,35 +298,36 @@ pub async fn select_claude_code_account(
         "selection_changed": selection_changed,
     });
     if selection_changed {
-        match state.reconcile_local_claude_sessions().await {
-            Ok(summary) => {
-                response["session_reconcile"] = json!({
-                    "sessions_scanned": summary.sessions_scanned,
-                    "sessions_failed": summary.sessions_failed,
-                    "keys_promoted": summary.keys_promoted,
-                    "keys_unchanged": summary.keys_unchanged,
-                });
+        match spawn_claude_account_switch_effects(state.clone()).await {
+            Ok(effects) => {
+                if let Ok(summary) = effects.session_reconcile {
+                    response["session_reconcile"] = json!({
+                        "sessions_scanned": summary.sessions_scanned,
+                        "sessions_failed": summary.sessions_failed,
+                        "keys_promoted": summary.keys_promoted,
+                        "keys_unchanged": summary.keys_unchanged,
+                    });
+                } else {
+                    response["session_reconcile_warning"] = Value::String(
+                        "Local Claude session reconciliation did not complete.".to_owned(),
+                    );
+                }
+                match effects.recovery {
+                    Ok(summary) => response["recovery"] = json!(summary),
+                    Err(error) => response["recovery_warning"] = Value::String(error),
+                }
             }
             Err(error) => {
                 tracing::warn!(
-                    error,
-                    "Claude account changed but local session reconciliation failed"
+                    error = %error,
+                    "Claude account switch effects ended before reporting their initial result"
                 );
                 response["session_reconcile_warning"] = Value::String(
                     "Local Claude session reconciliation did not complete.".to_owned(),
                 );
-            }
-        }
-        match crate::quota_resend::expedite_provider_after_account_switch(&state, "claude_code")
-            .await
-        {
-            Ok(summary) => response["recovery"] = json!(summary),
-            Err(error) => {
-                tracing::warn!(
-                    error,
-                    "Claude account changed but quota recovery wake failed"
+                response["recovery_warning"] = Value::String(
+                    "Quota recovery wake did not report its initial result.".to_owned(),
                 );
-                response["recovery_warning"] = Value::String(error);
             }
         }
     } else {
@@ -768,6 +828,92 @@ mod tests {
     use axum::extract::State;
     use tempfile::tempdir;
 
+    fn managed_account_state(root: &Path) -> (Arc<AppState>, String, PathBuf) {
+        let id = Uuid::new_v4().to_string();
+        let config_path = root.join("config.json");
+        let account_dir = managed_account_dir(Some(&config_path), &id);
+        std::fs::create_dir_all(&account_dir).unwrap();
+        std::fs::write(account_dir.join(OWNERSHIP_MARKER), &id).unwrap();
+        let mut config = GaryxConfig::default();
+        config
+            .provider_accounts
+            .claude_code
+            .accounts
+            .push(ClaudeCodeManagedAccount {
+                id: id.clone(),
+                name: "Work".to_owned(),
+                email: None,
+                organization: None,
+                plan: None,
+                auth_method: None,
+                created_at: Utc::now().to_rfc3339(),
+                updated_at: Utc::now().to_rfc3339(),
+            });
+        config.provider_accounts.claude_code.active_account_id = Some(id.clone());
+        let state = crate::server::AppStateBuilder::new(config)
+            .with_config_path(config_path)
+            .build();
+        state
+            .ops
+            .garyx_db
+            .run_thread_data_startup_migrations()
+            .unwrap();
+        (state, id, account_dir)
+    }
+
+    fn insert_waiting_recovery(state: &AppState, thread_id: &str) {
+        state
+            .ops
+            .garyx_db
+            .write_thread_record_with_projections(thread_id, "{}", None, None)
+            .unwrap();
+        state
+            .ops
+            .garyx_db
+            .register_quota_recovery_job(crate::garyx_db::NewQuotaRecoveryJob {
+                thread_id,
+                provider: "claude_code",
+                blocked_run_id: "run::blocked",
+                blocked_seq: 1,
+                quota_window: Some("primary"),
+                reset_at: Some("2099-01-01T00:00:00Z"),
+                due_at: "2099-01-01T00:01:00Z",
+            })
+            .unwrap();
+    }
+
+    async fn append_rate_limited_terminal(state: &AppState, thread_id: &str) {
+        state
+            .ops
+            .garyx_db
+            .write_thread_record_with_projections(thread_id, "{}", None, None)
+            .unwrap();
+        state
+            .threads
+            .history
+            .transcript_store()
+            .append_committed_messages(
+                thread_id,
+                Some("run::blocked"),
+                &[json!({
+                    "role": "system",
+                    "control": {
+                        "kind": "run_complete",
+                        "run_id": "run::blocked",
+                        "status": "rate_limited",
+                        "rate_limit": {
+                            "provider": "claude_code",
+                            "window": "primary",
+                            "reset_at": "2099-01-01T00:00:00Z",
+                            "will_auto_resend": true
+                        }
+                    }
+                })],
+            )
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn managed_account_directory_is_derived_below_owned_root() {
         let config_path = Path::new("/tmp/garyx/config.yaml");
@@ -821,70 +967,15 @@ mod tests {
     #[tokio::test]
     async fn changing_account_expedites_every_waiting_claude_recovery() {
         let temp = tempdir().unwrap();
-        let id = Uuid::new_v4().to_string();
-        let config_path = temp.path().join("config.yaml");
-        let account_dir = managed_account_dir(Some(&config_path), &id);
-        std::fs::create_dir_all(&account_dir).unwrap();
-        std::fs::write(account_dir.join(OWNERSHIP_MARKER), &id).unwrap();
+        let (state, _, account_dir) = managed_account_state(temp.path());
         let native_session_id = "11111111-2222-4333-8444-555555555555";
         let native_session = account_dir
             .join("projects/project")
             .join(format!("{native_session_id}.jsonl"));
         std::fs::create_dir_all(native_session.parent().unwrap()).unwrap();
         std::fs::write(&native_session, "{\"from\":\"managed\"}\n").unwrap();
-        let mut config = GaryxConfig::default();
-        config
-            .provider_accounts
-            .claude_code
-            .accounts
-            .push(ClaudeCodeManagedAccount {
-                id: id.clone(),
-                name: "Work".to_owned(),
-                email: None,
-                organization: None,
-                plan: None,
-                auth_method: None,
-                created_at: Utc::now().to_rfc3339(),
-                updated_at: Utc::now().to_rfc3339(),
-            });
-        config.provider_accounts.claude_code.active_account_id = Some(id);
-        let state = crate::server::AppStateBuilder::new(config)
-            .with_config_path(config_path)
-            .build();
-        state
-            .ops
-            .garyx_db
-            .run_thread_data_startup_migrations()
-            .unwrap();
-        state
-            .ops
-            .garyx_db
-            .write_thread_record_with_projections("thread::quota-switch", "{}", None, None)
-            .unwrap();
-        state
-            .threads
-            .history
-            .transcript_store()
-            .append_committed_messages(
-                "thread::quota-switch",
-                Some("run::blocked"),
-                &[json!({
-                    "role": "system",
-                    "control": {
-                        "kind": "run_complete",
-                        "run_id": "run::blocked",
-                        "status": "rate_limited",
-                        "rate_limit": {
-                            "provider": "claude_code",
-                            "window": "primary",
-                            "reset_at": "2099-01-01T00:00:00Z",
-                            "will_auto_resend": true
-                        }
-                    }
-                })],
-            )
-            .await
-            .unwrap();
+        append_rate_limited_terminal(&state, "thread::quota-switch").await;
+        crate::quota_resend::reconcile_transcript_recovery_jobs(&state).await;
 
         let Json(response) = select_claude_code_account(
             State(state.clone()),
@@ -915,6 +1006,146 @@ mod tests {
             crate::garyx_db::QuotaRecoveryWakeReason::AccountSwitch
         );
         assert_ne!(job.due_at, "2099-01-01T00:01:00Z");
+    }
+
+    #[tokio::test]
+    async fn changed_account_repairs_and_wakes_an_unprojected_terminal() {
+        let temp = tempdir().unwrap();
+        let (state, _, _) = managed_account_state(temp.path());
+        append_rate_limited_terminal(&state, "thread::quota-unprojected-switch").await;
+
+        let Json(response) = select_claude_code_account(
+            State(state.clone()),
+            Json(SelectClaudeCodeAccountRequest { account_id: None }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["selection_changed"], true);
+        assert_eq!(response["recovery"]["matched_threads"], 0);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if state
+                    .ops
+                    .garyx_db
+                    .active_quota_recovery_job("thread::quota-unprojected-switch")
+                    .unwrap()
+                    .is_some_and(|job| {
+                        job.wake_reason == crate::garyx_db::QuotaRecoveryWakeReason::AccountSwitch
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background repair should project and wake the terminal generation");
+    }
+
+    #[tokio::test]
+    async fn selecting_the_current_account_does_not_wake_quota_recovery() {
+        let temp = tempdir().unwrap();
+        let (state, id, _) = managed_account_state(temp.path());
+        insert_waiting_recovery(&state, "thread::quota-noop-switch");
+
+        let Json(response) = select_claude_code_account(
+            State(state.clone()),
+            Json(SelectClaudeCodeAccountRequest {
+                account_id: Some(id),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["selection_changed"], false);
+        assert_eq!(response["recovery"]["matched_threads"], 0);
+        let job = state
+            .ops
+            .garyx_db
+            .active_quota_recovery_job("thread::quota-noop-switch")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            job.wake_reason,
+            crate::garyx_db::QuotaRecoveryWakeReason::QuotaReset
+        );
+        assert_eq!(job.due_at, "2099-01-01T00:01:00Z");
+    }
+
+    #[tokio::test]
+    async fn changed_account_recovery_outlives_a_disconnected_request() {
+        let temp = tempdir().unwrap();
+        let (state, _, account_dir) = managed_account_state(temp.path());
+        let project_dir = account_dir.join("projects/project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        // Keep the post-commit reconciliation busy long enough to cancel the
+        // HTTP owner after the account selection is durably persisted.
+        for _ in 0..64 {
+            std::fs::write(
+                project_dir.join(format!("{}.jsonl", Uuid::new_v4())),
+                "{\"from\":\"managed\"}\n",
+            )
+            .unwrap();
+        }
+        insert_waiting_recovery(&state, "thread::quota-disconnected-switch");
+
+        let request_state = state.clone();
+        let request = tokio::spawn(async move {
+            select_claude_code_account(
+                State(request_state),
+                Json(SelectClaudeCodeAccountRequest { account_id: None }),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if state
+                    .config_snapshot()
+                    .provider_accounts
+                    .claude_code
+                    .active_account_id
+                    .is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("account selection should be applied before disconnect");
+        // Acquiring this lock proves mutate_config completed its full
+        // apply-and-persist transaction. The handler has no suspension point
+        // between releasing it and handing effects to the detached owner.
+        let settings_guard = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            state.ops.settings_mutex.lock(),
+        )
+        .await
+        .expect("account selection should finish persisting before disconnect");
+        assert!(
+            !request.is_finished(),
+            "the fixture must disconnect while account-switch effects are active"
+        );
+        request.abort();
+        let _ = request.await;
+        drop(settings_guard);
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let job = state
+                    .ops
+                    .garyx_db
+                    .active_quota_recovery_job("thread::quota-disconnected-switch")
+                    .unwrap()
+                    .unwrap();
+                if job.wake_reason == crate::garyx_db::QuotaRecoveryWakeReason::AccountSwitch {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("backend account-switch recovery must outlive the HTTP request");
     }
 
     #[cfg(unix)]

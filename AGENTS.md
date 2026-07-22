@@ -226,7 +226,10 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 - Quota recovery is SQL-owned per blocked run generation. Timer, account
   switch, and manual Continue must wake the same durable row and admission
   intent; never queue its synthetic `continue` into an active run, and never
-  let a surviving legacy `quota-resend:` cron dispatch independently.
+  let a surviving legacy `quota-resend:` cron dispatch independently. After a
+  real provider-account selection change commits, its backend-owned recovery
+  wake must outlive the originating HTTP request; selecting the already-active
+  account remains a no-op and must not wake quota recovery.
 - Anthropic OAuth usage can return a valid Fable `weekly_scoped` allowance with
   `is_active: false`; that flag means the bucket is not currently consuming,
   not that its quota is unavailable. Preserve scoped limits that have a usable

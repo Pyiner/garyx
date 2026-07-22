@@ -651,14 +651,10 @@ pub async fn reconcile_transcript_recovery_jobs(state: &Arc<AppState>) {
         .await;
 }
 
-pub(crate) async fn expedite_provider_after_account_switch(
+pub(crate) async fn expedite_waiting_provider_recoveries(
     state: &Arc<AppState>,
     provider: &str,
 ) -> Result<crate::garyx_db::QuotaRecoveryExpediteSummary, String> {
-    // The transcript terminal is committed before its SQL projection is
-    // broadcast. Close that narrow race so an account switch made from the
-    // freshly rendered card cannot miss the generation it is meant to wake.
-    reconcile_transcript_recovery_jobs(state).await;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let provider = provider.to_owned();
     let db = state.ops.garyx_db.clone();
@@ -670,6 +666,18 @@ pub(crate) async fn expedite_provider_after_account_switch(
         state.ops.quota_recovery_notify.notify_one();
     }
     Ok(summary)
+}
+
+pub(crate) async fn repair_and_expedite_provider_recoveries(
+    state: &Arc<AppState>,
+    provider: &str,
+) -> Result<crate::garyx_db::QuotaRecoveryExpediteSummary, String> {
+    // The transcript terminal is committed before its SQL projection is
+    // broadcast. Close that narrow race after the fast SQL-owned pass so a
+    // freshly rendered card cannot miss its generation, without making the
+    // account-selection response wait for a whole-library transcript scan.
+    reconcile_transcript_recovery_jobs(state).await;
+    expedite_waiting_provider_recoveries(state, provider).await
 }
 
 pub(crate) async fn expedite_thread_manual(
