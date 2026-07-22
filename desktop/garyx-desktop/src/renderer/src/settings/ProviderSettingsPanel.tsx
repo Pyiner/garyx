@@ -354,7 +354,12 @@ export function ProviderSettingsPanel({
     const configuredReasoning = String(runtimeConfig.model_reasoning_effort || '').trim();
     const configuredServiceTier = String(runtimeConfig.model_service_tier || '').trim();
     const usage = row.usageProviderId ? codingUsageByProviderId[row.usageProviderId] : null;
-    const usageAuthError = usage && !usage.available && usage.error ? usage.error : '';
+    const usageAuthError = usage
+      && !usage.available
+      && ['credentials_unavailable', 'reauth_required'].includes(usage.errorCode || '')
+      && usage.error
+      ? usage.error
+      : '';
     const finalize = (details: ProviderRowDetails): ProviderRowDetails => {
       if (!usageAuthError) {
         return details;
@@ -462,6 +467,23 @@ export function ProviderSettingsPanel({
     }
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
     return t('updated {age} ago', { age: formatUsageDuration(elapsedSeconds) });
+  }
+
+  function unavailableUsageText(usage: DesktopProviderUsage): string {
+    switch (usage.errorCode) {
+      case 'rate_limited':
+        return usage.retryAfterSeconds && usage.retryAfterSeconds > 0
+          ? t('Try again in {age}', { age: formatUsageDuration(usage.retryAfterSeconds) })
+          : t('Quota temporarily rate limited');
+      case 'reauth_required':
+        return t('Sign in again to refresh quota');
+      case 'credentials_unavailable':
+        return t('Account credentials unavailable');
+      case 'network':
+        return t('Quota refresh failed — check connection');
+      default:
+        return t('Quota temporarily unavailable');
+    }
   }
 
   function usageWindowCaption(
@@ -702,7 +724,11 @@ export function ProviderSettingsPanel({
       );
     }
     if (!usage.available) {
-      return <span className="provider-card-empty">{usage.error || t('Quota unavailable')}</span>;
+      return (
+        <span className="provider-card-empty" title={usage.error || undefined}>
+          {unavailableUsageText(usage)}
+        </span>
+      );
     }
     const windows = providerUsageWindows(usage);
     const models = sortedModelsByRemaining(usage);
@@ -854,7 +880,7 @@ export function ProviderSettingsPanel({
     } else if (!usage.available) {
       content = (
         <span className="provider-usage-muted" title={usage.error || undefined}>
-          {t('Unavailable')}
+          {unavailableUsageText(usage)}
         </span>
       );
     } else {
@@ -1007,7 +1033,7 @@ export function ProviderSettingsPanel({
                             </div>
                           )) : (
                             <span className="provider-card-empty">
-                              {account.usage.error || t('Quota unavailable')}
+                              {unavailableUsageText(account.usage)}
                             </span>
                           )}
                         </div>

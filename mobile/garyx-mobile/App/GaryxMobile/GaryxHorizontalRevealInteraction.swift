@@ -317,17 +317,25 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
 
     func applyRootSurfaceOccurrenceTransition(
         _ transition: GaryxRootSurfaceOccurrenceTransition,
-        position: GaryxHorizontalRevealPosition
+        position: GaryxHorizontalRevealPosition,
+        observableSettlement: GaryxObservableSettlementTiming = .afterViewGraphUpdate
     ) {
         guard var hostOwnership else {
             assertionFailure("root transition applied to a surface-local reveal")
             return
         }
+        let previousOwnership = hostOwnership
         let requiresTerminalization = hostOwnership.applyRootSurfaceTransition(transition)
         self.hostOwnership = hostOwnership
-        if requiresTerminalization {
-            forceTerminal(.hostOccurrenceEnded, position: position)
-        } else if !hostOwnership.hasActiveHost {
+        if requiresTerminalization
+            || (hostOwnership != previousOwnership
+                && requiresTerminalSettlement(at: position)) {
+            forceTerminal(
+                .hostOccurrenceEnded,
+                position: position,
+                observableSettlement: observableSettlement
+            )
+        } else if hostOwnership != previousOwnership && !hostOwnership.hasActiveHost {
             assertTerminalHasZeroResidue()
         }
     }
@@ -345,7 +353,15 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         self.hostOwnership = hostOwnership
         switch result {
         case .attached:
-            assertTerminalHasZeroResidue()
+            if requiresTerminalSettlement(at: position) {
+                forceTerminal(
+                    .hostOccurrenceEnded,
+                    position: position,
+                    observableSettlement: observableSettlement
+                )
+            } else {
+                assertTerminalHasZeroResidue()
+            }
         case .alreadyAttached:
             break
         case .superseded:
@@ -419,6 +435,17 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         )
     }
 
+    private func requiresTerminalSettlement(
+        at position: GaryxHorizontalRevealPosition
+    ) -> Bool {
+        state.phase != .idle
+            || state.settledPosition != position
+            || abs(state.reveal - position.reveal(for: extent)) > 0.000_001
+            || settleDriver.isSettling
+            || activeCurve != nil
+            || requestedPosition != position
+    }
+
     private func startSettle(
         _ settle: GaryxHorizontalRevealSettle,
         animated: Bool,
@@ -473,21 +500,25 @@ extension GaryxMobileModel {
     /// configure them. Lifecycle and canonical-owner invalidations therefore
     /// terminate both stores together at their model-owned endpoints.
     func forceTerminalGlobalRevealInteractions(
-        _ event: GaryxHorizontalRevealInvalidation
+        _ event: GaryxHorizontalRevealInvalidation,
+        observableSettlement: GaryxObservableSettlementTiming = .immediate
     ) {
         drawerRevealInteraction.forceTerminal(
             event,
-            position: sidebarVisible ? .open : .closed
+            position: sidebarVisible ? .open : .closed,
+            observableSettlement: observableSettlement
         )
         taskTreeRevealInteraction.forceTerminal(
             event,
-            position: isTaskTreeSidebarOpen ? .open : .closed
+            position: isTaskTreeSidebarOpen ? .open : .closed,
+            observableSettlement: observableSettlement
         )
     }
 
     /// Root branch publication and UIKit host attach/dismantle both converge on
-    /// the same occurrence ledger. Ending either owner synchronously stops the
-    /// display link and returns both shared reveal states to idle.
+    /// the same occurrence ledger. Ending either owner synchronously revokes
+    /// ownership, stops the display link, and terminalizes semantic state; only
+    /// the observable projection settles after the graph update returns.
     func applyGlobalRevealRootSurfaceTransition(
         _ transition: GaryxRootSurfaceOccurrenceTransition
     ) {

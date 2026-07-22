@@ -65,6 +65,17 @@ const ANTIGRAVITY_TOKEN_EXPIRY_SKEW_SECONDS: i64 = 60;
 /// Reuse a cached reading when it is younger than this, to avoid hammering the
 /// upstream usage endpoints when several clients poll at once.
 const FRESH_TTL: Duration = Duration::from_secs(20);
+/// Account switchers can be opened by both Mac and iOS at the same time. A
+/// one-minute Claude reading is fresh enough for selection while avoiding a
+/// burst of usage and token-refresh calls for every stored profile.
+const CLAUDE_FRESH_TTL: Duration = Duration::from_secs(60);
+
+const USAGE_ERROR_CREDENTIALS: &str = "credentials_unavailable";
+const USAGE_ERROR_REAUTH_REQUIRED: &str = "reauth_required";
+const USAGE_ERROR_RATE_LIMITED: &str = "rate_limited";
+const USAGE_ERROR_NETWORK: &str = "network";
+const USAGE_ERROR_UPSTREAM: &str = "upstream";
+const USAGE_ERROR_INVALID_RESPONSE: &str = "invalid_response";
 
 /// One usage window (e.g. the rolling weekly allowance or the 5-hour session).
 #[derive(Debug, Clone, Serialize)]
@@ -195,6 +206,13 @@ pub struct ProviderUsage {
     /// Human-readable reason a reading is unavailable, when applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Stable machine-readable reason for `error`, so clients can present a
+    /// useful state without parsing upstream text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<&'static str>,
+    /// Upstream retry hint, when the failure was throttled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
 }
 
 impl ProviderUsage {
@@ -210,7 +228,31 @@ impl ProviderUsage {
             scoped_limits: Vec::new(),
             models: Vec::new(),
             error: Some(error),
+            error_code: None,
+            retry_after_seconds: None,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UsageFetchError {
+    code: &'static str,
+    message: String,
+    retry_after_seconds: Option<u64>,
+}
+
+impl UsageFetchError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            retry_after_seconds: None,
+        }
+    }
+
+    fn with_retry_after(mut self, retry_after_seconds: Option<u64>) -> Self {
+        self.retry_after_seconds = retry_after_seconds;
+        self
     }
 }
 
@@ -274,8 +316,8 @@ async fn resolve_provider_with_cache_key(
     name: &'static str,
     fetch: impl std::future::Future<Output = Result<ProviderUsage, String>>,
 ) -> ProviderUsage {
-    if let Some((age, value)) = cached(&cache_key)
-        && age < FRESH_TTL
+    if let Some((age, fresh_for, value)) = cached(&cache_key)
+        && age < fresh_for
     {
         return value;
     }
@@ -286,7 +328,7 @@ async fn resolve_provider_with_cache_key(
             value
         }
         Err(error) => match cached(&cache_key) {
-            Some((_, mut value)) => {
+            Some((_, _, mut value)) => {
                 value.stale = true;
                 value.error = Some(error);
                 value
@@ -302,36 +344,162 @@ async fn resolve_provider_with_cache_key(
 
 #[cfg(test)]
 async fn fetch_claude_usage() -> Result<ProviderUsage, String> {
-    fetch_claude_usage_for_config_dir(None).await
+    fetch_claude_usage_for_config_dir(None)
+        .await
+        .map_err(|error| error.message)
 }
 
+#[cfg(test)]
 async fn fetch_claude_usage_for_config_dir(
     config_dir: Option<&Path>,
-) -> Result<ProviderUsage, String> {
-    let (token, plan) =
-        claude_oauth::read_stored_oauth_token_and_subscription_for_config_dir(config_dir).await?;
+) -> Result<ProviderUsage, UsageFetchError> {
+    fetch_claude_usage_for_config_dir_with(
+        config_dir,
+        CLAUDE_USAGE_URL,
+        claude_oauth::CLAUDE_OAUTH_TOKEN_URL,
+    )
+    .await
+}
 
-    let client = http_client()?;
+async fn request_claude_usage(
+    client: &reqwest::Client,
+    usage_url: &str,
+    token: &str,
+) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, String), UsageFetchError> {
     let response = client
-        .get(CLAUDE_USAGE_URL)
-        .bearer_auth(&token)
+        .get(usage_url)
+        .bearer_auth(token)
         .header("anthropic-beta", claude_oauth::CLAUDE_OAUTH_BETA)
         .header(reqwest::header::USER_AGENT, claude_oauth::CLAUDE_USER_AGENT)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|error| format!("Claude usage request failed: {error}"))?;
+        .map_err(|error| {
+            UsageFetchError::new(
+                USAGE_ERROR_NETWORK,
+                format!("Claude usage request failed: {error}"),
+            )
+        })?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| format!("Claude usage response unreadable: {error}"))?;
-    if !status.is_success() {
-        return Err(format!("Claude usage request returned HTTP {status}"));
+    let headers = response.headers().clone();
+    let text = response.text().await.map_err(|error| {
+        UsageFetchError::new(
+            USAGE_ERROR_INVALID_RESPONSE,
+            format!("Claude usage response unreadable: {error}"),
+        )
+    })?;
+    Ok((status, headers, text))
+}
+
+fn refresh_error_as_usage(error: claude_oauth::OAuthRefreshError) -> UsageFetchError {
+    let code = match error.kind {
+        claude_oauth::OAuthRefreshErrorKind::MissingRefreshToken
+        | claude_oauth::OAuthRefreshErrorKind::RefreshTokenExpired
+        | claude_oauth::OAuthRefreshErrorKind::ReauthRequired => USAGE_ERROR_REAUTH_REQUIRED,
+        claude_oauth::OAuthRefreshErrorKind::RateLimited => USAGE_ERROR_RATE_LIMITED,
+        claude_oauth::OAuthRefreshErrorKind::Network => USAGE_ERROR_NETWORK,
+        claude_oauth::OAuthRefreshErrorKind::InvalidResponse => USAGE_ERROR_INVALID_RESPONSE,
+        claude_oauth::OAuthRefreshErrorKind::Persistence
+        | claude_oauth::OAuthRefreshErrorKind::ConcurrentUpdate
+        | claude_oauth::OAuthRefreshErrorKind::Upstream => USAGE_ERROR_UPSTREAM,
+    };
+    UsageFetchError::new(code, error.message).with_retry_after(error.retry_after_seconds)
+}
+
+fn retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+fn claude_http_error(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> UsageFetchError {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return UsageFetchError::new(
+            USAGE_ERROR_RATE_LIMITED,
+            "Claude usage is temporarily rate limited.",
+        )
+        .with_retry_after(retry_after_seconds(headers));
     }
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("Claude usage response was not JSON: {error}"))?;
-    parse_claude_usage(&value, plan)
+    if matches!(status.as_u16(), 401 | 403) {
+        return UsageFetchError::new(
+            USAGE_ERROR_REAUTH_REQUIRED,
+            "Claude Code credentials expired; sign in again.",
+        );
+    }
+    UsageFetchError::new(
+        USAGE_ERROR_UPSTREAM,
+        format!("Claude usage request returned HTTP {status}."),
+    )
+}
+
+async fn fetch_claude_usage_for_config_dir_with(
+    config_dir: Option<&Path>,
+    usage_url: &str,
+    token_url: &str,
+) -> Result<ProviderUsage, UsageFetchError> {
+    let client = http_client().map_err(|error| UsageFetchError::new(USAGE_ERROR_NETWORK, error))?;
+    let now_ms = Utc::now().timestamp_millis();
+    let mut credentials = claude_oauth::read_stored_oauth_credential_snapshot(config_dir)
+        .await
+        .map_err(|error| UsageFetchError::new(USAGE_ERROR_CREDENTIALS, error))?;
+    let mut did_refresh = false;
+
+    if credentials.needs_refresh(now_ms) {
+        if !credentials.can_refresh(now_ms) {
+            return Err(UsageFetchError::new(
+                USAGE_ERROR_REAUTH_REQUIRED,
+                "Claude Code credentials expired; sign in again.",
+            ));
+        }
+        credentials = claude_oauth::refresh_stored_oauth_credentials_for_config_dir_with(
+            config_dir, &client, token_url, now_ms,
+        )
+        .await
+        .map_err(refresh_error_as_usage)?;
+        did_refresh = true;
+    }
+
+    if credentials.access_token.is_empty() {
+        return Err(UsageFetchError::new(
+            USAGE_ERROR_REAUTH_REQUIRED,
+            "Claude Code credentials expired; sign in again.",
+        ));
+    }
+
+    let (mut status, mut headers, mut text) =
+        request_claude_usage(&client, usage_url, &credentials.access_token).await?;
+
+    if status == reqwest::StatusCode::UNAUTHORIZED && !did_refresh {
+        if !credentials.can_refresh(now_ms) {
+            return Err(UsageFetchError::new(
+                USAGE_ERROR_REAUTH_REQUIRED,
+                "Claude Code credentials expired; sign in again.",
+            ));
+        }
+        credentials = claude_oauth::refresh_stored_oauth_credentials_for_config_dir_with(
+            config_dir, &client, token_url, now_ms,
+        )
+        .await
+        .map_err(refresh_error_as_usage)?;
+        (status, headers, text) =
+            request_claude_usage(&client, usage_url, &credentials.access_token).await?;
+    }
+
+    if !status.is_success() {
+        return Err(claude_http_error(status, &headers));
+    }
+    let value: Value = serde_json::from_str(&text).map_err(|error| {
+        UsageFetchError::new(
+            USAGE_ERROR_INVALID_RESPONSE,
+            format!("Claude usage response was not JSON: {error}"),
+        )
+    })?;
+    parse_claude_usage(&value, credentials.subscription)
+        .map_err(|error| UsageFetchError::new(USAGE_ERROR_INVALID_RESPONSE, error))
 }
 
 /// Resolve one Claude profile's quota without sharing cache entries with any
@@ -341,13 +509,65 @@ pub(crate) async fn resolve_claude_usage_for_config_dir(
     config_dir: Option<&Path>,
     cache_identity: &str,
 ) -> ProviderUsage {
-    resolve_provider_with_cache_key(
-        format!("{PROVIDER_CLAUDE}:{cache_identity}"),
-        PROVIDER_CLAUDE,
-        "Claude Code",
-        fetch_claude_usage_for_config_dir(config_dir),
+    resolve_claude_usage_for_config_dir_with(
+        config_dir,
+        cache_identity,
+        CLAUDE_USAGE_URL,
+        claude_oauth::CLAUDE_OAUTH_TOKEN_URL,
     )
     .await
+}
+
+async fn resolve_claude_usage_for_config_dir_with(
+    config_dir: Option<&Path>,
+    cache_identity: &str,
+    usage_url: &str,
+    token_url: &str,
+) -> ProviderUsage {
+    let cache_key = format!("{PROVIDER_CLAUDE}:{cache_identity}");
+    if let Some((age, fresh_for, value)) = cached(&cache_key)
+        && age < fresh_for
+    {
+        return value;
+    }
+
+    let fetch_lock = claude_fetch_lock(&cache_key).await;
+    let _fetch_guard = fetch_lock.lock().await;
+    if let Some((age, fresh_for, value)) = cached(&cache_key)
+        && age < fresh_for
+    {
+        return value;
+    }
+
+    match fetch_claude_usage_for_config_dir_with(config_dir, usage_url, token_url).await {
+        Ok(value) => {
+            store_for(cache_key, value.clone(), CLAUDE_FRESH_TTL);
+            value
+        }
+        Err(error) => {
+            let failure_ttl = error
+                .retry_after_seconds
+                .map(Duration::from_secs)
+                .unwrap_or(CLAUDE_FRESH_TTL)
+                .max(CLAUDE_FRESH_TTL)
+                .min(Duration::from_secs(15 * 60));
+            let mut value = cached(&cache_key)
+                .map(|(_, _, value)| value)
+                .unwrap_or_else(|| {
+                    ProviderUsage::unavailable(
+                        PROVIDER_CLAUDE,
+                        "Claude Code",
+                        error.message.clone(),
+                    )
+                });
+            value.stale = value.available;
+            value.error = Some(error.message);
+            value.error_code = Some(error.code);
+            value.retry_after_seconds = error.retry_after_seconds;
+            store_for(cache_key, value.clone(), failure_ttl);
+            value
+        }
+    }
 }
 
 pub(crate) fn invalidate_claude_usage_cache(cache_identity: &str) {
@@ -381,6 +601,8 @@ fn parse_claude_usage(value: &Value, plan: Option<String>) -> Result<ProviderUsa
         scoped_limits,
         models: Vec::new(),
         error: None,
+        error_code: None,
+        retry_after_seconds: None,
     })
 }
 
@@ -511,6 +733,8 @@ fn parse_codex_usage(value: &Value) -> Result<ProviderUsage, String> {
         scoped_limits: Vec::new(),
         models: Vec::new(),
         error: None,
+        error_code: None,
+        retry_after_seconds: None,
     })
 }
 
@@ -950,6 +1174,8 @@ fn parse_antigravity_usage(value: &Value) -> Result<ProviderUsage, String> {
         scoped_limits: Vec::new(),
         models,
         error: None,
+        error_code: None,
+        retry_after_seconds: None,
     })
 }
 
@@ -1009,6 +1235,7 @@ fn seconds_until(timestamp: &str) -> Option<i64> {
 
 struct CacheEntry {
     fetched_at: Instant,
+    fresh_for: Duration,
     value: ProviderUsage,
 }
 
@@ -1017,18 +1244,42 @@ fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cached(id: &str) -> Option<(Duration, ProviderUsage)> {
+fn claude_fetch_locks() -> &'static tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>
+{
+    static LOCKS: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    LOCKS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+async fn claude_fetch_lock(cache_key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = claude_fetch_locks().lock().await;
+    locks
+        .entry(cache_key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+fn cached(id: &str) -> Option<(Duration, Duration, ProviderUsage)> {
     let guard = cache().lock().ok()?;
     let entry = guard.get(id)?;
-    Some((entry.fetched_at.elapsed(), entry.value.clone()))
+    Some((
+        entry.fetched_at.elapsed(),
+        entry.fresh_for,
+        entry.value.clone(),
+    ))
 }
 
 fn store(id: String, value: ProviderUsage) {
+    store_for(id, value, FRESH_TTL);
+}
+
+fn store_for(id: String, value: ProviderUsage, fresh_for: Duration) {
     if let Ok(mut guard) = cache().lock() {
         guard.insert(
             id,
             CacheEntry {
                 fetched_at: Instant::now(),
+                fresh_for,
                 value,
             },
         );
@@ -1039,6 +1290,339 @@ fn store(id: String, value: ProviderUsage) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn write_claude_credentials(
+        config_dir: &Path,
+        access_token: &str,
+        refresh_token: &str,
+        expires_at_ms: i64,
+    ) {
+        std::fs::write(
+            config_dir.join(".credentials.json"),
+            json!({
+                "claudeAiOauth": {
+                    "accessToken": access_token,
+                    "refreshToken": refresh_token,
+                    "expiresAt": expires_at_ms,
+                    "refreshTokenExpiresAt": expires_at_ms + 30 * 24 * 60 * 60 * 1_000,
+                    "subscriptionType": "max"
+                }
+            })
+            .to_string(),
+        )
+        .expect("credentials");
+    }
+
+    fn claude_usage_payload() -> Value {
+        json!({
+            "five_hour": {"utilization": 21.0},
+            "seven_day": {"utilization": 34.0}
+        })
+    }
+
+    #[tokio::test]
+    async fn valid_claude_access_token_is_not_refreshed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/token"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer valid-access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(claude_usage_payload()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        write_claude_credentials(
+            temp.path(),
+            "valid-access-token",
+            "unused-refresh-token",
+            Utc::now().timestamp_millis() + 60 * 60 * 1_000,
+        );
+
+        let usage = fetch_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &format!("{}/api/oauth/usage", server.uri()),
+            &format!("{}/v1/oauth/token", server.uri()),
+        )
+        .await
+        .expect("usage");
+
+        assert!(usage.available);
+        assert_eq!(usage.session.expect("session").remaining_percent, 79.0);
+    }
+
+    #[tokio::test]
+    async fn expired_claude_access_token_refreshes_before_fetching_usage() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/token"))
+            .and(body_string_contains("refresh_token=old-refresh-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "fresh-access-token",
+                "refresh_token": "rotated-refresh-token",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer fresh-access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(claude_usage_payload()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        write_claude_credentials(
+            temp.path(),
+            "expired-access-token",
+            "old-refresh-token",
+            Utc::now().timestamp_millis() - 1,
+        );
+
+        let usage = fetch_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &format!("{}/api/oauth/usage", server.uri()),
+            &format!("{}/v1/oauth/token", server.uri()),
+        )
+        .await
+        .expect("usage after refresh");
+
+        assert!(usage.available);
+        let persisted: Value = serde_json::from_str(
+            &std::fs::read_to_string(temp.path().join(".credentials.json"))
+                .expect("persisted credentials"),
+        )
+        .expect("credentials JSON");
+        assert_eq!(
+            persisted["claudeAiOauth"]["refreshToken"].as_str(),
+            Some("rotated-refresh-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_claude_access_token_without_refresh_credentials_requires_login() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        write_claude_credentials(
+            temp.path(),
+            "expired-access-token",
+            "expired-refresh-token",
+            Utc::now().timestamp_millis() - 31 * 24 * 60 * 60 * 1_000,
+        );
+
+        let error = fetch_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &format!("{}/api/oauth/usage", server.uri()),
+            &format!("{}/v1/oauth/token", server.uri()),
+        )
+        .await
+        .expect_err("expired refresh credentials require login");
+
+        assert_eq!(error.code, USAGE_ERROR_REAUTH_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn refreshable_credentials_without_access_token_are_repaired() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "recovered-access-token",
+                "refresh_token": "rotated-refresh-token",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer recovered-access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(claude_usage_payload()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        std::fs::write(
+            temp.path().join(".credentials.json"),
+            json!({
+                "claudeAiOauth": {
+                    "refreshToken": "refresh-token",
+                    "refreshTokenExpiresAt": Utc::now().timestamp_millis() + 86_400_000,
+                    "subscriptionType": "max"
+                }
+            })
+            .to_string(),
+        )
+        .expect("credentials");
+
+        let usage = fetch_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &format!("{}/api/oauth/usage", server.uri()),
+            &format!("{}/v1/oauth/token", server.uri()),
+        )
+        .await
+        .expect("usage after repairing missing access token");
+        assert!(usage.available);
+    }
+
+    #[tokio::test]
+    async fn unexpected_claude_401_refreshes_once_and_retries_usage() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer rejected-access-token"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "replacement-access-token",
+                "refresh_token": "replacement-refresh-token",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer replacement-access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(claude_usage_payload()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        write_claude_credentials(
+            temp.path(),
+            "rejected-access-token",
+            "refresh-token",
+            Utc::now().timestamp_millis() + 60 * 60 * 1_000,
+        );
+
+        let usage = fetch_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &format!("{}/api/oauth/usage", server.uri()),
+            &format!("{}/v1/oauth/token", server.uri()),
+        )
+        .await
+        .expect("usage after 401 repair");
+        assert!(usage.available);
+    }
+
+    #[tokio::test]
+    async fn parallel_claude_account_reads_share_one_refresh_and_usage_fetch() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "fresh-access-token",
+                "refresh_token": "rotated-refresh-token",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer fresh-access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(claude_usage_payload()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        write_claude_credentials(
+            temp.path(),
+            "expired-access-token",
+            "old-refresh-token",
+            Utc::now().timestamp_millis() - 1,
+        );
+        let identity = format!("test-{}", uuid::Uuid::new_v4());
+        let usage_url = format!("{}/api/oauth/usage", server.uri());
+        let token_url = format!("{}/v1/oauth/token", server.uri());
+
+        let (first, second) = tokio::join!(
+            resolve_claude_usage_for_config_dir_with(
+                Some(temp.path()),
+                &identity,
+                &usage_url,
+                &token_url,
+            ),
+            resolve_claude_usage_for_config_dir_with(
+                Some(temp.path()),
+                &identity,
+                &usage_url,
+                &token_url,
+            )
+        );
+        assert!(first.available);
+        assert!(second.available);
+    }
+
+    #[tokio::test]
+    async fn claude_rate_limit_is_structured_and_negatively_cached() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/oauth/token"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "90"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let temp = tempdir().expect("temp dir");
+        write_claude_credentials(
+            temp.path(),
+            "valid-access-token",
+            "refresh-token",
+            Utc::now().timestamp_millis() + 60 * 60 * 1_000,
+        );
+        let identity = format!("test-{}", uuid::Uuid::new_v4());
+        let usage_url = format!("{}/api/oauth/usage", server.uri());
+        let token_url = format!("{}/v1/oauth/token", server.uri());
+
+        let first = resolve_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &identity,
+            &usage_url,
+            &token_url,
+        )
+        .await;
+        let second = resolve_claude_usage_for_config_dir_with(
+            Some(temp.path()),
+            &identity,
+            &usage_url,
+            &token_url,
+        )
+        .await;
+        assert!(!first.available);
+        assert_eq!(first.error_code, Some(USAGE_ERROR_RATE_LIMITED));
+        assert_eq!(first.retry_after_seconds, Some(90));
+        assert_eq!(second.error_code, first.error_code);
+    }
 
     #[test]
     fn parses_claude_weekly_session_and_scoped_model_limit() {

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The full-screen conversation surface presented for one route occurrence.
@@ -12,19 +13,6 @@ public enum GaryxConversationRouteRenderPhase: String, Equatable, Sendable {
     case openingPage
     case materializingConversation
     case live
-}
-
-/// Message availability is independent of full-page presentation. A thread
-/// page may already be live while its transcript is still loading.
-public enum GaryxConversationRouteMessagePhase: String, Equatable, Sendable {
-    case waitingForActivation
-    case loading
-    case ready
-}
-
-public enum GaryxConversationRoutePresentationAction: Equatable, Sendable {
-    case none
-    case beginMessagePreparation
 }
 
 /// Chooses the presentation pipeline once for a conversation route occurrence.
@@ -77,6 +65,60 @@ public enum GaryxConversationOpeningTranscriptPolicy {
         hasRenderedSnapshot: Bool = false
     ) -> GaryxConversationOpeningTranscriptPresentation {
         localRenderableRowCount > 0 || hasRenderedSnapshot ? .localMessages : .loading
+    }
+}
+
+/// Scroll geometry retained with one compositor snapshot. The viewport frame
+/// is expressed in the owning route page's coordinate space so outer route
+/// transition transforms do not become part of transcript placement.
+public struct GaryxConversationTranscriptSnapshotCaptureGeometry: Equatable, Sendable {
+    public struct Insets: Equatable, Sendable {
+        public let top: CGFloat
+        public let left: CGFloat
+        public let bottom: CGFloat
+        public let right: CGFloat
+
+        public init(top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+            self.top = top
+            self.left = left
+            self.bottom = bottom
+            self.right = right
+        }
+    }
+
+    public let viewportFrameInPage: CGRect
+    public let adjustedContentInsets: Insets
+    public let contentOffset: CGPoint
+
+    public init(
+        viewportFrameInPage: CGRect,
+        adjustedContentInsets: Insets,
+        contentOffset: CGPoint
+    ) {
+        self.viewportFrameInPage = viewportFrameInPage
+        self.adjustedContentInsets = adjustedContentInsets
+        self.contentOffset = contentOffset
+    }
+
+    public func snapshotPoint(forContentPoint point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: point.x - contentOffset.x,
+            y: point.y - contentOffset.y
+        )
+    }
+}
+
+public enum GaryxConversationTranscriptSnapshotGeometry {
+    public static func installationFrame(
+        capture: GaryxConversationTranscriptSnapshotCaptureGeometry,
+        containerFrameInPage: CGRect
+    ) -> CGRect {
+        CGRect(
+            x: capture.viewportFrameInPage.minX - containerFrameInPage.minX,
+            y: capture.viewportFrameInPage.minY - containerFrameInPage.minY,
+            width: capture.viewportFrameInPage.width,
+            height: capture.viewportFrameInPage.height
+        )
     }
 }
 
@@ -140,12 +182,15 @@ enum GaryxConversationRouteRenderInputResolver {
 /// Core-owned lifecycle and delivered-frame policy for a staged gateway thread.
 ///
 /// The route page is visible from mount. Once terminal, the first delivered
-/// opening-page frame closes the moving transition before message preparation
-/// begins; two delivered opening-page frames separate navigation settle from
-/// the expensive live SwiftUI mount. A short run of consecutive on-budget
+/// opening-page frame closes the moving transition before conversation runtime
+/// work begins; two delivered opening-page frames separate navigation settle
+/// from the expensive live SwiftUI mount. A short run of consecutive on-budget
 /// frames then proves that mount is composited before the opening page is
-/// removed. Already live predecessor hosts remain live while inactive so back
-/// navigation never reconstructs them. Local drafts are excluded by
+/// removed. This materialization clock deliberately has no network-readiness
+/// input: history refresh may control message-local loading and header chrome,
+/// but can never retain the noninteractive opening cover. Already live
+/// predecessor hosts remain live while inactive so back navigation never
+/// reconstructs them. Local drafts are excluded by
 /// `GaryxConversationRoutePresentationPolicy` and never instantiate this state.
 public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public static let defaultTerminalOpeningFrameCount = 2
@@ -153,7 +198,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
 
     public private(set) var lifecycle: GaryxRouteHostLifecyclePhase
     public private(set) var renderPhase: GaryxConversationRouteRenderPhase
-    public private(set) var messagePhase: GaryxConversationRouteMessagePhase
+    public private(set) var hasBegunContentPreparation: Bool
     public private(set) var hasPresentedLiveConversation: Bool
 
     private let terminalOpeningFrameCount: Int
@@ -172,7 +217,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         self.terminalOpeningFrameCount = terminalOpeningFrameCount
         self.materializationFrameCount = materializationFrameCount
         renderPhase = .openingPage
-        messagePhase = .waitingForActivation
+        hasBegunContentPreparation = false
         hasPresentedLiveConversation = false
     }
 
@@ -191,42 +236,36 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         renderPhase != .live
     }
 
-    public var showsMessageLoading: Bool {
-        messagePhase != .ready
+    /// Interaction belongs to the real transcript only after the compositor
+    /// handoff. Before then, the opening page is a brief transition continuity
+    /// layer and must not outlive the materialization stability proof.
+    public var allowsLiveConversationInteraction: Bool {
+        renderPhase == .live
     }
 
     public var needsPresentedFrameClock: Bool {
-        guard lifecycle == .active, !hasPresentedLiveConversation else { return false }
-        return renderPhase == .openingPage || messagePhase == .ready
+        lifecycle == .active && !hasPresentedLiveConversation
     }
 
-    @discardableResult
     public mutating func apply(
         lifecycle nextLifecycle: GaryxRouteHostLifecyclePhase
-    ) -> GaryxConversationRoutePresentationAction {
-        guard lifecycle != nextLifecycle else { return .none }
+    ) {
+        guard lifecycle != nextLifecycle else { return }
         lifecycle = nextLifecycle
 
         if hasPresentedLiveConversation {
             renderPhase = .live
             deliveredFramesInPhase = 0
-            return .none
+            return
         }
 
         guard nextLifecycle == .active else {
             renderPhase = .openingPage
-            messagePhase = .waitingForActivation
+            hasBegunContentPreparation = false
             deliveredFramesInPhase = 0
             referenceFrameInterval = nil
-            return .none
+            return
         }
-
-        return .none
-    }
-
-    public mutating func messageContentDidBecomeReady() {
-        guard lifecycle == .active, messagePhase == .loading else { return }
-        messagePhase = .ready
     }
 
     /// Records one frame delivered after terminal activation. `nil` begins a
@@ -241,11 +280,11 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
 
         switch renderPhase {
         case .openingPage:
-            if messagePhase == .waitingForActivation {
+            if !hasBegunContentPreparation {
                 // Keep terminal activation itself free of transcript work.
                 // The exact thread page is already visible, including cached
                 // rows or its message-local skeleton and header spinner.
-                messagePhase = .loading
+                hasBegunContentPreparation = true
             }
             if let interval, interval > 0 {
                 referenceFrameInterval = min(referenceFrameInterval ?? interval, interval)
@@ -258,19 +297,16 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
             deliveredFramesInPhase = 0
 
         case .materializingConversation:
-            guard messagePhase == .ready,
-                  let interval,
+            guard let interval,
                   interval > 0
             else {
                 deliveredFramesInPhase = 0
                 return renderPhase
             }
             guard let referenceFrameInterval else {
-                // Content readiness deliberately resets the delivered-frame
-                // clock. If that reset coincides with the second opening
-                // frame, materialization begins without an interval sample;
-                // establish a fresh reference here instead of leaving the
-                // reveal proof permanently unable to advance.
+                // The transition may reach materialization before UIKit has
+                // delivered an interval sample. Establish a fresh reference
+                // here instead of leaving the reveal proof unable to advance.
                 self.referenceFrameInterval = interval
                 deliveredFramesInPhase = 0
                 return renderPhase

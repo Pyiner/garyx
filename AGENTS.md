@@ -204,6 +204,11 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
   `is_active: false`; that flag means the bucket is not currently consuming,
   not that its quota is unavailable. Preserve scoped limits that have a usable
   model scope and percentage.
+- Claude quota reads must not rotate a still-valid access token. Refresh stored
+  OAuth credentials only after `expiresAt` has elapsed or after the usage API
+  rejects the access token with 401, retry at most once, and atomically persist
+  any rotated refresh token before using the replacement credential. Network,
+  rate-limit, and upstream failures never trigger credential refresh.
 - Gateway code changes do not affect the running gateway until the binary is
   built, installed, and the managed gateway is restarted.
 - For local macOS gateway development, use `scripts/build-local-cli.sh` to

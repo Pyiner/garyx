@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 import XCTest
@@ -186,6 +187,78 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         )
         XCTAssertGreaterThan(installedSnapshot.frame.maxX, openingContainer.bounds.maxX)
         XCTAssertGreaterThan(installedSnapshot.frame.maxY, openingContainer.bounds.maxY)
+    }
+
+    func testWarmReentrySnapshotMapsFullPageCaptureIntoTranscriptContainer() throws {
+        let threadID = "thread::snapshot-page-space-repro-\(UUID().uuidString)"
+        let pageSize = CGSize(width: 402, height: 874)
+        let sourceController = UIViewController()
+        let sourceScrollView = UIScrollView(frame: CGRect(origin: .zero, size: pageSize))
+        sourceScrollView.contentInsetAdjustmentBehavior = .never
+        sourceScrollView.contentInset = UIEdgeInsets(top: 124, left: 0, bottom: 0, right: 0)
+        sourceScrollView.contentOffset = CGPoint(x: 0, y: -124)
+        sourceScrollView.contentSize = CGSize(width: 402, height: 249)
+        sourceController.view.addSubview(sourceScrollView)
+
+        let firstRow = UIView(frame: CGRect(x: 16, y: 34, width: 370, height: 80))
+        firstRow.backgroundColor = .black
+        sourceScrollView.addSubview(firstRow)
+
+        let sourceWindow = makeTestWindow(frame: CGRect(origin: .zero, size: pageSize))
+        sourceWindow.rootViewController = sourceController
+        sourceWindow.isHidden = false
+        defer {
+            sourceWindow.isHidden = true
+            sourceWindow.rootViewController = nil
+        }
+        sourceWindow.layoutIfNeeded()
+
+        XCTAssertEqual(sourceScrollView.adjustedContentInset.top, 124, accuracy: 0.001)
+        XCTAssertEqual(sourceScrollView.contentOffset.y, -124, accuracy: 0.001)
+        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+            threadID: threadID,
+            revision: "full-page-402x874-inset-124",
+            scrollView: { sourceScrollView }
+        )
+        XCTAssertTrue(
+            waitForTranscriptSnapshot(threadID: threadID),
+            "the measured full-page scroll geometry must be captured before installation"
+        )
+
+        let destinationController = UIViewController()
+        let openingContainer = GaryxConversationTranscriptSnapshotHostView(
+            frame: CGRect(x: 0, y: 124, width: 402, height: 593)
+        )
+        destinationController.view.addSubview(openingContainer)
+        let destinationWindow = makeTestWindow(frame: CGRect(origin: .zero, size: pageSize))
+        destinationWindow.rootViewController = destinationController
+        destinationWindow.isHidden = false
+        defer {
+            destinationWindow.isHidden = true
+            destinationWindow.rootViewController = nil
+        }
+        destinationWindow.layoutIfNeeded()
+
+        openingContainer.displaySnapshot(for: threadID)
+        openingContainer.layoutIfNeeded()
+
+        let installedSnapshot = try XCTUnwrap(openingContainer.subviews.first)
+        XCTAssertEqual(installedSnapshot.frame.minX, 0, accuracy: 0.001)
+        XCTAssertEqual(installedSnapshot.frame.minY, -124, accuracy: 0.001)
+        XCTAssertEqual(installedSnapshot.frame.size, pageSize)
+
+        let firstRowYInCapturedPixels = firstRow.frame.minY - sourceScrollView.contentOffset.y
+        let liveFirstRowPageY = sourceScrollView.frame.minY + firstRowYInCapturedPixels
+        let openingFirstRowPageY = openingContainer.frame.minY
+            + installedSnapshot.frame.minY
+            + firstRowYInCapturedPixels
+        XCTAssertEqual(liveFirstRowPageY, 158, accuracy: 0.001)
+        XCTAssertEqual(
+            openingFirstRowPageY,
+            liveFirstRowPageY,
+            accuracy: 0.001,
+            "the cached opening pixels must keep the live transcript's page position"
+        )
     }
 
     func testTaskNotificationAndLongUserBubbleShareTrailingWidthOwnerAcrossDynamicType() throws {
@@ -602,7 +675,126 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
 
         model.connectionState = .checking
+        pumpMainRunLoop(duration: 0.1)
         XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+    }
+
+    func testProductionRouteCanvasRootUpdateDefersRevealPublishOutsideUpdateWindow() async throws {
+        let suiteName = "GaryxRouteCanvasUpdatePublishTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = GaryxProductionRouteStore()
+        let model = GaryxMobileModel(defaults: defaults)
+        model.gatewayURL = "http://127.0.0.1:4000"
+        model.connectionState = .ready(version: "first")
+        guard case .navigationShell(let firstRootOccurrence) =
+            model.homeObservationStore.rootSurface else {
+            return XCTFail("first navigation Shell did not begin")
+        }
+
+        func canvas(
+            _ occurrenceID: GaryxRootSurfaceOccurrenceID
+        ) -> GaryxProductionRouteCanvas {
+            GaryxProductionRouteCanvas(
+                rootSurfaceOccurrenceID: occurrenceID,
+                store: store,
+                model: model,
+                homeContent: AnyView(Color.blue),
+                routeContent: { _ in AnyView(Color.green) },
+                onOpenDrawer: {}
+            )
+        }
+
+        let root = UIHostingController(rootView: canvas(firstRootOccurrence))
+        let window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = root
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        root.view.frame = window.bounds
+        root.view.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+
+        let initialContainer = try XCTUnwrap(
+            descendants(of: root).compactMap { $0 as? GaryxRouteStackContainer }.first
+        )
+        model.drawerRevealInteraction.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: firstRootOccurrence
+        )
+
+        model.connectionState = .checking
+        model.connectionState = .ready(version: "second")
+        guard case .navigationShell(let secondRootOccurrence) =
+            model.homeObservationStore.rootSurface else {
+            return XCTFail("second navigation Shell did not begin")
+        }
+        let foregroundHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: secondRootOccurrence,
+            rawValue: "foreground-update-host"
+        )
+        model.attachGlobalRevealHostOccurrence(foregroundHost)
+        model.drawerRevealInteraction.beginGesture(in: foregroundHost)
+        model.drawerRevealInteraction.updateGesture(
+            logicalTranslation: 120,
+            in: foregroundHost
+        )
+        XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
+
+        var publicationCount = 0
+        var synchronousUpdatePublicationCount = 0
+        var isUpdatingRootView = false
+        let publication = model.drawerRevealInteraction.objectWillChange.sink {
+            publicationCount += 1
+            if isUpdatingRootView {
+                synchronousUpdatePublicationCount += 1
+            }
+        }
+
+        isUpdatingRootView = true
+        root.rootView = canvas(secondRootOccurrence)
+        root.view.layoutIfNeeded()
+        isUpdatingRootView = false
+
+        XCTAssertEqual(
+            synchronousUpdatePublicationCount,
+            0,
+            "UIViewControllerRepresentable.update must not synchronously publish"
+        )
+        XCTAssertFalse(
+            model.drawerRevealInteraction.diagnostics.hasTerminalResidue,
+            "update must synchronously terminalize semantic reveal state"
+        )
+        XCTAssertEqual(
+            model.drawerRevealInteraction.presentation.phase,
+            .dragging,
+            "the observable projection remains unchanged inside update"
+        )
+        for _ in 0..<20
+            where model.drawerRevealInteraction.presentation
+                != model.drawerRevealInteraction.diagnostics.presentation {
+            root.view.layoutIfNeeded()
+            await Task.yield()
+        }
+
+        let updatedContainer = try XCTUnwrap(
+            descendants(of: root).compactMap { $0 as? GaryxRouteStackContainer }.first
+        )
+        XCTAssertTrue(updatedContainer === initialContainer)
+        XCTAssertGreaterThan(publicationCount, 0, "the deferred terminal publish must land")
+        XCTAssertEqual(synchronousUpdatePublicationCount, 0)
+        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        XCTAssertEqual(
+            model.drawerRevealInteraction.presentation,
+            model.drawerRevealInteraction.diagnostics.presentation
+        )
+        XCTAssertTrue(try XCTUnwrap(updatedContainer.homeLeadingEdgeInteraction).isEligible())
+        withExtendedLifetime(publication) {}
     }
 
     func testFakeRouteHostRequiresExplicitDebugEnvironmentOptIn() throws {
@@ -783,6 +975,21 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let model = GaryxMobileModel(defaults: defaults)
+        let rootSurfaceOccurrenceID = GaryxRootSurfaceOccurrenceID(rawValue: 1)
+        let revealHostOccurrenceID = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
+            rawValue: "draft-route-wiring-host"
+        )
+        model.applyGlobalRevealRootSurfaceTransition(
+            .navigationShellBegan(rootSurfaceOccurrenceID)
+        )
+        model.attachGlobalRevealHostOccurrence(revealHostOccurrenceID)
+        defer {
+            model.detachGlobalRevealHostOccurrence(revealHostOccurrenceID)
+            model.applyGlobalRevealRootSurfaceTransition(
+                .navigationShellEnded(rootSurfaceOccurrenceID)
+            )
+        }
         let draft = entry(
             1,
             destination: .conversationDraft(draftID: "draft-direct")
@@ -796,6 +1003,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
                 Self.productionConversationHost(
                     node: node,
                     model: model,
+                    rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
                     routeLifecycleRegistry: draftRegistry
                 )
             }
@@ -805,7 +1013,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertEqual(
             draftRegistry.observationCounts(for: draftIdentity),
             .init(),
-            "a local draft must not own the staged lifecycle, readiness, or frame observers"
+            "a local draft must not own the staged lifecycle or frame observers"
         )
         XCTAssertFalse(draftRegistry.hasPresentedFrameDemand)
 
@@ -838,6 +1046,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
                 Self.productionConversationHost(
                     node: node,
                     model: model,
+                    rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
                     routeLifecycleRegistry: existingRegistry
                 )
             }
@@ -846,8 +1055,8 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 
         XCTAssertEqual(
             existingRegistry.observationCounts(for: existingIdentity),
-            .init(lifecycle: 1, contentReady: 1, presentedFrames: 1),
-            "the sensitivity control must observe the unchanged staged gateway-thread driver"
+            .init(lifecycle: 1, presentedFrames: 1),
+            "the sensitivity control must observe the staged gateway-thread driver"
         )
         XCTAssertTrue(existingRegistry.hasPresentedFrameDemand)
 
@@ -1558,6 +1767,7 @@ final class GaryxRouteStackContainerTests: XCTestCase {
     private static func productionConversationHost(
         node: GaryxRoutePresentationNode,
         model: GaryxMobileModel,
+        rootSurfaceOccurrenceID: GaryxRootSurfaceOccurrenceID,
         routeLifecycleRegistry: GaryxRouteLifecycleRegistry
     ) -> AnyView {
         guard case .entry(let entry) = node else {
@@ -1572,6 +1782,10 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             .environment(model.homeObservationStore)
             .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
             .environment(\.garyxAvatarScopeId, model.currentGatewayScopeId)
+            // The production route host always supplies this through its root
+            // shell; tests thread the harness occurrence through so
+            // occurrence-scoped assertions can vary it.
+            .environment(\.garyxRootSurfaceOccurrenceID, rootSurfaceOccurrenceID)
             .environment(\.garyxRouteLifecycleRegistry, routeLifecycleRegistry)
             .environment(
                 \.garyxPresentationLeaseCoordinator,

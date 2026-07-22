@@ -72,6 +72,8 @@ export interface DesktopProviderUsage {
   scopedLimits: DesktopScopedUsageLimit[];
   models: DesktopModelUsage[];
   error?: string | null;
+  errorCode?: string | null;
+  retryAfterSeconds?: number | null;
 }
 
 export interface DesktopCodingUsage {

@@ -38,7 +38,8 @@ final class GaryxProductionRouteStore: ObservableObject {
     private var pendingPlans: [GaryxNavigationIntentID: PendingRoutePlan] = [:]
     private var activePlan: PendingRoutePlan?
     private var preparedConversationEntry: GaryxRouteEntry?
-    var presentationBarrierActivated: @MainActor () -> Void = {}
+    var presentationBarrierActivated:
+        @MainActor (GaryxObservableSettlementTiming) -> Void = { _ in }
     private var navigationScopes: @MainActor () -> GaryxGatewayScopeRegistry = {
         GaryxGatewayScopeRegistry(
             initialActiveScope: GaryxGatewayScope(identity: "route-runtime", epoch: 1)
@@ -370,7 +371,7 @@ final class GaryxProductionRouteStore: ObservableObject {
             timing: observableSettlement
         )
         if activated {
-            presentationBarrierActivated()
+            presentationBarrierActivated(observableSettlement)
         }
     }
 
@@ -661,18 +662,12 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             container?.ensurePresentedFrames()
         }
         routeLifecycleRegistry.contentPreparationDidBegin = {
-            [weak model, weak store, weak routeLifecycleRegistry] identity in
-            guard let routeLifecycleRegistry else { return }
+            [weak model, weak store] identity in
             guard case .entry(let occurrenceID) = identity,
                   let entry = store?.path.first(where: { $0.id == occurrenceID })
             else { return }
-            guard case .conversation = entry.destination, let model else {
-                routeLifecycleRegistry.contentDidBecomeReady(identity)
-                return
-            }
-            model.conversationRouteContentPreparationBegan(entry) {
-                routeLifecycleRegistry.contentDidBecomeReady(identity)
-            }
+            guard case .conversation = entry.destination, let model else { return }
+            model.conversationRouteContentPreparationBegan(entry)
         }
         container.layoutDirectionOverride = layoutDirection == .rightToLeft
             ? .rightToLeft

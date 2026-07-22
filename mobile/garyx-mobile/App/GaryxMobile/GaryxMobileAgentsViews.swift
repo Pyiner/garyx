@@ -35,17 +35,64 @@ struct GaryxAgentsView: View {
             GaryxCreateAgentCard()
         }
         .garyxFullScreenCover(item: $model.selectedAgentDetail) { agent in
-            GaryxFormSheet(title: "Agent Detail") {
-                GaryxAgentDetailCard(agent: agent)
+            GaryxAgentDetailPresentation(agent: agent)
+        }
+    }
+}
+
+final class GaryxAgentDetailNavigation: ObservableObject {
+    @Published var showsEdit = false
+
+    func openEdit() {
+        showsEdit = true
+    }
+
+    func returnToDetail() {
+        showsEdit = false
+    }
+}
+
+struct GaryxAgentDetailPresentation: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let agent: GaryxAgentSummary
+    @StateObject private var navigation: GaryxAgentDetailNavigation
+
+    init(
+        agent: GaryxAgentSummary,
+        navigation: GaryxAgentDetailNavigation = GaryxAgentDetailNavigation()
+    ) {
+        self.agent = agent
+        _navigation = StateObject(wrappedValue: navigation)
+    }
+
+    var body: some View {
+        NavigationStack {
+            GaryxFormPage(title: "Agent Detail", onDone: { dismiss() }) {
+                GaryxAgentDetailCard(agent: agent, onEdit: navigation.openEdit)
+            }
+            .navigationDestination(isPresented: $navigation.showsEdit) {
+                GaryxAgentEditPage(
+                    agent: displayAgent,
+                    onCancel: navigation.returnToDetail
+                ) { updatedAgent in
+                    model.selectedAgentDetail = updatedAgent
+                    navigation.returnToDetail()
+                }
+                .navigationBarBackButtonHidden(true)
             }
         }
+    }
+
+    private var displayAgent: GaryxAgentSummary {
+        model.agents.first(where: { $0.id == agent.id }) ?? agent
     }
 }
 
 struct GaryxAgentDetailCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let agent: GaryxAgentSummary
-    @State private var showsEditForm = false
+    let onEdit: () -> Void
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
@@ -82,9 +129,7 @@ struct GaryxAgentDetailCard: View {
                     }
 
                     if !displayAgent.builtIn {
-                        Button {
-                            showsEditForm = true
-                        } label: {
+                        Button(action: onEdit) {
                             Label("Edit Agent", systemImage: "pencil")
                         }
                     }
@@ -103,11 +148,6 @@ struct GaryxAgentDetailCard: View {
                         Label("Delete Agent", systemImage: "trash")
                     }
                 }
-            }
-        }
-        .garyxFullScreenCover(isPresented: $showsEditForm) {
-            GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
-                model.selectedAgentDetail = updatedAgent
             }
         }
         .garyxConfirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -601,11 +641,11 @@ struct GaryxCreateAgentCard: View {
 }
 
 
-private struct GaryxAgentEditSheet: View {
-    @Environment(\.dismiss) private var dismiss
+private struct GaryxAgentEditPage: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let agent: GaryxAgentSummary
-    var onSaved: ((GaryxAgentSummary) -> Void)?
+    let onCancel: () -> Void
+    let onSaved: (GaryxAgentSummary) -> Void
     @State private var draft: GaryxCustomAgentDraft
     @State private var status = GaryxCustomAgentEditStatus.loading
     @State private var isSaving = false
@@ -613,18 +653,21 @@ private struct GaryxAgentEditSheet: View {
 
     init(
         agent: GaryxAgentSummary,
-        onSaved: ((GaryxAgentSummary) -> Void)? = nil
+        onCancel: @escaping () -> Void,
+        onSaved: @escaping (GaryxAgentSummary) -> Void
     ) {
         self.agent = agent
+        self.onCancel = onCancel
         self.onSaved = onSaved
         _draft = State(initialValue: .edit(authoritative: agent))
     }
 
     var body: some View {
-        GaryxFormSheet(
+        GaryxFormPage(
             title: "Edit Agent",
             canSave: canSaveAgent && !isSaving,
             isSaving: isSaving,
+            onCancel: onCancel,
             onSave: { Task { await saveAgent() } }
         ) {
             editStatusSection
@@ -748,8 +791,7 @@ private struct GaryxAgentEditSheet: View {
 
         switch await model.updateAgent(agentId: draft.agentId, request: request) {
         case .saved(let updated):
-            dismiss()
-            onSaved?(updated)
+            onSaved(updated)
         case .failed(.editConflict(let currentUpdatedAt)):
             status = .conflict(currentUpdatedAt: currentUpdatedAt)
         case .failed(.deleted):

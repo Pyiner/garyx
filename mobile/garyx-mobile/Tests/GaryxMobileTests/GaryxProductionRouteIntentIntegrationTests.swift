@@ -196,7 +196,7 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         model.selectedThread = thread
         model.productionRouteStore.applyCanonicalPath([second])
         model.conversationContentActivationOccurrenceID = first.id
-        model.conversationContentActivationTask = Task { @MainActor in
+        model.conversationInitialHistoryRefreshTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000_000)
         }
 
@@ -212,10 +212,15 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         }
         await fulfillment(of: [registered], timeout: 1)
 
-        model.conversationRouteContentPreparationBegan(second) {}
+        model.conversationRouteContentPreparationBegan(second)
 
         XCTAssertNil(model.conversationContentActivationWaiters[first.id])
         XCTAssertEqual(model.conversationContentActivationOccurrenceID, second.id)
+        XCTAssertEqual(model.completedConversationContentActivationOccurrenceID, second.id)
+        XCTAssertNotNil(
+            model.conversationInitialHistoryRefreshTask,
+            "local activation must complete while the independent history refresh remains in flight"
+        )
         model.cancelConversationContentActivation()
         await fulfillment(of: [resumed], timeout: 1)
         waiterTask.cancel()
@@ -356,11 +361,68 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
+    func testStoreDetachDefersActivePresentationBarrierPublication() async {
+        let store = GaryxProductionRouteStore()
+        let container = makeContainer(path: [], store: store)
+        store.attach(container)
+        let lease = GaryxPresentationLeaseSession()
+        lease.acquireIfNeeded(
+            coordinator: store.presentationCoordinator,
+            parent: nil,
+            operationContext: { nil }
+        )
+        XCTAssertTrue(store.hasPresentationBarrier)
+
+        var isInsideDetach = false
+        var publicationCount = 0
+        var synchronousPublicationCount = 0
+        let publication = store.objectWillChange.sink {
+            publicationCount += 1
+            if isInsideDetach {
+                synchronousPublicationCount += 1
+            }
+        }
+
+        isInsideDetach = true
+        store.detach(container)
+        isInsideDetach = false
+
+        XCTAssertFalse(store.isAttached, "container ownership bookkeeping must be immediate")
+        XCTAssertFalse(
+            store.semanticPresentationBarrierIsActive,
+            "the barrier's semantic state settles with ownership"
+        )
+        XCTAssertTrue(
+            store.hasPresentationBarrier,
+            "the observable barrier remains stable until the deferred settlement"
+        )
+        XCTAssertEqual(
+            synchronousPublicationCount,
+            0,
+            "store.detach must not publish from a representable dismantle callback"
+        )
+        for _ in 0..<20 where store.hasPresentationBarrier {
+            await Task.yield()
+        }
+        XCTAssertFalse(store.hasPresentationBarrier)
+        XCTAssertEqual(publicationCount, 1)
+        withExtendedLifetime((lease, publication)) {}
+    }
+
     func testDeferredBarrierDetachCannotOverwriteNewerAttachment() {
         let scheduler = GaryxManualObservableSettlementScheduler()
         let store = GaryxProductionRouteStore(
             observableSettlementScheduler: scheduler
         )
+        var barrierActivationWasDeferred: [Bool] = []
+        store.presentationBarrierActivated = { timing in
+            switch timing {
+            case .immediate:
+                barrierActivationWasDeferred.append(false)
+            case .afterViewGraphUpdate:
+                barrierActivationWasDeferred.append(true)
+            }
+        }
         let firstContainer = makeContainer(path: [], store: store)
         store.attach(firstContainer)
         XCTAssertTrue(store.presentationCoordinator.acquire(
@@ -369,6 +431,10 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
             resultBearing: false
         ))
         XCTAssertTrue(store.hasPresentationBarrier)
+        var publicationCount = 0
+        let publication = store.objectWillChange.sink {
+            publicationCount += 1
+        }
 
         store.detach(firstContainer)
 
@@ -380,15 +446,30 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         XCTAssertTrue(replacementContainer.acquirePresentationLease(
             .init(rawValue: "replacement-barrier")
         ))
-        store.attach(replacementContainer)
+        store.attach(
+            replacementContainer,
+            observableSettlement: .afterViewGraphUpdate
+        )
 
         XCTAssertTrue(store.semanticPresentationBarrierIsActive)
         XCTAssertTrue(store.hasPresentationBarrier)
+        XCTAssertEqual(
+            barrierActivationWasDeferred,
+            [false, true],
+            "a lifecycle rebind must propagate graph-safe timing to barrier side effects"
+        )
         scheduler.runNext()
         XCTAssertTrue(
             store.hasPresentationBarrier,
             "an older deferred detach cannot clear a replacement container's barrier"
         )
+        XCTAssertEqual(scheduler.pendingCount, 0)
+        XCTAssertEqual(
+            publicationCount,
+            0,
+            "coalescing the stale detach into the latest active barrier needs no projection write"
+        )
+        withExtendedLifetime(publication) {}
     }
 
     func testProductionCanvasLifecycleReplacementDefersObservableSettlement() throws {
@@ -631,7 +712,6 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         barrierScheduler.runNext()
         XCTAssertFalse(barrierProbeStore.hasPresentationBarrier)
         XCTAssertEqual(barrierDetachPublicationCount, 1)
-
         let model = routePreparationModel(session: .shared)
         model.connectionState = .ready(version: "build-158-dismantle-repro")
         guard case .navigationShell(let rootOccurrenceID) = model.homeObservationStore.rootSurface
@@ -712,6 +792,7 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         XCTAssertFalse(model.productionRouteStore.semanticPresentationBarrierIsActive)
         XCTAssertFalse(model.productionRouteStore.hasPresentationBarrier)
         XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        model.drawerRevealInteraction.assertTerminalHasZeroResidue()
         XCTAssertEqual(
             model.drawerRevealInteraction.presentation,
             .init(reveal: 330, phase: .idle, target: .open),
@@ -738,9 +819,13 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
 
     func testSceneInterruptionTerminatesEveryGlobalRevealInteraction() {
         let model = routePreparationModel(session: .shared)
+        let revealHost = attachGlobalRevealHost(to: model)
         model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
-        model.drawerRevealInteraction.beginGesture()
-        model.drawerRevealInteraction.updateGesture(logicalTranslation: 140)
+        model.drawerRevealInteraction.beginGesture(in: revealHost)
+        model.drawerRevealInteraction.updateGesture(
+            logicalTranslation: 140,
+            in: revealHost
+        )
         model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .open)
         model.taskTreeRevealInteraction.setTarget(.closed, animated: true)
         XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
@@ -763,6 +848,7 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
 
     func testSceneInterruptionStressLeavesBothLongLivedStoresIdle() {
         let model = routePreparationModel(session: .shared)
+        let revealHost = attachGlobalRevealHost(to: model)
         model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
         model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .closed)
 
@@ -781,9 +867,10 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
                 event: .routeInvalidated
             )
 
-            model.drawerRevealInteraction.beginGesture()
+            model.drawerRevealInteraction.beginGesture(in: revealHost)
             model.drawerRevealInteraction.updateGesture(
-                logicalTranslation: canonicalPosition == .closed ? 140 : -140
+                logicalTranslation: canonicalPosition == .closed ? 140 : -140,
+                in: revealHost
             )
             model.taskTreeRevealInteraction.setTarget(
                 canonicalPosition == .closed ? .open : .closed,
@@ -821,10 +908,14 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
 
     func testRouteAndGatewayInvalidationCannotRetainRevealOwnership() {
         let model = routePreparationModel(session: .shared)
+        let revealHost = attachGlobalRevealHost(to: model)
         model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
         model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .closed)
-        model.drawerRevealInteraction.beginGesture()
-        model.drawerRevealInteraction.updateGesture(logicalTranslation: 140)
+        model.drawerRevealInteraction.beginGesture(in: revealHost)
+        model.drawerRevealInteraction.updateGesture(
+            logicalTranslation: 140,
+            in: revealHost
+        )
         model.taskTreeRevealInteraction.setTarget(.open, animated: true)
 
         model.applyCanonicalRouteProjection([])
@@ -848,13 +939,17 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
 
     func testPresentationBarrierAcquisitionTerminatesEveryGlobalRevealInteraction() {
         let model = routePreparationModel(session: .shared)
+        let revealHost = attachGlobalRevealHost(to: model)
         let store = model.productionRouteStore
         let container = makeContainer(path: [], store: store)
         store.attach(container)
         model.drawerRevealInteraction.configure(extent: 330, restingPosition: .closed)
         model.taskTreeRevealInteraction.configure(extent: 300, restingPosition: .open)
-        model.drawerRevealInteraction.beginGesture()
-        model.drawerRevealInteraction.updateGesture(logicalTranslation: 140)
+        model.drawerRevealInteraction.beginGesture(in: revealHost)
+        model.drawerRevealInteraction.updateGesture(
+            logicalTranslation: 140,
+            in: revealHost
+        )
         model.taskTreeRevealInteraction.setTarget(.closed, animated: true)
         XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
         XCTAssertEqual(model.taskTreeRevealInteraction.presentation.phase, .settling(.closed))
@@ -1026,6 +1121,21 @@ final class GaryxProductionRouteIntentIntegrationTests: XCTestCase {
         First publication stack:
         \(first.stack.joined(separator: "\n"))
         """
+    }
+
+    private func attachGlobalRevealHost(
+        to model: GaryxMobileModel
+    ) -> GaryxHorizontalRevealHostOccurrenceID {
+        let rootOccurrenceID = GaryxRootSurfaceOccurrenceID(rawValue: 1)
+        let hostOccurrenceID = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: rootOccurrenceID,
+            rawValue: "route-intent-test-host"
+        )
+        model.applyGlobalRevealRootSurfaceTransition(
+            .navigationShellBegan(rootOccurrenceID)
+        )
+        model.attachGlobalRevealHostOccurrence(hostOccurrenceID)
+        return hostOccurrenceID
     }
 
     private func operationContext(_ operationID: String) -> GaryxPresentationOperationContext {

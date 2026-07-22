@@ -386,6 +386,12 @@ function mapProviderUsage(value: unknown, path: string): DesktopProviderUsage {
     error: hasContractField(record, "error")
       ? requireContractString(record.error, `${path}.error`)
       : null,
+    errorCode: hasContractField(record, "error_code")
+      ? requireContractString(record.error_code, `${path}.error_code`)
+      : null,
+    retryAfterSeconds: hasContractField(record, "retry_after_seconds")
+      ? requireContractInteger(record.retry_after_seconds, `${path}.retry_after_seconds`)
+      : null,
   };
 }
 

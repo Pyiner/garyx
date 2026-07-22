@@ -41,7 +41,9 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
               "id": "other",
               "name": "Other",
               "available": false,
-              "error": "no credentials"
+              "error": "temporarily throttled",
+              "error_code": "rate_limited",
+              "retry_after_seconds": 90
             },
             {
               "id": "antigravity",
@@ -89,6 +91,8 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         let other = try XCTUnwrap(usage.provider(id: "other"))
         XCTAssertFalse(other.available)
         XCTAssertNil(other.weekly)
+        XCTAssertEqual(other.errorCode, "rate_limited")
+        XCTAssertEqual(other.retryAfterSeconds, 90)
 
         let antigravity = try XCTUnwrap(usage.provider(id: "antigravity"))
         XCTAssertTrue(antigravity.available)
@@ -578,10 +582,36 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
 
         let display = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: provider, now: referenceNow))
         XCTAssertFalse(display.available)
-        XCTAssertEqual(display.summaryText, "Unavailable")
+        XCTAssertEqual(display.summaryText, "Quota unavailable")
+        XCTAssertEqual(display.detailText, "Try again shortly")
         XCTAssertEqual(display.plan, "pro")
         XCTAssertTrue(display.stale)
         XCTAssertTrue(display.windows.isEmpty)
+    }
+
+    func testProviderUsageDisplayModelExplainsRateLimitAndReauthentication() throws {
+        let rateLimited = GaryxProviderUsage(
+            id: "claude_code",
+            name: "Claude Code",
+            available: false,
+            error: "HTTP 429",
+            errorCode: "rate_limited",
+            retryAfterSeconds: 90
+        )
+        let rateDisplay = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: rateLimited))
+        XCTAssertEqual(rateDisplay.summaryText, "Try again in 1m")
+        XCTAssertEqual(rateDisplay.detailText, "Claude quota is temporarily rate limited")
+
+        let expired = GaryxProviderUsage(
+            id: "claude_code",
+            name: "Claude Code",
+            available: false,
+            error: "HTTP 401",
+            errorCode: "reauth_required"
+        )
+        let expiredDisplay = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: expired))
+        XCTAssertEqual(expiredDisplay.summaryText, "Sign in again")
+        XCTAssertEqual(expiredDisplay.detailText, "Claude Code credentials expired")
     }
 
     // MARK: - Store + snapshot

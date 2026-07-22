@@ -116,10 +116,10 @@ extension GaryxMobileModel {
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
             source: source
         )
-        // The real conversation page is already visible during the push.
-        // History, persisted-window restore, and stream activation start once
-        // that route becomes active, so only its message region can be loading
-        // and response mapping stays out of the moving transition.
+        // The complete opening page is already visible during the push.
+        // Local graph activation completes once the route begins its masked
+        // materialization phase; the bounded history refresh then continues
+        // independently and may drive only message-local/header loading.
         if productionRouteStore.isAttached {
             await waitForConversationContentActivation(entry.id)
         } else {
@@ -243,55 +243,65 @@ extension GaryxMobileModel {
         }
     }
 
-    /// Starts conversation runtime work when the route becomes active. The
-    /// conversation chrome is already on screen; only its message region waits
-    /// for this asynchronous transcript preparation.
-    func conversationRouteContentPreparationBegan(
-        _ entry: GaryxRouteEntry,
-        contentDidBecomeReady: @escaping @MainActor () -> Void
-    ) {
+    /// Starts occurrence-scoped runtime work when the route becomes active.
+    /// Cached rows (or the shared empty-transcript loading view) already make
+    /// the live graph locally renderable, so route activation completes before
+    /// the independent network refresh begins.
+    func conversationRouteContentPreparationBegan(_ entry: GaryxRouteEntry) {
         guard case .conversation(let threadID) = entry.destination,
               selectedThread?.id == threadID,
               conversationContentActivationOccurrenceID != entry.id
         else { return }
 
         let supersededOccurrenceID = conversationContentActivationOccurrenceID
-        conversationContentActivationTask?.cancel()
+        conversationInitialHistoryRefreshTask?.cancel()
         if let supersededOccurrenceID {
             resumeConversationContentActivationWaiters(for: supersededOccurrenceID)
         }
         conversationContentActivationOccurrenceID = entry.id
         completedConversationContentActivationOccurrenceID = nil
-        conversationContentActivationTask = Task { @MainActor [weak self] in
+        guard selectedThread?.id == threadID,
+              productionRouteStore.path.last?.id == entry.id
+        else {
+            finishConversationContentActivation(entry.id)
+            return
+        }
+
+        let hasRenderableCachedSnapshot = !cachedMessages(for: threadID).isEmpty
+        if !hasRenderableCachedSnapshot {
+            spawnColdOpenTranscriptRestore(threadId: threadID)
+        }
+        ensureSelectedThreadStreamForVisibleConversation()
+
+        // The staged cover now waits only for delivered-frame materialization.
+        // Navigation activation and its waiters must not inherit network
+        // latency from the refresh below.
+        finishConversationContentActivation(entry.id)
+
+        conversationInitialHistoryRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.finishConversationContentActivation(entry.id) }
+            defer { self.finishConversationInitialHistoryRefresh(entry.id) }
             guard !Task.isCancelled,
                   self.selectedThread?.id == threadID,
                   self.productionRouteStore.path.last?.id == entry.id
             else { return }
 
-            let hasRenderableCachedSnapshot = !self.cachedMessages(for: threadID).isEmpty
-            if !hasRenderableCachedSnapshot {
-                self.spawnColdOpenTranscriptRestore(threadId: threadID)
-            }
-            self.ensureSelectedThreadStreamForVisibleConversation()
-
             // Bound the open to the newest committed window. Mapping remains
-            // off-main; the page-local message loading state is replaced when
-            // this initial refresh applies.
+            // off-main. This refresh may drive the live header spinner and, if
+            // there are zero local rows, the shared message-region loader; it
+            // has no route-presentation readiness signal.
             await self.loadSelectedThreadHistory()
             guard !Task.isCancelled,
                   self.selectedThread?.id == threadID,
                   self.productionRouteStore.path.last?.id == entry.id
             else { return }
             self.ensureSelectedThreadStreamForVisibleConversation()
-            contentDidBecomeReady()
         }
     }
 
     func cancelConversationContentActivation() {
-        conversationContentActivationTask?.cancel()
-        conversationContentActivationTask = nil
+        conversationInitialHistoryRefreshTask?.cancel()
+        conversationInitialHistoryRefreshTask = nil
         conversationContentActivationOccurrenceID = nil
         completedConversationContentActivationOccurrenceID = nil
         let pendingWaiters = conversationContentActivationWaiters.values.flatMap { $0 }
@@ -316,10 +326,16 @@ extension GaryxMobileModel {
         _ occurrenceID: GaryxRouteInstanceID
     ) {
         if conversationContentActivationOccurrenceID == occurrenceID {
-            conversationContentActivationTask = nil
             completedConversationContentActivationOccurrenceID = occurrenceID
         }
         resumeConversationContentActivationWaiters(for: occurrenceID)
+    }
+
+    private func finishConversationInitialHistoryRefresh(
+        _ occurrenceID: GaryxRouteInstanceID
+    ) {
+        guard conversationContentActivationOccurrenceID == occurrenceID else { return }
+        conversationInitialHistoryRefreshTask = nil
     }
 
     private func resumeConversationContentActivationWaiters(
