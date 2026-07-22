@@ -159,6 +159,33 @@ impl AppState {
             .await;
     }
 
+    /// Reconcile account-local Claude transcripts into the canonical
+    /// `~/.claude/projects` store. The pass never mutates managed profile
+    /// directories, so it is safe while an older account process is still
+    /// finishing with its launch snapshot.
+    pub async fn reconcile_local_claude_sessions(
+        &self,
+    ) -> Result<claude_agent_sdk::SessionReconcileSummary, String> {
+        let managed_root =
+            provider_accounts::managed_accounts_root(self.ops.config_path.as_deref());
+        #[cfg(not(test))]
+        let canonical_root = claude_agent_sdk::default_claude_projects_dir();
+        #[cfg(test)]
+        let canonical_root = self
+            .ops
+            .config_path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(".test-claude/projects");
+        garyx_bridge::claude_provider::reconcile_local_claude_sessions(
+            &canonical_root,
+            &managed_root,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
     /// Install the boot-time channel plugin rebuilder. First caller
     /// wins; later calls are ignored (the hook is process-lifetime).
     pub fn set_channel_plugin_rebuilder(&self, rebuilder: ChannelPluginRebuilder) {

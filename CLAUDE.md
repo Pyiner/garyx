@@ -207,6 +207,15 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 - Claude Code account selection is provider-owned runtime state. Do not persist
   `CLAUDE_CONFIG_DIR` in thread or agent metadata; snapshot the provider's
   selected environment only when a new top-level run starts.
+- Claude Code managed accounts share native session continuity through the
+  local SessionStore rooted at `~/.claude/projects`. A resumed run must load
+  and reconcile main/subagent copies before spawning: parsed-equal copies are
+  no-ops, otherwise the newest file mtime wins, with an exact tie favoring the
+  canonical root. Every managed-account resume materializes the winner into
+  that account; System default does not self-copy. Mirror during native runs,
+  reconcile again after every run, and sweep at startup/account switch so
+  terminal Claude sees recovered copies. Storage failures must never clear the
+  native session or trigger the fresh-session fallback.
 - Quota recovery is SQL-owned per blocked run generation. Timer, account
   switch, and manual Continue must wake the same durable row and admission
   intent; never queue its synthetic `continue` into an active run, and never

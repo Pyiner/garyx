@@ -14,6 +14,10 @@ use crate::control::{
 };
 use crate::error::{ClaudeSDKError, Result};
 use crate::parse::parse_message;
+use crate::session_store::{
+    MirrorFailure, TranscriptMirrorBatcher, launched_projects_root, materialize_session_for_resume,
+    session_mirror_required,
+};
 use crate::transport::SubprocessTransport;
 use crate::types::{CanUseToolCallback, ClaudeAgentOptions, McpServerConfig, Message};
 
@@ -73,6 +77,28 @@ fn stop_hook_observation_message(input: Option<&Value>) -> Message {
     })
 }
 
+fn mirror_failure_message(failure: MirrorFailure) -> Message {
+    let session_id = failure.key.session_id.clone();
+    Message::System(crate::types::SystemMessage {
+        subtype: "mirror_error".to_owned(),
+        data: serde_json::json!({
+            "type": "system",
+            "subtype": "mirror_error",
+            "error": failure.error,
+            "key": failure.key,
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "session_id": session_id,
+        }),
+    })
+}
+
+fn resume_store_error(error: ClaudeSDKError) -> ClaudeSDKError {
+    match error {
+        error @ (ClaudeSDKError::SessionStore(_) | ClaudeSDKError::Timeout(_)) => error,
+        other => ClaudeSDKError::SessionStore(other.to_string()),
+    }
+}
+
 /// Internal client for bidirectional conversations with Claude Code.
 ///
 /// Public consumers should use [`run_streaming`](crate::run_streaming::run_streaming).
@@ -93,6 +119,9 @@ pub struct ClaudeSDKClient {
     reader_handle: Option<JoinHandle<()>>,
     /// Background stdin-stream task handle.
     stream_handle: Option<JoinHandle<()>>,
+    /// Shared transcript mirror batcher. The reader flushes before `result`
+    /// and EOF; explicit disconnect also flushes before aborting the reader.
+    mirror_batcher: Option<Arc<TranscriptMirrorBatcher>>,
     /// Signal to stop background tasks.
     closed: Arc<AtomicBool>,
     first_result_seen: Arc<AtomicBool>,
@@ -112,6 +141,7 @@ impl ClaudeSDKClient {
             request_counter: AtomicU64::new(0),
             reader_handle: None,
             stream_handle: None,
+            mirror_batcher: None,
             closed: Arc::new(AtomicBool::new(false)),
             first_result_seen: Arc::new(AtomicBool::new(false)),
             first_result_notify: Arc::new(Notify::new()),
@@ -133,6 +163,36 @@ impl ClaudeSDKClient {
         self.closed.store(false, Ordering::SeqCst);
         self.first_result_seen.store(false, Ordering::SeqCst);
         let is_streaming = matches!(&prompt, Some(Prompt::Stream(_)) | None);
+
+        if let Some(store) = self.options.session_store.as_ref() {
+            if self.options.enable_file_checkpointing {
+                return Err(ClaudeSDKError::SessionStore(
+                    "enable_file_checkpointing is not supported with session_store".to_owned(),
+                ));
+            }
+            let projects_root = launched_projects_root(&self.options.env);
+            if let Some(session_id) = self.options.resume.as_deref() {
+                let cwd = self.options.cwd.clone().unwrap_or(std::env::current_dir()?);
+                materialize_session_for_resume(
+                    store,
+                    &cwd,
+                    session_id,
+                    &projects_root,
+                    self.options.session_store_load_timeout,
+                )
+                .await
+                .map_err(resume_store_error)?;
+            }
+            self.mirror_batcher = session_mirror_required(store, &projects_root).then(|| {
+                Arc::new(TranscriptMirrorBatcher::new(
+                    store.clone(),
+                    projects_root,
+                    self.options.session_store_flush,
+                ))
+            });
+        } else {
+            self.mirror_batcher = None;
+        }
 
         // Build and spawn transport
         let transport = SubprocessTransport::new(self.options.clone(), is_streaming);
@@ -342,6 +402,15 @@ impl ClaudeSDKClient {
 
     /// Disconnect from Claude and clean up.
     pub async fn disconnect(&mut self) -> Result<()> {
+        if let Some(batcher) = self.mirror_batcher.as_ref() {
+            for failure in batcher.flush().await {
+                error!(
+                    key = ?failure.key,
+                    error = %failure.error,
+                    "SessionStore flush failed during disconnect"
+                );
+            }
+        }
         self.closed.store(true, Ordering::SeqCst);
 
         self.abort_background_tasks().await;
@@ -351,6 +420,7 @@ impl ClaudeSDKClient {
         }
 
         self.pending.lock().await.clear();
+        self.mirror_batcher = None;
         self.reset_message_channel();
         self.closed.store(false, Ordering::SeqCst);
 
@@ -396,6 +466,7 @@ impl ClaudeSDKClient {
         self.wait_for_reader_shutdown().await;
 
         self.pending.lock().await.clear();
+        self.mirror_batcher = None;
         self.reset_message_channel();
         self.closed.store(false, Ordering::SeqCst);
 
@@ -469,6 +540,7 @@ impl ClaudeSDKClient {
         }
 
         self.pending.lock().await.clear();
+        self.mirror_batcher = None;
         self.reset_message_channel();
         self.closed.store(false, Ordering::SeqCst);
         Ok(())
@@ -488,6 +560,7 @@ impl ClaudeSDKClient {
         let can_use_tool = self.options.can_use_tool.clone();
         let first_result_seen = self.first_result_seen.clone();
         let first_result_notify = self.first_result_notify.clone();
+        let mirror_batcher = self.mirror_batcher.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -501,9 +574,28 @@ impl ClaudeSDKClient {
                     Ok(Some(value)) => {
                         let msg_type = value.get("type").and_then(|v| v.as_str());
 
-                        if msg_type == Some("result") {
-                            first_result_seen.store(true, Ordering::SeqCst);
-                            first_result_notify.notify_waiters();
+                        if msg_type == Some("transcript_mirror") {
+                            let file_path = value
+                                .get("filePath")
+                                .and_then(Value::as_str)
+                                .map(std::path::PathBuf::from);
+                            let entries = value.get("entries").and_then(Value::as_array).cloned();
+                            match (mirror_batcher.as_ref(), file_path, entries) {
+                                (Some(batcher), Some(file_path), Some(entries)) => {
+                                    for failure in batcher.enqueue(file_path, entries).await {
+                                        if msg_tx
+                                            .send(Ok(mirror_failure_message(failure)))
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                                (None, _, _) => {}
+                                _ => error!("invalid transcript_mirror protocol frame"),
+                            }
+                            continue;
                         }
 
                         // Route control responses
@@ -585,6 +677,22 @@ impl ClaudeSDKClient {
                             continue;
                         }
 
+                        if msg_type == Some("result") {
+                            if let Some(batcher) = mirror_batcher.as_ref() {
+                                for failure in batcher.flush().await {
+                                    if msg_tx
+                                        .send(Ok(mirror_failure_message(failure)))
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
+                            first_result_seen.store(true, Ordering::SeqCst);
+                            first_result_notify.notify_waiters();
+                        }
+
                         // Parse and forward to consumer
                         let parsed = parse_message(&value);
                         if msg_tx.send(parsed).await.is_err() {
@@ -594,10 +702,20 @@ impl ClaudeSDKClient {
                     }
                     Ok(None) => {
                         debug!("Transport stream ended");
+                        if let Some(batcher) = mirror_batcher.as_ref() {
+                            for failure in batcher.flush().await {
+                                let _ = msg_tx.send(Ok(mirror_failure_message(failure))).await;
+                            }
+                        }
                         break;
                     }
                     Err(e) => {
                         error!("Transport read error: {e}");
+                        if let Some(batcher) = mirror_batcher.as_ref() {
+                            for failure in batcher.flush().await {
+                                let _ = msg_tx.send(Ok(mirror_failure_message(failure))).await;
+                            }
+                        }
                         let _ = msg_tx.send(Err(e)).await;
                         break;
                     }

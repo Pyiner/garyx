@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use claude_agent_sdk::{
     AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun,
-    ClaudeRunControl, ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage,
-    PermissionMode, STOP_HOOK_OBSERVATION_SUBTYPE, SystemMessage, TextBlock, UserInput,
-    run_streaming as sdk_run_streaming,
+    ClaudeRunControl, ClaudeSDKError, ContentBlock, LocalDirectorySessionStore, McpServerConfig,
+    Message, OutboundUserMessage, PermissionMode, STOP_HOOK_OBSERVATION_SUBTYPE,
+    SessionReconcileSummary, SystemMessage, TextBlock, UserInput, default_claude_projects_dir,
+    run_streaming as sdk_run_streaming, session_project_key,
 };
 use garyx_models::{
     is_builtin_provider_agent_id,
@@ -472,7 +473,7 @@ fn should_retry_message_with_fresh_session(msg: &str) -> bool {
 
 fn should_retry_with_fresh_session(error: &BridgeError) -> bool {
     match error {
-        BridgeError::SessionParseUnsupportedBlock(_) => false,
+        BridgeError::SessionParseUnsupportedBlock(_) | BridgeError::SessionStore(_) => false,
         other => should_retry_message_with_fresh_session(&other.to_string()),
     }
 }
@@ -505,6 +506,16 @@ fn bridge_error_from_sdk_stream_error(error: ClaudeSDKError) -> BridgeError {
             }
         }
         other => BridgeError::RunFailed(format!("claude SDK stream error: {other}")),
+    }
+}
+
+fn bridge_error_from_sdk_connect_error(error: ClaudeSDKError) -> BridgeError {
+    match error {
+        ClaudeSDKError::SessionStore(message) => BridgeError::SessionStore(message),
+        ClaudeSDKError::Timeout(message) if message.starts_with("SessionStore.") => {
+            BridgeError::SessionStore(message)
+        }
+        other => BridgeError::RunFailed(format!("failed to connect to claude: {other}")),
     }
 }
 
@@ -596,20 +607,130 @@ fn claude_config_dir(launch_env: &HashMap<String, String>) -> Option<PathBuf> {
     launch_env
         .get("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
 }
 
-fn claude_project_dir_name(cwd: &Path) -> String {
-    let text = cwd.to_string_lossy();
-    let mapped = text
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect::<String>();
-    if mapped.is_empty() {
-        "-".to_owned()
-    } else {
-        mapped
+fn managed_claude_projects_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return roots;
+    };
+    for entry in entries.flatten() {
+        let account_dir = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&account_dir) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let Some(account_id) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        if Uuid::parse_str(&account_id).is_err() {
+            continue;
+        }
+        let marker = account_dir.join(".garyx-claude-account");
+        let Ok(marker_metadata) = std::fs::symlink_metadata(&marker) else {
+            continue;
+        };
+        if marker_metadata.file_type().is_symlink() || !marker_metadata.is_file() {
+            continue;
+        }
+        if std::fs::read_to_string(&marker)
+            .ok()
+            .is_none_or(|value| value.trim() != account_id)
+        {
+            continue;
+        }
+        roots.push(account_dir.join("projects"));
     }
+    roots
+}
+
+/// Build the local SessionStore for one launch snapshot. The canonical root is
+/// Claude's ordinary `~/.claude/projects`, so native terminal Claude and Garyx
+/// share sessions while each managed profile keeps its own credentials.
+fn claude_local_session_store(launch_env: &HashMap<String, String>) -> LocalDirectorySessionStore {
+    let canonical_root = default_claude_projects_dir();
+    let mut legacy_roots = Vec::new();
+
+    if let Some(config_dir) = launch_env
+        .get("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
+    {
+        legacy_roots.push(config_dir.join("projects"));
+        if let Some(managed_root) = config_dir.parent() {
+            legacy_roots.extend(managed_claude_projects_roots(managed_root));
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        legacy_roots.extend(managed_claude_projects_roots(
+            &PathBuf::from(home)
+                .join(".garyx")
+                .join("provider-accounts")
+                .join("claude-code"),
+        ));
+    }
+
+    LocalDirectorySessionStore::new(canonical_root).with_legacy_roots(legacy_roots)
+}
+
+/// Promote the newest local Claude transcript copies into the supplied
+/// canonical projects root. Production passes `~/.claude/projects`; the
+/// explicit root keeps tests and alternate embeddings isolated. Used at
+/// gateway startup and after account switches so terminal Claude can resume a
+/// managed-account session even before Garyx launches that thread again.
+pub async fn reconcile_local_claude_sessions(
+    canonical_projects_root: &Path,
+    managed_accounts_root: &Path,
+) -> Result<SessionReconcileSummary, ClaudeSDKError> {
+    LocalDirectorySessionStore::new(canonical_projects_root)
+        .with_legacy_roots(managed_claude_projects_roots(managed_accounts_root))
+        .reconcile_all()
+        .await
+}
+
+async fn reconcile_local_claude_session_after_run(
+    launch_env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+    session_id: Option<&str>,
+) {
+    let Some(cwd) = cwd else {
+        return;
+    };
+    let Some(session_id) = session_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let store = claude_local_session_store(launch_env);
+    if let Err(error) = reconcile_local_claude_session(&store, cwd, session_id).await {
+        // The account-local transcript remains the primary write. A failed
+        // post-run promotion must never turn a completed Claude turn into a
+        // user-visible provider failure; startup/selection/pre-resume
+        // reconciliation will retry it.
+        tracing::warn!(
+            session_id,
+            project_key = session_project_key(cwd),
+            error = %error,
+            "failed to reconcile Claude transcript after run"
+        );
+    }
+}
+
+async fn reconcile_local_claude_session(
+    store: &LocalDirectorySessionStore,
+    cwd: &Path,
+    session_id: &str,
+) -> Result<SessionReconcileSummary, ClaudeSDKError> {
+    store
+        .reconcile_session(&session_project_key(cwd), session_id)
+        .await
+}
+
+fn claude_project_dir_name(cwd: &Path) -> String {
+    session_project_key(cwd)
 }
 
 fn claude_transcript_path(config_dir: &Path, cwd: &Path, session_id: &str) -> PathBuf {
@@ -1293,6 +1414,7 @@ impl ClaudeCliProvider {
             extra_args.insert("effort".to_string(), Some(effort));
         }
         let fork_session = metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY);
+        let session_store = std::sync::Arc::new(claude_local_session_store(launch_env));
 
         ClaudeAgentOptions {
             agent,
@@ -1314,6 +1436,7 @@ impl ClaudeCliProvider {
             setting_sources: (!self.config.setting_sources.is_empty())
                 .then(|| self.config.setting_sources.clone()),
             fork_session,
+            session_store: Some(session_store),
             // Every turn stop reports the CLI's authoritative in-flight
             // background-task list, which gates the post-result stdin close.
             stop_hook_observer: true,
@@ -1564,7 +1687,7 @@ impl ClaudeCliProvider {
         );
         let mut run = connect_future
             .await
-            .map_err(|e| BridgeError::RunFailed(format!("failed to connect to claude: {e}")))?;
+            .map_err(bridge_error_from_sdk_connect_error)?;
 
         let control = run.control();
         self.register_run(run_id, &options.thread_id, control.clone())
@@ -1581,6 +1704,19 @@ impl ClaudeCliProvider {
         {
             let _ = run.close().await;
             self.unregister_run(run_id).await;
+            let session_for_reconcile = self
+                .session_map
+                .lock()
+                .await
+                .get(&options.thread_id)
+                .cloned()
+                .or_else(|| session_id.map(ToOwned::to_owned));
+            reconcile_local_claude_session_after_run(
+                launch_env,
+                resolve_claude_cwd(&self.config, options).as_deref(),
+                session_for_reconcile.as_deref(),
+            )
+            .await;
             return Err(BridgeError::RunFailed(format!(
                 "failed to send user message: {e}"
             )));
@@ -1595,12 +1731,36 @@ impl ClaudeCliProvider {
             Err(error) => {
                 let _ = run.close().await;
                 self.unregister_run(run_id).await;
+                let session_for_reconcile = self
+                    .session_map
+                    .lock()
+                    .await
+                    .get(&options.thread_id)
+                    .cloned()
+                    .or_else(|| session_id.map(ToOwned::to_owned));
+                reconcile_local_claude_session_after_run(
+                    launch_env,
+                    resolve_claude_cwd(&self.config, options).as_deref(),
+                    session_for_reconcile.as_deref(),
+                )
+                .await;
                 return Err(error);
             }
         };
 
+        let reconciled_session_id = result_data
+            .as_ref()
+            .map(|result| result.session_id.as_str())
+            .or(session_id)
+            .map(ToOwned::to_owned);
         let finish_result = run.finish().await;
         self.unregister_run(run_id).await;
+        reconcile_local_claude_session_after_run(
+            launch_env,
+            resolve_claude_cwd(&self.config, options).as_deref(),
+            reconciled_session_id.as_deref(),
+        )
+        .await;
         finish_result.map_err(|error| {
             BridgeError::RunFailed(format!("failed to finish claude run: {error}"))
         })?;

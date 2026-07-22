@@ -34,4 +34,5 @@ reqwest = { workspace = true }
 garyx-router = { workspace = true, features = ["test-seams"] }
 chrono-tz = "0.10"
 tempfile = { workspace = true }
+filetime = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

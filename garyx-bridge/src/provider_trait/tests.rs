@@ -22,6 +22,10 @@ fn test_bridge_error_variants() {
             "session parse unsupported block: document",
         ),
         (
+            BridgeError::SessionStore("unreadable".into()),
+            "session store error: unreadable",
+        ),
+        (
             BridgeError::SessionError("gone".into()),
             "session error: gone",
         ),

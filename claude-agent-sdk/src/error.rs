@@ -32,6 +32,9 @@ pub enum ClaudeSDKError {
     #[error("Control protocol error: {0}")]
     Control(String),
 
+    #[error("SessionStore error: {0}")]
+    SessionStore(String),
+
     #[error("Timeout: {0}")]
     Timeout(String),
 

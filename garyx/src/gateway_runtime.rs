@@ -577,6 +577,16 @@ async fn initialize_bridge_runtime(
     bridge: &Arc<MultiProviderBridge>,
     config: &GaryxConfig,
 ) -> Result<(), String> {
+    match state.reconcile_local_claude_sessions().await {
+        Ok(summary) => tracing::info!(
+            sessions_scanned = summary.sessions_scanned,
+            sessions_failed = summary.sessions_failed,
+            keys_promoted = summary.keys_promoted,
+            keys_unchanged = summary.keys_unchanged,
+            "Claude local sessions reconciled at startup"
+        ),
+        Err(error) => tracing::warn!(error, "Claude local session startup reconciliation failed"),
+    }
     state
         .apply_provider_account_selection_to_bridge(config)
         .await;

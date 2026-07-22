@@ -427,8 +427,11 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 name = "claude-agent-sdk"
 version = "0.1.32"
 dependencies = [
+ "async-trait",
+ "filetime",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -909,6 +912,7 @@ dependencies = [
  "chrono-tz",
  "claude-agent-sdk",
  "codex-sdk",
+ "filetime",
  "garyx-models",
  "garyx-router",
  "iana-time-zone",
@@ -980,6 +984,7 @@ dependencies = [
  "cctty",
  "chrono",
  "chrono-tz",
+ "claude-agent-sdk",
  "crc32fast",
  "cron",
  "filetime",
