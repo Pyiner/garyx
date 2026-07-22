@@ -142,8 +142,10 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
             hostEntryID: fixture.entryID,
             hasInteractionOwner: true
         )
-        XCTAssertEqual(notices.map(\.kind), [.feedback])
-        XCTAssertEqual(notices.first?.title, "Some attachments could not be restored")
+        XCTAssertTrue(
+            notices.isEmpty,
+            "durable recovery feedback must not become composer status copy"
+        )
 
         let acknowledgement = try XCTUnwrap(
             GaryxFeedbackAcknowledgementPlanner.plan(
@@ -476,7 +478,7 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         )
     }
 
-    func testNoticeProjectionRequiresExactEntryInteractionOwner() async throws {
+    func testDurableAnomaliesNeverProjectComposerNoticesForAnyOwner() async throws {
         let fixture = try await makeAmbiguousFixture()
         let snapshot = try await fixture.store.load()
         XCTAssertTrue(
@@ -486,15 +488,12 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
                 hasInteractionOwner: false
             ).isEmpty
         )
-        let notices = GaryxComposerDurableNoticeProjector.project(
-            snapshot: snapshot,
-            hostEntryID: fixture.entryID,
-            hasInteractionOwner: true
-        )
-        XCTAssertEqual(notices.first?.title, "Send status unknown")
-        XCTAssertEqual(
-            notices.first?.actions,
-            [.restoreDelivery(fixture.deliveryID), .resendDeliveryCopy(fixture.deliveryID)]
+        XCTAssertTrue(
+            GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID,
+                hasInteractionOwner: true
+            ).isEmpty
         )
     }
 
@@ -593,6 +592,69 @@ final class GaryxDurableDeliveryActionsTests: XCTestCase {
         let claimed = try await fixture.store.commit(try XCTUnwrap(lateEvidence.transaction))
         XCTAssertEqual(claimed.deliveries[fixture.deliveryID]?.evidence, .serverAcknowledged)
         XCTAssertEqual(claimed.scopeRegistry.lifecycle(of: scope), .revoked)
+    }
+
+    func testComposerProjectsNoInlineStatusAcrossNetworkFailureRecoverySequence() async throws {
+        let fixture = try await makeAmbiguousFixture(deliveryIsAmbiguous: false)
+
+        func assertComposerHasNoInlineStatus(
+            _ snapshot: GaryxComposerDurabilitySnapshot,
+            stage: String,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            let titles = GaryxComposerDurableNoticeProjector.project(
+                snapshot: snapshot,
+                hostEntryID: fixture.entryID,
+                hasInteractionOwner: true
+            ).map(\.title)
+            XCTAssertEqual(
+                titles,
+                [],
+                "composer emitted inline status during \(stage): \(titles)",
+                file: file,
+                line: line
+            )
+        }
+
+        var snapshot = try await fixture.store.load()
+        assertComposerHasNoInlineStatus(snapshot, stage: "outbox committed")
+
+        var delivery = try XCTUnwrap(snapshot.deliveries[fixture.deliveryID])
+        XCTAssertTrue(delivery.markTransportAttempted())
+        snapshot = try await fixture.store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "simulate a stuck transport attempt",
+                mutations: [.upsertDelivery(delivery)]
+            )
+        )
+        assertComposerHasNoInlineStatus(snapshot, stage: "transport stuck")
+
+        XCTAssertTrue(delivery.markAmbiguous())
+        snapshot = try await fixture.store.commit(
+            .init(
+                expectedRevision: snapshot.revision,
+                label: "simulate response loss during network jitter",
+                mutations: [.upsertDelivery(delivery)]
+            )
+        )
+        assertComposerHasNoInlineStatus(snapshot, stage: "network response lost")
+
+        let recoveredGeneration = try await fixture.store.allocatePayloadGeneration()
+        snapshot = try await fixture.store.load()
+        let recovery = try XCTUnwrap(
+            GaryxDeliveryDraftRecoveryPlanner.plan(
+                snapshot: snapshot,
+                deliveryID: fixture.deliveryID,
+                recoveredEntryID: .init(rawValue: "network-recovery-entry"),
+                recoveredLifecycleNonce: "network-recovery-token",
+                recoveredGeneration: recoveredGeneration,
+                conflictSetID: .init(rawValue: "network-recovery-conflict")
+            )
+        )
+        snapshot = try await fixture.store.commit(recovery.transaction)
+        assertComposerHasNoInlineStatus(snapshot, stage: "durable recovery completed")
     }
 
     private func makeAmbiguousFixture(

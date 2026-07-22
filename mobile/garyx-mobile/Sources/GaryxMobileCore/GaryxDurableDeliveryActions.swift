@@ -676,131 +676,16 @@ public struct GaryxComposerDurableNotice: Equatable, Codable, Identifiable, Send
 }
 
 public enum GaryxComposerDurableNoticeProjector {
+    /// Durable delivery, recovery, and feedback records are never composer
+    /// content. Their lifecycle remains authoritative for automatic recovery,
+    /// retry, and outbox continuation, but no intermediate or terminal state
+    /// is translated into inline status copy in the input surface.
     public static func project(
-        snapshot: GaryxComposerDurabilitySnapshot,
-        hostEntryID: GaryxComposerPayloadEntryID,
-        hasInteractionOwner: Bool
+        snapshot _: GaryxComposerDurabilitySnapshot,
+        hostEntryID _: GaryxComposerPayloadEntryID,
+        hasInteractionOwner _: Bool
     ) -> [GaryxComposerDurableNotice] {
-        guard hasInteractionOwner,
-              let entry = snapshot.payloadStore.entriesByScope.values
-                .lazy
-                .compactMap({ $0[hostEntryID] })
-                .first else {
-            return []
-        }
-        var notices: [GaryxComposerDurableNotice] = []
-        let ambiguousCreateIntentIDs = Set(
-            snapshot.createDeliveries.values.lazy.filter {
-                $0.entryID == hostEntryID
-                    && $0.scope == entry.scope
-                    && $0.phase == .ambiguous
-                    && $0.userDisposition == .none
-            }.map(\.createIntentID)
-        )
-        for delivery in snapshot.deliveries.values
-            .filter({
-                $0.entryID == hostEntryID
-                    && $0.scope == entry.scope
-                    && $0.phase == .ambiguous
-                    && $0.userDisposition == .none
-                    && !ambiguousCreateIntentIDs.contains($0.correlationID)
-            })
-            .sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
-            notices.append(
-                GaryxComposerDurableNotice(
-                    id: "delivery:\(delivery.id.rawValue)",
-                    kind: .ambiguousDelivery,
-                    title: "Send status unknown",
-                    detail: "The gateway may have accepted this message. Resending can create a duplicate.",
-                    actions: [
-                        .restoreDelivery(delivery.id),
-                        .resendDeliveryCopy(delivery.id),
-                    ]
-                )
-            )
-        }
-        for create in snapshot.createDeliveries.values
-            .filter({
-                $0.entryID == hostEntryID
-                    && $0.scope == entry.scope
-                    && $0.phase == .ambiguous
-                    && $0.userDisposition == .none
-            })
-            .sorted(by: { $0.createIntentID < $1.createIntentID }) {
-            let chatWasAttempted = create.ambiguousAfter == .chatStartAttempted
-            notices.append(
-                GaryxComposerDurableNotice(
-                    id: "create:\(create.createIntentID)",
-                    kind: .ambiguousCreate,
-                    title: chatWasAttempted
-                        ? "Send status unknown"
-                        : "Conversation creation status unknown",
-                    detail: chatWasAttempted
-                        ? "The gateway may have accepted this message. Resending can create a duplicate."
-                        : "The conversation may already exist. Rebuilding can create another conversation.",
-                    actions: [
-                        .restoreCreate(create.key),
-                        .rebuildCreateCopy(create.key),
-                    ]
-                )
-            )
-        }
-        for feedback in snapshot.feedback.values
-            .filter({
-                $0.scope == entry.scope
-                    && $0.entryID == hostEntryID
-                    && ($0.phase == .pending || $0.phase == .presented)
-            })
-            .sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
-            let content = feedbackContent(feedback)
-            notices.append(
-                GaryxComposerDurableNotice(
-                    id: "feedback:\(feedback.id.rawValue)",
-                    kind: .feedback,
-                    title: content.title,
-                    detail: content.detail,
-                    actions: content.actions
-                )
-            )
-        }
-        return notices
-    }
-
-    private static func feedbackContent(
-        _ feedback: GaryxOperationFeedback
-    ) -> (title: String, detail: String, actions: [GaryxComposerDurableNoticeAction]) {
-        switch feedback.kind {
-        case .deliveryBackpressure:
-            return (
-                "Too many sends awaiting confirmation",
-                "This draft was kept. Resolve an unknown send before trying again.",
-                [.acknowledgeFeedback(feedback.id)]
-            )
-        case .quotaExceeded:
-            return (
-                "Attachment storage is full",
-                "Remove an attachment and try again.",
-                [.acknowledgeFeedback(feedback.id)]
-            )
-        case .uploadRetryable:
-            return (
-                "Upload did not finish",
-                "Retry the upload or remove this attachment.",
-                [.retryUpload(feedback.id), .removeUpload(feedback.id)]
-            )
-        case .uploadTerminal:
-            return (
-                "Attachment could not be uploaded",
-                "Remove it or choose a replacement.",
-                [.removeUpload(feedback.id)]
-            )
-        case .deliveryAttachmentRecoveryIncomplete:
-            return (
-                "Some attachments could not be restored",
-                "The unsent message text was recovered. Reattach the missing files before sending.",
-                [.acknowledgeFeedback(feedback.id)]
-            )
-        }
+        []
     }
 }
 

@@ -1,6 +1,8 @@
 # iOS Fluid P0-A A4d-2 Acceptance Record
 
 Date: 2026-07-19
+Updated: 2026-07-22 — composer inline status presentation retired; durable
+send, retry, recovery, and outbox behavior remains unchanged.
 
 This record covers the v41 A4d-2 slice: the A4d-1 concrete durability domain
 is connected to the production iOS composer, existing gateway transport,
@@ -28,8 +30,8 @@ code or endpoint contract changes are part of this slice.
   empty list.
 - The quota gate is the A4d-1 canonical `GaryxDeliveryQuota`: at most 64 live
   records per gateway scope and 256 globally. Rejection occurs before sealing,
-  leaves the draft intact, and durably creates one owner-scoped backpressure
-  chip.
+  leaves the draft intact, and durably records owner-scoped backpressure
+  feedback without projecting it into composer copy.
 - `GaryxGatewayClient` exposes a before-dispatch callback at the existing
   create-thread and start-chat request sites. The callback commits
   `transportAttempted` immediately before URLSession dispatch. For a newly
@@ -60,40 +62,36 @@ code or endpoint contract changes are part of this slice.
   delivery handle retain their prior transport path. Existing busy-send,
   direct-follow-up, and Queue-Steer run-tracker semantics remain in place.
 
-## Evidence and explicit ambiguous exits
+## Evidence and non-presentational recovery
 
 - Committed history and per-thread stream frames feed their authenticated
   `origin_id` values into a body-free `DeliveryEvidenceIngress`. Matching uses
   exact gateway scope plus correlation ID and can acknowledge an ambiguous
   record without depending on the active composer Entry.
-- An unresolved record is rendered inline as **Send status unknown**. The two
-  explicit actions are atomic durability transactions: restore the envelope to
-  the automatic composer-placement path above, or resend a clearly labelled
-  duplicate-risk copy with a fresh client intent ID. Restore never opens a
-  second draft-choice interaction. Late evidence can still claim the original
-  correlation without undoing either user disposition.
+- An unresolved record remains durable evidence, but no delivery phase is
+  projected into composer copy. The restore and duplicate-resend transactions
+  remain available to the durability workflow, and late evidence can still
+  claim the original correlation without undoing either user disposition.
 - Conversation creation persists `createPending`, `threadCreated`, optional
   `bindingCompleted`, and `chatStartAttempted` separately. Lost create,
   binding, or chat responses become ambiguous at the exact durable stage. A
-  lost create response is presented as **Conversation creation status
-  unknown**; the product does not promise that a server-side conversation
-  cannot exist. Restore and duplicate-risk rebuild settle create plus message
-  state together, and a rebuild changes both client intents when a new
+  lost create response remains durable state and is not presented in the
+  composer; the product does not promise that a server-side conversation
+  cannot exist. Restore and duplicate-risk rebuild still settle create plus
+  message state together, and a rebuild changes both client intents when a new
   conversation may be required.
 
-## Durable feedback chips
+## Durable feedback state
 
-- Pending operation feedback is projected only for the exact host Entry that
-  currently owns interaction. Presentation transitions `pending -> presented`
-  durably, so route changes and relaunch cannot silently lose the chip.
+- Pending operation feedback remains in the durability snapshot, but the
+  composer neither projects it into inline copy nor advances it solely for
+  presentation.
 - Backpressure and storage feedback acknowledgement removes the Entry
   reference and advances the feedback record in one action transaction.
   Retry-upload and remove-upload actions likewise include their acknowledgement
   and attachment/operation settlement in the owning transaction.
-- Gateway-scope revocation archives destination-invalid feedback and removes
-  its live Entry references. The inline chip UI exposes native labelled
-  buttons with at least 44-point hit regions and no competing interaction
-  owner.
+- Gateway-scope revocation still archives destination-invalid feedback and
+  removes its live Entry references.
 
 ## Scope settlement
 
@@ -135,11 +133,10 @@ The complete retained A4d-1 matrix remains green. A4d-2 adds and pins:
 - scope revoke before/after commit for not-dispatched, attempted, ambiguous,
   and acknowledged records, followed by epoch-gate and late-evidence checks.
 
-The full SwiftPM run executes all 22 real-process durability suites. No case
-uses an in-memory reconstruction as a relaunch substitute, and every recovered
-delivery reaches acknowledged, a surfaced/reclaimed safe retry, or an explicit
-user exit rather than remaining hidden in `notDispatched` or
-`transportAttempted`.
+The full SwiftPM run executes all real-process durability suites. No case uses
+an in-memory reconstruction as a relaunch substitute, and delivery recovery
+continues to settle through the durable protocol without relying on composer
+status presentation.
 
 ## Canonical cross-platform contract
 
@@ -156,55 +153,46 @@ user exit rather than remaining hidden in `notDispatched` or
   scope-authenticated multi-record evidence rules rather than maintaining a
   second client-local spec.
 
-## UI and accessibility acceptance
+## Headless composer presentation acceptance
 
-The production notice stack is exercised through an isolated app-hosted
-fixture using the same view and action types. Five XCUITests cover:
-
-- unknown-send restore through automatic placement without overwriting the
-  current draft;
-- duplicate-risk resend warning and fresh-intent action;
-- durable feedback acknowledgement, upload retry, and upload removal;
-- lost-create restore and duplicate-risk conversation rebuild; and
-- VoiceOver sufficient-description plus hit-region audits for every send exit
-  and chip action.
-
-All five passed on iPhone 17 Pro / iOS 26.5 with zero accessibility audit
-failures. The only product-visible additions are the inline unknown-state exits
-and durable feedback chips.
+`GaryxMobileCore` drives the production durable states through an outbox
+commit, a stuck transport attempt, ambiguous response loss during network
+jitter, and durable recovery. The SwiftPM regression asserts that every stage
+projects an empty composer-notice collection. The app-hosted notice fixture and
+its XCUITests were removed with the production notice view; no visual fixture
+can reintroduce a second presentation source.
 
 ## Compatibility and validation
 
-No file under `garyx-gateway` changed. The generated Xcode project has no
-post-generation drift. The final validation gate is:
+No file under `garyx-gateway` changed. Xcode project references to the retired
+notice view, debug fixture, and UI test were removed. The 2026-07-22
+task-specific validation was:
 
 ```sh
 cd mobile/garyx-mobile
-xcodegen generate
+swift test --filter \
+  GaryxDurableDeliveryActionsTests/testComposerProjectsNoInlineStatusAcrossNetworkFailureRecoverySequence
+swift test --filter \
+  'GaryxDurableDeliveryActionsTests|GaryxComposerDurabilityRecoveryTests|GaryxComposerDeliveryProtocolTests'
 swift test
+xcodebuild build -project GaryxMobile.xcodeproj \
+  -scheme GaryxMobile \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max,OS=26.5' \
+  CODE_SIGNING_ALLOWED=NO
 xcodebuild test -project GaryxMobile.xcodeproj \
   -scheme GaryxMobile \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max,OS=26.5' \
+  -only-testing:GaryxMobileTests/GaryxComposerRuntimeIntegrationTests \
   CODE_SIGNING_ALLOWED=NO
-xcodebuild test -project GaryxMobile.xcodeproj \
-  -scheme GaryxMobileFluidRoutes \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
-  -only-testing:GaryxMobileUITests/DurableDeliveryInteractionTests \
-  CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project GaryxMobile.xcodeproj \
-  -scheme GaryxMobile -configuration Debug \
-  -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project GaryxMobile.xcodeproj \
-  -scheme GaryxMobile -configuration Release \
-  -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO
-cd ../../desktop/garyx-desktop
-npm run test:unit -- \
-  src/renderer/src/conversation-state-conformance.test.mjs
 ```
 
-Final results:
+The focused regression failed before the production change with
+`Send status unknown` at the response-loss stage, then passed after the mapping
+and view path were removed. The focused durable suites passed 57 tests, the
+complete SwiftPM run passed 1,521 tests, the exact simulator build completed,
+and the composer runtime integration suite passed, all with zero failures.
+
+Original 2026-07-19 results (before the zero-inline-notice update):
 
 - SwiftPM passed 1,401 of 1,401 tests with zero failures, including all 22
   real-process durability suites and the true `SQLITE_FULL` case.
@@ -212,8 +200,8 @@ Final results:
   failures, including a production SQLite attachment send/ambiguity/restore
   round trip and a live attempt-marker failure that proves URLSession never
   starts before the envelope is reclaimed.
-- The focused durable UI/VoiceOver suite passed 5 of 5 tests with zero failures
-  in 80.596 seconds.
+- The now-retired durable notice UI/VoiceOver suite passed 5 of 5 tests with
+  zero failures in 80.596 seconds.
 - The desktop canonical conformance suite passed all 27 tests.
 - Generic simulator Debug and Release builds both completed successfully with
   code signing disabled.

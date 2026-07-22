@@ -1069,7 +1069,6 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
 
         XCTAssertEqual(coordinator.currentText, "current latest intent")
         XCTAssertEqual(host.text, "current latest intent")
-        XCTAssertTrue(coordinator.durableNotices.isEmpty)
 
         let current = try await coordinator.takeReadyPayload(
             clientIntentID: "deferred-recovery-current"
@@ -1121,7 +1120,6 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         try await persistText("", in: coordinator)
         try await coordinator.recoverUndispatchedDelivery(second.delivery)
         XCTAssertEqual(coordinator.currentText, "first recovered payload")
-        XCTAssertTrue(coordinator.durableNotices.isEmpty)
 
         let databaseURL = directory
             .appendingPathComponent("Garyx", isDirectory: true)
@@ -1182,7 +1180,6 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
         let current = try await send.value
         XCTAssertEqual(current.text, "current payload being sent")
         XCTAssertEqual(coordinator.currentText, "typed while current payload commits")
-        XCTAssertTrue(coordinator.durableNotices.isEmpty)
 
         let databaseURL = directory
             .appendingPathComponent("Garyx", isDirectory: true)
@@ -1536,7 +1533,6 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
             coordinator.inputConfiguration()?.initialText,
             "recover before dispatch"
         )
-        XCTAssertTrue(coordinator.durableNotices.isEmpty)
         let databaseURL = directory
             .appendingPathComponent("Garyx", isDirectory: true)
             .appendingPathComponent("ComposerPayload", isDirectory: true)
