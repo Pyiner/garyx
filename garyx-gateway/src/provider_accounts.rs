@@ -239,6 +239,25 @@ pub async fn select_claude_code_account(
         "selection_changed": selection_changed,
     });
     if selection_changed {
+        match state.reconcile_local_claude_sessions().await {
+            Ok(summary) => {
+                response["session_reconcile"] = json!({
+                    "sessions_scanned": summary.sessions_scanned,
+                    "sessions_failed": summary.sessions_failed,
+                    "keys_promoted": summary.keys_promoted,
+                    "keys_unchanged": summary.keys_unchanged,
+                });
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error,
+                    "Claude account changed but local session reconciliation failed"
+                );
+                response["session_reconcile_warning"] = Value::String(
+                    "Local Claude session reconciliation did not complete.".to_owned(),
+                );
+            }
+        }
         match crate::quota_resend::expedite_provider_after_account_switch(&state, "claude_code")
             .await
         {
@@ -807,6 +826,12 @@ mod tests {
         let account_dir = managed_account_dir(Some(&config_path), &id);
         std::fs::create_dir_all(&account_dir).unwrap();
         std::fs::write(account_dir.join(OWNERSHIP_MARKER), &id).unwrap();
+        let native_session_id = "11111111-2222-4333-8444-555555555555";
+        let native_session = account_dir
+            .join("projects/project")
+            .join(format!("{native_session_id}.jsonl"));
+        std::fs::create_dir_all(native_session.parent().unwrap()).unwrap();
+        std::fs::write(&native_session, "{\"from\":\"managed\"}\n").unwrap();
         let mut config = GaryxConfig::default();
         config
             .provider_accounts
@@ -869,6 +894,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(response["selection_changed"], true);
+        assert_eq!(response["session_reconcile"]["sessions_scanned"], 1);
+        assert_eq!(response["session_reconcile"]["keys_promoted"], 1);
+        assert!(
+            temp.path()
+                .join(".test-claude/projects/project")
+                .join(format!("{native_session_id}.jsonl"))
+                .is_file()
+        );
         assert_eq!(response["recovery"]["matched_threads"], 1);
         assert_eq!(response["recovery"]["expedited_threads"], 1);
         let job = state

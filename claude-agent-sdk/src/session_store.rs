@@ -57,6 +57,33 @@ pub struct SessionStoreSession {
     pub mtime: u64,
 }
 
+/// Result of reconciling native Claude transcript copies into the canonical
+/// local SessionStore.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionReconcileSummary {
+    pub sessions_scanned: usize,
+    pub sessions_failed: usize,
+    pub keys_promoted: usize,
+    pub keys_unchanged: usize,
+}
+
+impl SessionReconcileSummary {
+    fn record(&mut self, outcome: ReconcileKeyOutcome) {
+        match outcome {
+            ReconcileKeyOutcome::Missing => {}
+            ReconcileKeyOutcome::Unchanged => self.keys_unchanged += 1,
+            ReconcileKeyOutcome::Promoted => self.keys_promoted += 1,
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.sessions_scanned += other.sessions_scanned;
+        self.sessions_failed += other.sessions_failed;
+        self.keys_promoted += other.keys_promoted;
+        self.keys_unchanged += other.keys_unchanged;
+    }
+}
+
 /// Transcript-mirror flush policy from the TypeScript SDK.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SessionStoreFlush {
@@ -219,6 +246,20 @@ pub struct LocalDirectorySessionStore {
     path_locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileKeyOutcome {
+    Missing,
+    Unchanged,
+    Promoted,
+}
+
+#[derive(Debug)]
+struct SessionCandidate {
+    root: PathBuf,
+    modified: SystemTime,
+    canonical: bool,
+}
+
 impl std::fmt::Debug for LocalDirectorySessionStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalDirectorySessionStore")
@@ -246,6 +287,7 @@ impl LocalDirectorySessionStore {
             }
             unique.push(root);
         }
+        unique.sort();
         self.legacy_roots = Arc::new(unique);
         self
     }
@@ -363,48 +405,269 @@ impl LocalDirectorySessionStore {
         }
     }
 
-    async fn import_best_legacy_session(&self, key: &SessionKey) -> Result<()> {
-        if key.subpath.is_some() || self.legacy_roots.is_empty() {
-            return Ok(());
-        }
-
-        let mut best: Option<(usize, SystemTime, PathBuf, Vec<Value>)> = None;
-        for root in self.legacy_roots.iter() {
-            let Some(entries) = Self::read_entries_at(root, key).await? else {
-                continue;
-            };
-            let path = Self::path_for_key_at(root, key)?;
-            let modified = tokio::fs::metadata(&path)
-                .await
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
-            let candidate = (entries.len(), modified, root.clone(), entries);
-            if best
-                .as_ref()
-                .is_none_or(|current| (candidate.0, candidate.1) > (current.0, current.1))
-            {
-                best = Some(candidate);
+    async fn candidate_at(
+        root: &Path,
+        key: &SessionKey,
+        canonical: bool,
+    ) -> Result<Option<SessionCandidate>> {
+        let transcript_path = Self::path_for_key_at(root, key)?;
+        let (mut exists, mut modified) = match tokio::fs::symlink_metadata(&transcript_path).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                if canonical {
+                    return Err(ClaudeSDKError::SessionStore(format!(
+                        "canonical SessionStore transcript is a symlink: {}",
+                        transcript_path.display()
+                    )));
+                }
+                return Ok(None);
             }
-        }
-
-        let Some((_, _, source_root, main_entries)) = best else {
-            return Ok(());
+            Ok(metadata) if metadata.is_file() => (true, metadata.modified().unwrap_or(UNIX_EPOCH)),
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, UNIX_EPOCH),
+            Err(error) => return Err(error.into()),
         };
-        self.append(key, &main_entries).await?;
 
-        let source_session_dir = source_root.join(&key.project_key).join(&key.session_id);
-        for subpath in session_subpaths(&source_session_dir).await? {
-            let subkey = SessionKey {
-                project_key: key.project_key.clone(),
-                session_id: key.session_id.clone(),
-                subpath: Some(subpath),
-            };
-            if let Some(entries) = Self::read_entries_at(&source_root, &subkey).await? {
-                self.append(&subkey, &entries).await?;
+        if let Some(metadata_path) = Self::metadata_path_for_key_at(root, key)? {
+            match tokio::fs::symlink_metadata(&metadata_path).await {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    if canonical {
+                        return Err(ClaudeSDKError::SessionStore(format!(
+                            "canonical SessionStore metadata is a symlink: {}",
+                            metadata_path.display()
+                        )));
+                    }
+                    return Ok(None);
+                }
+                Ok(metadata) if metadata.is_file() => {
+                    exists = true;
+                    modified = modified.max(metadata.modified().unwrap_or(UNIX_EPOCH));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
             }
         }
+
+        Ok(exists.then(|| SessionCandidate {
+            root: root.to_path_buf(),
+            modified,
+            canonical,
+        }))
+    }
+
+    fn candidate_wins(candidate: &SessionCandidate, current: &SessionCandidate) -> bool {
+        candidate.modified > current.modified
+            || (candidate.modified == current.modified
+                && ((candidate.canonical && !current.canonical)
+                    || (candidate.canonical == current.canonical && candidate.root < current.root)))
+    }
+
+    async fn replace_canonical_entries(
+        &self,
+        key: &SessionKey,
+        entries: &[SessionStoreEntry],
+    ) -> Result<()> {
+        let path = self.path_for_key(key)?;
+        self.ensure_safe_parent(&path).await?;
+
+        let (transcript_entries, metadata_entry): (Vec<&Value>, Option<&Value>) =
+            if key.subpath.is_some() {
+                let mut transcript = Vec::new();
+                let mut metadata = None;
+                for entry in entries {
+                    if entry.get("type").and_then(Value::as_str) == Some("agent_metadata") {
+                        metadata = Some(entry);
+                    } else {
+                        transcript.push(entry);
+                    }
+                }
+                (transcript, metadata)
+            } else {
+                (entries.iter().collect(), None)
+            };
+
+        let transcript_entries = transcript_entries
+            .into_iter()
+            .cloned()
+            .collect::<Vec<Value>>();
+        write_entries_atomic(&path, &transcript_entries).await?;
+
+        if key.subpath.is_some() {
+            let metadata_path = path.with_extension("meta.json");
+            if let Some(metadata_entry) = metadata_entry {
+                let mut metadata = metadata_entry.clone();
+                let object = metadata.as_object_mut().ok_or_else(|| {
+                    ClaudeSDKError::SessionStore("agent_metadata entry is not an object".to_owned())
+                })?;
+                object.remove("type");
+                atomic_write_private(&metadata_path, &serde_json::to_vec(&metadata)?).await?;
+            } else {
+                remove_file_if_present(&metadata_path).await?;
+            }
+        }
+
         Ok(())
     }
+
+    /// Reconcile one main or subagent transcript. Parsed entry equality is
+    /// checked before mtime so a prior materialization cannot make an
+    /// unchanged managed copy feed back into the canonical store.
+    async fn reconcile_key(&self, key: &SessionKey) -> Result<ReconcileKeyOutcome> {
+        let canonical_path = self.path_for_key(key)?;
+        let lock = self.path_lock(&canonical_path).await;
+        let _guard = lock.lock().await;
+
+        let mut candidates = Vec::new();
+        if let Some(candidate) = Self::candidate_at(&self.root, key, true).await? {
+            candidates.push(candidate);
+        }
+        for root in self.legacy_roots.iter() {
+            if let Some(candidate) = Self::candidate_at(root, key, false).await? {
+                candidates.push(candidate);
+            }
+        }
+
+        let Some(winner) = candidates.iter().reduce(|current, candidate| {
+            if Self::candidate_wins(candidate, current) {
+                candidate
+            } else {
+                current
+            }
+        }) else {
+            return Ok(ReconcileKeyOutcome::Missing);
+        };
+
+        if winner.canonical {
+            // Validate the winning transcript now. Stale corrupt profile
+            // copies do not poison a healthy, newer canonical lineage.
+            Self::read_entries_at(&self.root, key).await?;
+            return Ok(ReconcileKeyOutcome::Unchanged);
+        }
+
+        let Some(winner_entries) = Self::read_entries_at(&winner.root, key).await? else {
+            return Ok(ReconcileKeyOutcome::Missing);
+        };
+        if Self::read_entries_at(&self.root, key)
+            .await
+            .is_ok_and(|canonical| canonical.as_ref() == Some(&winner_entries))
+        {
+            return Ok(ReconcileKeyOutcome::Unchanged);
+        }
+
+        self.replace_canonical_entries(key, &winner_entries).await?;
+        Ok(ReconcileKeyOutcome::Promoted)
+    }
+
+    async fn session_subkeys_across_roots(&self, key: &SessionKey) -> Result<Vec<String>> {
+        let mut subkeys = BTreeSet::new();
+        for root in std::iter::once(&self.root).chain(self.legacy_roots.iter()) {
+            let session_dir = root.join(&key.project_key).join(&key.session_id);
+            subkeys.extend(session_subpaths(&session_dir).await?);
+        }
+        Ok(subkeys.into_iter().collect())
+    }
+
+    /// Reconcile one native Claude session, treating the main transcript and
+    /// every subagent transcript as independent LWW keys.
+    pub async fn reconcile_session(
+        &self,
+        project_key: &str,
+        session_id: &str,
+    ) -> Result<SessionReconcileSummary> {
+        validate_single_segment(project_key, "projectKey")?;
+        validate_single_segment(session_id, "sessionId")?;
+        let main = SessionKey::main(project_key, session_id);
+        let mut summary = SessionReconcileSummary {
+            sessions_scanned: 1,
+            ..SessionReconcileSummary::default()
+        };
+        summary.record(self.reconcile_key(&main).await?);
+        for subpath in self.session_subkeys_across_roots(&main).await? {
+            let subkey = SessionKey {
+                project_key: project_key.to_owned(),
+                session_id: session_id.to_owned(),
+                subpath: Some(subpath),
+            };
+            summary.record(self.reconcile_key(&subkey).await?);
+        }
+        Ok(summary)
+    }
+
+    /// Startup/account-switch repair pass. This only promotes the newest
+    /// durable copy into the canonical root; managed profile copies are never
+    /// rewritten by the sweep.
+    pub async fn reconcile_all(&self) -> Result<SessionReconcileSummary> {
+        if self.legacy_roots.is_empty() {
+            return Ok(SessionReconcileSummary::default());
+        }
+        let mut sessions = BTreeSet::new();
+        for root in std::iter::once(&self.root).chain(self.legacy_roots.iter()) {
+            sessions.extend(session_ids_below_projects_root(root).await?);
+        }
+
+        let mut summary = SessionReconcileSummary::default();
+        for (project_key, session_id) in sessions {
+            match self.reconcile_session(&project_key, &session_id).await {
+                Ok(session_summary) => summary.merge(session_summary),
+                Err(error) => {
+                    summary.sessions_scanned += 1;
+                    summary.sessions_failed += 1;
+                    tracing::warn!(
+                        project_key,
+                        session_id,
+                        error = %error,
+                        "skipping failed Claude session during reconciliation sweep"
+                    );
+                }
+            }
+        }
+        Ok(summary)
+    }
+}
+
+async fn session_ids_below_projects_root(root: &Path) -> Result<BTreeSet<(String, String)>> {
+    let mut sessions = BTreeSet::new();
+    let mut projects = match tokio::fs::read_dir(root).await {
+        Ok(projects) => projects,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(sessions),
+        Err(error) => return Err(error.into()),
+    };
+    while let Some(project) = projects.next_entry().await? {
+        let file_type = project.file_type().await?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        let Some(project_key) = project.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        if validate_single_segment(&project_key, "projectKey").is_err() {
+            continue;
+        }
+        let mut entries = tokio::fs::read_dir(project.path()).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let file_type = entry.file_type().await?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let session_id = if file_type.is_file()
+                && entry.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
+            {
+                entry
+                    .path()
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .map(ToOwned::to_owned)
+            } else if file_type.is_dir() {
+                entry.file_name().to_str().map(ToOwned::to_owned)
+            } else {
+                None
+            };
+            if let Some(session_id) = session_id.filter(|value| valid_session_id(value)) {
+                sessions.insert((project_key.clone(), session_id));
+            }
+        }
+    }
+    Ok(sessions)
 }
 
 fn with_suffix(mut path: PathBuf, suffix: &str) -> Result<PathBuf> {
@@ -468,10 +731,7 @@ impl SessionStore for LocalDirectorySessionStore {
     }
 
     async fn load(&self, key: &SessionKey) -> Result<Option<Vec<SessionStoreEntry>>> {
-        if let Some(entries) = Self::read_entries_at(&self.root, key).await? {
-            return Ok(Some(entries));
-        }
-        self.import_best_legacy_session(key).await?;
+        self.reconcile_key(key).await?;
         Self::read_entries_at(&self.root, key).await
     }
 
@@ -525,8 +785,16 @@ impl SessionStore for LocalDirectorySessionStore {
     async fn list_subkeys(&self, key: &SessionKey) -> Result<Option<Vec<String>>> {
         validate_single_segment(&key.project_key, "projectKey")?;
         validate_single_segment(&key.session_id, "sessionId")?;
-        let session_dir = self.root.join(&key.project_key).join(&key.session_id);
-        Ok(Some(session_subpaths(&session_dir).await?))
+        let subkeys = self.session_subkeys_across_roots(key).await?;
+        for subpath in &subkeys {
+            let subkey = SessionKey {
+                project_key: key.project_key.clone(),
+                session_id: key.session_id.clone(),
+                subpath: Some(subpath.clone()),
+            };
+            self.reconcile_key(&subkey).await?;
+        }
+        Ok(Some(subkeys))
     }
 
     fn native_projects_root(&self) -> Option<&Path> {
@@ -672,8 +940,19 @@ fn valid_session_id(value: &str) -> bool {
 
 /// Resolve the config projects root used by a Claude subprocess.
 pub(crate) fn launched_projects_root(env: &HashMap<String, String>) -> PathBuf {
+    launched_projects_root_with_inherited(
+        env,
+        std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from),
+    )
+}
+
+fn launched_projects_root_with_inherited(
+    env: &HashMap<String, String>,
+    inherited_config_dir: Option<PathBuf>,
+) -> PathBuf {
     env.get("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
+        .or(inherited_config_dir)
         .unwrap_or_else(|| {
             default_claude_projects_dir()
                 .parent()
@@ -718,6 +997,16 @@ pub(crate) async fn materialize_session_for_resume(
         return Ok(false);
     };
 
+    let subkeys = timeout_store_call(
+        store.list_subkeys(&key),
+        timeout,
+        format!(
+            "SessionStore.listSubkeys() timed out after {}ms for session {session_id}",
+            timeout.as_millis()
+        ),
+    )
+    .await?;
+
     if store
         .native_projects_root()
         .is_some_and(|root| same_path(root, target_projects_root))
@@ -732,16 +1021,7 @@ pub(crate) async fn materialize_session_for_resume(
 
     let session_dir = project_dir.join(session_id);
     remove_dir_if_present(&session_dir).await?;
-    let Some(subkeys) = timeout_store_call(
-        store.list_subkeys(&key),
-        timeout,
-        format!(
-            "SessionStore.listSubkeys() timed out after {}ms for session {session_id}",
-            timeout.as_millis()
-        ),
-    )
-    .await?
-    else {
+    let Some(subkeys) = subkeys else {
         return Ok(true);
     };
 
@@ -1033,6 +1313,7 @@ impl TranscriptMirrorBatcher {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use filetime::{FileTime, set_file_mtime};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -1040,6 +1321,29 @@ mod tests {
 
     fn key() -> SessionKey {
         SessionKey::main("proj", "sess")
+    }
+
+    fn set_mtime(path: impl AsRef<Path>, seconds: i64) {
+        set_file_mtime(path, FileTime::from_unix_time(seconds, 0)).unwrap();
+    }
+
+    #[test]
+    fn launched_projects_root_falls_back_to_inherited_config_dir() {
+        let inherited = PathBuf::from("/tmp/inherited-claude");
+        assert_eq!(
+            launched_projects_root_with_inherited(&HashMap::new(), Some(inherited.clone())),
+            inherited.join("projects")
+        );
+        assert_eq!(
+            launched_projects_root_with_inherited(
+                &HashMap::from([(
+                    "CLAUDE_CONFIG_DIR".to_owned(),
+                    "/tmp/explicit-claude".to_owned()
+                )]),
+                Some(inherited),
+            ),
+            PathBuf::from("/tmp/explicit-claude/projects")
+        );
     }
 
     #[tokio::test]
@@ -1139,7 +1443,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_miss_imports_the_most_complete_legacy_session() {
+    async fn canonical_miss_imports_the_newest_legacy_session() {
         let temp = tempdir().unwrap();
         let canonical = temp.path().join("canonical");
         let old_a = temp.path().join("old-a");
@@ -1150,9 +1454,268 @@ mod tests {
         b.append(&key(), &[json!({"type":"a"}), json!({"type":"b"})])
             .await
             .unwrap();
+        set_mtime(old_a.join("proj/sess.jsonl"), 10);
+        set_mtime(old_b.join("proj/sess.jsonl"), 20);
         let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([old_a, old_b]);
         assert_eq!(store.load(&key()).await.unwrap().unwrap().len(), 2);
         assert!(canonical.join("proj/sess.jsonl").is_file());
+    }
+
+    #[tokio::test]
+    async fn newer_profile_copy_wins_per_key_and_preserves_source() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        let canonical_store = LocalDirectorySessionStore::new(&canonical);
+        let profile_store = LocalDirectorySessionStore::new(&profile);
+        let main = key();
+        let sub = SessionKey {
+            subpath: Some("subagents/agent-a".to_owned()),
+            ..main.clone()
+        };
+        canonical_store
+            .append(&main, &[json!({"entry":"canonical"})])
+            .await
+            .unwrap();
+        canonical_store
+            .append(&sub, &[json!({"entry":"canonical-sub"})])
+            .await
+            .unwrap();
+        let profile_main = vec![json!({"entry":"canonical"}), json!({"entry":"new-tail"})];
+        let profile_sub = vec![
+            json!({"entry":"new-sub"}),
+            json!({"type":"agent_metadata","toolUseId":"new-tool"}),
+        ];
+        profile_store.append(&main, &profile_main).await.unwrap();
+        profile_store.append(&sub, &profile_sub).await.unwrap();
+
+        set_mtime(canonical.join("proj/sess.jsonl"), 10);
+        set_mtime(canonical.join("proj/sess/subagents/agent-a.jsonl"), 10);
+        set_mtime(profile.join("proj/sess.jsonl"), 20);
+        set_mtime(profile.join("proj/sess/subagents/agent-a.jsonl"), 20);
+        set_mtime(profile.join("proj/sess/subagents/agent-a.meta.json"), 20);
+
+        let store =
+            LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile.clone()]);
+        let summary = store.reconcile_session("proj", "sess").await.unwrap();
+        assert_eq!(summary.keys_promoted, 2);
+        assert_eq!(store.load(&main).await.unwrap(), Some(profile_main.clone()));
+        assert_eq!(store.load(&sub).await.unwrap(), Some(profile_sub.clone()));
+        assert_eq!(
+            LocalDirectorySessionStore::new(&profile)
+                .load(&main)
+                .await
+                .unwrap(),
+            Some(profile_main)
+        );
+        assert_eq!(
+            LocalDirectorySessionStore::new(&profile)
+                .load(&sub)
+                .await
+                .unwrap(),
+            Some(profile_sub)
+        );
+    }
+
+    #[tokio::test]
+    async fn deep_equal_newer_profile_does_not_rewrite_canonical() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        let entries = [json!({"same":true})];
+        LocalDirectorySessionStore::new(&canonical)
+            .append(&key(), &entries)
+            .await
+            .unwrap();
+        LocalDirectorySessionStore::new(&profile)
+            .append(&key(), &entries)
+            .await
+            .unwrap();
+        let canonical_path = canonical.join("proj/sess.jsonl");
+        set_mtime(&canonical_path, 10);
+        set_mtime(profile.join("proj/sess.jsonl"), 20);
+
+        let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile]);
+        let summary = store.reconcile_session("proj", "sess").await.unwrap();
+        assert_eq!(summary.keys_promoted, 0);
+        assert_eq!(summary.keys_unchanged, 1);
+        assert_eq!(
+            std::fs::metadata(canonical_path)
+                .unwrap()
+                .modified()
+                .unwrap(),
+            UNIX_EPOCH + Duration::from_secs(10)
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_mtime_tie_keeps_canonical_copy() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        let canonical_entries = vec![json!({"winner":"canonical"})];
+        LocalDirectorySessionStore::new(&canonical)
+            .append(&key(), &canonical_entries)
+            .await
+            .unwrap();
+        LocalDirectorySessionStore::new(&profile)
+            .append(&key(), &[json!({"winner":"profile"})])
+            .await
+            .unwrap();
+        set_mtime(canonical.join("proj/sess.jsonl"), 10);
+        set_mtime(profile.join("proj/sess.jsonl"), 10);
+
+        let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile]);
+        let summary = store.reconcile_session("proj", "sess").await.unwrap();
+        assert_eq!(summary.keys_promoted, 0);
+        assert_eq!(store.load(&key()).await.unwrap(), Some(canonical_entries));
+    }
+
+    #[tokio::test]
+    async fn startup_sweep_promotes_legacy_only_main_and_subagent() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        let session_id = "11111111-2222-4333-8444-555555555555";
+        let main = SessionKey::main("project", session_id);
+        let sub = SessionKey {
+            subpath: Some("subagents/agent-a".to_owned()),
+            ..main.clone()
+        };
+        let profile_store = LocalDirectorySessionStore::new(&profile);
+        profile_store
+            .append(&main, &[json!({"legacy":true})])
+            .await
+            .unwrap();
+        profile_store
+            .append(
+                &sub,
+                &[
+                    json!({"subagent":true}),
+                    json!({"type":"agent_metadata","toolUseId":"legacy-tool"}),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile]);
+        let summary = store.reconcile_all().await.unwrap();
+        assert_eq!(summary.sessions_scanned, 1);
+        assert_eq!(summary.sessions_failed, 0);
+        assert_eq!(summary.keys_promoted, 2);
+        assert!(store.load(&main).await.unwrap().is_some());
+        assert!(store.load(&sub).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn newer_corrupt_profile_never_destroys_canonical_copy() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        let canonical_entries = vec![json!({"safe":"canonical"})];
+        LocalDirectorySessionStore::new(&canonical)
+            .append(&key(), &canonical_entries)
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(profile.join("proj"))
+            .await
+            .unwrap();
+        tokio::fs::write(profile.join("proj/sess.jsonl"), b"{broken\n")
+            .await
+            .unwrap();
+        set_mtime(canonical.join("proj/sess.jsonl"), 10);
+        set_mtime(profile.join("proj/sess.jsonl"), 20);
+
+        let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile]);
+        assert!(store.reconcile_session("proj", "sess").await.is_err());
+        assert_eq!(
+            LocalDirectorySessionStore::new(&canonical)
+                .load(&key())
+                .await
+                .unwrap(),
+            Some(canonical_entries)
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_corrupt_profile_does_not_poison_newer_canonical_copy() {
+        let temp = tempdir().unwrap();
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        let canonical_entries = vec![json!({"safe":"canonical"})];
+        LocalDirectorySessionStore::new(&canonical)
+            .append(&key(), &canonical_entries)
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(profile.join("proj"))
+            .await
+            .unwrap();
+        tokio::fs::write(profile.join("proj/sess.jsonl"), b"{broken\n")
+            .await
+            .unwrap();
+        set_mtime(profile.join("proj/sess.jsonl"), 10);
+        set_mtime(canonical.join("proj/sess.jsonl"), 20);
+
+        let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile]);
+        assert_eq!(
+            store.reconcile_session("proj", "sess").await.unwrap(),
+            SessionReconcileSummary {
+                sessions_scanned: 1,
+                keys_unchanged: 1,
+                ..SessionReconcileSummary::default()
+            }
+        );
+        assert_eq!(store.load(&key()).await.unwrap(), Some(canonical_entries));
+    }
+
+    #[tokio::test]
+    async fn resume_reconciles_newer_profile_tail_before_materializing() {
+        let temp = tempdir().unwrap();
+        let cwd = temp.path().join("workspace");
+        tokio::fs::create_dir_all(&cwd).await.unwrap();
+        let project_key = session_project_key(&cwd);
+        let session_id = "11111111-2222-4333-8444-555555555555";
+        let main = SessionKey::main(&project_key, session_id);
+        let canonical = temp.path().join("canonical");
+        let profile = temp.path().join("profile");
+        LocalDirectorySessionStore::new(&canonical)
+            .append(&main, &[json!({"n":1})])
+            .await
+            .unwrap();
+        LocalDirectorySessionStore::new(&profile)
+            .append(&main, &[json!({"n":1}), json!({"n":2,"tail":true})])
+            .await
+            .unwrap();
+        set_mtime(
+            canonical
+                .join(&project_key)
+                .join(format!("{session_id}.jsonl")),
+            10,
+        );
+        set_mtime(
+            profile
+                .join(&project_key)
+                .join(format!("{session_id}.jsonl")),
+            20,
+        );
+
+        let concrete =
+            LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile.clone()]);
+        let store: Arc<dyn SessionStore> = Arc::new(concrete.clone());
+        materialize_session_for_resume(&store, &cwd, session_id, &profile, Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(concrete.load(&main).await.unwrap().unwrap().len(), 2);
+        assert_eq!(
+            LocalDirectorySessionStore::new(&profile)
+                .load(&main)
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]

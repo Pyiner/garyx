@@ -5,6 +5,7 @@ use claude_agent_sdk::{
     AssistantMessage, MessageOrigin, ResultMessage, SystemMessage, ToolResultBlock, ToolUseBlock,
     UserContent, UserInput, UserMessage,
 };
+use filetime::{FileTime, set_file_mtime};
 use garyx_models::provider::{ClaudeCodeConfig, QueuedUserInput};
 use serde_json::{Value, json};
 use std::fs;
@@ -90,6 +91,51 @@ fn test_managed_claude_projects_roots_only_accepts_marked_uuid_profiles() {
     assert_eq!(
         managed_claude_projects_roots(dir.path()),
         vec![valid.join("projects")]
+    );
+}
+
+#[tokio::test]
+async fn run_end_reconcile_promotes_a_profile_tail_without_mirror_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("workspace");
+    tokio::fs::create_dir_all(&cwd).await.unwrap();
+    let project_key = session_project_key(&cwd);
+    let session_id = "11111111-2222-4333-8444-555555555555";
+    let canonical = dir.path().join("canonical");
+    let profile = dir.path().join("profile");
+    let canonical_path = canonical
+        .join(&project_key)
+        .join(format!("{session_id}.jsonl"));
+    let profile_path = profile
+        .join(&project_key)
+        .join(format!("{session_id}.jsonl"));
+    tokio::fs::create_dir_all(canonical_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(profile_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&canonical_path, b"{\"n\":1}\n")
+        .await
+        .unwrap();
+    tokio::fs::write(&profile_path, b"{\"n\":1}\n{\"n\":2}\n")
+        .await
+        .unwrap();
+    set_file_mtime(&canonical_path, FileTime::from_unix_time(10, 0)).unwrap();
+    set_file_mtime(&profile_path, FileTime::from_unix_time(20, 0)).unwrap();
+
+    let store = LocalDirectorySessionStore::new(&canonical).with_legacy_roots([profile.clone()]);
+    let summary = reconcile_local_claude_session(&store, &cwd, session_id)
+        .await
+        .unwrap();
+    assert_eq!(summary.keys_promoted, 1);
+    assert_eq!(
+        tokio::fs::read_to_string(&canonical_path).await.unwrap(),
+        "{\"n\":1}\n{\"n\":2}\n"
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(&profile_path).await.unwrap(),
+        "{\"n\":1}\n{\"n\":2}\n"
     );
 }
 
@@ -407,13 +453,15 @@ fn test_fresh_session_retry_detection() {
 #[test]
 fn test_session_store_connect_errors_never_become_fresh_session_retries() {
     let store_error = bridge_error_from_sdk_connect_error(ClaudeSDKError::SessionStore(
-        "canonical transcript is unreadable".to_owned(),
+        "/tmp/corrupted-data-repo/invalid session.jsonl is unreadable".to_owned(),
     ));
+    assert!(matches!(store_error, BridgeError::SessionStore(_)));
     assert!(!should_retry_with_fresh_session(&store_error));
 
     let timeout = bridge_error_from_sdk_connect_error(ClaudeSDKError::Timeout(
         "SessionStore.load() timed out after 60000ms for session probe".to_owned(),
     ));
+    assert!(matches!(timeout, BridgeError::SessionStore(_)));
     assert!(!should_retry_with_fresh_session(&timeout));
 }
 
@@ -3766,8 +3814,8 @@ async fn test_run_streaming_does_not_clear_session_after_session_store_failure()
         .await
         .insert("sess::store".to_owned(), "native-session".to_owned());
     provider
-        .enqueue_test_run_attempt(Err(BridgeError::RunFailed(
-            "claude SessionStore failed before launch: unreadable canonical transcript".to_owned(),
+        .enqueue_test_run_attempt(Err(BridgeError::SessionStore(
+            "/tmp/corrupted-data-repo/invalid session.jsonl is unreadable".to_owned(),
         )))
         .await;
 

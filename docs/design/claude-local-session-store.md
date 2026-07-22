@@ -1,6 +1,6 @@
 # Claude Code local SessionStore parity
 
-Status: implementation-ready  
+Status: implemented
 Owner: Garyx  
 Baseline: `@anthropic-ai/claude-agent-sdk@0.3.217`, tag/commit
 `v0.3.217` / `2997b3d35a729ef823d4edf6cf3c690f86d888e3`
@@ -52,6 +52,8 @@ production adapter:
 - CLI `--session-mirror` consumption, batching, bounded retry, timeout, and
   `mirror_error` reporting;
 - lazy import of pre-feature sessions from managed account project roots;
+- parsed-content/mtime LWW reconciliation across canonical and managed copies;
+- startup, account-switch, pre-resume, and post-run reconciliation;
 - Garyx bridge wiring with `~/.claude/projects` as the default canonical root.
 
 S3, Redis, Postgres, remote storage, a settings control for the directory, and
@@ -121,24 +123,81 @@ segments; subpaths must be non-empty, relative, and contain no `..` segment.
 Canonicalization/containment checks prevent a symlink or traversal from
 escaping the configured root.
 
-## Read, mirror, and account-switch flow
+## Read, reconcile, mirror, and account-switch flow
 
 ```text
 Garyx thread sdk_session_id
         |
         v
-LocalDirectorySessionStore (~/.claude/projects)
-        | load before spawn
+reconcile canonical + every safe managed copy
+        | parsed equal => no write
+        | different => newest mtime wins (tie => canonical)
+        v
+LocalDirectorySessionStore (~/.claude/projects, canonical winner)
+        | load before every resume
         v
 selected account CLAUDE_CONFIG_DIR/projects/<project>/<session>.jsonl
         | claude --resume=<same id> --session-mirror
         v
 transcript_mirror frames ----append----> canonical store
+        |
+        `---- post-run reconcile fallback ----^
 ```
 
 When the selected config's projects root is itself the canonical root (System
-default), the CLI already writes the canonical files. Rust skips redundant
-mirror appends so entries are not duplicated, while retaining native resume.
+default), the CLI already writes the canonical files. Rust skips physical
+materialization and redundant mirror appends so entries are not duplicated,
+while retaining native resume. It still reconciles managed recovery copies
+before the default resume.
+
+Every managed-account resume physically materializes the full winning main and
+subagent view into that selected profile, including a same-account resume. The
+operation happens before the Claude subprocess is spawned. An already-running
+process keeps its original directory and is never rewritten in place by an
+account switch; only a future top-level run observes the new provider choice.
+
+### Local last-write-wins reconciliation
+
+The canonical file and every safe managed-account file are recovery replicas,
+not independent branches. Reconciliation is per key: the main transcript and
+each subagent transcript (with its metadata sidecar) are compared separately.
+
+1. Discover existing candidates and their filesystem modification times.
+2. Pick the greatest mtime. An exact tie favors the canonical root; equal
+   profile mtimes use stable path ordering.
+3. Parse the winning candidate. If it is canonical, leave it in place.
+4. If a managed candidate wins, compare parsed JSON entries with canonical.
+   Equal content is a no-op regardless of mtime. Different content atomically
+   replaces canonical with the winner; the managed source is never rewritten
+   by reconciliation.
+
+The parsed-content check is deliberately first in effect: resume
+materialization refreshes the selected profile's mtime even when bytes are
+unchanged, and must not create a feedback loop that continuously rewrites
+canonical. The system never concatenates or guesses a semantic merge. When
+copies truly diverge, the later durable native write is the complete winner,
+as selected by mtime. Claude compaction is append-only in the pinned/native
+protocol: prior JSONL lines remain and a compact summary is appended, so normal
+compaction does not create a competing rewritten prefix.
+
+Reconciliation runs at four lifecycle points:
+
+- gateway startup: sweep all valid UUID sessions so legacy managed-only files
+  become visible to terminal Claude;
+- account switch: sweep before quota-recovery threads are expedited;
+- every explicit resume: reconcile that session before materialization/spawn;
+- every run end: reconcile that session after CLI shutdown, covering a missed
+  mirror frame and the optional cctty execution mode, which does not currently
+  emit `transcript_mirror` frames.
+
+The post-run pass is best-effort because the account-local file remains primary
+evidence; startup/switch/next-resume retries it. A native managed run normally
+updates canonical through mirror frames first, so the post-run pass is a
+parsed-equal no-op. There remains one unavoidable local-only window: if Garyx
+is killed after Claude writes a profile but before mirror/post-run reconcile,
+and the user immediately resumes from terminal before Garyx restarts or an
+account switch occurs, terminal Claude can still see the older canonical copy.
+The next Garyx startup closes that window.
 
 ### Legacy bootstrap
 
@@ -150,11 +209,11 @@ legacy projects roots. Garyx supplies:
   `provider-accounts/claude-code` root;
 - the default Garyx managed-account root when it differs.
 
-Candidates are exact `(projectKey, sessionId)` matches. The most complete
-candidate (entry count, then mtime) is imported into the canonical root,
-including subagents, before normal materialization. Import is idempotent and
-never removes or rewrites the source. Once a canonical session exists it is
-authoritative; old per-account copies are not merged into it on every launch.
+Candidates are exact `(projectKey, sessionId)` matches. Legacy-only files use
+the same per-key mtime reconciliation as post-feature files and are promoted
+into canonical without removing or rewriting their source. Because startup
+sweeps all safe profiles, a pre-feature managed-only session becomes available
+to ordinary terminal Claude without first resuming it inside Garyx.
 
 This repairs sessions created before SessionStore support without persisting
 the source account on the thread.
@@ -170,7 +229,12 @@ the source account on the thread.
   category.
 - Mirror append failure does not kill a successful Claude turn, matching the
   official SDK. It emits `mirror_error`, remains visible in logs, and leaves
-  the account-local transcript as recovery evidence.
+  the account-local transcript as recovery evidence for post-run/startup LWW
+  reconciliation.
+- A newer corrupt candidate fails that session's pre-resume reconciliation and
+  never destroys the valid canonical copy. Startup/account-switch sweeps isolate
+  the failure to that session and continue scanning. A stale corrupt profile is
+  not parsed when a newer canonical copy wins.
 - Malformed/unsafe subkeys are skipped with a warning; they are never joined
   outside the target session directory.
 - File checkpointing remains incompatible with SessionStore, matching the
@@ -210,6 +274,12 @@ surface) and feature-head success must be demonstrated before review.
   Garyx account.
 - Switching back and forth across at least two managed accounts preserves one
   native session ID and one monotonically growing canonical transcript.
+- Default, two managed accounts, and direct terminal Claude can alternate
+  resumes without truncating a newer copy; same-account resumes also reconcile
+  before materialization.
+- Parsed-equal/newer, divergent/newer, exact-mtime tie, legacy-only, mirror
+  failure, corrupt candidate, main/subagent, and startup/account-switch sweeps
+  have deterministic tests.
 - Quota-recovery dispatch after an account switch uses the same path without a
   special-case prompt or metadata field.
 - Official TypeScript/Rust differential traces are identical at the pinned

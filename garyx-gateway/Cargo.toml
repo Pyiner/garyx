@@ -17,6 +17,7 @@ garyx-models = { workspace = true }
 garyx-core = { workspace = true }
 garyx-router = { workspace = true }
 garyx-bridge = { workspace = true }
+claude-agent-sdk = { workspace = true }
 garyx-channels = { workspace = true }
 cctty = { workspace = true }
 serde = { workspace = true }

@@ -428,6 +428,7 @@ name = "claude-agent-sdk"
 version = "0.1.32"
 dependencies = [
  "async-trait",
+ "filetime",
  "serde",
  "serde_json",
  "tempfile",
@@ -911,6 +912,7 @@ dependencies = [
  "chrono-tz",
  "claude-agent-sdk",
  "codex-sdk",
+ "filetime",
  "garyx-models",
  "garyx-router",
  "iana-time-zone",
@@ -982,6 +984,7 @@ dependencies = [
  "cctty",
  "chrono",
  "chrono-tz",
+ "claude-agent-sdk",
  "crc32fast",
  "cron",
  "filetime",

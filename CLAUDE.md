@@ -209,9 +209,13 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
   selected environment only when a new top-level run starts.
 - Claude Code managed accounts share native session continuity through the
   local SessionStore rooted at `~/.claude/projects`. A resumed run must load
-  and materialize that transcript before spawning with the selected account,
-  then mirror new native entries back to the shared root. Storage failures must
-  never clear the native session or trigger the fresh-session fallback.
+  and reconcile main/subagent copies before spawning: parsed-equal copies are
+  no-ops, otherwise the newest file mtime wins, with an exact tie favoring the
+  canonical root. Every managed-account resume materializes the winner into
+  that account; System default does not self-copy. Mirror during native runs,
+  reconcile again after every run, and sweep at startup/account switch so
+  terminal Claude sees recovered copies. Storage failures must never clear the
+  native session or trigger the fresh-session fallback.
 - Quota recovery is SQL-owned per blocked run generation. Timer, account
   switch, and manual Continue must wake the same durable row and admission
   intent; never queue its synthetic `continue` into an active run, and never
