@@ -470,7 +470,7 @@ export function buildStories(): Story[] {
     name: '消息排版 · 阅读基线',
     description: '固定宽度与固定内容，用于核对正文、列表、强调和行内代码的像素级排版。',
     steps: [
-      step('Markdown 阅读基线', '直接渲染 RichMessageText，隔离消息状态与工具行。', {
+      step('Markdown 阅读基线', '通过真实助手气泡渲染 RichMessageText，隔离消息状态与工具行。', {
         messages: [],
       }),
     ],

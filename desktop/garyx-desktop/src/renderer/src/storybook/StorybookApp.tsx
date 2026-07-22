@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
+
 import { ThreadPage } from '../app-shell/components/ThreadPage';
 import { deriveThreadActivityModel } from '../app-shell/thread-activity';
 import { isRuntimeBusy } from '../message-machine';
@@ -16,6 +18,15 @@ const MARKDOWN_PARITY_FIXTURE = [
   '',
   '- **2026年10月4日 02:00**：拨快 1 小时到 03:00，进入 **AEDT，UTC+11**',
   '- **2027年4月4日 03:00**：拨慢 1 小时到 02:00，回到 **AEST，UTC+10**',
+  '',
+  '15. 有序列表从两位数开始',
+  '16. 较窄的数字仍需完整显示',
+  '17. 列表 marker 保持右对齐',
+  '18. 正文维持原有阅读边界',
+  '19. 窄首位字形的最后一项',
+  '20. 宽字形不能被左边界裁剪',
+  '21. 后续序号同样完整',
+  '22. 两位数列表的收尾项',
   '',
   '所以如果你是在排会议或写代码，最好用 `Australia/Sydney`，不要硬编码 `+10` 或 `+11`。',
   '',
@@ -324,7 +335,17 @@ export function StorybookApp() {
         <section className="storybook-stage">
           {story.id === 'markdown-parity' ? (
             <div className="storybook-markdown-parity">
-              <RichMessageText text={MARKDOWN_PARITY_FIXTURE} tone="assistant" />
+              <Bubble
+                className="w-[min(100%,736px)] self-start"
+                variant="ghost"
+              >
+                <BubbleContent className="border-0">
+                  <RichMessageText
+                    text={MARKDOWN_PARITY_FIXTURE}
+                    tone="assistant"
+                  />
+                </BubbleContent>
+              </Bubble>
             </div>
           ) : (
             <ThreadStage step={step} storyId={story.id} />
