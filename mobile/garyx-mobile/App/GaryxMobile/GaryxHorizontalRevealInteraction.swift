@@ -44,6 +44,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     private var requestedPosition: GaryxHorizontalRevealPosition
     private var isConfigured = false
     private var hostOwnership: GaryxHorizontalRevealHostOwnership?
+    private var revealGeneration: UInt64 = 0
 
     init(
         initialPosition: GaryxHorizontalRevealPosition = .closed,
@@ -304,11 +305,17 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
             assertionFailure("root transition applied to a surface-local reveal")
             return
         }
+        let previousOwnership = hostOwnership
         let requiresTerminalization = hostOwnership.applyRootSurfaceTransition(transition)
         self.hostOwnership = hostOwnership
-        if requiresTerminalization {
-            forceTerminal(.hostOccurrenceEnded, position: position)
-        } else if !hostOwnership.hasActiveHost {
+        if requiresTerminalization
+            || (hostOwnership != previousOwnership
+                && requiresTerminalSettlement(at: position)) {
+            deferHostTerminalSettlement(
+                expectedOwnership: hostOwnership,
+                position: position
+            )
+        } else if hostOwnership != previousOwnership && !hostOwnership.hasActiveHost {
             assertTerminalHasZeroResidue()
         }
     }
@@ -325,11 +332,21 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         self.hostOwnership = hostOwnership
         switch result {
         case .attached:
-            assertTerminalHasZeroResidue()
+            if requiresTerminalSettlement(at: position) {
+                deferHostTerminalSettlement(
+                    expectedOwnership: hostOwnership,
+                    position: position
+                )
+            } else {
+                assertTerminalHasZeroResidue()
+            }
         case .alreadyAttached:
             break
         case .superseded:
-            forceTerminal(.hostOccurrenceEnded, position: position)
+            deferHostTerminalSettlement(
+                expectedOwnership: hostOwnership,
+                position: position
+            )
         case .rejected:
             assertionFailure("reveal host attached outside its root surface occurrence")
         }
@@ -346,7 +363,10 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         let detachedCurrentOwner = hostOwnership.detachHost(occurrenceID)
         self.hostOwnership = hostOwnership
         if detachedCurrentOwner {
-            forceTerminal(.hostOccurrenceEnded, position: position)
+            deferHostTerminalSettlement(
+                expectedOwnership: hostOwnership,
+                position: position
+            )
         }
     }
 
@@ -389,6 +409,39 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
         )
     }
 
+    private func requiresTerminalSettlement(
+        at position: GaryxHorizontalRevealPosition
+    ) -> Bool {
+        state.phase != .idle
+            || state.settledPosition != position
+            || abs(state.reveal - position.reveal(for: extent)) > 0.000_001
+            || settleDriver.isSettling
+            || activeCurve != nil
+            || requestedPosition != position
+    }
+
+    /// Representable lifecycle callbacks must update the imperative ownership
+    /// ledger immediately, but publishing their terminal projection would
+    /// re-enter SwiftUI's active graph update. Stop the obsolete frame source
+    /// now and settle the observable state on the next main-actor turn.
+    private func deferHostTerminalSettlement(
+        expectedOwnership: GaryxHorizontalRevealHostOwnership,
+        position: GaryxHorizontalRevealPosition
+    ) {
+        settleDriver.invalidate()
+        activeCurve = nil
+        revealGeneration &+= 1
+        let generation = revealGeneration
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.revealGeneration == generation,
+                  self.hostOwnership == expectedOwnership else {
+                return
+            }
+            self.forceTerminal(.hostOccurrenceEnded, position: position)
+        }
+    }
+
     private func startSettle(
         _ settle: GaryxHorizontalRevealSettle,
         animated: Bool,
@@ -422,6 +475,7 @@ final class GaryxHorizontalRevealInteractionStore: ObservableObject {
     }
 
     private func publish() {
+        revealGeneration &+= 1
         if hostOwnership?.hasActiveHost == false {
             assert(
                 state.phase == .idle && !settleDriver.isSettling,
@@ -458,8 +512,9 @@ extension GaryxMobileModel {
     }
 
     /// Root branch publication and UIKit host attach/dismantle both converge on
-    /// the same occurrence ledger. Ending either owner synchronously stops the
-    /// display link and returns both shared reveal states to idle.
+    /// the same occurrence ledger. Ending either owner synchronously revokes
+    /// ownership and stops the display link; its observable terminal projection
+    /// settles after the representable lifecycle callback returns.
     func applyGlobalRevealRootSurfaceTransition(
         _ transition: GaryxRootSurfaceOccurrenceTransition
     ) {

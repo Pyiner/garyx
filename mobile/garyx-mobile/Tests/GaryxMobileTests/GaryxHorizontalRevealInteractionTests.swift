@@ -258,7 +258,7 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         }
     }
 
-    func testRootSurfaceAndUIKitHostEndsSynchronouslyReleaseTheDriver() {
+    func testRootSurfaceAndUIKitHostEndsImmediatelyReleaseDriverThenSettlePresentation() async {
         let harness = Harness(
             projection: .fullScreenNavigation,
             bindsToRootSurfaceHost: true
@@ -287,7 +287,9 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         )
 
         XCTAssertFalse(harness.frames.isRunning)
-        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        XCTAssertFalse(harness.store.isGestureEligible(in: firstHost))
+        XCTAssertTrue(harness.store.diagnostics.hasTerminalResidue)
+        await waitForTerminalSettlement(harness.store)
         XCTAssertTrue(harness.store.presentation.phase.allowsSurfaceHitTesting)
 
         // Model commands may update the canonical endpoint while no host is
@@ -319,7 +321,9 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         )
         harness.store.attachHostOccurrence(replacementHost, position: .open)
         XCTAssertFalse(harness.frames.isRunning)
-        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        XCTAssertFalse(harness.store.isGestureEligible(in: secondHost))
+        XCTAssertTrue(harness.store.isGestureEligible(in: replacementHost))
+        await waitForTerminalSettlement(harness.store)
 
         harness.store.detachHostOccurrence(secondHost, position: .open)
         harness.store.beginGesture(in: secondHost)
@@ -329,11 +333,93 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
 
         harness.store.detachHostOccurrence(replacementHost, position: .open)
         XCTAssertFalse(harness.frames.isRunning)
-        XCTAssertFalse(harness.store.diagnostics.hasTerminalResidue)
+        XCTAssertFalse(harness.store.isGestureEligible(in: replacementHost))
+        await waitForTerminalSettlement(harness.store)
         XCTAssertTrue(harness.store.presentation.phase.allowsSurfaceHitTesting)
     }
 
-    func testModelConnectionReplacementTerminatesBeforePublishingTheNewRoot() throws {
+    func testDetachedOccurrenceSettlementCannotClobberImmediateReplacement() async {
+        let harness = Harness(
+            projection: .fullScreenNavigation,
+            bindsToRootSurfaceHost: true
+        )
+        let root = GaryxRootSurfaceOccurrenceID(rawValue: 1)
+        let firstHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "first-host"
+        )
+        let replacementHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "replacement-host"
+        )
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellBegan(root),
+            position: .closed
+        )
+        harness.store.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: root
+        )
+        harness.store.attachHostOccurrence(firstHost, position: .closed)
+
+        harness.store.detachHostOccurrence(firstHost, position: .closed)
+        harness.store.attachHostOccurrence(replacementHost, position: .open)
+
+        XCTAssertFalse(harness.store.isGestureEligible(in: firstHost))
+        XCTAssertTrue(harness.store.isGestureEligible(in: replacementHost))
+        XCTAssertFalse(harness.frames.isRunning)
+        await drainMainActorTurns()
+        await waitForTerminalSettlement(harness.store)
+        XCTAssertEqual(harness.store.presentation, .init(
+            reveal: 330,
+            phase: .idle,
+            target: .open
+        ))
+    }
+
+    func testDetachedOccurrenceSettlementCannotClobberNewGesture() async {
+        let harness = Harness(
+            projection: .fullScreenNavigation,
+            bindsToRootSurfaceHost: true
+        )
+        let root = GaryxRootSurfaceOccurrenceID(rawValue: 1)
+        let firstHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "first-host"
+        )
+        let replacementHost = GaryxHorizontalRevealHostOccurrenceID(
+            rootSurfaceOccurrenceID: root,
+            rawValue: "replacement-host"
+        )
+        harness.store.applyRootSurfaceOccurrenceTransition(
+            .navigationShellBegan(root),
+            position: .closed
+        )
+        harness.store.configure(
+            extent: 330,
+            restingPosition: .closed,
+            rootSurfaceOccurrenceID: root
+        )
+        harness.store.attachHostOccurrence(firstHost, position: .closed)
+        harness.store.setTarget(.open, animated: true)
+
+        harness.store.detachHostOccurrence(firstHost, position: .closed)
+        harness.store.attachHostOccurrence(replacementHost, position: .closed)
+        harness.store.beginGesture(in: replacementHost)
+        harness.store.updateGesture(logicalTranslation: 90, in: replacementHost)
+        await drainMainActorTurns()
+
+        XCTAssertTrue(harness.store.isGestureEligible(in: replacementHost))
+        XCTAssertEqual(harness.store.presentation.phase, .dragging)
+        XCTAssertEqual(harness.store.presentation.reveal, 90, accuracy: 1e-9)
+        XCTAssertFalse(harness.frames.isRunning)
+
+        harness.store.detachHostOccurrence(replacementHost, position: .closed)
+        await waitForTerminalSettlement(harness.store)
+    }
+
+    func testModelConnectionReplacementRevokesOldOwnershipBeforePublishingTheNewRoot() async throws {
         let suiteName = "GaryxRootInteractionOwnershipTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
@@ -363,7 +449,7 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         model.connectionState = .checking
 
         XCTAssertEqual(model.homeObservationStore.rootSurface, .gatewaySetup)
-        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        await waitForTerminalSettlement(model.drawerRevealInteraction)
         XCTAssertTrue(
             model.drawerRevealInteraction.presentation.phase.allowsSurfaceHitTesting
         )
@@ -381,7 +467,30 @@ final class GaryxHorizontalRevealInteractionTests: XCTestCase {
         model.drawerRevealInteraction.beginGesture(in: secondHost)
         XCTAssertEqual(model.drawerRevealInteraction.presentation.phase, .dragging)
         model.detachGlobalRevealHostOccurrence(secondHost)
-        XCTAssertFalse(model.drawerRevealInteraction.diagnostics.hasTerminalResidue)
+        await waitForTerminalSettlement(model.drawerRevealInteraction)
+    }
+
+    private func waitForTerminalSettlement(
+        _ store: GaryxHorizontalRevealInteractionStore,
+        turns: Int = 20,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<turns where store.diagnostics.hasTerminalResidue {
+            await Task.yield()
+        }
+        XCTAssertFalse(
+            store.diagnostics.hasTerminalResidue,
+            "deferred host settlement did not reach a terminal presentation",
+            file: file,
+            line: line
+        )
+    }
+
+    private func drainMainActorTurns(_ turns: Int = 20) async {
+        for _ in 0..<turns {
+            await Task.yield()
+        }
     }
 
     private func rootOccurrenceID(
