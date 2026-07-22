@@ -75,11 +75,16 @@ The gateway performs these operations in order:
 
 1. validate the requested profile;
 2. apply and persist provider selection, including the bridge launch env;
-3. reconcile committed rate-limit terminals that have not reached the async
-   SQL projection yet;
-4. expedite every waiting Claude Code recovery job to `due_at = now`;
-5. notify the recovery worker;
-6. return the account selection plus a recovery summary.
+3. when and only when the selection changed, hand the remaining effects to a
+   detached gateway-owned task whose lifetime is independent of the HTTP
+   request;
+4. reconcile local Claude session replicas, then immediately expedite every
+   already-durable waiting Claude Code recovery job to `due_at = now` and
+   notify the recovery worker;
+5. return the account selection plus that fast SQL recovery summary;
+6. in the same detached task, reconcile committed rate-limit terminals that
+   have not reached the async SQL projection yet, then perform a second
+   idempotent expedite and notification pass.
 
 The response is backward-compatible:
 
@@ -97,7 +102,11 @@ The response is backward-compatible:
 
 Old clients ignore the added fields. New clients use the counts for a short
 `Resuming 4 threads…` confirmation. The HTTP response does not wait for every
-provider run to finish.
+provider run or the whole-library transcript repair to finish. Once the
+selection commit succeeds, a client timeout or disconnect cannot cancel the
+backend-owned recovery wake. The first summary can report zero in the narrow
+terminal-commit/SQL-projection window; the second pass still projects and
+wakes that generation.
 
 Selecting the already-active account is a no-op and does not force a premature
 retry. A failed post-selection expedite is returned as an explicit recovery
