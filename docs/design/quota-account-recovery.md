@@ -75,9 +75,11 @@ The gateway performs these operations in order:
 
 1. validate the requested profile;
 2. apply and persist provider selection, including the bridge launch env;
-3. expedite every waiting Claude Code recovery job to `due_at = now`;
-4. notify the recovery worker;
-5. return the account selection plus a recovery summary.
+3. reconcile committed rate-limit terminals that have not reached the async
+   SQL projection yet;
+4. expedite every waiting Claude Code recovery job to `due_at = now`;
+5. notify the recovery worker;
+6. return the account selection plus a recovery summary.
 
 The response is backward-compatible:
 
@@ -113,6 +115,7 @@ CREATE TABLE quota_recovery_jobs (
     thread_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     blocked_run_id TEXT NOT NULL,
+    blocked_seq INTEGER NOT NULL CHECK (blocked_seq > 0),
     quota_window TEXT,
     reset_at TEXT,
     due_at TEXT NOT NULL,
@@ -144,9 +147,17 @@ CREATE INDEX idx_quota_recovery_provider_waiting
     ON quota_recovery_jobs(provider, state, due_at);
 ```
 
-`blocked_run_id` is the recovery generation. Replaying the same committed
-terminal event is idempotent. A new rate-limited run supersedes any older
-active job for that thread before inserting its new generation.
+`blocked_run_id` is the recovery generation and `blocked_seq` is its monotonic
+transcript position. Replaying the same committed terminal event is
+idempotent. A higher sequence supersedes an older active job; a delayed lower
+sequence is ignored even if an account-switch reconciliation already projected
+the newer terminal.
+
+A terminal without a trustworthy automatic reset is still recorded, with no
+`reset_at` and a non-runnable sentinel deadline. Timer lookup excludes these
+parked rows. Account switch or manual Continue changes their wake reason and
+deadline to `now`, so “all quota-paused threads” includes providers that could
+not report a reset time without inventing an automatic retry.
 
 No account id, config directory, or credential data is stored in this table or
 thread metadata.
@@ -171,8 +182,9 @@ thread deletion ------------------> cancelled
 The recovery worker is SQL-backed and replaces quota-specific cron jobs. It
 reads the earliest due row, sleeps until that deadline, and also listens on a
 `Notify` so rate-limit events and account switches wake it immediately. It
-claims with a short lease in a `BEGIN IMMEDIATE` transaction. Startup returns
-expired claims to `waiting`.
+claims with a short lease in a `BEGIN IMMEDIATE` transaction. At process
+startup, all claims owned by the previous gateway process return to `waiting`;
+there cannot be a live worker from that process to retain them.
 
 Every dispatch uses the existing durable admission ledger with an internal
 scope and deterministic intent:
@@ -184,8 +196,12 @@ client_intent_id = quota-recovery:<blocked_run_id>
 ```
 
 Only an idle thread whose active recovery generation still matches may be
-dispatched. A thread that already started another run supersedes the recovery
-instead of queueing an extra `continue` into the active run.
+dispatched. The claim token is passed out-of-band in gateway process memory and
+validated in the same SQLite transaction as durable dispatch admission. It is
+never included in request metadata or its idempotency fingerprint, so a new
+claim after restart reuses the exact same durable intent. A thread that already
+started another run supersedes the recovery instead of queueing an extra
+`continue` into the active run.
 
 Manual Continue is moved from a generic client send to a quota-recovery retry
 endpoint. It claims the same SQL row and therefore shares the same duplicate
@@ -194,10 +210,10 @@ fence as reset and account-switch recovery.
 The internal message remains the literal `continue`, with internal metadata:
 
 - `internal_dispatch = true`;
-- `quota_recovery = true`;
-- `quota_recovery_job_id`;
-- `quota_recovery_blocked_run_id`;
-- `quota_recovery_wake_reason`.
+- `quota_recovery = true`.
+
+Job id, generation, wake reason, and claim token remain exclusively in the SQL
+recovery record and gateway logs; they are not sent through provider metadata.
 
 Provider failures before durable admission release the lease with bounded
 backoff. A new `rate_limited` completion creates a new generation and its own
@@ -205,15 +221,18 @@ provider reset deadline.
 
 ## Render-state ownership
 
-The immutable transcript control retains provider/reset/window/message. The
-gateway overlays the current SQL recovery state when producing
-`render_state.rateLimit`; clients do not infer scheduling from a reset time.
+The immutable transcript control retains the blocked run generation together
+with provider/reset/window/message. The gateway overlays SQL state only when
+the row's `blocked_run_id` matches that render generation; clients do not infer
+scheduling from a reset time. This avoids an older settled row briefly masking
+a newly committed rate-limit event before its asynchronous SQL projection.
 
 The render contract gains optional recovery fields while keeping
 `willAutoResend` for compatibility:
 
 ```json
 {
+  "recoveryGeneration": "run-id-that-hit-the-limit",
   "provider": "claude",
   "resetAt": "2026-07-23T01:30:00Z",
   "window": "primary",
@@ -244,6 +263,10 @@ without import. New code never creates quota cron jobs. A legacy cron executor
 that encounters a surviving job must claim the matching SQL generation before
 dispatch and otherwise no-op.
 
+Startup also scans canonical thread records and projects any still-current
+committed rate-limit terminal into SQLite. This closes the crash window between
+the transcript commit and the normal asynchronous event projection.
+
 ## Failure and race semantics
 
 - Account selection is applied before jobs become due, so every newly started
@@ -258,7 +281,7 @@ dispatch and otherwise no-op.
 - A user send admitted before recovery supersedes the waiting generation in
   the same SQLite admission transaction.
 - Thread archive/delete removes or cancels pending recovery work.
-- A gateway restart recovers expired claims. Reusing the deterministic
+- A gateway restart recovers claims left by the previous process. Reusing the deterministic
   dispatch intent prevents a second committed synthetic user input.
 
 ## Delivery plan

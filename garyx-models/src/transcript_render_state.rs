@@ -54,6 +54,12 @@ pub struct RenderWindow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderRateLimit {
+    #[serde(
+        rename = "recoveryGeneration",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recovery_generation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(rename = "resetAt", default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +70,18 @@ pub struct RenderRateLimit {
     pub message: Option<String>,
     #[serde(rename = "willAutoResend", default)]
     pub will_auto_resend: bool,
+    #[serde(
+        rename = "recoveryState",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recovery_state: Option<String>,
+    #[serde(
+        rename = "recoveryAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recovery_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -654,11 +672,14 @@ pub fn reduce_transcript_render_state_with_prefix_state<'a>(
     let (tail_activity, active_tool_group_id, progress_locus) =
         derive_tail_activity(blocks.last(), run_state, latest_run_start_seq);
     let rate_limit = run_state.rate_limit.as_ref().map(|limit| RenderRateLimit {
+        recovery_generation: limit.blocked_run_id.clone(),
         provider: limit.provider.clone(),
         reset_at: limit.reset_at.clone(),
         window: limit.window.clone(),
         message: limit.message.clone(),
         will_auto_resend: limit.will_auto_resend,
+        recovery_state: None,
+        recovery_at: None,
     });
 
     RenderSnapshot {
@@ -3345,6 +3366,10 @@ mod tests {
 
         let snapshot = reduce_transcript_render_state(&records);
         let rate_limit = snapshot.rate_limit.expect("rate limit surfaced");
+        assert_eq!(
+            rate_limit.recovery_generation.as_deref(),
+            Some("run::render-final")
+        );
         assert_eq!(rate_limit.provider.as_deref(), Some("codex"));
         assert_eq!(rate_limit.reset_at.as_deref(), Some("2026-01-01T05:00:00Z"));
         assert_eq!(rate_limit.window.as_deref(), Some("primary"));

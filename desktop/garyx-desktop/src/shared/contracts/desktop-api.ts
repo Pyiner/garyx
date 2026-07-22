@@ -85,6 +85,7 @@ import type {
 import type {
   DesktopApiProviderType,
   DesktopClaudeAuthSession,
+  DesktopClaudeCodeAccountSelection,
   DesktopClaudeCodeAccounts,
   DesktopCodingUsage,
   DesktopProviderModels,
@@ -307,7 +308,10 @@ export interface GaryxDesktopApi {
   ) => Promise<DesktopProviderModels>;
   getCodingUsage: () => Promise<DesktopCodingUsage>;
   listClaudeCodeAccounts: () => Promise<DesktopClaudeCodeAccounts>;
-  selectClaudeCodeAccount: (input: { accountId: string | null }) => Promise<void>;
+  selectClaudeCodeAccount: (
+    input: { accountId: string | null },
+  ) => Promise<DesktopClaudeCodeAccountSelection>;
+  retryThreadQuotaRecovery: (input: { threadId: string }) => Promise<void>;
   renameClaudeCodeAccount: (input: { accountId: string; name: string }) => Promise<void>;
   deleteClaudeCodeAccount: (input: { accountId: string }) => Promise<void>;
   startClaudeCodeAuth: (

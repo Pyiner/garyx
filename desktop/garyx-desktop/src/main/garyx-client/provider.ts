@@ -3,6 +3,7 @@ import type {
   DesktopClaudeAuthSession,
   DesktopClaudeAuthStatus,
   DesktopClaudeCodeAccount,
+  DesktopClaudeCodeAccountSelection,
   DesktopClaudeCodeAccounts,
   DesktopCodingUsage,
   DesktopModelUsage,
@@ -539,8 +540,8 @@ export async function listClaudeCodeAccounts(
 export async function selectClaudeCodeAccount(
   settings: DesktopSettings,
   accountId: string | null,
-): Promise<void> {
-  await requestJson<unknown>(
+): Promise<DesktopClaudeCodeAccountSelection> {
+  const payload = await requestJson<unknown>(
     settings,
     "/api/providers/claude_code/accounts/active",
     "mutationSingleAttempt",
@@ -549,6 +550,44 @@ export async function selectClaudeCodeAccount(
       signal: AbortSignal.timeout(15000),
       body: JSON.stringify({ account_id: accountId }),
     },
+  );
+  const path = "Claude Code account selection";
+  const record = requireContractRecord(payload, path);
+  const recovery = hasContractField(record, "recovery")
+    ? requireContractRecord(record.recovery, `${path}.recovery`)
+    : {};
+  return {
+    activeAccountId: optionalContractString(record, "active_account_id", path),
+    selectionChanged: hasContractField(record, "selection_changed")
+      ? requireContractBoolean(record.selection_changed, `${path}.selection_changed`)
+      : true,
+    recovery: {
+      matchedThreads: hasContractField(recovery, "matched_threads")
+        ? requireContractInteger(recovery.matched_threads, `${path}.recovery.matched_threads`)
+        : 0,
+      expeditedThreads: hasContractField(recovery, "expedited_threads")
+        ? requireContractInteger(recovery.expedited_threads, `${path}.recovery.expedited_threads`)
+        : 0,
+      alreadyClaimedThreads: hasContractField(recovery, "already_claimed_threads")
+        ? requireContractInteger(
+          recovery.already_claimed_threads,
+          `${path}.recovery.already_claimed_threads`,
+        )
+        : 0,
+    },
+    recoveryWarning: optionalContractString(record, "recovery_warning", path),
+  };
+}
+
+export async function retryThreadQuotaRecovery(
+  settings: DesktopSettings,
+  threadId: string,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/threads/${encodeURIComponent(threadId)}/quota-recovery/retry`,
+    "mutationSingleAttempt",
+    { method: "POST", signal: AbortSignal.timeout(15000) },
   );
 }
 

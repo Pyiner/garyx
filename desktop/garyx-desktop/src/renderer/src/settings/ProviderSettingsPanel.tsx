@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ProviderAgentIcon } from '../app-shell/components/ProviderAgentIcon';
+import { ClaudeAccountSwitcherDialog } from '../app-shell/components/ClaudeAccountSwitcherDialog';
 import { useI18n, type Translate } from '../i18n';
 import { shouldRequestProviderModelCatalog } from '../provider-model-catalog';
 import {
@@ -150,6 +151,7 @@ export function ProviderSettingsPanel({
   const [claudeAccountsError, setClaudeAccountsError] = useState<string | null>(null);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [accountMutationId, setAccountMutationId] = useState<string | null>(null);
+  const [accountRecoveryNotice, setAccountRecoveryNotice] = useState<string | null>(null);
   const [loginDialog, setLoginDialog] = useState<{
     mode: 'new' | 'reauth';
     account: DesktopClaudeCodeAccount | null;
@@ -278,6 +280,12 @@ export function ProviderSettingsPanel({
     void refreshClaudeAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
+
+  useEffect(() => {
+    if (!accountRecoveryNotice) return;
+    const timer = window.setTimeout(() => setAccountRecoveryNotice(null), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [accountRecoveryNotice]);
 
   useEffect(() => {
     if (!loginSession || loginSession.status === 'succeeded' || loginSession.status === 'failed') {
@@ -594,8 +602,17 @@ export function ProviderSettingsPanel({
     setAccountMutationId(mutationKey);
     setClaudeAccountsError(null);
     try {
-      await window.garyxDesktop.selectClaudeCodeAccount({ accountId: account.id });
+      const result = await window.garyxDesktop.selectClaudeCodeAccount({ accountId: account.id });
       await Promise.all([refreshClaudeAccounts(), refreshCodingUsage()]);
+      if (result.recoveryWarning) {
+        setAccountRecoveryNotice(t('Account switched. Retry the paused threads manually.'));
+      } else if (result.recovery.matchedThreads > 0) {
+        setAccountRecoveryNotice(t('Resuming {count} paused threads…', {
+          count: result.recovery.matchedThreads,
+        }));
+      } else {
+        setAccountRecoveryNotice(t('Account switched.'));
+      }
       setAccountSwitcherOpen(false);
     } catch (error) {
       setClaudeAccountsError(error instanceof Error ? error.message : t('Failed to switch account.'));
@@ -837,7 +854,9 @@ export function ProviderSettingsPanel({
                   </Button>
                 </div>
               )}
-              description={`${claudeAccountName} · ${claudeAccountDetail}`}
+              description={`${claudeAccountName} · ${claudeAccountDetail}${accountRecoveryNotice
+                ? ` · ${accountRecoveryNotice}`
+                : ''}`}
               label={t('Current account')}
             />
           ) : null}
@@ -969,110 +988,22 @@ export function ProviderSettingsPanel({
   return (
     <div className="provider-panel">
       {renderProviderCards()}
-      <Dialog open={accountSwitcherOpen} onOpenChange={setAccountSwitcherOpen}>
-        <DialogContent className="provider-account-dialog" size="form">
-          <DialogHeader>
-            <DialogTitle>{t('Claude Code accounts')}</DialogTitle>
-            <DialogDescription>
-              {t('Choose the account for new Claude Code runs.')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="provider-account-dialog-body">
-            {claudeAccountsError ? (
-              <div className="provider-account-error">{claudeAccountsError}</div>
-            ) : null}
-            {claudeAccountsLoading && !claudeAccounts ? (
-              <div className="provider-account-loading">{t('Loading accounts…')}</div>
-            ) : null}
-            <div className="codex-list-card provider-account-list">
-              {(claudeAccounts?.accounts || []).map((account) => {
-                const accountKey = account.id || 'system';
-                const windows = providerUsageWindows(account.usage);
-                return (
-                  <div
-                    className={classNames('provider-account-option', account.selected && 'is-selected')}
-                    key={accountKey}
-                  >
-                    <label className="provider-account-choice">
-                      <input
-                        aria-label={account.selected
-                          ? t('Current account: {name}', { name: account.name })
-                          : t('Use account: {name}', { name: account.name })}
-                        checked={account.selected}
-                        className="provider-account-radio"
-                        disabled={Boolean(accountMutationId)}
-                        name="claude-code-account"
-                        onChange={() => {
-                          if (!account.selected) void handleSelectClaudeAccount(account);
-                        }}
-                        type="radio"
-                      />
-                      <div className="provider-account-option-content">
-                        <div className="provider-account-option-header">
-                          <div className="provider-account-option-copy">
-                            <div>
-                              <strong>{account.name}</strong>
-                              {account.selected ? <Badge variant="outline">{t('Current')}</Badge> : null}
-                              {account.plan ? <Badge variant="outline">{account.plan}</Badge> : null}
-                            </div>
-                            <span>{account.email || account.organization || (account.systemDefault
-                              ? t('This Mac’s default Claude Code login')
-                              : t('Added to Garyx'))}</span>
-                          </div>
-                          {accountMutationId === accountKey ? <span>{t('Switching…')}</span> : null}
-                        </div>
-                        <div className="provider-account-option-meters">
-                          {account.usage.available && windows.length > 0 ? windows.map((entry) => (
-                            <div key={entry.key}>
-                              {renderUsageMeter(
-                                entry.label,
-                                entry.value.remainingPercent,
-                                usageWindowCaption(entry.value, entry.fallback),
-                                { compact: true, stale: account.usage.stale },
-                              )}
-                            </div>
-                          )) : (
-                            <span className="provider-card-empty">
-                              {unavailableUsageText(account.usage)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </label>
-                    <div className="provider-account-option-actions">
-                      <button onClick={() => openLoginDialog('reauth', account)} type="button">
-                        {t('Sign in again')}
-                      </button>
-                      {!account.systemDefault ? (
-                        <>
-                          <button
-                            onClick={() => {
-                              setRenameAccount(account);
-                              setRenameValue(account.name);
-                            }}
-                            type="button"
-                          >
-                            {t('Rename')}
-                          </button>
-                          <button className="destructive" onClick={() => setDeleteAccount(account)} type="button">
-                            {t('Delete')}
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => openLoginDialog('new')} type="button">
-              <Plus aria-hidden size={14} strokeWidth={2} />
-              {t('Add Claude account')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ClaudeAccountSwitcherDialog
+        accounts={claudeAccounts}
+        error={claudeAccountsError}
+        loading={claudeAccountsLoading}
+        mutationId={accountMutationId}
+        onAdd={() => openLoginDialog('new')}
+        onDelete={setDeleteAccount}
+        onOpenChange={setAccountSwitcherOpen}
+        onReauthenticate={(account) => openLoginDialog('reauth', account)}
+        onRename={(account) => {
+          setRenameAccount(account);
+          setRenameValue(account.name);
+        }}
+        onSelect={handleSelectClaudeAccount}
+        open={accountSwitcherOpen}
+      />
 
       <Dialog
         open={Boolean(loginDialog)}

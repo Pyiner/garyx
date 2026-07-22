@@ -158,6 +158,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:list-claude-code-accounts"),
   selectClaudeCodeAccount: (input) =>
     ipcRenderer.invoke("garyx:select-claude-code-account", input),
+  retryThreadQuotaRecovery: (input) =>
+    ipcRenderer.invoke("garyx:retry-thread-quota-recovery", input),
   renameClaudeCodeAccount: (input) =>
     ipcRenderer.invoke("garyx:rename-claude-code-account", input),
   deleteClaudeCodeAccount: (input) =>

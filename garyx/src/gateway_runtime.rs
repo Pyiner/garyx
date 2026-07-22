@@ -15,7 +15,10 @@ use std::time::Duration;
 
 use garyx_bridge::MultiProviderBridge;
 use garyx_channels::{BuiltInPluginDiscoverer, ChannelPluginManager};
-use garyx_gateway::server::{AppState, AppStateBuilder, Gateway, start_automation_scheduler};
+use garyx_gateway::server::{
+    AppState, AppStateBuilder, Gateway, migrate_legacy_cron_jobs,
+    reconcile_transcript_recovery_jobs, start_automation_scheduler,
+};
 use garyx_gateway::{CronService, ThreadFileLogger, default_thread_log_dir};
 use garyx_models::config::GaryxConfig;
 use garyx_models::config_loader::{
@@ -331,6 +334,18 @@ mod phases {
                 "pruned expired lifecycle operation history"
             );
         }
+        let quota_recovery_cutoff = (chrono::Utc::now() - chrono::Duration::days(30))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let pruned_quota_recoveries = state
+            .ops
+            .garyx_db
+            .prune_settled_quota_recovery_jobs(&quota_recovery_cutoff)?;
+        if pruned_quota_recoveries > 0 {
+            tracing::info!(
+                pruned_quota_recoveries,
+                "pruned settled quota recovery history"
+            );
+        }
 
         // Bind the bridge to AppState's final SQLite store handle so provider
         // persistence, routing, and history all share the same truth source.
@@ -339,6 +354,10 @@ mod phases {
             .await;
         bridge.set_thread_history(state.threads.history.clone());
         bridge.set_event_tx(state.ops.events.sender()).await;
+        if cron_loaded {
+            migrate_legacy_cron_jobs(&state).await;
+        }
+        reconcile_transcript_recovery_jobs(&state).await;
         // Start the automation scheduler only now that the assembled state
         // exists and the bridge is bound to its final stores: the loop's
         // execution env is built from the state in one shot instead of being

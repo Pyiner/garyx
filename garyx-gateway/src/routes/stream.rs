@@ -686,7 +686,49 @@ pub(super) async fn thread_render_snapshot_at_seq(
     } else {
         store.render_snapshot_at_seq(thread_id, seq).await
     };
-    result.map_err(|error| io::Error::other(format!("failed to derive render snapshot: {error}")))
+    let mut snapshot = result
+        .map_err(|error| io::Error::other(format!("failed to derive render snapshot: {error}")))?;
+    if let Some(rate_limit) = snapshot.rate_limit.as_mut() {
+        let db = state.ops.garyx_db.clone();
+        let thread_id = thread_id.to_owned();
+        let recovery = db
+            .run_blocking(move |db| db.latest_quota_recovery_job_for_thread(&thread_id))
+            .await
+            .map_err(|error| {
+                io::Error::other(format!("failed to read quota recovery state: {error}"))
+            })?;
+        apply_quota_recovery_overlay(rate_limit, recovery.as_ref());
+    }
+    Ok(snapshot)
+}
+
+pub(super) fn apply_quota_recovery_overlay(
+    rate_limit: &mut garyx_models::transcript_render_state::RenderRateLimit,
+    recovery: Option<&crate::garyx_db::QuotaRecoveryJob>,
+) {
+    let Some(recovery) = recovery else { return };
+    if rate_limit.recovery_generation.as_deref() != Some(&recovery.blocked_run_id) {
+        // The transcript may have committed a newer terminal while its async
+        // SQL projection is still in flight. An older row must not mask it.
+        return;
+    }
+    if matches!(
+        recovery.state,
+        crate::garyx_db::QuotaRecoveryState::Waiting | crate::garyx_db::QuotaRecoveryState::Claimed
+    ) {
+        let is_eligible = recovery.reset_at.is_some()
+            || !matches!(
+                recovery.wake_reason,
+                crate::garyx_db::QuotaRecoveryWakeReason::QuotaReset
+            );
+        rate_limit.will_auto_resend = is_eligible;
+        rate_limit.recovery_state = Some(recovery.state.as_str().to_owned());
+        rate_limit.recovery_at = is_eligible.then(|| recovery.due_at.clone());
+    } else {
+        rate_limit.will_auto_resend = false;
+        rate_limit.recovery_state = None;
+        rate_limit.recovery_at = None;
+    }
 }
 
 pub(super) fn thread_stream_frame_payload(

@@ -591,7 +591,8 @@ struct GaryxConversationView: View {
                     }
                     if let rateLimit = liveStore.rateLimit(in: model) {
                         GaryxRateLimitBanner(rateLimit: rateLimit) {
-                            await model.send("continue")
+                            guard let threadId = model.selectedThread?.id else { return }
+                            await model.retryThreadQuotaRecovery(threadId: threadId)
                         }
                         .transition(motion.transition(.transcriptAppear))
                     }

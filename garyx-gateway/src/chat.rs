@@ -22,7 +22,7 @@ use crate::conversation_admission::{
 };
 use crate::garyx_db::{
     DispatchAdmissionKey, DispatchAdmissionKind, DispatchAdmissionRecord, DispatchAdmissionState,
-    DispatchOutcome,
+    DispatchOutcome, QuotaRecoveryClaimWitness,
 };
 use crate::prompt_attachment_lifecycle::PromptAttachmentLifecycleError;
 use crate::sqlite_thread_store::{AtomicCreateDispatchLedger, AtomicExistingDispatchCommit};
@@ -509,7 +509,9 @@ async fn run_durable_chat_start(
     key: DispatchAdmissionKey,
     fingerprint: String,
     callback_builder: Option<ChatStreamCallbackBuilder>,
+    quota_recovery_claim: Option<QuotaRecoveryClaimWitness>,
 ) -> AdmissionOperationResult {
+    let is_quota_recovery = quota_recovery_claim.is_some();
     let existing = match state.ops.conversation_admission.read(key.clone()).await {
         Ok(record) => record,
         Err(error) => {
@@ -636,6 +638,8 @@ async fn run_durable_chat_start(
                     outcome,
                     attachment_claims: managed_attachment_claims,
                 },
+                supersede_quota_recovery: !is_quota_recovery,
+                quota_recovery_claim,
             };
             match binding_plan {
                 Some(binding) => state
@@ -852,14 +856,40 @@ async fn run_durable_chat_start(
     }
 }
 
-async fn start_chat_run(
+pub(crate) async fn start_chat_run(
+    state: &Arc<AppState>,
+    request: ChatRequest,
+    callback_builder: Option<ChatStreamCallbackBuilder>,
+) -> Result<StartChatResponse, (StatusCode, Json<Value>)> {
+    start_chat_run_with_context(state, request, callback_builder, None).await
+}
+
+pub(crate) async fn start_chat_run_with_quota_recovery(
+    state: &Arc<AppState>,
+    request: ChatRequest,
+    quota_recovery_claim: QuotaRecoveryClaimWitness,
+) -> Result<StartChatResponse, (StatusCode, Json<Value>)> {
+    start_chat_run_with_context(state, request, None, Some(quota_recovery_claim)).await
+}
+
+async fn start_chat_run_with_context(
     state: &Arc<AppState>,
     mut request: ChatRequest,
     callback_builder: Option<ChatStreamCallbackBuilder>,
+    quota_recovery_claim: Option<QuotaRecoveryClaimWitness>,
 ) -> Result<StartChatResponse, (StatusCode, Json<Value>)> {
     let correlation = resolve_dispatch_correlation(&mut request)
         .map_err(|(status, payload)| (status, Json(payload)))?;
     let Some(correlation) = correlation else {
+        if quota_recovery_claim.is_some() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "quota_recovery_correlation_required",
+                    "message": "quota recovery must use durable dispatch correlation",
+                })),
+            ));
+        }
         return start_chat_run_legacy(state, request, callback_builder).await;
     };
 
@@ -870,6 +900,15 @@ async fn start_chat_run(
             thread_id
         }
         None => match resolve_threadless_correlation_target(state, &request).await {
+            _ if quota_recovery_claim.is_some() => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "quota_recovery_thread_required",
+                        "message": "quota recovery must target an existing thread",
+                    })),
+                ));
+            }
             Ok(ThreadlessCorrelationTarget::Existing { thread_id }) => thread_id,
             Ok(ThreadlessCorrelationTarget::Create(plan)) => {
                 return crate::create_dispatch::create_implicit_and_dispatch(
@@ -941,6 +980,7 @@ async fn start_chat_run(
                     owner_key,
                     fingerprint,
                     callback_builder,
+                    quota_recovery_claim,
                 )
                 .await;
                 owner.publish(result);

@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use crate::garyx_db::{
     CreateIntentKey, DispatchAdmissionKey, DispatchAdmissionRecord, DispatchOutcome, GaryxDbResult,
-    GaryxDbService, NewDispatchAdmission, ThreadRecordProjections,
+    GaryxDbService, NewDispatchAdmission, QuotaRecoveryClaimWitness, ThreadRecordProjections,
 };
 use crate::recent_thread_projection::{
     ActiveRunProbe, recent_thread_draft_from_thread_data_with_active_run, resolve_active_run_id,
@@ -106,6 +106,8 @@ pub(crate) struct AtomicExistingDispatchCommit {
     pub target_patch: ThreadRecordPatch,
     pub merges: Vec<garyx_router::AtomicRecordMerge>,
     pub dispatch: AtomicCreateDispatchLedger,
+    pub supersede_quota_recovery: bool,
+    pub quota_recovery_claim: Option<QuotaRecoveryClaimWitness>,
 }
 
 impl SqliteThreadStore {
@@ -401,6 +403,8 @@ impl SqliteThreadStore {
                     },
                     writes,
                     &dispatch.attachment_claims,
+                    command.supersede_quota_recovery,
+                    command.quota_recovery_claim.as_ref(),
                 )
             })
             .await

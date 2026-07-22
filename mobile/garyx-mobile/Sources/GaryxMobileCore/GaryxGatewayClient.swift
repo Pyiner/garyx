@@ -770,10 +770,19 @@ public final class GaryxGatewayClient {
         try await get("/api/providers/claude_code/accounts")
     }
 
-    public func selectClaudeCodeAccount(accountId: String?) async throws {
-        let _: GaryxJSONValue = try await put(
+    public func selectClaudeCodeAccount(
+        accountId: String?
+    ) async throws -> GaryxClaudeCodeAccountSelection {
+        try await put(
             "/api/providers/claude_code/accounts/active",
             body: GaryxClaudeCodeAccountSelectionRequest(accountId: accountId)
+        )
+    }
+
+    public func retryThreadQuotaRecovery(threadId: String) async throws {
+        let _: GaryxJSONValue = try await post(
+            "/api/threads/\(threadId.urlPathEncoded)/quota-recovery/retry",
+            body: GaryxEmptyBody()
         )
     }
 

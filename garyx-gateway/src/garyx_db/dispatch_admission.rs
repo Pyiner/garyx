@@ -479,6 +479,8 @@ impl GaryxDbService {
             input,
             Vec::new(),
             attachment_claims,
+            false,
+            None,
         )
     }
 
@@ -490,6 +492,8 @@ impl GaryxDbService {
         input: NewDispatchAdmission<'_>,
         records: Vec<ThreadRecordWrite>,
         attachment_claims: &[PromptAttachmentClaim],
+        supersede_quota_recovery: bool,
+        quota_recovery_claim: Option<&QuotaRecoveryClaimWitness>,
     ) -> GaryxDbResult<DispatchAdmissionRecord> {
         let now = now_string();
         let mut conn = self.conn()?;
@@ -538,6 +542,29 @@ impl GaryxDbService {
                 input.key.thread_id
             )));
         }
+        if let Some(claim) = quota_recovery_claim {
+            let claim_is_active = tx
+                .query_row(
+                    "SELECT 1 FROM quota_recovery_jobs
+                      WHERE job_id = ?1 AND thread_id = ?2
+                        AND state = 'claimed' AND claim_token = ?3
+                        AND dispatch_intent_id = ?4",
+                    params![
+                        claim.job_id,
+                        input.key.thread_id,
+                        claim.claim_token,
+                        input.key.client_intent_id,
+                    ],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !claim_is_active {
+                return Err(GaryxDbError::BadRequest(
+                    "quota recovery claim is no longer active".to_owned(),
+                ));
+            }
+        }
         for record in records {
             write_thread_record_with_projections_tx(
                 &tx,
@@ -549,6 +576,15 @@ impl GaryxDbService {
             )?;
         }
         insert_dispatch_admission_tx(&tx, &input, &now)?;
+        if supersede_quota_recovery {
+            tx.execute(
+                "UPDATE quota_recovery_jobs
+                    SET state = 'superseded', claim_token = NULL,
+                        claim_expires_at = NULL, updated_at = ?2, settled_at = ?2
+                  WHERE thread_id = ?1 AND state IN ('waiting', 'claimed')",
+                params![input.key.thread_id, now],
+            )?;
+        }
         if !attachment_claims.is_empty() {
             let effective_run_id = input.effective_run_id.ok_or_else(|| {
                 GaryxDbError::BadRequest(
@@ -900,6 +936,8 @@ mod tests {
                     expected_kind: "file".to_owned(),
                     expected_sha256: "missing".to_owned(),
                 }],
+                false,
+                None,
             )
             .unwrap_err();
         assert!(error.to_string().contains("attachment"));

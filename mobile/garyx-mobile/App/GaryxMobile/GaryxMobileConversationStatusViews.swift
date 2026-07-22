@@ -233,17 +233,18 @@ struct GaryxUserMessageLoadingBubble: View {
 /// provider's usage quota. The reset wall-clock time and countdown re-derive
 /// every second from the server-provided reset time via
 /// `GaryxRateLimitBannerModel`; when the gateway scheduled an auto-resend the
-/// card says when it fires, otherwise a Continue button dispatches a literal
-/// "continue" prompt through the regular send pipeline.
+/// card says when it fires. Claude Code also exposes the provider-owned
+/// account selector so a healthy account can resume all quota-paused threads.
 struct GaryxRateLimitBanner: View {
     let rateLimit: GaryxRenderRateLimit
-    /// Dispatches the "continue" prompt. The button shows a sending state
-    /// until the call returns, so a failed or no-op send re-arms the button
-    /// instead of leaving it stuck; on success the run start clears the
-    /// rate-limit state and removes the card.
+    /// Makes the same durable SQL recovery generation due immediately. The
+    /// button never creates an independent ordinary user message.
     var onContinue: (() async -> Void)?
 
+    @EnvironmentObject private var mobileModel: GaryxMobileModel
     @State private var sending = false
+    @State private var showsAccountSwitcher = false
+    @State private var recoveryNotice: String?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -255,64 +256,109 @@ struct GaryxRateLimitBanner: View {
         .onChange(of: rateLimit) { _, _ in
             // A fresh rate-limit context re-arms the Continue action.
             sending = false
+            recoveryNotice = nil
+        }
+        .garyxSheet(isPresented: $showsAccountSwitcher) {
+            GaryxClaudeCodeAccountsSheet(selectionOnly: true) { result in
+                if result.recoveryWarning != nil {
+                    recoveryNotice = "Account switched. Retry paused threads manually."
+                } else if result.recovery.matchedThreads > 0 {
+                    recoveryNotice = "Resuming \(result.recovery.matchedThreads) paused threads…"
+                } else {
+                    recoveryNotice = "Account switched."
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func card(for model: GaryxRateLimitBannerModel) -> some View {
-        // Minimal single-paragraph card: no icon, no title row — just the
-        // compact text and the Continue capsule. Accessibility Dynamic Type
-        // is a layout input: the line cap is lifted (the two-line head
-        // truncation would drop the reset hint's meaning) and the Continue
-        // capsule moves below the text instead of squeezing it.
         let isAccessibilitySize = dynamicTypeSize.isAccessibilitySize
 
-        Group {
-            if isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 10) {
-                    compactText(for: model, lineLimit: nil)
-                    if model.showContinue, onContinue != nil {
-                        continueButton
-                    }
-                }
-            } else {
-                HStack(alignment: .center, spacing: 10) {
-                    compactText(for: model, lineLimit: 2)
-                    Spacer(minLength: 0)
-                    if model.showContinue, onContinue != nil {
-                        continueButton
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                GaryxProviderAgentAvatarView(
+                    providerType: normalizedProviderType,
+                    diameter: 36
+                )
+
+                Text(model.title)
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 8)
+
+                if !isAccessibilitySize, model.showContinue, onContinue != nil {
+                    continueButton
                 }
             }
+
+            Text(model.detail)
+                .font(GaryxFont.footnote())
+                .monospacedDigit()
+                .foregroundStyle(GaryxTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if isAccessibilitySize, model.showContinue, onContinue != nil {
+                continueButton
+            }
+
+            if isClaudeCode {
+                Divider()
+                    .overlay(Color(.separator).opacity(0.55))
+
+                Button {
+                    recoveryNotice = nil
+                    showsAccountSwitcher = true
+                    Task { await mobileModel.loadClaudeCodeAccounts() }
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Claude Code account")
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                            Text(selectedAccountName)
+                                .font(GaryxFont.subheadline(weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Text("Switch account")
+                            .font(GaryxFont.caption(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .garyxReadingLineLimit()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(GaryxPressableRowStyle())
+                .disabled(mobileModel.isMutatingClaudeCodeAccount)
+
+                Text(
+                    recoveryNotice
+                        ?? "Switching accounts resumes every Claude thread paused by quota."
+                )
+                .font(GaryxFont.caption())
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(.systemBackground))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color(.separator).opacity(0.6), lineWidth: 1)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func compactText(
-        for model: GaryxRateLimitBannerModel,
-        lineLimit: Int?
-    ) -> some View {
-        // One quiet paragraph; semantic font so Dynamic Type still applies.
-        Text(model.compactText)
-            .font(.caption)
-            .monospacedDigit()
-            .foregroundStyle(GaryxTheme.secondaryText)
-            // Keep the card short for a verbose provider message; the reset
-            // hint sits at the end, so truncate from the head. Accessibility
-            // sizes pass nil and show the full text.
-            .lineLimit(lineLimit)
-            .truncationMode(.head)
     }
 
     private var continueButton: some View {
@@ -353,6 +399,33 @@ struct GaryxRateLimitBanner: View {
         }
         .buttonStyle(GaryxPressableRowStyle(prepares: .messageSendCommitted))
         .disabled(sending)
+    }
+
+    private var isClaudeCode: Bool {
+        (rateLimit.provider ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("claude")
+    }
+
+    private var normalizedProviderType: String {
+        let provider = (rateLimit.provider ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if provider.hasPrefix("claude") { return "claude_code" }
+        if provider.hasPrefix("codex") { return "codex_app_server" }
+        if provider.hasPrefix("trae") { return "traex" }
+        if provider.hasPrefix("antigravity") || provider.hasPrefix("agy") {
+            return "antigravity"
+        }
+        return provider
+    }
+
+    private var selectedAccountName: String {
+        if let account = mobileModel.claudeCodeAccounts?.selectedAccount {
+            return account.name
+        }
+        return mobileModel.isLoadingClaudeCodeAccounts ? "Loading account…" : "Choose account"
     }
 }
 

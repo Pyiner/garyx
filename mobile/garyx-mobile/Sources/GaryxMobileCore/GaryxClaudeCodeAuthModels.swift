@@ -135,6 +135,65 @@ public struct GaryxClaudeCodeAccountSelectionRequest: Encodable, Equatable, Send
     enum CodingKeys: String, CodingKey { case accountId = "account_id" }
 }
 
+public struct GaryxQuotaRecoverySummary: Codable, Equatable, Sendable {
+    public var matchedThreads: Int
+    public var expeditedThreads: Int
+    public var alreadyClaimedThreads: Int
+
+    public init(
+        matchedThreads: Int = 0,
+        expeditedThreads: Int = 0,
+        alreadyClaimedThreads: Int = 0
+    ) {
+        self.matchedThreads = matchedThreads
+        self.expeditedThreads = expeditedThreads
+        self.alreadyClaimedThreads = alreadyClaimedThreads
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case matchedThreads = "matched_threads"
+        case expeditedThreads = "expedited_threads"
+        case alreadyClaimedThreads = "already_claimed_threads"
+    }
+}
+
+public struct GaryxClaudeCodeAccountSelection: Codable, Equatable, Sendable {
+    public var activeAccountId: String?
+    public var selectionChanged: Bool
+    public var recovery: GaryxQuotaRecoverySummary
+    public var recoveryWarning: String?
+
+    public init(
+        activeAccountId: String? = nil,
+        selectionChanged: Bool = true,
+        recovery: GaryxQuotaRecoverySummary = GaryxQuotaRecoverySummary(),
+        recoveryWarning: String? = nil
+    ) {
+        self.activeAccountId = activeAccountId
+        self.selectionChanged = selectionChanged
+        self.recovery = recovery
+        self.recoveryWarning = recoveryWarning
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case activeAccountId = "active_account_id"
+        case selectionChanged = "selection_changed"
+        case recovery
+        case recoveryWarning = "recovery_warning"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        activeAccountId = try container.decodeIfPresent(String.self, forKey: .activeAccountId)
+        selectionChanged = try container.decodeIfPresent(Bool.self, forKey: .selectionChanged) ?? true
+        recovery = try container.decodeIfPresent(
+            GaryxQuotaRecoverySummary.self,
+            forKey: .recovery
+        ) ?? GaryxQuotaRecoverySummary()
+        recoveryWarning = try container.decodeIfPresent(String.self, forKey: .recoveryWarning)
+    }
+}
+
 public struct GaryxClaudeCodeAccountRenameRequest: Encodable, Equatable, Sendable {
     public var name: String
 

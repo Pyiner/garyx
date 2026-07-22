@@ -58,6 +58,132 @@ fn lifecycle_request_body(state: &Arc<AppState>, endpoint_keys: &[&str]) -> Body
     Body::from(lifecycle_request_json(state, endpoint_keys).to_string())
 }
 
+fn quota_recovery_job(
+    blocked_run_id: &str,
+    state: crate::garyx_db::QuotaRecoveryState,
+) -> crate::garyx_db::QuotaRecoveryJob {
+    let settled_at = matches!(
+        state,
+        crate::garyx_db::QuotaRecoveryState::Delivered
+            | crate::garyx_db::QuotaRecoveryState::Superseded
+            | crate::garyx_db::QuotaRecoveryState::Cancelled
+    )
+    .then(|| "2026-01-01T00:00:01Z".to_owned());
+    crate::garyx_db::QuotaRecoveryJob {
+        job_id: format!("quota-recovery:{blocked_run_id}"),
+        thread_id: "thread::quota-render".to_owned(),
+        provider: "claude_code".to_owned(),
+        blocked_run_id: blocked_run_id.to_owned(),
+        blocked_seq: 7,
+        quota_window: Some("primary".to_owned()),
+        reset_at: Some("2099-01-01T00:00:00Z".to_owned()),
+        due_at: "2099-01-01T00:01:00Z".to_owned(),
+        state,
+        wake_reason: crate::garyx_db::QuotaRecoveryWakeReason::QuotaReset,
+        claim_token: None,
+        claim_expires_at: None,
+        dispatch_intent_id: format!("quota-recovery:{blocked_run_id}"),
+        attempt_count: 0,
+        last_error: None,
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+        settled_at,
+    }
+}
+
+#[test]
+fn quota_recovery_overlay_ignores_an_older_generation() {
+    let mut rate_limit = garyx_models::transcript_render_state::RenderRateLimit {
+        recovery_generation: Some("run::new".to_owned()),
+        provider: Some("claude_code".to_owned()),
+        reset_at: Some("2099-01-01T00:00:00Z".to_owned()),
+        window: Some("primary".to_owned()),
+        message: None,
+        will_auto_resend: true,
+        recovery_state: None,
+        recovery_at: None,
+    };
+    let older = quota_recovery_job("run::old", crate::garyx_db::QuotaRecoveryState::Delivered);
+
+    super::stream::apply_quota_recovery_overlay(&mut rate_limit, Some(&older));
+
+    assert!(rate_limit.will_auto_resend);
+    assert!(rate_limit.recovery_state.is_none());
+}
+
+#[test]
+fn quota_recovery_overlay_uses_the_matching_generation() {
+    let mut rate_limit = garyx_models::transcript_render_state::RenderRateLimit {
+        recovery_generation: Some("run::current".to_owned()),
+        provider: Some("claude_code".to_owned()),
+        reset_at: Some("2099-01-01T00:00:00Z".to_owned()),
+        window: Some("primary".to_owned()),
+        message: None,
+        will_auto_resend: true,
+        recovery_state: None,
+        recovery_at: None,
+    };
+    let delivered = quota_recovery_job(
+        "run::current",
+        crate::garyx_db::QuotaRecoveryState::Delivered,
+    );
+
+    super::stream::apply_quota_recovery_overlay(&mut rate_limit, Some(&delivered));
+
+    assert!(!rate_limit.will_auto_resend);
+    assert!(rate_limit.recovery_state.is_none());
+}
+
+#[test]
+fn quota_recovery_overlay_surfaces_a_matching_waiting_job() {
+    let mut rate_limit = garyx_models::transcript_render_state::RenderRateLimit {
+        recovery_generation: Some("run::waiting".to_owned()),
+        provider: Some("claude_code".to_owned()),
+        reset_at: Some("2099-01-01T00:00:00Z".to_owned()),
+        window: Some("primary".to_owned()),
+        message: None,
+        will_auto_resend: false,
+        recovery_state: None,
+        recovery_at: None,
+    };
+    let waiting = quota_recovery_job("run::waiting", crate::garyx_db::QuotaRecoveryState::Waiting);
+
+    super::stream::apply_quota_recovery_overlay(&mut rate_limit, Some(&waiting));
+
+    assert!(rate_limit.will_auto_resend);
+    assert_eq!(rate_limit.recovery_state.as_deref(), Some("waiting"));
+    assert_eq!(
+        rate_limit.recovery_at.as_deref(),
+        Some("2099-01-01T00:01:00Z")
+    );
+}
+
+#[test]
+fn quota_recovery_overlay_keeps_a_no_reset_job_manual_only() {
+    let mut rate_limit = garyx_models::transcript_render_state::RenderRateLimit {
+        recovery_generation: Some("run::manual-only".to_owned()),
+        provider: Some("claude_code".to_owned()),
+        reset_at: None,
+        window: Some("primary".to_owned()),
+        message: None,
+        will_auto_resend: false,
+        recovery_state: None,
+        recovery_at: None,
+    };
+    let mut waiting = quota_recovery_job(
+        "run::manual-only",
+        crate::garyx_db::QuotaRecoveryState::Waiting,
+    );
+    waiting.reset_at = None;
+    waiting.due_at = "9999-12-31T23:59:59.999Z".to_owned();
+
+    super::stream::apply_quota_recovery_overlay(&mut rate_limit, Some(&waiting));
+
+    assert!(!rate_limit.will_auto_resend);
+    assert_eq!(rate_limit.recovery_state.as_deref(), Some("waiting"));
+    assert!(rate_limit.recovery_at.is_none());
+}
+
 async fn drain_lifecycle_outbox(state: &Arc<AppState>) {
     while state
         .ops

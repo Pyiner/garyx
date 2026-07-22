@@ -1432,7 +1432,12 @@ final class GaryxGatewayClientTests: XCTestCase {
                     JSONSerialization.jsonObject(with: body) as? [String: Any]
                 )
                 XCTAssertEqual(object["account_id"] as? String, "account/with slash")
-                return (response, Data(#"{"ok":true}"#.utf8))
+                return (
+                    response,
+                    Data(
+                        #"{"active_account_id":"account/with slash","selection_changed":true,"recovery":{"matched_threads":3,"expedited_threads":2,"already_claimed_threads":1}}"#.utf8
+                    )
+                )
             case 3:
                 XCTAssertEqual(request.httpMethod, "PATCH")
                 XCTAssertEqual(
@@ -1464,6 +1469,13 @@ final class GaryxGatewayClientTests: XCTestCase {
                         #"{"login_id":"login/with slash","status":"failed","error":"cancelled"}"#.utf8
                     )
                 )
+            case 6:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(
+                    path,
+                    "/garyx/api/threads/thread%3A%3Aquota/quota-recovery/retry"
+                )
+                return (response, Data(#"{"status":"accepted"}"#.utf8))
             default:
                 XCTFail("unexpected request \(requestIndex)")
                 throw URLError(.badServerResponse)
@@ -1479,16 +1491,22 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         _ = try await client.claudeCodeAccounts()
-        try await client.selectClaudeCodeAccount(accountId: " account/with slash ")
+        let selection = try await client.selectClaudeCodeAccount(
+            accountId: " account/with slash "
+        )
+        XCTAssertEqual(selection.recovery.matchedThreads, 3)
+        XCTAssertEqual(selection.recovery.expeditedThreads, 2)
+        XCTAssertEqual(selection.recovery.alreadyClaimedThreads, 1)
         try await client.renameClaudeCodeAccount(
             accountId: "account/with slash",
             name: " Work "
         )
         try await client.deleteClaudeCodeAccount(accountId: "account/with slash")
         let cancelled = try await client.cancelClaudeCodeAuth(loginId: "login/with slash")
+        try await client.retryThreadQuotaRecovery(threadId: "thread::quota")
 
         XCTAssertEqual(cancelled.status, .failed)
-        XCTAssertEqual(requestCounter.value(), 5)
+        XCTAssertEqual(requestCounter.value(), 6)
     }
 
     func testRecentThreadsPageRejectsLegacyOffsetShapeWithoutCursorIdentity() throws {
