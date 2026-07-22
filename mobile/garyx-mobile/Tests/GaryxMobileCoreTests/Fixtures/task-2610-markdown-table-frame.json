@@ -1,0 +1,216 @@
+{
+  "type": "thread_render_frame",
+  "thread_id": "thread::markdown-table-repro",
+  "events": [
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 103,
+      "message": {
+        "role": "user",
+        "content": "你刚才说的那些其他内容，都已经在远端了吗？他们是什么时候提交的？为什么没有被上一轮test flash带上呢？",
+        "text": "你刚才说的那些其他内容，都已经在远端了吗？他们是什么时候提交的？为什么没有被上一轮test flash带上呢？"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 104,
+      "message": {
+        "role": "system",
+        "kind": "control",
+        "internal": true,
+        "internal_kind": "control",
+        "control": {
+          "kind": "user_ack",
+          "pending_input_id": "queued_input:00000000-0000-0000-0000-000000000001",
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "thread_id": "thread::markdown-table-repro"
+        }
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 105,
+      "message": {
+        "role": "system",
+        "kind": "control",
+        "internal": true,
+        "internal_kind": "control",
+        "control": {
+          "kind": "assistant_boundary",
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "thread_id": "thread::markdown-table-repro"
+        }
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 106,
+      "message": {
+        "role": "assistant",
+        "content": "我查一下远端 main 的提交时间线和上一轮 TestFlight 实际构建的 commit，对比就清楚了。",
+        "text": "我查一下远端 main 的提交时间线和上一轮 TestFlight 实际构建的 commit，对比就清楚了。"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 107,
+      "message": {
+        "role": "tool_use",
+        "content": { "tool": "Bash", "input": { "description": "Compare build timeline" } },
+        "tool_name": "Bash",
+        "tool_use_id": "tool-table-1"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 108,
+      "message": {
+        "role": "tool_result",
+        "content": { "result": "TestFlight head and recent commits" },
+        "text": "TestFlight head and recent commits",
+        "tool_use_id": "tool-table-1",
+        "is_error": false
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 109,
+      "message": {
+        "role": "tool_use",
+        "content": { "tool": "Bash", "input": { "description": "Find teardown commits" } },
+        "tool_name": "Bash",
+        "tool_use_id": "tool-table-2"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 110,
+      "message": {
+        "role": "tool_result",
+        "content": { "result": "Teardown commit timeline" },
+        "text": "Teardown commit timeline",
+        "tool_use_id": "tool-table-2",
+        "is_error": false
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 111,
+      "message": {
+        "role": "tool_use",
+        "content": { "tool": "Bash", "input": { "description": "Find mobile fix commits" } },
+        "tool_name": "Bash",
+        "tool_use_id": "tool-table-3"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 112,
+      "message": {
+        "role": "tool_result",
+        "content": { "result": "Mobile fix commit timeline" },
+        "text": "Mobile fix commit timeline",
+        "tool_use_id": "tool-table-3",
+        "is_error": false
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 113,
+      "message": {
+        "role": "tool_use",
+        "content": { "tool": "Edit", "input": { "file_path": "/Users/test/.garyx/agents/test-agent/memory.md" } },
+        "tool_name": "Edit",
+        "tool_use_id": "tool-table-4"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 114,
+      "message": {
+        "role": "tool_result",
+        "content": { "result": "The synthetic fixture file was updated successfully." },
+        "text": "The synthetic fixture file was updated successfully.",
+        "tool_use_id": "tool-table-4",
+        "is_error": false
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 115,
+      "message": {
+        "role": "system",
+        "kind": "control",
+        "internal": true,
+        "internal_kind": "control",
+        "control": {
+          "kind": "assistant_boundary",
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "thread_id": "thread::markdown-table-repro"
+        }
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::markdown-table-repro",
+      "seq": 116,
+      "message": {
+        "role": "assistant",
+        "content": "情况就是上面表格那样。现在继续等 #TASK-2609 完工通知，到了我验收 → 合 main → push → 发 TestFlight，一次带齐。",
+        "text": "情况就是上面表格那样。现在继续等 #TASK-2609 完工通知，到了我验收 → 合 main → push → 发 TestFlight，一次带齐。"
+      }
+    }
+  ],
+  "render_state": {
+    "based_on_seq": 116,
+    "rows": [
+      {
+        "kind": "user_turn",
+        "id": "user_turn:origin:mobile-00000000-0000-0000-0000-000000000003",
+        "user": {
+          "id": "origin:mobile-00000000-0000-0000-0000-000000000003",
+          "role": "user",
+          "seq": 103
+        },
+        "activity": [
+          {
+            "kind": "step",
+            "id": "step:assistant_step:seq:106",
+            "steps": [
+              {
+                "kind": "assistant_message",
+                "id": "assistant_step:seq:106",
+                "message": { "id": "seq:106", "role": "assistant", "seq": 106 },
+                "streaming": false
+              }
+            ],
+            "final_message": { "id": "seq:116", "role": "assistant", "seq": 116 },
+            "running": false,
+            "started_at": "2026-07-22T13:19:43Z",
+            "finished_at": "2026-07-22T13:21:11Z"
+          }
+        ],
+        "started_at": "2026-07-22T13:19:43Z",
+        "finished_at": "2026-07-22T13:21:11Z"
+      }
+    ],
+    "tailActivity": "none",
+    "activeToolGroupId": null,
+    "progress_locus": "none",
+    "filtered_placeholders": [],
+    "window": { "floor_seq": 103, "has_more_above": true }
+  }
+}
