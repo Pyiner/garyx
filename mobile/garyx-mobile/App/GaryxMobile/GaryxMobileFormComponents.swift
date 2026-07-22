@@ -3,6 +3,40 @@ import SwiftUI
 import UIKit
 
 struct GaryxFormSheet<Content: View>: View {
+    let page: GaryxFormPage<Content>
+
+    init(title: String, onDone: (() -> Void)? = nil, @ViewBuilder content: () -> Content) {
+        page = GaryxFormPage(title: title, onDone: onDone, content: content)
+    }
+
+    init(
+        title: String,
+        canSave: Bool,
+        saveTitle: String = "Save",
+        isSaving: Bool = false,
+        onCancel: (() -> Void)? = nil,
+        onSave: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        page = GaryxFormPage(
+            title: title,
+            canSave: canSave,
+            saveTitle: saveTitle,
+            isSaving: isSaving,
+            onCancel: onCancel,
+            onSave: onSave,
+            content: content
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            page
+        }
+    }
+}
+
+struct GaryxFormPage<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
     let canSave: Bool?
@@ -44,45 +78,43 @@ struct GaryxFormSheet<Content: View>: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                content
-            }
-            .formStyle(.grouped)
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if let onSave {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(action: cancel) {
-                            Text("Cancel")
-                                .foregroundStyle(.primary)
-                        }
+        Form {
+            content
+        }
+        .formStyle(.grouped)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let onSave {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(action: cancel) {
+                        Text("Cancel")
+                            .foregroundStyle(.primary)
                     }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(action: onSave) {
-                            ZStack {
-                                Text(saveTitle)
-                                    .fontWeight(.semibold)
-                                    .opacity(isSaving ? 0 : 1)
-                                if isSaving {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                }
-                            }
-                            .foregroundStyle(canSave == false ? Color.secondary : Color.primary)
-                        }
-                        .disabled(canSave == false)
-                        .accessibilityLabel(isSaving ? "Saving" : saveTitle)
-                    }
-                } else {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(action: finish) {
-                            Text("Done")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(action: onSave) {
+                        ZStack {
+                            Text(saveTitle)
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.primary)
+                                .opacity(isSaving ? 0 : 1)
+                            if isSaving {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
                         }
+                        .foregroundStyle(canSave == false ? Color.secondary : Color.primary)
+                    }
+                    .disabled(canSave == false)
+                    .accessibilityLabel(isSaving ? "Saving" : saveTitle)
+                }
+            } else {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(action: finish) {
+                        Text("Done")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
                     }
                 }
             }

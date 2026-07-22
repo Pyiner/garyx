@@ -257,6 +257,63 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(agent.updatedAt, "2026-07-13T12:00:00Z")
     }
 
+    func testUpdateAgentUsesPutRouteAndExpectedUpdatedAtToken() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(
+                request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.percentEncodedPath,
+                "/api/custom-agents/agent%2Ftest"
+            )
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(
+                    with: try XCTUnwrap(garyxRequestBodyData(from: request))
+                ) as? [String: Any]
+            )
+            XCTAssertEqual(object["expected_updated_at"] as? String, "2026-07-13T12:00:00Z")
+            XCTAssertEqual(object["display_name"] as? String, "Updated Agent")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    #"{"agent_id":"agent/test","display_name":"Updated Agent","provider_type":"codex_app_server","updated_at":"2026-07-22T00:00:00Z"}"#.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+        let request = GaryxCustomAgentRequest(
+            agentId: "agent/test",
+            displayName: "Updated Agent",
+            providerType: "codex_app_server",
+            expectedUpdatedAt: "2026-07-13T12:00:00Z"
+        )
+
+        let updated = try await client.updateAgent(agentId: "agent/test", request: request)
+        XCTAssertEqual(updated.displayName, "Updated Agent")
+        XCTAssertEqual(updated.updatedAt, "2026-07-22T00:00:00Z")
+    }
+
     func testAgentCatalogToggleAndDefaultUseAvailabilityRoutes() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]
