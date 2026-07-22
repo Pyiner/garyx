@@ -1001,7 +1001,7 @@ export function ProviderSettingsPanel({
                               {renderUsageMeter(
                                 entry.label,
                                 entry.value.remainingPercent,
-                                '',
+                                usageWindowCaption(entry.value, entry.fallback),
                                 { compact: true, stale: account.usage.stale },
                               )}
                             </div>
