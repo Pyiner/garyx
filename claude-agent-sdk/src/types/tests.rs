@@ -4,6 +4,7 @@ use crate::LocalDirectorySessionStore;
 #[test]
 fn test_default_options_cli_args() {
     let opts = ClaudeAgentOptions::default();
+    assert_eq!(opts.session_store_flush, SessionStoreFlush::Batched);
     let args = opts.to_cli_args();
 
     assert!(args.contains(&"--output-format".to_string()));

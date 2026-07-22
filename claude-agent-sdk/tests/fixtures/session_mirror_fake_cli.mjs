@@ -90,6 +90,22 @@ input.on('line', line => {
       emit({ type: 'transcript_mirror', filePath, entries })
     }
     const marked = marker => ({ type: 'probe', marker })
+    const emitScenarioResult = () => {
+      emit({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        total_cost_usd: 0,
+        session_id: sessionId,
+        result: JSON.stringify({
+          scenario,
+          mirrorFlag: process.argv.includes('--session-mirror'),
+        }),
+      })
+    }
     const subagentMirrorPath = join(
       projectsRoot,
       projectKey,
@@ -114,6 +130,20 @@ input.on('line', line => {
       mirror(mainPath, [marked(1)])
       mirror(mainPath, [marked(2)])
       mirror(subagentMirrorPath, [marked(3)])
+    } else if (scenario === 'eager-background') {
+      mirror(mainPath, [marked('background')])
+      setTimeout(() => {
+        emit({
+          type: 'assistant',
+          session_id: sessionId,
+          message: {
+            model: 'probe',
+            content: [{ type: 'text', text: 'release background append' }],
+          },
+        })
+        emitScenarioResult()
+      }, 50)
+      return
     } else if (scenario === 'bytes') {
       const empty = [{ type: 'probe', marker: 'bytes', text: '' }]
       const padding = 1024 * 1024 - JSON.stringify(empty).length
@@ -136,20 +166,7 @@ input.on('line', line => {
       return
     }
 
-    emit({
-      type: 'result',
-      subtype: 'success',
-      is_error: false,
-      duration_ms: 1,
-      duration_api_ms: 1,
-      num_turns: 1,
-      total_cost_usd: 0,
-      session_id: sessionId,
-      result: JSON.stringify({
-        scenario,
-        mirrorFlag: process.argv.includes('--session-mirror'),
-      }),
-    })
+    emitScenarioResult()
     return
   }
 

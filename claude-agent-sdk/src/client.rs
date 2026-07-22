@@ -92,6 +92,33 @@ fn mirror_failure_message(failure: MirrorFailure) -> Message {
     })
 }
 
+async fn forward_ready_mirror_failures(
+    failure_rx: &mut Option<mpsc::UnboundedReceiver<MirrorFailure>>,
+    msg_tx: &mpsc::Sender<Result<Message>>,
+) -> bool {
+    loop {
+        let Some(receiver) = failure_rx.as_mut() else {
+            return true;
+        };
+        match receiver.try_recv() {
+            Ok(failure) => {
+                if msg_tx
+                    .send(Ok(mirror_failure_message(failure)))
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            Err(mpsc::error::TryRecvError::Empty) => return true,
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                *failure_rx = None;
+                return true;
+            }
+        }
+    }
+}
+
 fn resume_store_error(error: ClaudeSDKError) -> ClaudeSDKError {
     match error {
         error @ (ClaudeSDKError::SessionStore(_) | ClaudeSDKError::Timeout(_)) => error,
@@ -403,13 +430,7 @@ impl ClaudeSDKClient {
     /// Disconnect from Claude and clean up.
     pub async fn disconnect(&mut self) -> Result<()> {
         if let Some(batcher) = self.mirror_batcher.as_ref() {
-            for failure in batcher.flush().await {
-                error!(
-                    key = ?failure.key,
-                    error = %failure.error,
-                    "SessionStore flush failed during disconnect"
-                );
-            }
+            batcher.flush().await;
         }
         self.closed.store(true, Ordering::SeqCst);
 
@@ -561,6 +582,9 @@ impl ClaudeSDKClient {
         let first_result_seen = self.first_result_seen.clone();
         let first_result_notify = self.first_result_notify.clone();
         let mirror_batcher = self.mirror_batcher.clone();
+        let mut mirror_failure_rx = mirror_batcher
+            .as_ref()
+            .and_then(|batcher| batcher.take_failure_receiver());
 
         let handle = tokio::spawn(async move {
             loop {
@@ -568,7 +592,38 @@ impl ClaudeSDKClient {
                     break;
                 }
 
-                let msg_result = transport.read_message().await;
+                enum ReaderEvent {
+                    Transport(Result<Option<Value>>),
+                    MirrorFailure(Option<MirrorFailure>),
+                }
+
+                let event = if let Some(failure_rx) = mirror_failure_rx.as_mut() {
+                    tokio::select! {
+                        biased;
+                        failure = failure_rx.recv() => ReaderEvent::MirrorFailure(failure),
+                        message = transport.read_message() => ReaderEvent::Transport(message),
+                    }
+                } else {
+                    ReaderEvent::Transport(transport.read_message().await)
+                };
+
+                let msg_result = match event {
+                    ReaderEvent::MirrorFailure(Some(failure)) => {
+                        if msg_tx
+                            .send(Ok(mirror_failure_message(failure)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    ReaderEvent::MirrorFailure(None) => {
+                        mirror_failure_rx = None;
+                        continue;
+                    }
+                    ReaderEvent::Transport(message) => message,
+                };
 
                 match msg_result {
                     Ok(Some(value)) => {
@@ -582,15 +637,7 @@ impl ClaudeSDKClient {
                             let entries = value.get("entries").and_then(Value::as_array).cloned();
                             match (mirror_batcher.as_ref(), file_path, entries) {
                                 (Some(batcher), Some(file_path), Some(entries)) => {
-                                    for failure in batcher.enqueue(file_path, entries).await {
-                                        if msg_tx
-                                            .send(Ok(mirror_failure_message(failure)))
-                                            .await
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                    }
+                                    batcher.enqueue(file_path, entries);
                                 }
                                 (None, _, _) => {}
                                 _ => error!("invalid transcript_mirror protocol frame"),
@@ -679,14 +726,11 @@ impl ClaudeSDKClient {
 
                         if msg_type == Some("result") {
                             if let Some(batcher) = mirror_batcher.as_ref() {
-                                for failure in batcher.flush().await {
-                                    if msg_tx
-                                        .send(Ok(mirror_failure_message(failure)))
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
+                                batcher.flush().await;
+                                if !forward_ready_mirror_failures(&mut mirror_failure_rx, &msg_tx)
+                                    .await
+                                {
+                                    break;
                                 }
                             }
                             first_result_seen.store(true, Ordering::SeqCst);
@@ -703,18 +747,18 @@ impl ClaudeSDKClient {
                     Ok(None) => {
                         debug!("Transport stream ended");
                         if let Some(batcher) = mirror_batcher.as_ref() {
-                            for failure in batcher.flush().await {
-                                let _ = msg_tx.send(Ok(mirror_failure_message(failure))).await;
-                            }
+                            batcher.flush().await;
+                            let _ = forward_ready_mirror_failures(&mut mirror_failure_rx, &msg_tx)
+                                .await;
                         }
                         break;
                     }
                     Err(e) => {
                         error!("Transport read error: {e}");
                         if let Some(batcher) = mirror_batcher.as_ref() {
-                            for failure in batcher.flush().await {
-                                let _ = msg_tx.send(Ok(mirror_failure_message(failure))).await;
-                            }
+                            batcher.flush().await;
+                            let _ = forward_ready_mirror_failures(&mut mirror_failure_rx, &msg_tx)
+                                .await;
                         }
                         let _ = msg_tx.send(Err(e)).await;
                         break;

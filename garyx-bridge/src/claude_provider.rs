@@ -9,8 +9,8 @@ use claude_agent_sdk::{
     AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun,
     ClaudeRunControl, ClaudeSDKError, ContentBlock, LocalDirectorySessionStore, McpServerConfig,
     Message, OutboundUserMessage, PermissionMode, STOP_HOOK_OBSERVATION_SUBTYPE,
-    SessionReconcileSummary, SystemMessage, TextBlock, UserInput, default_claude_projects_dir,
-    run_streaming as sdk_run_streaming, session_project_key,
+    SessionReconcileSummary, SessionStoreFlush, SystemMessage, TextBlock, UserInput,
+    default_claude_projects_dir, run_streaming as sdk_run_streaming, session_project_key,
 };
 use garyx_models::{
     is_builtin_provider_agent_id,
@@ -1437,6 +1437,9 @@ impl ClaudeCliProvider {
                 .then(|| self.config.setting_sources.clone()),
             fork_session,
             session_store: Some(session_store),
+            // The local adapter is cheap and durable; mirror every protocol
+            // frame in the background instead of waiting for batch limits.
+            session_store_flush: SessionStoreFlush::Eager,
             // Every turn stop reports the CLI's authoritative in-flight
             // background-task list, which gates the post-result stdin close.
             stop_hook_observer: true,

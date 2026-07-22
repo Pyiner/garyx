@@ -532,6 +532,13 @@ fn test_build_sdk_options_defaults() {
     // stream events only.
     assert!(sdk_opts.stop_hook_observer);
 
+    // Garyx explicitly opts its local store into the official eager mode.
+    // The generic SDK default remains batched for downstream compatibility.
+    assert_eq!(
+        sdk_opts.session_store_flush,
+        claude_agent_sdk::SessionStoreFlush::Eager
+    );
+
     // Extra args
     assert!(sdk_opts.extra_args.contains_key("replay-user-messages"));
 

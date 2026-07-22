@@ -238,14 +238,31 @@ type AppendTrace = {
 
 class RecordingSessionStore {
   readonly calls: AppendTrace[] = []
+  readonly events: string[] = []
   readonly mainKey: SessionKey
   readonly seed: SessionStoreEntry[]
   failuresRemaining: number
+  watchdogUsed = false
+  private releaseBackgroundAppend: (() => void) | undefined
+  private readonly backgroundAppendReleased: Promise<void>
 
-  constructor(mainKey: SessionKey, failures: number) {
+  constructor(
+    mainKey: SessionKey,
+    failures: number,
+    readonly scenario: string,
+  ) {
     this.mainKey = mainKey
     this.seed = [{ type: 'seed' }]
     this.failuresRemaining = failures
+    this.backgroundAppendReleased = new Promise(resolve => {
+      this.releaseBackgroundAppend = resolve
+    })
+  }
+
+  observeAssistant(): void {
+    if (this.scenario !== 'eager-background') return
+    this.events.push('assistant')
+    this.releaseBackgroundAppend?.()
   }
 
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
@@ -258,6 +275,22 @@ class RecordingSessionStore {
       lastMarker: entries.at(-1)?.marker,
       outcome: failed ? 'error' : 'ok',
     })
+    if (this.scenario === 'eager-background') {
+      this.events.push('append-start')
+      let watchdog: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        this.backgroundAppendReleased,
+        new Promise<void>(resolve => {
+          watchdog = setTimeout(() => {
+            this.watchdogUsed = true
+            this.events.push('watchdog')
+            resolve()
+          }, 500)
+        }),
+      ])
+      if (watchdog !== undefined) clearTimeout(watchdog)
+      this.events.push('append-end')
+    }
     if (failed) throw new Error('intentional parity probe failure')
   }
 
@@ -279,7 +312,13 @@ class RecordingSessionStore {
 
 async function officialMirrorTrace(
   scenario: string,
-): Promise<{ result: unknown; calls: AppendTrace[]; mirrorErrors: number }> {
+): Promise<{
+  result: unknown
+  calls: AppendTrace[]
+  mirrorErrors: number
+  events: string[]
+  watchdogUsed: boolean
+}> {
   const cwd = join(scratch, `batch-${scenario}-workspace`)
   const profile = join(scratch, `batch-${scenario}-typescript-profile`)
   mkdirSync(cwd, { recursive: true })
@@ -305,6 +344,7 @@ async function officialMirrorTrace(
   const store = new RecordingSessionStore(
     { projectKey, sessionId },
     scenario === 'retry' ? 2 : scenario === 'failure' ? 3 : 0,
+    scenario,
   )
   let resultValue: unknown
   let mirrorErrors = 0
@@ -321,15 +361,22 @@ async function officialMirrorTrace(
         ANTHROPIC_API_KEY: 'parity-probe',
       },
       sessionStore: store,
-      sessionStoreFlush: scenario === 'eager' ? 'eager' : 'batched',
+      sessionStoreFlush: scenario.startsWith('eager') ? 'eager' : 'batched',
     },
   })) {
     if (message.type === 'result') resultValue = JSON.parse(message.result)
+    if (message.type === 'assistant') store.observeAssistant()
     if (message.type === 'system' && message.subtype === 'mirror_error') {
       mirrorErrors += 1
     }
   }
-  return { result: resultValue, calls: store.calls, mirrorErrors }
+  return {
+    result: resultValue,
+    calls: store.calls,
+    mirrorErrors,
+    events: store.events,
+    watchdogUsed: store.watchdogUsed,
+  }
 }
 
 async function rustMirrorTrace(scenario: string): Promise<unknown> {
@@ -355,6 +402,7 @@ describe('transcript mirror batch differential', () => {
   for (const scenario of [
     'batched',
     'eager',
+    'eager-background',
     'bytes',
     'unsafe',
     'retry',
@@ -371,6 +419,13 @@ describe('transcript mirror batch differential', () => {
         ])
       } else if (scenario === 'eager') {
         expect(typescript.calls.map(call => call.entryCount)).toEqual([1, 1, 1])
+      } else if (scenario === 'eager-background') {
+        expect(typescript.events).toEqual([
+          'append-start',
+          'assistant',
+          'append-end',
+        ])
+        expect(typescript.watchdogUsed).toBe(false)
       } else if (scenario === 'bytes') {
         expect(typescript.calls.map(call => call.entryCount)).toEqual([2])
       } else if (scenario === 'unsafe') {
