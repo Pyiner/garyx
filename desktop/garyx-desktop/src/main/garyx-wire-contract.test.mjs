@@ -312,7 +312,19 @@ test("capsules require snake_case nullable keys instead of camel aliases", async
 test("custom agents require snake_case names and present provider_icon", async () => {
   await withGatewayFetch(
     async () => jsonResponse({
-      agents: [canonicalAgent()],
+      agents: [
+        canonicalAgent(),
+        canonicalAgent({
+          agent_id: "grok",
+          display_name: "Grok",
+          provider_type: "grok_build",
+          provider_icon: {
+            key: "grok",
+            provider_type: "grok_build",
+            label: "Grok",
+          },
+        }),
+      ],
       default_agent_id: null,
       effective_default_agent_id: "test-agent",
     }),
@@ -320,6 +332,11 @@ test("custom agents require snake_case names and present provider_icon", async (
       const catalog = await listCustomAgents(settings);
       assert.equal(catalog.agents[0].displayName, "Test Agent");
       assert.equal(catalog.agents[0].providerIcon, null);
+      assert.deepEqual(catalog.agents[1].providerIcon, {
+        key: "grok",
+        providerType: "grok_build",
+        label: "Grok",
+      });
       assert.equal(catalog.defaultAgentId, null);
       assert.equal(catalog.effectiveDefaultAgentId, "test-agent");
     },

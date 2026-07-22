@@ -58,7 +58,13 @@ function normalizeProviderIconKey(
   value: unknown,
   path: string,
 ): DesktopProviderIconKey {
-  if (value === "claude" || value === "codex" || value === "traex" || value === "gemini") {
+  if (
+    value === "claude" ||
+    value === "codex" ||
+    value === "traex" ||
+    value === "gemini" ||
+    value === "grok"
+  ) {
     return value;
   }
   throw new GatewayContractError(path, "must be a current provider icon key");

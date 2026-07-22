@@ -54,6 +54,8 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
             "Traex"
         )
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "grok-build").displayName, "Grok")
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "Grok Build").kind, .grok)
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "Grok Build").displayName, "Grok")
     }
 
     func testProviderPresentationUsesAgentAndProviderForAvatarFallbacks() {

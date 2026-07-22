@@ -21,6 +21,7 @@ pub(super) async fn fetch_grok_models(
     let client = GrokClient::new(GrokClientConfig {
         binary,
         environment: agent_config.env,
+        max_turns: None,
         startup_timeout: Duration::from_secs(10),
         request_timeout: Duration::from_secs(15),
     });

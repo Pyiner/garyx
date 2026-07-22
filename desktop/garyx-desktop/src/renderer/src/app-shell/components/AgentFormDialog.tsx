@@ -325,11 +325,17 @@ export function AgentFormDialog({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectItem value="claude_code">Claude</SelectItem>
-                      <SelectItem value="codex_app_server">Codex</SelectItem>
-                      <SelectItem value="antigravity">Antigravity</SelectItem>
-                      <SelectItem value="traex">Trae</SelectItem>
-                      <SelectItem value="grok_build">Grok</SelectItem>
+                      <SelectItem value="claude_code">
+                        {providerLabel('claude_code')}
+                      </SelectItem>
+                      <SelectItem value="codex_app_server">
+                        {providerLabel('codex_app_server')}
+                      </SelectItem>
+                      <SelectItem value="antigravity">
+                        {providerLabel('antigravity')}
+                      </SelectItem>
+                      <SelectItem value="traex">{providerLabel('traex')}</SelectItem>
+                      <SelectItem value="grok_build">{providerLabel('grok_build')}</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>

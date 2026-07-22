@@ -21,12 +21,14 @@ use tokio::time::{Instant, timeout};
 const ACP_PROTOCOL_VERSION: u64 = 1;
 const RATE_LIMITED_RPC_CODE: i64 = -32003;
 const STDERR_LIMIT_BYTES: usize = 16 * 1024;
+const CANCEL_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug)]
 pub struct GrokClientConfig {
     pub binary: String,
     /// Owned copy of Garyx's ordinary provider environment for this process.
     pub environment: HashMap<String, String>,
+    pub max_turns: Option<i64>,
     pub startup_timeout: Duration,
     pub request_timeout: Duration,
 }
@@ -36,6 +38,7 @@ impl Default for GrokClientConfig {
         Self {
             binary: "grok".to_owned(),
             environment: HashMap::new(),
+            max_turns: None,
             startup_timeout: Duration::from_secs(30),
             request_timeout: Duration::from_secs(300),
         }
@@ -53,6 +56,8 @@ struct GrokCancellationInner {
     notify: Notify,
     acknowledged: AtomicBool,
     acknowledged_notify: Notify,
+    completed: AtomicBool,
+    completed_notify: Notify,
 }
 
 impl GrokCancellation {
@@ -76,9 +81,28 @@ impl GrokCancellation {
             .is_ok()
     }
 
+    /// Wait until the ACP run has consumed the cancellation response, so the
+    /// child has processed the request before a caller may tear it down.
+    pub async fn wait_completed(&self, wait: Duration) -> bool {
+        if self.inner.completed.load(Ordering::SeqCst) {
+            return true;
+        }
+        timeout(wait, self.inner.completed_notify.notified())
+            .await
+            .is_ok()
+    }
+
     fn acknowledge(&self) {
         self.inner.acknowledged.store(true, Ordering::SeqCst);
         self.inner.acknowledged_notify.notify_one();
+    }
+
+    fn complete(&self) {
+        self.inner.completed.store(true, Ordering::SeqCst);
+        self.inner.completed_notify.notify_waiters();
+        // Retain a permit for a waiter that observed `completed == false`
+        // immediately before the store but had not registered with Notify yet.
+        self.inner.completed_notify.notify_one();
     }
 
     async fn cancelled(&self) {
@@ -388,7 +412,7 @@ impl GrokClient {
                     }),
                 )
                 .await?;
-            let deadline = Instant::now() + self.config.request_timeout;
+            let mut deadline = Instant::now() + self.config.request_timeout;
             let mut cancellation_sent = false;
             let prompt_response = loop {
                 if Instant::now() >= deadline {
@@ -403,9 +427,22 @@ impl GrokClient {
                         ).await?;
                         cancellation.acknowledge();
                         cancellation_sent = true;
+                        deadline = Instant::now()
+                            + self.config.request_timeout.min(CANCEL_SETTLEMENT_TIMEOUT);
                     }
                     message = transport.recv_until(deadline) => {
-                        let message = message?;
+                        let message = match message {
+                            Ok(message) => message,
+                            Err(_) if cancellation_sent => break Ok(Value::Null),
+                            Err(error) => break Err(error),
+                        };
+                        if !cancellation_sent {
+                            // Prompt streams use inactivity semantics: any ACP
+                            // frame proves that the child is still making
+                            // progress. One-shot requests keep their fixed
+                            // deadline in `Transport::request`.
+                            deadline = Instant::now() + self.config.request_timeout;
+                        }
                         if is_server_request(&message) {
                             transport.reject_server_request(&message).await?;
                             continue;
@@ -421,11 +458,12 @@ impl GrokClient {
                         }
                     }
                 }
-            }?;
-
-            if cancellation_sent {
-                return Err(GrokError::Cancelled);
-            }
+            };
+            let prompt_response = match prompt_response {
+                Ok(value) => value,
+                Err(_) if cancellation_sent => Value::Null,
+                Err(error) => return Err(error),
+            };
             let meta = prompt_response.get("_meta").unwrap_or(&Value::Null);
             Ok(GrokRunOutput {
                 session_id,
@@ -434,11 +472,18 @@ impl GrokClient {
                     .or(current_model),
                 input_tokens: value_i64(meta, &["inputTokens", "input_tokens"]).unwrap_or(0),
                 output_tokens: value_i64(meta, &["outputTokens", "output_tokens"]).unwrap_or(0),
-                stop_reason: value_string(&prompt_response, &["stopReason", "stop_reason"]),
+                stop_reason: if cancellation_sent {
+                    // The local cancellation signal is authoritative even if
+                    // the child races it with a natural-looking end_turn.
+                    Some("cancelled".to_owned())
+                } else {
+                    value_string(&prompt_response, &["stopReason", "stop_reason"])
+                },
             })
         }
         .await;
 
+        cancellation.complete();
         transport.finish().await;
         result
     }
@@ -464,8 +509,11 @@ impl Transport {
         let binary = config.binary.trim();
         let binary = if binary.is_empty() { "grok" } else { binary };
         let mut command = Command::new(binary);
+        command.arg("--no-auto-update");
+        if let Some(max_turns) = config.max_turns.filter(|value| *value > 0) {
+            command.arg("--max-turns").arg(max_turns.to_string());
+        }
         command
-            .arg("--no-auto-update")
             .arg("agent")
             .arg("--always-approve")
             .arg("--no-leader");
@@ -542,7 +590,16 @@ impl Transport {
                     captured.push('\n');
                 }
                 let remaining = STDERR_LIMIT_BYTES.saturating_sub(captured.len());
-                captured.extend(line.chars().take(remaining));
+                let end = if line.len() <= remaining {
+                    line.len()
+                } else {
+                    line.char_indices()
+                        .map(|(index, _)| index)
+                        .take_while(|index| *index <= remaining)
+                        .last()
+                        .unwrap_or(0)
+                };
+                captured.push_str(&line[..end]);
             }
         });
 
@@ -958,6 +1015,7 @@ done
                 "GROK_TEST_MARKER".to_owned(),
                 "snapshot-value".to_owned(),
             )]),
+            max_turns: None,
             startup_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(5),
         });
@@ -998,6 +1056,92 @@ done
     }
 
     #[tokio::test]
+    async fn active_prompt_streams_may_outlive_the_inactivity_timeout() {
+        let (_dir, binary) = fake_grok(
+            r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}' ;;
+    *'"method":"session/new"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"long-session"}}' ;;
+    *'"method":"session/prompt"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"long-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"still "}}}}'
+      sleep 1.2
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"long-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working"}}}}'
+      sleep 1.2
+      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}' ;;
+  esac
+done
+"#,
+        );
+        let client = GrokClient::new(GrokClientConfig {
+            binary,
+            environment: HashMap::new(),
+            max_turns: None,
+            startup_timeout: Duration::from_secs(2),
+            request_timeout: Duration::from_secs(2),
+        });
+        let mut chunks = String::new();
+        let output = client
+            .run(
+                GrokRunRequest {
+                    cwd: std::env::current_dir().expect("cwd"),
+                    prompt: "keep working".to_owned(),
+                    session_id: None,
+                    model: None,
+                    reasoning_effort: None,
+                },
+                GrokCancellation::default(),
+                |event| {
+                    if let GrokEvent::SessionUpdate { update } = event
+                        && let Some(text) = update
+                            .get("content")
+                            .and_then(|content| content.get("text"))
+                            .and_then(Value::as_str)
+                    {
+                        chunks.push_str(text);
+                    }
+                },
+            )
+            .await
+            .expect("active updates keep the prompt alive");
+
+        assert_eq!(output.session_id, "long-session");
+        assert_eq!(chunks, "still working");
+    }
+
+    #[tokio::test]
+    async fn one_shot_requests_keep_a_fixed_deadline_despite_notifications() {
+        let (_dir, binary) = fake_grok(
+            r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      i=0
+      while [ "$i" -lt 5 ]; do
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk"}}}'
+        sleep 0.3
+        i=$((i + 1))
+      done ;;
+  esac
+done
+"#,
+        );
+        let client = GrokClient::new(GrokClientConfig {
+            binary,
+            environment: HashMap::new(),
+            max_turns: None,
+            startup_timeout: Duration::from_secs(1),
+            request_timeout: Duration::from_secs(5),
+        });
+
+        let error = client
+            .discover_models(&std::env::current_dir().expect("cwd"))
+            .await
+            .expect_err("initialize notifications do not extend its deadline");
+        assert!(matches!(error, GrokError::Timeout));
+    }
+
+    #[tokio::test]
     async fn loads_exact_native_session_and_sends_acp_cancel() {
         let (_dir, binary) = fake_grok(
             r#"
@@ -1009,7 +1153,7 @@ while IFS= read -r line; do
       case "$line" in *'native-resume-id'*) ;; *) exit 3 ;; esac
       case "$line" in *'"noReplay":true'*) ;; *) exit 4 ;; esac
       printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{}}' ;;
-    *'"method":"session/cancel"'*'native-resume-id'*) printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"cancelled"}}' ;;
+    *'"method":"session/cancel"'*'native-resume-id'*) printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}' ;;
   esac
 done
 "#,
@@ -1017,6 +1161,7 @@ done
         let client = GrokClient::new(GrokClientConfig {
             binary,
             environment: HashMap::new(),
+            max_turns: None,
             startup_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(5),
         });
@@ -1028,7 +1173,7 @@ done
             cancellation_for_task.cancel();
         });
         let mut events = Vec::new();
-        let result = client
+        let output = client
             .run(
                 GrokRunRequest {
                     cwd: std::env::current_dir().expect("cwd"),
@@ -1040,13 +1185,20 @@ done
                 cancellation,
                 |event| events.push(event),
             )
-            .await;
+            .await
+            .expect("cancelled prompt returns its partial native result");
         cancel_task.await.expect("cancel task");
 
-        assert!(matches!(result, Err(GrokError::Cancelled)));
+        assert_eq!(output.session_id, "native-resume-id");
+        assert_eq!(output.stop_reason.as_deref(), Some("cancelled"));
         assert!(
             cancellation_observer
                 .wait_acknowledged(Duration::from_millis(10))
+                .await
+        );
+        assert!(
+            cancellation_observer
+                .wait_completed(Duration::from_millis(10))
                 .await
         );
         assert_eq!(
@@ -1074,6 +1226,7 @@ done
         let client = GrokClient::new(GrokClientConfig {
             binary,
             environment: HashMap::new(),
+            max_turns: None,
             startup_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(5),
         });
@@ -1104,6 +1257,41 @@ done
     }
 
     #[tokio::test]
+    async fn multibyte_stderr_is_capped_by_bytes() {
+        let (_dir, binary) = fake_grok(
+            r#"
+i=0
+while [ "$i" -lt 20000 ]; do
+  printf 'é' >&2
+  i=$((i + 1))
+done
+printf '\n' >&2
+exit 8
+"#,
+        );
+        let client = GrokClient::new(GrokClientConfig {
+            binary,
+            environment: HashMap::new(),
+            max_turns: None,
+            startup_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(5),
+        });
+
+        let error = client
+            .discover_models(&std::env::current_dir().expect("cwd"))
+            .await
+            .expect_err("closed stdout includes captured stderr");
+        let GrokError::Transport(message) = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert!(
+            message.len() <= "Grok Build closed stdout: ".len() + STDERR_LIMIT_BYTES,
+            "captured stderr exceeded its byte cap: {} bytes",
+            message.len()
+        );
+    }
+
+    #[tokio::test]
     async fn applies_model_and_reasoning_to_the_acp_session() {
         let (_dir, binary) = fake_grok(
             r#"
@@ -1124,6 +1312,7 @@ done
         let client = GrokClient::new(GrokClientConfig {
             binary,
             environment: HashMap::new(),
+            max_turns: None,
             startup_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(5),
         });

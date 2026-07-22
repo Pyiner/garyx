@@ -12,7 +12,8 @@ use garyx_models::provider::{
     build_prompt_message_with_attachments, stage_image_payloads_for_prompt,
 };
 use grok_agent_sdk::{
-    GrokCancellation, GrokClient, GrokClientConfig, GrokError, GrokEvent, GrokRunRequest,
+    GrokCancellation, GrokClient, GrokClientConfig, GrokError, GrokEvent, GrokRunOutput,
+    GrokRunRequest,
 };
 use serde_json::{Value, json};
 
@@ -28,6 +29,8 @@ use crate::provider_trait::{
 };
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
+const CANCEL_ACK_TIMEOUT: Duration = Duration::from_secs(1);
+const CANCEL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct ActiveGrokRun {
@@ -207,7 +210,12 @@ impl GrokEventMapper {
         };
         let state = self.tools.entry(id.clone()).or_default();
         merge_tool_state(state, update);
-        emit_tool_use(&id, state, &mut self.session_messages, on_chunk);
+        // ToolUse is append-only in Garyx's stream contract. If Grok defers
+        // rawInput to the first tool_call_update, wait one ACP frame so the
+        // single emitted row contains the authoritative input.
+        if !state.input.is_null() {
+            emit_tool_use(&id, state, &mut self.session_messages, on_chunk);
+        }
     }
 
     fn apply_tool_update(&mut self, update: &Value, on_chunk: &StreamCallback) {
@@ -216,9 +224,12 @@ impl GrokEventMapper {
         };
         let state = self.tools.entry(id.clone()).or_default();
         merge_tool_state(state, update);
-        emit_tool_use(&id, state, &mut self.session_messages, on_chunk);
         let status = update.get("status").and_then(Value::as_str);
-        if !matches!(status, Some("completed" | "failed" | "cancelled")) || state.finished {
+        let terminal = matches!(status, Some("completed" | "failed" | "cancelled"));
+        if !state.input.is_null() || terminal {
+            emit_tool_use(&id, state, &mut self.session_messages, on_chunk);
+        }
+        if !terminal || state.finished {
             return;
         }
         state.finished = true;
@@ -350,6 +361,27 @@ fn standard_rate_limit(error: &GrokError) -> Option<ProviderRateLimit> {
     })
 }
 
+fn completion_status(stop_reason: Option<&str>) -> (bool, Option<String>) {
+    let reason = stop_reason.map(str::trim).filter(|value| !value.is_empty());
+    let Some(reason) = reason else {
+        return (true, None);
+    };
+    let normalized = reason.to_ascii_lowercase();
+    match normalized.as_str() {
+        "end_turn" => (true, None),
+        "cancelled" | "canceled" => (true, Some("Grok Build stopped: cancelled".to_owned())),
+        "max_tokens" | "max_turn_requests" | "refusal" => {
+            (false, Some(format!("Grok Build stopped: {normalized}")))
+        }
+        _ => (true, Some(format!("Grok Build stopped: {reason}"))),
+    }
+}
+
+async fn wait_for_cancel_settlement(cancellation: &GrokCancellation) {
+    let _ = cancellation.wait_acknowledged(CANCEL_ACK_TIMEOUT).await;
+    let _ = cancellation.wait_completed(CANCEL_SETTLE_TIMEOUT).await;
+}
+
 #[async_trait]
 impl ProviderRuntime for GrokBuildProvider {
     fn provider_type(&self) -> ProviderType {
@@ -388,6 +420,11 @@ impl ProviderRuntime for GrokBuildProvider {
         if !self.is_ready() {
             return Err(BridgeError::ProviderNotReady);
         }
+        if metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY) {
+            return Err(BridgeError::SessionError(
+                "grok provider does not support sdk session fork".to_owned(),
+            ));
+        }
         let started_at = Instant::now();
         let run_id = resolve_uuid_run_id(&options.metadata);
         self.pending_rate_limits.clear(&options.thread_id).await;
@@ -397,18 +434,14 @@ impl ProviderRuntime for GrokBuildProvider {
             .expect("Grok config lock poisoned")
             .clone();
         let workspace = resolve_workspace_dir(&config, options)?;
-        let existing_session_id = if metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY)
-        {
-            None
-        } else {
-            metadata_string(&options.metadata, SDK_SESSION_ID_METADATA_KEY).or_else(|| {
+        let existing_session_id = metadata_string(&options.metadata, SDK_SESSION_ID_METADATA_KEY)
+            .or_else(|| {
                 self.session_map
                     .lock()
                     .expect("Grok session lock poisoned")
                     .get(&options.thread_id)
                     .cloned()
-            })
-        };
+            });
         let include_instructions = existing_session_id.is_none();
         let (prompt, _staged_attachments) = build_prompt_text(options, include_instructions);
         let cancellation = GrokCancellation::default();
@@ -433,6 +466,7 @@ impl ProviderRuntime for GrokBuildProvider {
             binary: normalize_non_empty(Some(&config.grok_bin))
                 .unwrap_or_else(|| "grok".to_owned()),
             environment: runtime_env(&config.env, &options.metadata),
+            max_turns: config.max_turns,
             startup_timeout: Duration::from_secs(30),
             request_timeout: request_timeout(&config),
         });
@@ -442,7 +476,7 @@ impl ProviderRuntime for GrokBuildProvider {
                 GrokRunRequest {
                     cwd: workspace,
                     prompt,
-                    session_id: existing_session_id,
+                    session_id: existing_session_id.clone(),
                     model: resolve_model(&config, options),
                     reasoning_effort: resolve_reasoning_effort(&config, options),
                 },
@@ -461,6 +495,23 @@ impl ProviderRuntime for GrokBuildProvider {
 
         let output = match result {
             Ok(output) => output,
+            Err(GrokError::Cancelled) => GrokRunOutput {
+                session_id: self
+                    .session_map
+                    .lock()
+                    .expect("Grok session lock poisoned")
+                    .get(&options.thread_id)
+                    .cloned()
+                    .or(existing_session_id)
+                    .ok_or_else(|| {
+                        BridgeError::SessionError(
+                            "Grok cancellation completed before a native session was bound"
+                                .to_owned(),
+                        )
+                    })?,
+                stop_reason: Some("cancelled".to_owned()),
+                ..Default::default()
+            },
             Err(error) => {
                 if let Some(rate_limit) = standard_rate_limit(&error) {
                     self.pending_rate_limits
@@ -470,6 +521,7 @@ impl ProviderRuntime for GrokBuildProvider {
                 return Err(bridge_error(&error));
             }
         };
+        let (success, error) = completion_status(output.stop_reason.as_deref());
         on_chunk(StreamEvent::Done);
         Ok(ProviderRunResult {
             run_id,
@@ -479,8 +531,8 @@ impl ProviderRuntime for GrokBuildProvider {
             sdk_session_id: Some(output.session_id),
             actual_model: output.actual_model,
             thread_title: None,
-            success: true,
-            error: None,
+            success,
+            error,
             input_tokens: output.input_tokens,
             output_tokens: output.output_tokens,
             cost: 0.0,
@@ -525,7 +577,7 @@ impl ProviderRuntime for GrokBuildProvider {
             .map(|run| run.cancellation.clone());
         if let Some(cancellation) = cancellation {
             cancellation.cancel();
-            let _ = cancellation.wait_acknowledged(Duration::from_secs(1)).await;
+            wait_for_cancel_settlement(&cancellation).await;
             true
         } else {
             false
@@ -542,7 +594,7 @@ impl ProviderRuntime for GrokBuildProvider {
             .map(|run| run.cancellation.clone());
         if let Some(cancellation) = cancellation {
             cancellation.cancel();
-            let _ = cancellation.wait_acknowledged(Duration::from_secs(1)).await;
+            wait_for_cancel_settlement(&cancellation).await;
             true
         } else {
             false
@@ -581,9 +633,48 @@ impl ProviderRuntime for GrokBuildProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::sync::Notify;
 
     fn callback() -> StreamCallback {
         Box::new(|_| {})
+    }
+
+    fn fake_grok(script_body: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fake-grok");
+        fs::write(&path, format!("#!/bin/sh\n{script_body}\n")).expect("write script");
+        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("permissions");
+        (dir, path.to_string_lossy().into_owned())
+    }
+
+    async fn initialized_provider(
+        binary: String,
+        workspace_dir: &std::path::Path,
+        max_turns: Option<i64>,
+    ) -> GrokBuildProvider {
+        let mut provider = GrokBuildProvider::new(GrokBuildConfig {
+            grok_bin: binary,
+            workspace_dir: Some(workspace_dir.to_string_lossy().into_owned()),
+            timeout_seconds: 5.0,
+            max_turns,
+            ..Default::default()
+        });
+        provider.initialize().await.expect("initialize provider");
+        provider
+    }
+
+    fn run_options(thread_id: &str, workspace_dir: &std::path::Path) -> ProviderRunOptions {
+        ProviderRunOptions {
+            thread_id: thread_id.to_owned(),
+            message: "continue".to_owned(),
+            workspace_dir: Some(workspace_dir.to_string_lossy().into_owned()),
+            images: None,
+            metadata: HashMap::new(),
+        }
     }
 
     #[test]
@@ -648,6 +739,223 @@ mod tests {
     }
 
     #[test]
+    fn tool_input_from_the_first_update_is_present_on_the_single_tool_use() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_for_callback = Arc::clone(&events);
+        let callback: StreamCallback = Box::new(move |event| {
+            events_for_callback
+                .lock()
+                .expect("events lock poisoned")
+                .push(event);
+        });
+        let mut mapper = GrokEventMapper::default();
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-late-input",
+                "title": "Run command",
+                "_meta": {"x.ai/tool": {"name": "run_terminal_command"}}
+            }),
+            &callback,
+        );
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool-late-input",
+                "status": "in_progress"
+            }),
+            &callback,
+        );
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool-late-input",
+                "status": "completed",
+                "rawInput": {"command": "pwd"},
+                "rawOutput": {"output_for_prompt": "/workspace"}
+            }),
+            &callback,
+        );
+
+        let events = events.lock().expect("events lock poisoned");
+        let tool_uses = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ToolUse { message } => Some(message),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tool_uses.len(), 1);
+        assert_eq!(tool_uses[0].content["input"], json!({"command": "pwd"}));
+        assert_eq!(
+            mapper.session_messages[0].content["input"],
+            json!({"command": "pwd"})
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupt_returns_partial_success_after_native_cancel_settles() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let settled_marker = workspace.path().join("cancel-settled");
+        let script = format!(
+            r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{}}}}' ;;
+    *'"method":"session/new"'*) printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"cancel-session"}}}}' ;;
+    *'"method":"session/prompt"'*) printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"cancel-session","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"partial answer"}}}}}}}}' ;;
+    *'"method":"session/cancel"'*)
+      sleep 0.2
+      printf '%s' settled > '{}'
+      printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"cancelled","_meta":{{"inputTokens":4,"outputTokens":2}}}}}}' ;;
+  esac
+done
+"#,
+            settled_marker.display()
+        );
+        let (_binary_dir, binary) = fake_grok(&script);
+        let provider = Arc::new(initialized_provider(binary, workspace.path(), None).await);
+        let options = run_options("thread::grok-cancel", workspace.path());
+        let partial_seen = Arc::new(Notify::new());
+        let partial_for_callback = Arc::clone(&partial_seen);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_for_callback = Arc::clone(&events);
+        let callback: StreamCallback = Box::new(move |event| {
+            if matches!(&event, StreamEvent::Delta { text } if text == "partial answer") {
+                partial_for_callback.notify_one();
+            }
+            events_for_callback
+                .lock()
+                .expect("events lock poisoned")
+                .push(event);
+        });
+
+        let run = provider.run_streaming(&options, callback);
+        let interrupt = async {
+            tokio::time::timeout(Duration::from_secs(2), partial_seen.notified())
+                .await
+                .expect("partial response");
+            let accepted = provider
+                .interrupt_streaming_session("thread::grok-cancel")
+                .await;
+            (accepted, settled_marker.exists())
+        };
+        let (result, (accepted, settled_before_return)) = tokio::join!(run, interrupt);
+
+        assert!(accepted);
+        assert!(
+            settled_before_return,
+            "interrupt must wait briefly for Grok to process session/cancel"
+        );
+        let result = result.expect("cancel is a clean partial completion");
+        assert!(result.success);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Grok Build stopped: cancelled")
+        );
+        assert_eq!(result.response, "partial answer");
+        assert_eq!(result.sdk_session_id.as_deref(), Some("cancel-session"));
+        assert_eq!(result.input_tokens, 4);
+        assert_eq!(result.output_tokens, 2);
+        assert!(
+            provider
+                .take_rate_limit("thread::grok-cancel")
+                .await
+                .is_none(),
+            "cancellation must not stage rate-limit state"
+        );
+        assert!(
+            events
+                .lock()
+                .expect("events lock poisoned")
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Done))
+        );
+    }
+
+    #[tokio::test]
+    async fn non_terminal_stop_reason_is_a_soft_failure() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (_binary_dir, binary) = fake_grok(
+            r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}' ;;
+    *'"method":"session/new"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"refusal-session"}}' ;;
+    *'"method":"session/prompt"'*) printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"refusal"}}' ;;
+  esac
+done
+"#,
+        );
+        let provider = initialized_provider(binary, workspace.path(), None).await;
+        let result = provider
+            .run_streaming(
+                &run_options("thread::grok-refusal", workspace.path()),
+                callback(),
+            )
+            .await
+            .expect("ACP completion remains a soft result");
+
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Grok Build stopped: refusal"));
+        assert_eq!(result.sdk_session_id.as_deref(), Some("refusal-session"));
+    }
+
+    #[tokio::test]
+    async fn sdk_session_fork_is_rejected_before_process_launch() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let provider = initialized_provider(
+            "/definitely/missing/grok".to_owned(),
+            workspace.path(),
+            None,
+        )
+        .await;
+        let mut options = run_options("thread::grok-fork", workspace.path());
+        options
+            .metadata
+            .insert(SDK_SESSION_FORK_METADATA_KEY.to_owned(), Value::Bool(true));
+
+        let error = provider
+            .run_streaming(&options, callback())
+            .await
+            .expect_err("fork must not silently create an empty session");
+        assert!(
+            matches!(error, BridgeError::SessionError(message) if message.contains("does not support sdk session fork"))
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_max_turns_reaches_the_grok_process() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (_binary_dir, binary) = fake_grok(
+            r#"
+case " $* " in
+  *' --max-turns 7 '*) ;;
+  *) printf '%s\n' 'missing --max-turns 7' >&2; exit 17 ;;
+esac
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}' ;;
+    *'"method":"session/new"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"max-turns-session"}}' ;;
+    *'"method":"session/prompt"'*) printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}' ;;
+  esac
+done
+"#,
+        );
+        let provider = initialized_provider(binary, workspace.path(), Some(7)).await;
+        let result = provider
+            .run_streaming(
+                &run_options("thread::grok-max-turns", workspace.path()),
+                callback(),
+            )
+            .await
+            .expect("configured max turns reaches the child");
+
+        assert!(result.success);
+        assert_eq!(result.sdk_session_id.as_deref(), Some("max-turns-session"));
+    }
+
+    #[test]
     fn structured_rate_limit_maps_only_to_standard_provider_state() {
         let error = GrokError::Rpc {
             method: "session/prompt".to_owned(),
@@ -661,5 +969,25 @@ mod tests {
         assert_eq!(rate_limit.reached_type.as_deref(), Some("capacity"));
         assert_eq!(rate_limit.message.as_deref(), Some("upstream capacity"));
         assert!(standard_rate_limit(&GrokError::Transport("HTTP 429".to_owned())).is_none());
+    }
+
+    #[test]
+    fn stop_reasons_have_explicit_terminal_semantics() {
+        assert_eq!(completion_status(None), (true, None));
+        assert_eq!(completion_status(Some("end_turn")), (true, None));
+        assert_eq!(
+            completion_status(Some("cancelled")),
+            (true, Some("Grok Build stopped: cancelled".to_owned()))
+        );
+        for reason in ["max_tokens", "max_turn_requests", "refusal"] {
+            assert_eq!(
+                completion_status(Some(reason)),
+                (false, Some(format!("Grok Build stopped: {reason}")))
+            );
+        }
+        assert_eq!(
+            completion_status(Some("future_reason")),
+            (true, Some("Grok Build stopped: future_reason".to_owned()))
+        );
     }
 }

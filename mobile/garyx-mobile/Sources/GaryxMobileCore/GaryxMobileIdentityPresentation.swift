@@ -107,7 +107,10 @@ public struct GaryxProviderPresentation: Equatable {
         if source.contains("claude") {
             return .claude
         }
-        if source == "grok" || source.contains("grok_build") || source.contains("grok-build") {
+        if source == "grok"
+            || source.contains("grok_build")
+            || source.contains("grok-build")
+            || source.contains("grok build") {
             return .grok
         }
         return .generic
