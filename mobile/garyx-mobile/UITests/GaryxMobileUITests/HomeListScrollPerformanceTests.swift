@@ -315,6 +315,38 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         waitForKeyboard(false, in: scrollingApp)
     }
 
+    func testLongConversationKeyboardDismissesFromVisibleTrailingBlankBackground() {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "chat"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_PUSH_FIXTURE"] = "send-jitter"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_DIAGNOSTICS"] = "1"
+        app.launch()
+
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.tap()
+        waitForKeyboard(true, in: app)
+
+        let lastMessage = app.staticTexts["Existing captured turn 21"]
+        XCTAssertTrue(lastMessage.waitForExistence(timeout: 3))
+        let transcript = app.scrollViews["garyx-conversation-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 3))
+
+        let blankY = (lastMessage.frame.maxY + composer.frame.minY) / 2
+        XCTAssertGreaterThan(blankY, lastMessage.frame.maxY)
+        XCTAssertLessThan(blankY, composer.frame.minY)
+        XCTAssertTrue(transcript.frame.contains(CGPoint(x: 24, y: blankY)))
+
+        app.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 24 / app.frame.width,
+                dy: blankY / app.frame.height
+            )
+        ).tap()
+        waitForKeyboard(false, in: app)
+    }
+
     /// Sanitized simulator replay of the reported send shape: 21 committed
     /// turns, a four-line composer, optimistic origin insertion, then the same
     /// origin materialized by the captured committed render row. The probe

@@ -16,15 +16,15 @@ private func garyxDismissKeyboard() {
     )
 }
 
-/// Viewport-sized transcript background shared by startup prewarming and the
-/// live message region. Placing it below row content makes blank taps explicit
-/// without participating in link, long-press, or disclosure hit testing.
+/// Transcript content-plane background shared by startup prewarming and the
+/// live message region. Its owner supplies the resolved content size; placing
+/// it behind row content makes blank taps explicit without participating in
+/// link, long-press, or disclosure hit testing.
 struct GaryxTranscriptBlankSpaceTapLayer: View {
     let action: () -> Void
 
     var body: some View {
         Color.clear
-            .containerRelativeFrame(.vertical) { length, _ in length }
             .contentShape(Rectangle())
             .onTapGesture(perform: action)
     }
@@ -586,7 +586,13 @@ struct GaryxConversationView: View {
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             ZStack(alignment: .topLeading) {
-                GaryxTranscriptBlankSpaceTapLayer(action: dismissComposerKeyboard)
+                // Give short transcripts a viewport-height content plane. The
+                // gesture owner is attached after this ZStack resolves, so for
+                // long transcripts it expands to the full scroll content height
+                // instead of remaining behind only the first visible page.
+                Color.clear
+                    .containerRelativeFrame(.vertical) { length, _ in length }
+                    .allowsHitTesting(false)
 
                 VStack(alignment: .leading) {
                     // Deliberately an eager VStack: LazyVStack's estimated row
@@ -714,10 +720,12 @@ struct GaryxConversationView: View {
                         }
                 }
             }
-            // The content background is the blank-space gesture owner. Its
-            // native container-relative height fills short viewports, while
-            // the ZStack still grows to the intrinsic height of long rows.
-            // Row links, long presses, and disclosures remain above it.
+            // Resolve the blank-space owner from the complete content plane:
+            // max(viewport height, intrinsic transcript height). Row links,
+            // long presses, and disclosures remain above this background.
+            .background {
+                GaryxTranscriptBlankSpaceTapLayer(action: dismissComposerKeyboard)
+            }
         }
         .id(conversationScrollIdentity)
         .accessibilityIdentifier("garyx-conversation-transcript")

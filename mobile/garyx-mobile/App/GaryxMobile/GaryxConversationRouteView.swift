@@ -383,7 +383,9 @@ struct GaryxConversationOpeningTranscriptView: View {
     private var openingTranscript: some View {
         ScrollView {
             ZStack(alignment: .topLeading) {
-                GaryxTranscriptBlankSpaceTapLayer(action: {})
+                Color.clear
+                    .containerRelativeFrame(.vertical) { length, _ in length }
+                    .allowsHitTesting(false)
 
                 VStack(alignment: .leading) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -408,6 +410,9 @@ struct GaryxConversationOpeningTranscriptView: View {
                         .frame(height: 24)
                         .accessibilityHidden(true)
                 }
+            }
+            .background {
+                GaryxTranscriptBlankSpaceTapLayer(action: {})
             }
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
