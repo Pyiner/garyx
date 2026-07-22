@@ -182,6 +182,21 @@ pub(super) fn antigravity_models() -> Vec<ProviderModelOption> {
             false,
         ),
         (
+            "Gemini 3.6 Flash (Low)",
+            "Antigravity Gemini option; may be subject to Google AI Platform location limits.",
+            false,
+        ),
+        (
+            "Gemini 3.6 Flash (Medium)",
+            "Antigravity Gemini option; may be subject to Google AI Platform location limits.",
+            false,
+        ),
+        (
+            "Gemini 3.6 Flash (High)",
+            "Antigravity Gemini option; may be subject to Google AI Platform location limits.",
+            false,
+        ),
+        (
             "Gemini 3.5 Flash (Low)",
             "Antigravity Gemini option; may be subject to Google AI Platform location limits.",
             false,

@@ -71,6 +71,12 @@ async fn antigravity_model_catalog_defaults_to_claude_opus() {
             .iter()
             .any(|model| model.id == "Claude Sonnet 4.6 (Thinking)")
     );
+    assert!(
+        response
+            .models
+            .iter()
+            .any(|model| model.id == "Gemini 3.6 Flash (High)")
+    );
 }
 
 #[tokio::test]
