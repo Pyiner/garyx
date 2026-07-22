@@ -104,6 +104,10 @@
 - Validate responsive changes in the installed app around the actual seams:
   640, 720/721, 980/981, 1332/1333, and a wide desktop width. Restore the
   user's original window size after CDP measurement.
+- For dev-mode UI iteration, never drive the user's installed app (CDP
+  39222). Run a separate instance with
+  `GARYX_DESKTOP_REMOTE_DEBUGGING_PORT=<port> npm run dev` in
+  `desktop/garyx-desktop` and attach playwright-cli to that port instead.
 
 ## Workspace File Tree
 
