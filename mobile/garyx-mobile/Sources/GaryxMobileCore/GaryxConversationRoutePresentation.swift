@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The full-screen conversation surface presented for one route occurrence.
@@ -64,6 +65,60 @@ public enum GaryxConversationOpeningTranscriptPolicy {
         hasRenderedSnapshot: Bool = false
     ) -> GaryxConversationOpeningTranscriptPresentation {
         localRenderableRowCount > 0 || hasRenderedSnapshot ? .localMessages : .loading
+    }
+}
+
+/// Scroll geometry retained with one compositor snapshot. The viewport frame
+/// is expressed in the owning route page's coordinate space so outer route
+/// transition transforms do not become part of transcript placement.
+public struct GaryxConversationTranscriptSnapshotCaptureGeometry: Equatable, Sendable {
+    public struct Insets: Equatable, Sendable {
+        public let top: CGFloat
+        public let left: CGFloat
+        public let bottom: CGFloat
+        public let right: CGFloat
+
+        public init(top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+            self.top = top
+            self.left = left
+            self.bottom = bottom
+            self.right = right
+        }
+    }
+
+    public let viewportFrameInPage: CGRect
+    public let adjustedContentInsets: Insets
+    public let contentOffset: CGPoint
+
+    public init(
+        viewportFrameInPage: CGRect,
+        adjustedContentInsets: Insets,
+        contentOffset: CGPoint
+    ) {
+        self.viewportFrameInPage = viewportFrameInPage
+        self.adjustedContentInsets = adjustedContentInsets
+        self.contentOffset = contentOffset
+    }
+
+    public func snapshotPoint(forContentPoint point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: point.x - contentOffset.x,
+            y: point.y - contentOffset.y
+        )
+    }
+}
+
+public enum GaryxConversationTranscriptSnapshotGeometry {
+    public static func installationFrame(
+        capture: GaryxConversationTranscriptSnapshotCaptureGeometry,
+        containerFrameInPage: CGRect
+    ) -> CGRect {
+        CGRect(
+            x: capture.viewportFrameInPage.minX - containerFrameInPage.minX,
+            y: capture.viewportFrameInPage.minY - containerFrameInPage.minY,
+            width: capture.viewportFrameInPage.width,
+            height: capture.viewportFrameInPage.height
+        )
     }
 }
 

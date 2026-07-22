@@ -13,7 +13,7 @@ final class GaryxConversationTranscriptSnapshotCache {
 
     private struct Entry {
         let view: UIView
-        let size: CGSize
+        let geometry: GaryxConversationTranscriptSnapshotCaptureGeometry
     }
 
     private var entries: [String: Entry] = [:]
@@ -41,9 +41,9 @@ final class GaryxConversationTranscriptSnapshotCache {
         captureDrivers[threadID]?.stop()
         let driver = GaryxConversationTranscriptSnapshotDriver(
             scrollView: scrollView
-        ) { [weak self] snapshot, size in
+        ) { [weak self] snapshot, geometry in
             self?.captureDrivers[threadID] = nil
-            self?.store(snapshot, size: size, for: threadID)
+            self?.store(snapshot, geometry: geometry, for: threadID)
         }
         captureDrivers[threadID] = driver
         driver.start()
@@ -66,29 +66,40 @@ final class GaryxConversationTranscriptSnapshotCache {
         }
 
         // A compositor snapshot is already-rendered pixels, not relayoutable
-        // content. Keep its captured geometry at the top of the viewport and
-        // let the dedicated host clip any overflow. Resizing this view to a
-        // transient opening bound non-uniformly scales every glyph.
+        // content. Keep its captured geometry and let the dedicated host clip
+        // overflow. Resizing this view to a transient opening bound
+        // non-uniformly scales every glyph.
         snapshot.transform = .identity
         snapshot.translatesAutoresizingMaskIntoConstraints = true
         snapshot.autoresizingMask = [
             .flexibleRightMargin,
             .flexibleBottomMargin,
         ]
-        snapshot.frame = CGRect(
-            x: container.bounds.minX,
-            y: container.bounds.minY,
-            width: entry.size.width,
-            height: entry.size.height
+        layoutSnapshot(for: threadID, in: container)
+    }
+
+    func layoutSnapshot(for threadID: String, in container: UIView) {
+        guard let entry = entries[threadID], entry.view.superview === container else { return }
+        let containerFrameInPage = container.garyxFrameInOwningRoutePage
+            ?? CGRect(origin: .zero, size: container.bounds.size)
+        entry.view.frame = GaryxConversationTranscriptSnapshotGeometry.installationFrame(
+            capture: entry.geometry,
+            containerFrameInPage: containerFrameInPage
         )
     }
 
-    private func store(_ snapshot: UIView, size: CGSize, for threadID: String) {
-        guard size.width > 0, size.height > 0 else { return }
+    private func store(
+        _ snapshot: UIView,
+        geometry: GaryxConversationTranscriptSnapshotCaptureGeometry,
+        for threadID: String
+    ) {
+        guard geometry.viewportFrameInPage.width > 0,
+              geometry.viewportFrameInPage.height > 0
+        else { return }
         if entries[threadID] == nil {
             insertionOrder.append(threadID)
         }
-        entries[threadID] = Entry(view: snapshot, size: size)
+        entries[threadID] = Entry(view: snapshot, geometry: geometry)
         while insertionOrder.count > capacity {
             let evictedThreadID = insertionOrder.removeFirst()
             entries[evictedThreadID] = nil
@@ -103,20 +114,48 @@ final class GaryxConversationTranscriptSnapshotCache {
 struct GaryxConversationTranscriptSnapshotView: UIViewRepresentable {
     let threadID: String
 
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView(frame: .zero)
+    func makeUIView(context: Context) -> GaryxConversationTranscriptSnapshotHostView {
+        let container = GaryxConversationTranscriptSnapshotHostView(frame: .zero)
         container.backgroundColor = .clear
-        GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
-            for: threadID,
-            in: container
-        )
+        container.displaySnapshot(for: threadID)
         return container
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
+    func updateUIView(
+        _ uiView: GaryxConversationTranscriptSnapshotHostView,
+        context: Context
+    ) {
+        uiView.displaySnapshot(for: threadID)
+    }
+}
+
+/// Repositions cached pixels after SwiftUI has attached and laid out the
+/// transcript-only viewport. This keeps the conversion in route-page space
+/// while the outer route wrapper remains free to own horizontal push motion.
+@MainActor
+final class GaryxConversationTranscriptSnapshotHostView: UIView {
+    private var threadID: String?
+
+    func displaySnapshot(for threadID: String) {
+        self.threadID = threadID
         GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
             for: threadID,
-            in: uiView
+            in: self
+        )
+        setNeedsLayout()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let threadID else { return }
+        GaryxConversationTranscriptSnapshotCache.shared.layoutSnapshot(
+            for: threadID,
+            in: self
         )
     }
 }
@@ -128,14 +167,20 @@ struct GaryxConversationTranscriptSnapshotView: UIViewRepresentable {
 @MainActor
 private final class GaryxConversationTranscriptSnapshotDriver: NSObject {
     private let scrollViewProvider: @MainActor () -> UIScrollView?
-    private let completion: @MainActor (UIView, CGSize) -> Void
+    private let completion: @MainActor (
+        UIView,
+        GaryxConversationTranscriptSnapshotCaptureGeometry
+    ) -> Void
     private var displayLink: CADisplayLink?
     private var stableFrameCount = 0
     private var attempts = 0
 
     init(
         scrollView: @escaping @MainActor () -> UIScrollView?,
-        completion: @escaping @MainActor (UIView, CGSize) -> Void
+        completion: @escaping @MainActor (
+            UIView,
+            GaryxConversationTranscriptSnapshotCaptureGeometry
+        ) -> Void
     ) {
         scrollViewProvider = scrollView
         self.completion = completion
@@ -173,7 +218,13 @@ private final class GaryxConversationTranscriptSnapshotDriver: NSObject {
 
         stableFrameCount += 1
         guard stableFrameCount >= 60 else { return }
-        let size = scrollView.bounds.size
+        guard let viewportFrameInPage = scrollView.garyxFrameInOwningRoutePage else {
+            stableFrameCount = 0
+            if attempts >= 120 {
+                stop()
+            }
+            return
+        }
         guard let snapshot = scrollView.snapshotView(afterScreenUpdates: false) else {
             stableFrameCount = 0
             if attempts >= 120 {
@@ -183,7 +234,36 @@ private final class GaryxConversationTranscriptSnapshotDriver: NSObject {
         }
 
         stop()
-        snapshot.frame = CGRect(origin: .zero, size: size)
-        completion(snapshot, size)
+        let adjustedInsets = scrollView.adjustedContentInset
+        let geometry = GaryxConversationTranscriptSnapshotCaptureGeometry(
+            viewportFrameInPage: viewportFrameInPage,
+            adjustedContentInsets: .init(
+                top: adjustedInsets.top,
+                left: adjustedInsets.left,
+                bottom: adjustedInsets.bottom,
+                right: adjustedInsets.right
+            ),
+            contentOffset: scrollView.contentOffset
+        )
+        snapshot.frame = CGRect(origin: .zero, size: viewportFrameInPage.size)
+        completion(snapshot, geometry)
+    }
+}
+
+private extension UIView {
+    /// The viewport rect normalized to its nearest owning controller's page.
+    /// Converting to this ancestor excludes the route wrapper's outer
+    /// transition transform while retaining safe-area/container placement.
+    var garyxFrameInOwningRoutePage: CGRect? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                let pageBounds = controller.view.bounds
+                let frame = convert(bounds, to: controller.view)
+                return frame.offsetBy(dx: -pageBounds.minX, dy: -pageBounds.minY)
+            }
+            responder = current.next
+        }
+        return nil
     }
 }

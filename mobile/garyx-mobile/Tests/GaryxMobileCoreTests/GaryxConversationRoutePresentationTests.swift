@@ -20,6 +20,42 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         )
     }
 
+    func testWarmReentrySnapshotAlignsFirstRowWithLiveTranscript() {
+        let capture = GaryxConversationTranscriptSnapshotCaptureGeometry(
+            viewportFrameInPage: CGRect(x: 0, y: 0, width: 402, height: 874),
+            adjustedContentInsets: .init(top: 124, left: 0, bottom: 0, right: 0),
+            contentOffset: CGPoint(x: 0, y: -124)
+        )
+        let openingContainerFrame = CGRect(x: 0, y: 124, width: 402, height: 593)
+        let installationFrame = GaryxConversationTranscriptSnapshotGeometry.installationFrame(
+            capture: capture,
+            containerFrameInPage: openingContainerFrame
+        )
+
+        // The captured short-thread row begins 34 pt into content. With the
+        // measured -124 content offset it is at y=158 in the live full-page
+        // scroll view. Installing those same pixels in the transcript-only
+        // container must preserve that page coordinate through the handoff.
+        let firstRowInSnapshot = capture.snapshotPoint(
+            forContentPoint: CGPoint(x: 16, y: 34)
+        )
+        let liveFirstRowY = capture.viewportFrameInPage.minY + firstRowInSnapshot.y
+        let openingFirstRowY = openingContainerFrame.minY
+            + installationFrame.minY
+            + firstRowInSnapshot.y
+
+        XCTAssertEqual(capture.contentOffset.y, -capture.adjustedContentInsets.top)
+        XCTAssertEqual(liveFirstRowY, 158, accuracy: 0.001)
+        XCTAssertEqual(
+            openingFirstRowY,
+            liveFirstRowY,
+            accuracy: 0.001,
+            "the opening snapshot and live scroll view must put the first row at the same page y"
+        )
+        XCTAssertEqual(installationFrame.minY, -124, accuracy: 0.001)
+        XCTAssertEqual(installationFrame.size, CGSize(width: 402, height: 874))
+    }
+
     func testConversationPageIsTheOnlyFullScreenSurfaceFromMount() {
         var state = GaryxConversationRoutePresentationState()
 

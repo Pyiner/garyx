@@ -189,6 +189,78 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertGreaterThan(installedSnapshot.frame.maxY, openingContainer.bounds.maxY)
     }
 
+    func testWarmReentrySnapshotMapsFullPageCaptureIntoTranscriptContainer() throws {
+        let threadID = "thread::snapshot-page-space-repro-\(UUID().uuidString)"
+        let pageSize = CGSize(width: 402, height: 874)
+        let sourceController = UIViewController()
+        let sourceScrollView = UIScrollView(frame: CGRect(origin: .zero, size: pageSize))
+        sourceScrollView.contentInsetAdjustmentBehavior = .never
+        sourceScrollView.contentInset = UIEdgeInsets(top: 124, left: 0, bottom: 0, right: 0)
+        sourceScrollView.contentOffset = CGPoint(x: 0, y: -124)
+        sourceScrollView.contentSize = CGSize(width: 402, height: 249)
+        sourceController.view.addSubview(sourceScrollView)
+
+        let firstRow = UIView(frame: CGRect(x: 16, y: 34, width: 370, height: 80))
+        firstRow.backgroundColor = .black
+        sourceScrollView.addSubview(firstRow)
+
+        let sourceWindow = makeTestWindow(frame: CGRect(origin: .zero, size: pageSize))
+        sourceWindow.rootViewController = sourceController
+        sourceWindow.isHidden = false
+        defer {
+            sourceWindow.isHidden = true
+            sourceWindow.rootViewController = nil
+        }
+        sourceWindow.layoutIfNeeded()
+
+        XCTAssertEqual(sourceScrollView.adjustedContentInset.top, 124, accuracy: 0.001)
+        XCTAssertEqual(sourceScrollView.contentOffset.y, -124, accuracy: 0.001)
+        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+            threadID: threadID,
+            revision: "full-page-402x874-inset-124",
+            scrollView: { sourceScrollView }
+        )
+        XCTAssertTrue(
+            waitForTranscriptSnapshot(threadID: threadID),
+            "the measured full-page scroll geometry must be captured before installation"
+        )
+
+        let destinationController = UIViewController()
+        let openingContainer = GaryxConversationTranscriptSnapshotHostView(
+            frame: CGRect(x: 0, y: 124, width: 402, height: 593)
+        )
+        destinationController.view.addSubview(openingContainer)
+        let destinationWindow = makeTestWindow(frame: CGRect(origin: .zero, size: pageSize))
+        destinationWindow.rootViewController = destinationController
+        destinationWindow.isHidden = false
+        defer {
+            destinationWindow.isHidden = true
+            destinationWindow.rootViewController = nil
+        }
+        destinationWindow.layoutIfNeeded()
+
+        openingContainer.displaySnapshot(for: threadID)
+        openingContainer.layoutIfNeeded()
+
+        let installedSnapshot = try XCTUnwrap(openingContainer.subviews.first)
+        XCTAssertEqual(installedSnapshot.frame.minX, 0, accuracy: 0.001)
+        XCTAssertEqual(installedSnapshot.frame.minY, -124, accuracy: 0.001)
+        XCTAssertEqual(installedSnapshot.frame.size, pageSize)
+
+        let firstRowYInCapturedPixels = firstRow.frame.minY - sourceScrollView.contentOffset.y
+        let liveFirstRowPageY = sourceScrollView.frame.minY + firstRowYInCapturedPixels
+        let openingFirstRowPageY = openingContainer.frame.minY
+            + installedSnapshot.frame.minY
+            + firstRowYInCapturedPixels
+        XCTAssertEqual(liveFirstRowPageY, 158, accuracy: 0.001)
+        XCTAssertEqual(
+            openingFirstRowPageY,
+            liveFirstRowPageY,
+            accuracy: 0.001,
+            "the cached opening pixels must keep the live transcript's page position"
+        )
+    }
+
     func testTaskNotificationAndLongUserBubbleShareTrailingWidthOwnerAcrossDynamicType() throws {
         let viewportWidth = try XCTUnwrap(
             UIApplication.shared.connectedScenes
