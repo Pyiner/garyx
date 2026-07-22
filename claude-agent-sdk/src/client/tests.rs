@@ -1,8 +1,9 @@
 use super::{
     ClaudeSDKClient, Prompt, build_user_message_payload, incoming_control_response,
-    unsupported_incoming_control_request_response,
+    resume_store_error, unsupported_incoming_control_request_response,
 };
 use crate::control::IncomingControlRequest;
+use crate::error::ClaudeSDKError;
 use crate::types::{ClaudeAgentOptions, Message};
 use serde_json::Value;
 use std::fs;
@@ -28,6 +29,15 @@ fn write_mock_claude_script(name: &str, body: &str) -> PathBuf {
     perms.set_mode(0o755);
     fs::set_permissions(&path, perms).expect("failed to chmod mock claude script");
     path
+}
+
+#[test]
+fn test_resume_store_io_error_keeps_storage_identity() {
+    let error = resume_store_error(ClaudeSDKError::Io(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "probe",
+    )));
+    assert!(matches!(error, ClaudeSDKError::SessionStore(message) if message.contains("probe")));
 }
 
 #[test]

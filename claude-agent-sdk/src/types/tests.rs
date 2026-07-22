@@ -1,4 +1,5 @@
 use super::*;
+use crate::LocalDirectorySessionStore;
 
 #[test]
 fn test_default_options_cli_args() {
@@ -12,6 +13,42 @@ fn test_default_options_cli_args() {
     assert!(!args.contains(&"--system-prompt".to_string()));
     // Default: setting-sources with empty string
     assert!(args.contains(&"--setting-sources".to_string()));
+}
+
+#[test]
+fn test_session_store_mirror_flag_only_for_a_distinct_launch_projects_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let direct_config = temp.path().join("direct-config");
+    let canonical = direct_config.join("projects");
+    let store: Arc<dyn SessionStore> = Arc::new(LocalDirectorySessionStore::new(&canonical));
+
+    let direct = ClaudeAgentOptions {
+        env: HashMap::from([(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            direct_config.to_string_lossy().into_owned(),
+        )]),
+        session_store: Some(store.clone()),
+        ..Default::default()
+    };
+    assert!(
+        !direct
+            .to_cli_args()
+            .contains(&"--session-mirror".to_owned())
+    );
+
+    let managed = ClaudeAgentOptions {
+        env: HashMap::from([(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            temp.path().join("managed").to_string_lossy().into_owned(),
+        )]),
+        session_store: Some(store),
+        ..Default::default()
+    };
+    assert!(
+        managed
+            .to_cli_args()
+            .contains(&"--session-mirror".to_owned())
+    );
 }
 
 #[test]

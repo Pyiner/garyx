@@ -71,6 +71,29 @@ async fn test_provider_type() {
 }
 
 #[test]
+fn test_managed_claude_projects_roots_only_accepts_marked_uuid_profiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let valid_id = "11111111-2222-4333-8444-555555555555";
+    let valid = dir.path().join(valid_id);
+    fs::create_dir_all(valid.join("projects")).unwrap();
+    fs::write(valid.join(".garyx-claude-account"), valid_id).unwrap();
+
+    let wrong_marker_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    let wrong_marker = dir.path().join(wrong_marker_id);
+    fs::create_dir_all(wrong_marker.join("projects")).unwrap();
+    fs::write(wrong_marker.join(".garyx-claude-account"), valid_id).unwrap();
+
+    let non_uuid = dir.path().join("not-an-account");
+    fs::create_dir_all(non_uuid.join("projects")).unwrap();
+    fs::write(non_uuid.join(".garyx-claude-account"), "not-an-account").unwrap();
+
+    assert_eq!(
+        managed_claude_projects_roots(dir.path()),
+        vec![valid.join("projects")]
+    );
+}
+
+#[test]
 fn test_result_usage_tokens_accepts_claude_sdk_snake_case_usage() {
     let mut usage = HashMap::new();
     usage.insert("input_tokens".to_owned(), Value::from(12));
@@ -371,11 +394,27 @@ fn test_fresh_session_retry_detection() {
     assert!(!should_retry_with_fresh_session(&BridgeError::RunFailed(
         "permission denied".to_owned()
     )));
+    assert!(!should_retry_with_fresh_session(&BridgeError::RunFailed(
+        "claude SessionStore failed before launch: canonical transcript is unreadable".to_owned()
+    )));
     assert!(!should_retry_with_fresh_session(
         &BridgeError::SessionParseUnsupportedBlock(
             "Unknown content block type: document".to_owned()
         )
     ));
+}
+
+#[test]
+fn test_session_store_connect_errors_never_become_fresh_session_retries() {
+    let store_error = bridge_error_from_sdk_connect_error(ClaudeSDKError::SessionStore(
+        "canonical transcript is unreadable".to_owned(),
+    ));
+    assert!(!should_retry_with_fresh_session(&store_error));
+
+    let timeout = bridge_error_from_sdk_connect_error(ClaudeSDKError::Timeout(
+        "SessionStore.load() timed out after 60000ms for session probe".to_owned(),
+    ));
+    assert!(!should_retry_with_fresh_session(&timeout));
 }
 
 #[test]
@@ -3714,6 +3753,50 @@ async fn test_run_streaming_retries_with_fresh_session_after_connect_failure() {
             .cloned()
             .as_deref(),
         Some("fresh-session")
+    );
+}
+
+#[tokio::test]
+async fn test_run_streaming_does_not_clear_session_after_session_store_failure() {
+    let mut provider = make_provider();
+    provider.ready = true;
+    provider
+        .session_map
+        .lock()
+        .await
+        .insert("sess::store".to_owned(), "native-session".to_owned());
+    provider
+        .enqueue_test_run_attempt(Err(BridgeError::RunFailed(
+            "claude SessionStore failed before launch: unreadable canonical transcript".to_owned(),
+        )))
+        .await;
+
+    provider
+        .run_streaming(
+            &ProviderRunOptions {
+                thread_id: "sess::store".to_owned(),
+                message: "hello".to_owned(),
+                workspace_dir: None,
+                images: None,
+                metadata: HashMap::new(),
+            },
+            Box::new(|_| {}),
+        )
+        .await
+        .expect_err("store failures must fail closed on the original session");
+
+    assert_eq!(
+        provider.recorded_test_session_attempts().await,
+        vec![Some("native-session".to_owned())]
+    );
+    assert_eq!(
+        provider
+            .session_map
+            .lock()
+            .await
+            .get("sess::store")
+            .map(String::as_str),
+        Some("native-session")
     );
 }
 

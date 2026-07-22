@@ -3,9 +3,14 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::control::CanUseToolRequest;
 use crate::error::Result;
+use crate::session_store::{
+    SESSION_STORE_LOAD_TIMEOUT, SessionStore, SessionStoreFlush, launched_projects_root,
+    session_mirror_required,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -380,6 +385,12 @@ pub struct ClaudeAgentOptions {
     pub max_thinking_tokens: Option<i64>,
     pub output_format: Option<Value>,
     pub enable_file_checkpointing: bool,
+    /// Mirror native Claude transcripts into an external/local SessionStore.
+    pub session_store: Option<Arc<dyn SessionStore>>,
+    /// Transcript mirror batching policy. Ignored without `session_store`.
+    pub session_store_flush: SessionStoreFlush,
+    /// Per-call timeout for resume load and subkey discovery.
+    pub session_store_load_timeout: Duration,
     /// Register an SDK-level `Stop` hook observer during `initialize`.
     ///
     /// When enabled, each turn stop fires a `hook_callback` control request
@@ -427,6 +438,15 @@ impl std::fmt::Debug for ClaudeAgentOptions {
             .field("max_thinking_tokens", &self.max_thinking_tokens)
             .field("output_format", &self.output_format)
             .field("enable_file_checkpointing", &self.enable_file_checkpointing)
+            .field(
+                "session_store",
+                &self.session_store.as_ref().map(|_| "<session-store>"),
+            )
+            .field("session_store_flush", &self.session_store_flush)
+            .field(
+                "session_store_load_timeout",
+                &self.session_store_load_timeout,
+            )
             .field("stop_hook_observer", &self.stop_hook_observer)
             .field(
                 "can_use_tool",
@@ -470,6 +490,9 @@ impl Default for ClaudeAgentOptions {
             max_thinking_tokens: None,
             output_format: None,
             enable_file_checkpointing: false,
+            session_store: None,
+            session_store_flush: SessionStoreFlush::Batched,
+            session_store_load_timeout: SESSION_STORE_LOAD_TIMEOUT,
             stop_hook_observer: false,
             can_use_tool: None,
         }
@@ -585,6 +608,13 @@ impl ClaudeAgentOptions {
 
         if self.include_partial_messages {
             args.push("--include-partial-messages".into());
+        }
+
+        if let Some(store) = self.session_store.as_ref() {
+            let projects_root = launched_projects_root(&self.env);
+            if session_mirror_required(store, &projects_root) {
+                args.push("--session-mirror".into());
+            }
         }
 
         if self.fork_session {

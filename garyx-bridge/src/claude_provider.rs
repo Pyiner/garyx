@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use claude_agent_sdk::{
     AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun,
-    ClaudeRunControl, ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage,
-    PermissionMode, STOP_HOOK_OBSERVATION_SUBTYPE, SystemMessage, TextBlock, UserInput,
-    run_streaming as sdk_run_streaming,
+    ClaudeRunControl, ClaudeSDKError, ContentBlock, LocalDirectorySessionStore, McpServerConfig,
+    Message, OutboundUserMessage, PermissionMode, STOP_HOOK_OBSERVATION_SUBTYPE, SystemMessage,
+    TextBlock, UserInput, default_claude_projects_dir, run_streaming as sdk_run_streaming,
+    session_project_key,
 };
 use garyx_models::{
     is_builtin_provider_agent_id,
@@ -508,6 +509,18 @@ fn bridge_error_from_sdk_stream_error(error: ClaudeSDKError) -> BridgeError {
     }
 }
 
+fn bridge_error_from_sdk_connect_error(error: ClaudeSDKError) -> BridgeError {
+    match error {
+        ClaudeSDKError::SessionStore(message) => BridgeError::RunFailed(format!(
+            "claude SessionStore failed before launch: {message}"
+        )),
+        ClaudeSDKError::Timeout(message) if message.starts_with("SessionStore.") => {
+            BridgeError::RunFailed(format!("claude SessionStore load timed out: {message}"))
+        }
+        other => BridgeError::RunFailed(format!("failed to connect to claude: {other}")),
+    }
+}
+
 fn non_empty_session_id(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -599,17 +612,71 @@ fn claude_config_dir(launch_env: &HashMap<String, String>) -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
 }
 
-fn claude_project_dir_name(cwd: &Path) -> String {
-    let text = cwd.to_string_lossy();
-    let mapped = text
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect::<String>();
-    if mapped.is_empty() {
-        "-".to_owned()
-    } else {
-        mapped
+fn managed_claude_projects_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return roots;
+    };
+    for entry in entries.flatten() {
+        let account_dir = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&account_dir) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let Some(account_id) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        if Uuid::parse_str(&account_id).is_err() {
+            continue;
+        }
+        let marker = account_dir.join(".garyx-claude-account");
+        let Ok(marker_metadata) = std::fs::symlink_metadata(&marker) else {
+            continue;
+        };
+        if marker_metadata.file_type().is_symlink() || !marker_metadata.is_file() {
+            continue;
+        }
+        if std::fs::read_to_string(&marker)
+            .ok()
+            .is_none_or(|value| value.trim() != account_id)
+        {
+            continue;
+        }
+        roots.push(account_dir.join("projects"));
     }
+    roots
+}
+
+/// Build the local SessionStore for one launch snapshot. The canonical root is
+/// Claude's ordinary `~/.claude/projects`, so native terminal Claude and Garyx
+/// share sessions while each managed profile keeps its own credentials.
+fn claude_local_session_store(launch_env: &HashMap<String, String>) -> LocalDirectorySessionStore {
+    let canonical_root = default_claude_projects_dir();
+    let mut legacy_roots = Vec::new();
+
+    if let Some(config_dir) = launch_env.get("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+        legacy_roots.push(config_dir.join("projects"));
+        if let Some(managed_root) = config_dir.parent() {
+            legacy_roots.extend(managed_claude_projects_roots(managed_root));
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        legacy_roots.extend(managed_claude_projects_roots(
+            &PathBuf::from(home)
+                .join(".garyx")
+                .join("provider-accounts")
+                .join("claude-code"),
+        ));
+    }
+
+    LocalDirectorySessionStore::new(canonical_root).with_legacy_roots(legacy_roots)
+}
+
+fn claude_project_dir_name(cwd: &Path) -> String {
+    session_project_key(cwd)
 }
 
 fn claude_transcript_path(config_dir: &Path, cwd: &Path, session_id: &str) -> PathBuf {
@@ -1293,6 +1360,7 @@ impl ClaudeCliProvider {
             extra_args.insert("effort".to_string(), Some(effort));
         }
         let fork_session = metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY);
+        let session_store = std::sync::Arc::new(claude_local_session_store(launch_env));
 
         ClaudeAgentOptions {
             agent,
@@ -1314,6 +1382,7 @@ impl ClaudeCliProvider {
             setting_sources: (!self.config.setting_sources.is_empty())
                 .then(|| self.config.setting_sources.clone()),
             fork_session,
+            session_store: Some(session_store),
             // Every turn stop reports the CLI's authoritative in-flight
             // background-task list, which gates the post-result stdin close.
             stop_hook_observer: true,
@@ -1564,7 +1633,7 @@ impl ClaudeCliProvider {
         );
         let mut run = connect_future
             .await
-            .map_err(|e| BridgeError::RunFailed(format!("failed to connect to claude: {e}")))?;
+            .map_err(bridge_error_from_sdk_connect_error)?;
 
         let control = run.control();
         self.register_run(run_id, &options.thread_id, control.clone())
