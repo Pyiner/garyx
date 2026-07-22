@@ -788,31 +788,34 @@ export function ThreadPage({
     activeThreadSummary?.rootWorkspacePath ||
     activeThreadSummary?.workspacePath ||
     "";
+  // Codex parity: thread surfaces echo only the leaf directory name; the
+  // full path stays available on hover via the title attribute.
   const sentWorkspaceLabel = (() => {
-    if (!sentWorkspacePath.trim()) {
+    const trimmedPath = sentWorkspacePath.trim();
+    if (!trimmedPath) {
       return null;
     }
-    const home = gatewayHome?.replace(/\/+$/, "");
-    if (home && (sentWorkspacePath === home || sentWorkspacePath.startsWith(`${home}/`))) {
-      return `~${sentWorkspacePath.slice(home.length)}`;
-    }
-    return sentWorkspacePath;
+    return trimmedPath.split("/").filter(Boolean).pop() || trimmedPath;
   })();
   // Side chats fork their workspace from the source thread; a fork has
-  // nothing to choose, so the draft chip never renders for them and the
+  // nothing to choose, so the draft controls never render for them and the
   // sent-thread branches below show the inherited workspace read-only.
-  const composerContext = !selectedThreadId && surfaceVariant !== "side-chat" ? (
-    <WorkspaceComposerChip
-      addWorkspaceBusy={workspaceAddBusy}
-      gatewayHome={gatewayHome}
-      onAddWorkspace={onDraftAddWorkspace}
-      onSelectionChange={onDraftWorkspaceSelectionChange}
-      onWorkspaceModeChange={onDraftWorkspaceModeChange}
-      selection={draftWorkspaceSelection}
-      workspaceMode={draftWorkspaceMode}
-      workspaces={draftWorkspaces}
-    />
-  ) : composerWorkspaceMode ? (
+  // Draft workspace selection lives in the skirt under the composer
+  // (Codex new-task apron), not in the composer footer.
+  const draftWorkspaceControls =
+    !selectedThreadId && surfaceVariant !== "side-chat" ? (
+      <WorkspaceComposerChip
+        addWorkspaceBusy={workspaceAddBusy}
+        gatewayHome={gatewayHome}
+        onAddWorkspace={onDraftAddWorkspace}
+        onSelectionChange={onDraftWorkspaceSelectionChange}
+        onWorkspaceModeChange={onDraftWorkspaceModeChange}
+        selection={draftWorkspaceSelection}
+        workspaceMode={draftWorkspaceMode}
+        workspaces={draftWorkspaces}
+      />
+    ) : null;
+  const composerContext = draftWorkspaceControls ? null : composerWorkspaceMode ? (
     <div
       aria-label={t("Workspace mode")}
       className="thread-composer-status"
@@ -1249,6 +1252,7 @@ export function ThreadPage({
             !showAutomationRunInitialPlaceholder ? (
               <NewThreadEmptyState
                 onResumeProviderSession={onResumeProviderSession}
+                workspaceControls={draftWorkspaceControls}
               />
             ) : null}
             </div>

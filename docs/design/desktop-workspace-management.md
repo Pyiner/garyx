@@ -105,7 +105,11 @@ soft shadow; composer chip = pill, height 28px, padding 0 8px, font 13px.
 
 ### 4.1 Sidebar Workspaces section
 
-Codex row grammar, pixel-faithful:
+Codex interaction grammar; row geometry follows Garyx's own sidebar. The
+original pixel-faithful 24px/4px Codex row read as misaligned next to the
+Bots and Pinned sections, so workspace rows now share the bots-row metrics
+(32px min-height, 10px left padding, 16px icon, 6px copy gap, 13px/400
+label) while keeping the Codex hover/expand behavior:
 
 - **Row**: extracted project-folder SVG + display name (server-provided).
   Hover reveals inline `⋯` (actions) and `+` (new thread here). Chevron

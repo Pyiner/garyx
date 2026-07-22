@@ -46,12 +46,15 @@ type WorkspaceComposerChipProps = {
   onAddWorkspace: () => void;
 };
 
-function abbreviatePath(path: string, gatewayHome: string | null): string {
+/** Codex parity: the chip echoes only the leaf directory name; the
+ *  gateway home itself keeps its `~` spelling (a bare leaf would be
+ *  meaningless there). */
+function workspaceChipLabel(path: string, gatewayHome: string | null): string {
   const home = gatewayHome?.replace(/\/+$/, '');
-  if (home && (path === home || path.startsWith(`${home}/`))) {
-    return `~${path.slice(home.length)}`;
+  if (home && path === home) {
+    return '~';
   }
-  return path;
+  return path.split('/').filter(Boolean).pop() || path;
 }
 
 /**
@@ -147,7 +150,7 @@ export function WorkspaceComposerChip({
     selection?.kind === 'none'
       ? t('No workspace')
       : selectedWorkspace?.name ||
-        (selectedPath ? abbreviatePath(selectedPath, gatewayHome) : t('No workspace'));
+        (selectedPath ? workspaceChipLabel(selectedPath, gatewayHome) : t('No workspace'));
 
   const pick = (next: DraftWorkspaceSelection) => {
     setOpen(false);
@@ -164,6 +167,7 @@ export function WorkspaceComposerChip({
           <button
             aria-label={t('Change workspace')}
             className={`workspace-composer-chip ${selection?.kind === 'none' ? 'is-none' : ''}`}
+            title={selectedPath ?? undefined}
             type="button"
           >
             {selection?.kind === 'none' ? (
@@ -221,7 +225,7 @@ export function WorkspaceComposerChip({
               <SelectLabel>{t('Workspace mode')}</SelectLabel>
               <SelectItem value="local">
                 <Laptop aria-hidden size={16} strokeWidth={1.7} />
-                <span className="new-thread-menu-text">{t('Direct')}</span>
+                <span className="new-thread-menu-text">{t('Local')}</span>
               </SelectItem>
               <SelectItem value="worktree">
                 <GitBranch aria-hidden size={16} strokeWidth={1.7} />

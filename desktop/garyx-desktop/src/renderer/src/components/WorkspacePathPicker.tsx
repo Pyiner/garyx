@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Search as SearchIcon } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Folder, Search as SearchIcon } from 'lucide-react';
 
 import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
 
@@ -104,7 +104,10 @@ function WorkspacePathSummary({ path, placeholder }: WorkspacePathSummaryProps) 
 type LocalDirectoryBrowserProps = {
   selectedPath: string;
   disabled?: boolean;
-  onSelect: (path: string) => void;
+  /** Reports every successfully loaded directory: the folder currently in
+   *  view IS the selection (Codex add-workspace behavior — no explicit
+   *  "use this folder" step). */
+  onCurrentPathChange: (path: string) => void;
 };
 
 function breadcrumbSegments(path: string): Array<{ label: string; path: string }> {
@@ -131,7 +134,7 @@ function breadcrumbSegments(path: string): Array<{ label: string; path: string }
 function LocalDirectoryBrowser({
   selectedPath,
   disabled = false,
-  onSelect,
+  onCurrentPathChange,
 }: LocalDirectoryBrowserProps) {
   const { t } = useI18n();
   const adapter = useWorkspaceDataAdapter();
@@ -152,9 +155,6 @@ function LocalDirectoryBrowser({
   const [filter, setFilter] = useState('');
 
   const currentPath = listing?.path || '';
-  const normalizedSelected = normalizeWorkspacePath(selectedPath);
-  const normalizedCurrent = normalizeWorkspacePath(currentPath);
-  const isCurrentSelected = Boolean(normalizedCurrent && normalizedCurrent === normalizedSelected);
 
   useEffect(() => {
     setRequestedPath(selectedPath || null);
@@ -170,6 +170,9 @@ function LocalDirectoryBrowser({
         setListing(nextListing);
         setNavigationError(null);
         setFilter('');
+        // The folder in view is the selection; keep the caller's draft in
+        // lockstep with every successful navigation.
+        onCurrentPathChange(normalizeWorkspacePath(nextListing.path));
       })
       .catch((nextError) => {
         if (cancelled) return;
@@ -187,7 +190,7 @@ function LocalDirectoryBrowser({
     return () => {
       cancelled = true;
     };
-  }, [adapter, requestedPath, t]);
+  }, [adapter, onCurrentPathChange, requestedPath, t]);
 
   const navigate = (path: string | null) => {
     setNavigationError(null);
@@ -286,18 +289,6 @@ function LocalDirectoryBrowser({
             </button>
           )}
         </div>
-        {currentPath ? (
-          <Button
-            disabled={disabled || loading || isCurrentSelected}
-            onClick={() => onSelect(normalizeWorkspacePath(currentPath))}
-            size="sm"
-            type="button"
-            variant={isCurrentSelected ? 'secondary' : 'outline'}
-          >
-            {isCurrentSelected ? <Check /> : <FolderOpen />}
-            {isCurrentSelected ? t('Selected') : t('Use this folder')}
-          </Button>
-        ) : null}
       </div>
       {navigationError ? (
         <div className="workspace-browser-error" role="alert">
@@ -386,7 +377,7 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
         </DialogHeader>
         <LocalDirectoryBrowser
           disabled={saving}
-          onSelect={setDraft}
+          onCurrentPathChange={setDraft}
           selectedPath={draft}
         />
         {isAbsoluteWorkspacePath(draft) ? (
@@ -710,7 +701,7 @@ export function WorkspacePathPickerDialog({
         </DialogHeader>
         <LocalDirectoryBrowser
           disabled={saving}
-          onSelect={setDraft}
+          onCurrentPathChange={setDraft}
           selectedPath={draft}
         />
         {canSave ? (

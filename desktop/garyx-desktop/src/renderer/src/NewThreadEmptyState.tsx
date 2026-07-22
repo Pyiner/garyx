@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { History, RefreshCw } from 'lucide-react';
 
 import type {
@@ -27,12 +28,17 @@ type NewThreadEmptyStateProps = {
     sessionId: string,
     providerHint?: DesktopSessionProviderHint | null,
   ) => Promise<void>;
+  /** Draft workspace controls (workspace chip + worktree/local mode) rendered
+   *  in the skirt row ahead of Resume, mirroring the Codex composer apron. */
+  workspaceControls?: ReactNode;
 };
 
-/** Workspace selection lives in the composer footer chip; this empty state
- *  keeps only the Resume entry point. */
+/** The gray skirt under the draft composer (Codex new-task apron, flipped to
+ *  hang below our centered composer): workspace chip, worktree/local mode,
+ *  and the Resume entry point. */
 export function NewThreadEmptyState({
   onResumeProviderSession,
+  workspaceControls,
 }: NewThreadEmptyStateProps) {
   const { t } = useI18n();
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -135,6 +141,7 @@ export function NewThreadEmptyState({
     <>
       <div className="new-thread-empty-state">
         <div className="new-thread-option-row">
+          {workspaceControls}
           <Button
             variant="ghost"
             size="sm"

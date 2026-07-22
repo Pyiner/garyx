@@ -268,30 +268,8 @@
   gap: 0;
 }
 
-.workspace-thread-block .workspace-row {
-  min-height: 28px;
-  padding: 0 6px 0 8px;
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-}
-
-.workspace-thread-block .workspace-row-main {
-  min-height: 26px;
-}
-
-.workspace-thread-block .workspace-row-copy {
-  gap: 7px;
-}
-
-.workspace-thread-block .workspace-row-copy .icon {
-  width: 15px;
-  height: 15px;
-}
-
-.workspace-thread-block .workspace-name {
-  font-size: var(--text-sm);
-  line-height: 1.15;
-}
+/* Row geometry lives with the workspace-row grammar block further down
+   (kept beside the bot-row grammar it mirrors). */
 
 .workspace-thread-block .workspace-status {
   font-size: var(--text-xs);
@@ -674,34 +652,28 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Codex-parity workspace rows (captured 2026-07-21; see
- * docs/design/desktop-workspace-management.md §2). Row grammar: 24px row,
- * 10px radius, 4px padding, 13px/445 label; hover reveals the actions
- * cluster; chevron expands an inline thread subtree.
+ * Workspace rows follow the same row grammar as the Bots section above
+ * (base .workspace-row: 32px min-height, 10px left padding, 16px icon,
+ * 6px copy gap) so the Bots / Pinned / Workspaces columns align. Codex
+ * interaction parity stays (see docs/design/desktop-workspace-management.md
+ * §2): hover reveals the actions cluster; chevron expands an inline thread
+ * subtree.
  * ------------------------------------------------------------------------ */
 
 .workspace-thread-block .workspace-row {
-  height: 24px;
-  min-height: 24px;
-  padding: 0 4px;
+  padding: 0 2px 0 10px;
   border-radius: 10px;
   gap: 4px;
   font-size: 13px;
-  font-weight: 445;
   line-height: 1.4286;
 }
 
 .workspace-thread-block .workspace-row-main {
-  min-height: 24px;
-}
-
-.workspace-thread-block .workspace-row-copy {
-  gap: 4px;
+  min-height: 30px;
 }
 
 .workspace-thread-block .workspace-name {
   font-size: 13px;
-  font-weight: 445;
   line-height: 1.4286;
 }
 
@@ -735,13 +707,15 @@
   transform: rotate(180deg);
 }
 
-/* Inline thread subtree under an expanded workspace row. */
+/* Inline thread subtree under an expanded workspace row. The 18px indent
+   keeps the guide line under the 16px folder icon's center (10px row
+   padding + half the icon). */
 .workspace-thread-subtree {
   display: flex;
   flex-direction: column;
   gap: 1px;
   padding: 1px 0 3px;
-  margin-left: 14px;
+  margin-left: 18px;
   border-left: 1px solid var(--color-token-border);
 }
 

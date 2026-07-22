@@ -352,8 +352,11 @@
   padding: 0;
 }
 
-button.new-thread-workspace-trigger,
-button.new-thread-mode-trigger,
+/* The skirt hosts the draft workspace chip, the worktree/local mode select,
+   and Resume; all three share the Codex apron chip recipe (pill 28px, 13px,
+   muted label, hover row wash). */
+.new-thread-option-row .workspace-composer-chip,
+.new-thread-option-row .workspace-chip-mode-trigger,
 button.new-thread-resume-link {
   height: 28px;
   padding: 0 6px;
@@ -367,57 +370,60 @@ button.new-thread-resume-link {
   box-shadow: none;
 }
 
-button.new-thread-workspace-trigger,
-button.new-thread-mode-trigger,
+.new-thread-option-row .workspace-composer-chip,
+.new-thread-option-row .workspace-chip-mode-trigger,
 button.new-thread-resume-link {
   gap: 4px;
 }
 
-button.new-thread-workspace-trigger {
-  min-width: 88px;
-  max-width: min(180px, 32vw);
+.new-thread-option-row .workspace-chip-cluster {
+  gap: 4px;
+  min-width: 0;
 }
 
-button.new-thread-mode-trigger {
-  width: 104px;
+.new-thread-option-row .workspace-composer-chip {
+  max-width: min(220px, 32vw);
+}
+
+.new-thread-option-row .workspace-chip-mode-trigger {
+  width: auto;
   min-width: 0;
   max-width: none;
 }
 
-button.new-thread-mode-trigger [data-slot="select-value"] {
+.new-thread-option-row .workspace-chip-mode-trigger [data-slot="select-value"] {
   flex: 0 0 auto;
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
 }
 
-button.new-thread-mode-trigger [data-slot="select-value"] > span {
+.new-thread-option-row .workspace-chip-mode-trigger [data-slot="select-value"] > span {
   overflow: visible;
   text-overflow: clip;
 }
 
-button.new-thread-workspace-trigger > svg:first-child,
-button.new-thread-mode-trigger > svg:first-child {
+.new-thread-option-row .workspace-composer-chip > svg:first-child,
+.new-thread-option-row .workspace-chip-mode-trigger [data-slot="select-value"] svg {
   width: 16px;
   height: 16px;
 }
 
-button.new-thread-workspace-trigger > svg:last-child,
-button.new-thread-mode-trigger > svg:last-child {
+.new-thread-option-row .workspace-chip-mode-trigger > svg:last-child {
   width: 14px;
   height: 14px;
 }
 
-button.new-thread-workspace-trigger svg,
-button.new-thread-mode-trigger svg,
+.new-thread-option-row .workspace-composer-chip svg,
+.new-thread-option-row .workspace-chip-mode-trigger svg,
 button.new-thread-resume-link svg {
   color: currentColor !important;
 }
 
-button.new-thread-workspace-trigger:hover,
-button.new-thread-workspace-trigger[data-state="open"],
-button.new-thread-mode-trigger:hover,
-button.new-thread-mode-trigger[data-state="open"],
+.new-thread-option-row .workspace-composer-chip:hover,
+.new-thread-option-row .workspace-composer-chip[data-state="open"],
+.new-thread-option-row .workspace-chip-mode-trigger:hover,
+.new-thread-option-row .workspace-chip-mode-trigger[data-state="open"],
 button.new-thread-resume-link:hover {
   color: rgba(26, 28, 31, 0.78);
   background: var(--color-token-row-hover);
@@ -425,17 +431,10 @@ button.new-thread-resume-link:hover {
 
 /* Surface, row, label, and separator styling come from the shared menu
    recipe (styles/menus.css); only widths, heights, and layout are local. */
-[data-slot="select-content"].new-thread-workspace-menu,
 [data-slot="select-content"].new-thread-mode-menu {
   height: auto !important;
   max-height: 254px !important;
   overflow-y: auto;
-}
-
-[data-slot="select-content"].new-thread-workspace-menu {
-  width: min(360px, calc(100vw - 32px));
-  min-width: 260px;
-  max-width: min(360px, calc(100vw - 32px));
 }
 
 [data-slot="select-content"].new-thread-mode-menu {
@@ -444,7 +443,6 @@ button.new-thread-resume-link:hover {
   max-width: 260px;
 }
 
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-viewport"],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-viewport"] {
   /* Popper sizing only; the 4px viewport inset comes from the shared
      select-viewport rule in styles/menus.css. */
@@ -453,19 +451,16 @@ button.new-thread-resume-link:hover {
   min-width: 0 !important;
 }
 
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-label"],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-label"] {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] [data-slot="select-item-indicator"],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"] [data-slot="select-item-indicator"] {
   right: 8px;
 }
 
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] > span:last-child,
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"] > span:last-child {
   display: flex;
   min-width: 0;
