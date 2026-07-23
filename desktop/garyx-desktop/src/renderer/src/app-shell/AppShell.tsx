@@ -55,7 +55,6 @@ import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
-import { WorkspaceRenameDialog } from "../components/WorkspaceRenameDialog";
 import { workspaceGitStatusCache } from "../workspace-git-status-cache";
 import { WorkspaceEpochContext } from "../components/workspace-data-adapter";
 // Side-effect import: wires cross-store capsule cache invalidation (a `/serve`
@@ -212,6 +211,7 @@ import {
   workspaceDirectoryKey,
   workspaceFileAbsolutePath,
 } from "./workspace-helpers";
+import { shouldDismissWorkspaceMenuOnPointerDown } from "./workspace-menu-pointer";
 import {
   summarizeRemoteStateErrors,
 } from "./gateway-errors";
@@ -854,9 +854,6 @@ export function AppShell() {
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
-  const [workspaceRenameTarget, setWorkspaceRenameTarget] =
-    useState<DesktopWorkspace | null>(null);
-  const [workspaceRenameSaving, setWorkspaceRenameSaving] = useState(false);
   const [, setPinnedThreadsVersion] = useState(0);
   const [addWorkspaceDialog, setAddWorkspaceDialog] = useState<{
     source: "new-thread" | "task";
@@ -2896,7 +2893,7 @@ export function AppShell() {
       if (!(target instanceof Element)) {
         return;
       }
-      if (target.closest(".workspace-actions")) {
+      if (!shouldDismissWorkspaceMenuOnPointerDown(target)) {
         return;
       }
       setWorkspaceMenuOpenPath(null);
@@ -3015,8 +3012,6 @@ export function AppShell() {
     workspaceEpochRef.current = nextEpoch;
     setWorkspaceEpoch(nextEpoch);
     setWorkspaceMenuOpenPath(null);
-    setWorkspaceRenameTarget(null);
-    setWorkspaceRenameSaving(false);
     setWorkspaceMutation(null);
     setAddWorkspaceDialog((current) => {
       current?.resolve?.(null);
@@ -3980,45 +3975,6 @@ export function AppShell() {
       setError(
         pinError instanceof Error ? pinError.message : "Failed to pin workspace",
       );
-    }
-  }
-
-  async function handleRenameWorkspaceSubmit(
-    workspace: DesktopWorkspace,
-    name: string,
-  ) {
-    if (!workspace.path) {
-      setWorkspaceRenameTarget(null);
-      return;
-    }
-    setError(null);
-    setWorkspaceRenameSaving(true);
-    const epoch = workspaceEpochRef.current;
-    try {
-      const nextState = await requestDesktopState(() =>
-        window.garyxDesktop.renameWorkspace({
-          workspacePath: workspace.path || "",
-          name,
-        }),
-      );
-      if (!isCurrentWorkspaceEpoch(epoch)) {
-        return;
-      }
-      setDesktopState(nextState);
-      setWorkspaceRenameTarget(null);
-    } catch (renameError) {
-      if (!isCurrentWorkspaceEpoch(epoch)) {
-        return;
-      }
-      setError(
-        renameError instanceof Error
-          ? renameError.message
-          : "Failed to rename workspace",
-      );
-    } finally {
-      if (isCurrentWorkspaceEpoch(epoch)) {
-        setWorkspaceRenameSaving(false);
-      }
     }
   }
 
@@ -4993,9 +4949,6 @@ export function AppShell() {
         onPinWorkspace={(workspace, pinned) => {
           void handlePinWorkspace(workspace, pinned);
         }}
-        onRequestRenameWorkspace={(workspace) => {
-          setWorkspaceRenameTarget(workspace);
-        }}
         onAddBot={() => {
           void openAddBotDialog();
         }}
@@ -5145,14 +5098,6 @@ export function AppShell() {
         onCreateChannel={handleAddChannelAccount}
         ref={addBotDialogRef}
         workspaces={workspacePickerWorkspaces}
-      />
-      <WorkspaceRenameDialog
-        onCancel={() => setWorkspaceRenameTarget(null)}
-        onSubmit={(workspace, name) => {
-          void handleRenameWorkspaceSubmit(workspace, name);
-        }}
-        saving={workspaceRenameSaving}
-        workspace={workspaceRenameTarget}
       />
       <WorkspacePathPickerDialog
         open={Boolean(addWorkspaceDialog)}

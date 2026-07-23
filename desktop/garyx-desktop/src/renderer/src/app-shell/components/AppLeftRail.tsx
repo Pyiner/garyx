@@ -65,7 +65,6 @@ type AppLeftRailProps = {
   onAddWorkspace: () => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
-  onRequestRenameWorkspace: (workspace: DesktopWorkspace) => void;
   onPinWorkspace: (workspace: DesktopWorkspace, pinned: boolean) => void;
   setWorkspaceMenuOpenPath: Dispatch<SetStateAction<string | null>>;
   onOpenSettings: () => void;
@@ -112,7 +111,6 @@ export function AppLeftRail({
   onPinnedThreadDragCancel,
   onReorderPinnedThreads,
   onToggleBotConversationGroup,
-  onRequestRenameWorkspace,
   onPinWorkspace,
   onAddBot,
   onAddWorkspace,
@@ -260,7 +258,6 @@ export function AppLeftRail({
               onOpenThread={onOpenPinnedThread}
               onPinWorkspace={onPinWorkspace}
               onRequestRemoveWorkspace={onRequestRemoveWorkspace}
-              onRequestRenameWorkspace={onRequestRenameWorkspace}
               setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
               workspaceMenuOpenPath={workspaceMenuOpenPath}
               workspaceMutation={workspaceMutation}

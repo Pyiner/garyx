@@ -4,11 +4,7 @@ import { HoverCard as HoverCardPrimitive } from 'radix-ui';
 import type { DesktopWorkspace, DesktopWorkspaceGitStatus } from '@shared/contracts';
 
 import {
-  CodexMenuCopyPathIcon,
-  CodexMenuNewThreadIcon,
-  CodexMenuPinIcon,
   CodexMenuRemoveIcon,
-  CodexMenuRenameIcon,
   CodexPinIcon,
   CodexProjectActionsIcon,
   CodexProjectIcon,
@@ -22,7 +18,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu';
 import { IconTooltip, TooltipProvider } from './components/ui/tooltip';
@@ -45,7 +40,6 @@ type WorkspaceThreadSidebarProps = {
   onOpenThread: (threadId: string) => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
-  onRequestRenameWorkspace: (workspace: DesktopWorkspace) => void;
   onPinWorkspace: (workspace: DesktopWorkspace, pinned: boolean) => void;
   onAddWorkspace: () => void;
 };
@@ -155,7 +149,6 @@ export function WorkspaceThreadSidebar({
   onOpenThread,
   onCreateThreadForWorkspace,
   onRequestRemoveWorkspace,
-  onRequestRenameWorkspace,
   onPinWorkspace,
   onAddWorkspace,
 }: WorkspaceThreadSidebarProps) {
@@ -302,47 +295,12 @@ export function WorkspaceThreadSidebar({
                       </IconTooltip>
                       <DropdownMenuContent
                         align="end"
+                        data-workspace-menu-content
                         className="min-w-[186px]"
                         onClick={(event) => {
                           event.stopPropagation();
                         }}
                       >
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            onPinWorkspace(workspace, !workspace.pinned);
-                          }}
-                        >
-                          <CodexMenuPinIcon aria-hidden />
-                          <span>{workspace.pinned ? t('Unpin workspace') : t('Pin workspace')}</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            onRequestRenameWorkspace(workspace);
-                          }}
-                        >
-                          <CodexMenuRenameIcon aria-hidden />
-                          <span>{t('Rename…')}</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={!workspace.available || workspaceMutation === 'assign'}
-                          onSelect={() => {
-                            onCreateThreadForWorkspace(workspacePath);
-                          }}
-                        >
-                          <CodexMenuNewThreadIcon aria-hidden />
-                          <span>{t('New thread')}</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            if (workspace.path) {
-                              handleCopyPath(workspace.path);
-                            }
-                          }}
-                        >
-                          <CodexMenuCopyPathIcon aria-hidden />
-                          <span>{t('Copy path')}</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
                         <DropdownMenuItem
                           variant="destructive"
                           onSelect={() => {
