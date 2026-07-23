@@ -296,9 +296,8 @@ reinterpreted in feature code.
   the machine timezone is implicit (sub-second precision allowed for logs):
   the tracing log timer (`main.rs` `ChronoLocal`), thread-log line stamps,
   CLI list/detail timestamps (`commands/shared.rs::format_local_timestamp`),
-  and agent-facing strings (`schedule_followup` responses, followup metadata,
   and the `current_time` line in `<garyx_thread_metadata>`, which carries the
-  IANA zone once as context). Machine-facing `unix_ts` fields stay
+  IANA zone once as context. Machine-facing `unix_ts` fields stay
   timezone-neutral.
 - Bare cron expressions without an explicit timezone are interpreted in the
   gateway machine's local timezone, not UTC. Product automation schedules

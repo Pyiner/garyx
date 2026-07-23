@@ -1993,32 +1993,22 @@ async fn test_cron_runs_no_service() {
 /// debug-endpoint tests can assert filtering behavior. Returns the service
 /// (caller wraps it into AppState.ops.cron_service).
 async fn seed_cron_service_for_debug() -> crate::automation::CronService {
-    use garyx_models::config::{
-        CronAction, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
-    };
+    use garyx_models::config::{CronAction, CronJobConfig, CronJobKind, CronSchedule};
     let tmp = tempfile::TempDir::new().unwrap();
     let svc = crate::automation::CronService::new(tmp.path().to_path_buf());
     let _ = tokio::fs::create_dir_all(tmp.path().join("cron").join("jobs")).await;
 
     let far_future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
 
-    // Two system followup jobs on different threads.
+    // Two system jobs on different threads.
     for (id, thread) in [
-        ("followup_aaa", "thread::alpha"),
-        ("followup_bbb", "thread::beta"),
+        ("system-alpha", "thread::alpha"),
+        ("system-beta", "thread::beta"),
     ] {
         svc.add(CronJobConfig {
             id: id.to_owned(),
-            kind: CronJobKind::InternalDispatch {
-                payload: InternalDispatchJobPayload {
-                    prompt: "resume the build poll".to_owned(),
-                    reason: Some("background build finished".to_owned()),
-                    originating_run_id: Some("run-test-1".to_owned()),
-                    scheduled_at: chrono::Utc::now(),
-                    delay_seconds_requested: 300,
-                },
-            },
-            label: Some(format!("schedule_followup({thread})")),
+            kind: CronJobKind::AutomationPrompt,
+            label: Some(format!("system job ({thread})")),
             schedule: CronSchedule::Once {
                 at: far_future.clone(),
             },
@@ -2107,12 +2097,12 @@ async fn test_debug_system_cron_jobs_lists_only_system() {
         .iter()
         .map(|j| j["id"].as_str().unwrap())
         .collect();
-    assert!(ids.contains(&"followup_aaa"));
-    assert!(ids.contains(&"followup_bbb"));
+    assert!(ids.contains(&"system-alpha"));
+    assert!(ids.contains(&"system-beta"));
     assert!(!ids.contains(&"user-automation"));
-    // Each job carries its internal_dispatch kind + a recent_runs array.
+    // Each job carries its kind plus a recent_runs array.
     let job = &json["jobs"][0];
-    assert_eq!(job["kind"]["type"], "internal_dispatch");
+    assert_eq!(job["kind"]["type"], "automation_prompt");
     assert!(job["recent_runs"].is_array());
 }
 
@@ -2135,7 +2125,7 @@ async fn test_debug_system_cron_jobs_thread_filter() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["count"], 1);
-    assert_eq!(json["jobs"][0]["id"], "followup_bbb");
+    assert_eq!(json["jobs"][0]["id"], "system-beta");
     assert_eq!(json["thread_id"], "thread::beta");
 }
 

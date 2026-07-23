@@ -37,7 +37,9 @@ for an in-flight provider run:
 
 - `status` — gateway uptime, active threads, provider and channel info.
 - `search` — web search through the configured Gemini grounding backend.
-- `schedule_followup` — delayed re-wake of the current thread.
+- `capsule_create` — create a self-contained HTML capsule for the current thread.
+- `capsule_update` — revise an existing capsule.
+- `capsule_list` — list capsules created by the current thread.
 
 Stored transcript inspection is intentionally handled by the CLI
 (`garyx thread history`) rather than the in-run MCP tool surface.

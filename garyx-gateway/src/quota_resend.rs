@@ -18,7 +18,6 @@ use axum::{
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use futures_util::stream::{self, StreamExt};
-use garyx_models::config::CronJobKind;
 use garyx_router::ThreadTranscriptRecord;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
@@ -36,7 +35,6 @@ const RESEND_PROMPT: &str = "continue";
 const EVENT_HISTORY_REPLAY: usize = 256;
 const QUOTA_ADMISSION_SCOPE: &str = "__quota_recovery__";
 const QUOTA_ADMISSION_EPOCH: i64 = 1;
-const LEGACY_JOB_PREFIX: &str = "quota-resend:";
 const NO_AUTOMATIC_DUE_AT: &str = "9999-12-31T23:59:59.999Z";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,14 +172,6 @@ fn recovery_plan_from_control(
         window,
         reset_at,
     })
-}
-
-/// Legacy quota cron files can survive a successful SQL import when their
-/// best-effort deletion fails. The SQL recovery worker exclusively owns these
-/// generations after startup migration, so the generic cron executor must
-/// never dispatch them independently.
-pub(crate) fn is_legacy_quota_recovery_job(job_id: &str) -> bool {
-    job_id.starts_with(LEGACY_JOB_PREFIX)
 }
 
 pub(crate) fn canonical_quota_provider(provider: &str) -> String {
@@ -531,82 +521,6 @@ async fn settle_claim_as_cancelled(
         .await
     {
         warn!(thread_id = %job.thread_id, error = %error, "failed to cancel quota recovery");
-    }
-}
-
-/// Import quota jobs created by the pre-SQL implementation. This runs after
-/// cron files are loaded and before the cron scheduler starts, so a legacy job
-/// cannot fire while it is being fenced by its SQL generation.
-pub async fn migrate_legacy_cron_jobs(state: &Arc<AppState>) {
-    let Some(cron) = state.ops.cron_service.as_ref() else {
-        return;
-    };
-    let jobs = cron.list_all().await;
-    for job in jobs {
-        if !job.system || !job.id.starts_with(LEGACY_JOB_PREFIX) {
-            continue;
-        }
-        let Some(thread_id) = job.thread_id.as_deref() else {
-            continue;
-        };
-        let CronJobKind::InternalDispatch { payload } = &job.kind else {
-            continue;
-        };
-        let Some(originating_run_id) = payload.originating_run_id.as_deref() else {
-            continue;
-        };
-        let records = match state
-            .threads
-            .history
-            .transcript_store()
-            .records(thread_id)
-            .await
-        {
-            Ok(records) => records,
-            Err(error) => {
-                warn!(job_id = %job.id, error = %error, "failed to inspect legacy quota job");
-                continue;
-            }
-        };
-        let plan = latest_rate_limited_plan(&records);
-        let stale = plan
-            .as_ref()
-            .is_none_or(|plan| plan.run_id != originating_run_id);
-        if stale {
-            if let Err(error) = cron.delete(&job.id).await {
-                warn!(job_id = %job.id, error = %error, "failed to delete stale legacy quota job");
-            }
-            continue;
-        }
-        let plan = plan.expect("non-stale legacy quota job has a plan");
-        let db = state.ops.garyx_db.clone();
-        let due_at = job.next_run.to_rfc3339_opts(SecondsFormat::Millis, true);
-        let reset_at = plan
-            .reset_at
-            .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true));
-        let result = db
-            .run_blocking(move |db| {
-                db.register_quota_recovery_job(NewQuotaRecoveryJob {
-                    thread_id: &plan.thread_id,
-                    provider: &plan.provider,
-                    blocked_run_id: &plan.run_id,
-                    blocked_seq: plan.blocked_seq,
-                    quota_window: plan.window.as_deref(),
-                    reset_at: reset_at.as_deref(),
-                    due_at: &due_at,
-                })
-            })
-            .await;
-        match result {
-            Ok(_) => {
-                if let Err(error) = cron.delete(&job.id).await {
-                    warn!(job_id = %job.id, error = %error, "legacy quota job imported but file deletion failed");
-                }
-            }
-            Err(error) => {
-                warn!(job_id = %job.id, error = %error, "failed to import legacy quota job")
-            }
-        }
     }
 }
 

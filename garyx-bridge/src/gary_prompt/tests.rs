@@ -14,7 +14,6 @@ fn compose_without_extra_returns_base_only() {
     assert!(value.contains("System capabilities:"));
     assert!(value.contains("garyx task create"));
     assert!(value.contains("garyx automation create"));
-    assert!(value.contains("mcp__garyx__schedule_followup"));
     assert!(value.contains("ScheduleWakeup"));
     assert!(!value.contains("Global Memory"));
     assert!(!value.contains("Workspace Memory"));

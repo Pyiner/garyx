@@ -16,8 +16,8 @@ use std::time::Duration;
 use garyx_bridge::MultiProviderBridge;
 use garyx_channels::{BuiltInPluginDiscoverer, ChannelPluginManager};
 use garyx_gateway::server::{
-    AppState, AppStateBuilder, Gateway, migrate_legacy_cron_jobs,
-    reconcile_transcript_recovery_jobs, start_automation_scheduler,
+    AppState, AppStateBuilder, Gateway, reconcile_transcript_recovery_jobs,
+    start_automation_scheduler,
 };
 use garyx_gateway::{CronService, ThreadFileLogger, default_thread_log_dir};
 use garyx_models::config::GaryxConfig;
@@ -354,9 +354,6 @@ mod phases {
             .await;
         bridge.set_thread_history(state.threads.history.clone());
         bridge.set_event_tx(state.ops.events.sender()).await;
-        if cron_loaded {
-            migrate_legacy_cron_jobs(&state).await;
-        }
         reconcile_transcript_recovery_jobs(&state).await;
         // Start the automation scheduler only now that the assembled state
         // exists and the bridge is bound to its final stores: the loop's

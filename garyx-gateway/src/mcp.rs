@@ -27,11 +27,7 @@ use tokio_util::sync::CancellationToken;
 mod helpers;
 #[cfg(test)]
 mod tests;
-// `pub(crate)` (not `pub`) so other gateway modules — currently
-// `cron::tests` reaching into `schedule_followup::followup_job_id` — can
-// share the same helpers without re-exporting them on a public API
-// surface.
-pub(crate) mod tools;
+mod tools;
 
 // ---------------------------------------------------------------------------
 // Parameter types (JsonSchema enables auto tool discovery)
@@ -41,23 +37,6 @@ pub(crate) mod tools;
 pub struct SearchParams {
     /// The search query to look up using Google Search
     pub query: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ScheduleFollowupParams {
-    /// Wall-clock delay in seconds before the assistant is re-woken on the
-    /// current thread. Must be in `60..=86400`; out-of-range requests are
-    /// rejected with `out_of_range` rather than silently clamped.
-    #[serde(alias = "delaySeconds")]
-    pub delay_seconds: u64,
-    /// Prompt text that will be injected back into the thread when the
-    /// delay elapses. Echoed verbatim after a `<garyx_followup_metadata>`
-    /// header so the resumed agent can correlate the turn.
-    pub prompt: String,
-    /// Optional free-text reason recorded in the metadata block; intended
-    /// for the agent's own bookkeeping and surfaced in telemetry.
-    #[serde(default)]
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -223,17 +202,6 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Schedule a delayed re-wake of the current thread. After `delay_seconds` (60..=86400) elapses, the gateway injects a synthetic user turn carrying the supplied `prompt` so the agent can continue work that depends on background progress. Multiple calls from the same (thread, run) replace each other and the response reports `replaced_previous` so the agent can see if it just bumped its own earlier schedule."
-    )]
-    async fn schedule_followup(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(params): Parameters<ScheduleFollowupParams>,
-    ) -> Result<String, String> {
-        tools::schedule_followup::run(self, ctx, params).await
-    }
-
-    #[tool(
         description = "Create a Capsule: a self-contained single-file HTML explanation, visualization, or demo for the current thread. Provide exactly one of `html` or absolute `html_path`; HTML must be UTF-8, <=5 MiB, and self-contained (resources inline or via data:/blob:/https: only). Returns the new capsule's `capsule_id` (UUID) and `serve_path`; pass that `capsule_id` to `capsule_update` to revise it later."
     )]
     async fn capsule_create(
@@ -284,7 +252,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, search, schedule_followup, capsule_create, capsule_update, capsule_list."
+                "Garyx MCP server. Tools: status, search, capsule_create, capsule_update, capsule_list."
                     .to_owned(),
             ),
         }

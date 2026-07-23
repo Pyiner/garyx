@@ -322,26 +322,34 @@ async fn test_mcp_tool_metrics_record_success_and_error() {
 }
 
 #[test]
-fn test_mcp_tool_router_excludes_cron_management() {
+fn test_mcp_tool_router_exposes_only_supported_tools() {
     let server = test_server();
-    let names = server
+    let mut names = server
         .tool_router
         .list_all()
         .into_iter()
         .map(|tool| tool.name.to_string())
         .collect::<Vec<_>>();
+    names.sort();
 
-    assert!(names.iter().any(|name| name == "status"));
-    assert!(names.iter().any(|name| name == "capsule_create"));
-    assert!(names.iter().any(|name| name == "capsule_update"));
-    assert!(names.iter().any(|name| name == "capsule_list"));
-    assert!(
-        !names.iter().any(|name| name == "message"),
-        "outbound message sending must stay out of MCP tools: {names:?}"
+    assert_eq!(
+        names,
+        [
+            "capsule_create",
+            "capsule_list",
+            "capsule_update",
+            "search",
+            "status",
+        ],
+        "the MCP router must expose only the supported built-in tools"
     );
-    assert!(
-        !names.iter().any(|name| name == "cron"),
-        "scheduled automation management must stay out of MCP tools: {names:?}"
+
+    let info = ServerHandler::get_info(&server);
+    assert_eq!(
+        info.instructions.as_deref(),
+        Some(
+            "Garyx MCP server. Tools: status, search, capsule_create, capsule_update, capsule_list."
+        )
     );
 }
 

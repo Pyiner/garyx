@@ -23,7 +23,7 @@ pub use crate::event_stream_hub::EventStreamHub;
 pub use crate::mcp_metrics::{
     McpToolCallCount, McpToolDurationStat, McpToolMetrics, McpToolMetricsSnapshot,
 };
-pub use crate::quota_resend::{migrate_legacy_cron_jobs, reconcile_transcript_recovery_jobs};
+pub use crate::quota_resend::reconcile_transcript_recovery_jobs;
 use crate::route_graph;
 pub use crate::runtime_cells::{ChannelDispatcherCell, HotSwapCell, LiveConfigCell};
 
