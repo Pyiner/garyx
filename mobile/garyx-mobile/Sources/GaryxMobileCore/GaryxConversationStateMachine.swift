@@ -36,6 +36,7 @@ public enum GaryxIntentState: String, CaseIterable, Sendable {
 
 public enum GaryxIntentSource: String, CaseIterable, Sendable {
     case composerSend = "composer_send"
+    case composerSteer = "composer_steer"
     case composerQueue = "composer_queue"
     case queueSend = "queue_send"
     case queueSteer = "queue_steer"
@@ -75,6 +76,7 @@ public struct GaryxMessageIntent: Equatable, Sendable {
     public var threadId: String
     public var text: String
     public var createdAt: String
+    public var clientTimestampLocal: String
     public var updatedAt: String
     public var state: GaryxIntentState
     public var source: GaryxIntentSource
@@ -90,6 +92,7 @@ public struct GaryxMessageIntent: Equatable, Sendable {
         threadId: String,
         text: String,
         createdAt: String = "",
+        clientTimestampLocal: String,
         updatedAt: String = "",
         state: GaryxIntentState,
         source: GaryxIntentSource,
@@ -104,6 +107,7 @@ public struct GaryxMessageIntent: Equatable, Sendable {
         self.threadId = threadId
         self.text = text
         self.createdAt = createdAt
+        self.clientTimestampLocal = clientTimestampLocal
         self.updatedAt = updatedAt
         self.state = state
         self.source = source
@@ -190,6 +194,7 @@ public enum GaryxConversationAction: Sendable {
         error: String?,
         source: GaryxIntentSource?
     )
+    case intentQueueSteerFailed(intentId: String, error: String)
     case intentReorder(threadId: String, intentId: String, toIndex: Int)
     case threadRuntime(
         threadId: String,
@@ -360,6 +365,13 @@ public struct GaryxConversationMachineState: Equatable, Sendable {
                 queue.insert(intentId, at: 0)
             }
             queueByThread[threadId] = queue
+
+        case let .intentQueueSteerFailed(intentId, error):
+            patchIntent(intentId, now: now) { intent in
+                intent.state = .queuedLocal
+                intent.dispatchMode = nil
+                intent.error = error
+            }
 
         case let .intentReorder(threadId, intentId, toIndex):
             var queue = queueByThread[threadId] ?? []

@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  buildChatStartRequestBody,
+  buildStreamInputRequestBody,
   cancelClaudeCodeAuth,
   fetchAutomationActivity,
   fetchBotConsoles,
@@ -839,6 +841,7 @@ test("chat HTTP responses use canonical camelCase and expose schema drift", asyn
       const input = {
         threadId: "thread::chat-test",
         clientIntentId: "intent-test",
+        clientTimestampLocal: "2026-07-23 22:29:21",
         message: "Synthetic message",
       };
       const opened = await openChatStream(settings, input);
@@ -872,6 +875,41 @@ test("chat HTTP responses use canonical camelCase and expose schema drift", asyn
           }),
         /chat stream-input response\.threadId is required/,
       ),
+  );
+});
+
+test("chat request bodies are byte-identical across attempts for one intent", () => {
+  const input = {
+    threadId: "thread::stable-attempt",
+    clientIntentId: "intent-stable-attempt",
+    clientTimestampLocal: "2026-07-23 22:29:21",
+    message: "Stable synthetic message",
+    images: [],
+    files: [],
+  };
+
+  const firstStartBody = buildChatStartRequestBody(
+    settings,
+    input,
+    "/Users/test/project",
+  );
+  const secondStartBody = buildChatStartRequestBody(
+    settings,
+    input,
+    "/Users/test/project",
+  );
+  const firstStreamInputBody = buildStreamInputRequestBody(input);
+  const secondStreamInputBody = buildStreamInputRequestBody(input);
+
+  assert.equal(secondStartBody, firstStartBody);
+  assert.equal(secondStreamInputBody, firstStreamInputBody);
+  assert.equal(
+    JSON.parse(firstStartBody).metadata.client_timestamp_local,
+    input.clientTimestampLocal,
+  );
+  assert.equal(
+    JSON.parse(firstStreamInputBody).metadata.client_timestamp_local,
+    input.clientTimestampLocal,
   );
 });
 

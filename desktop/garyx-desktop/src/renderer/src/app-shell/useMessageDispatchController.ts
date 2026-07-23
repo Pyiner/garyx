@@ -242,6 +242,10 @@ type UseMessageDispatchControllerArgs = {
   deferredQueueDrainByThreadRef: React.MutableRefObject<
     Record<string, boolean>
   >;
+  dispatchComposerSteer: (
+    intent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ) => Promise<void>;
   dispatchMessageState: (action: MessageMachineAction) => void;
   ensureSelectedThreadId: () => Promise<string | null>;
   ensureThreadBotRouting: (threadId: string) => Promise<boolean>;
@@ -301,6 +305,7 @@ export function useMessageDispatchController({
   clearLiveStreamState,
   contentView,
   deferredQueueDrainByThreadRef,
+  dispatchComposerSteer,
   dispatchMessageState,
   ensureSelectedThreadId,
   ensureThreadBotRouting,
@@ -835,7 +840,7 @@ export function useMessageDispatchController({
     selectedThreadId,
   ]);
 
-  async function handleQueueCurrentPrompt(options?: { steerImmediately?: boolean }) {
+  async function handleFollowUpPrompt(mode: "queue" | "steer") {
     if (composerAttachmentUploadPending) {
       setError("Attachments are still uploading to gateway.");
       return;
@@ -870,21 +875,22 @@ export function useMessageDispatchController({
       text: prompt,
       images: promptImages,
       files: composerFiles,
-      source: "composer_queue",
-      state: "queued_local",
+      source: mode === "steer" ? "composer_steer" : "composer_queue",
+      state: mode === "steer" ? "dispatch_requested" : "queued_local",
+      dispatchMode: mode === "steer" ? "async_steer" : undefined,
     });
     dispatchMessageState({
       type: "intent/created",
       intent,
-      enqueue: true,
+      enqueue: mode === "queue",
     });
-    if (isActiveSendingThread) {
+    if (mode === "queue" && isActiveSendingThread) {
       deferredQueueDrainByThreadRef.current[threadId] = true;
     }
     clearComposerDraft();
     setError(null);
-    if (options?.steerImmediately) {
-      await steerQueuedIntent(intent);
+    if (mode === "steer") {
+      await dispatchComposerSteer(intent);
     }
   }
 
@@ -1153,10 +1159,11 @@ export function useMessageDispatchController({
           ? "queue"
           : "steer"
         : settingsDraft.followUpBehavior;
-      void handleQueueCurrentPrompt({
-        steerImmediately:
-          followUpBehavior === "steer" && canSteerQueuedPrompt,
-      });
+      void handleFollowUpPrompt(
+        followUpBehavior === "steer" && canSteerQueuedPrompt
+          ? "steer"
+          : "queue",
+      );
       return;
     }
     void handleStartDispatch();

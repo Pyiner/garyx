@@ -8,6 +8,7 @@ import XCTest
 /// See docs/agents/conversation-state.md.
 final class GaryxConversationStateConformanceTests: XCTestCase {
     private static let fixedNow = "2026-01-01T00:00:00.000Z"
+    private static let fixedLocalTimestamp = "2026-01-01 00:00:00"
 
     private func specURL(_ relativePath: String) -> URL {
         var url = URL(fileURLWithPath: #filePath)
@@ -161,6 +162,7 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
                     intentId: intentId,
                     threadId: "t1",
                     text: "",
+                    clientTimestampLocal: Self.fixedLocalTimestamp,
                     state: .awaitingProviderAck,
                     source: .queueSteer,
                     pendingInputId: raw["pendingInputId"] as? String
@@ -506,6 +508,11 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
                 error: raw["error"] as? String,
                 source: (raw["source"] as? String).flatMap(GaryxIntentSource.init(rawValue:))
             )
+        case "intent/queue-steer-failed":
+            return .intentQueueSteerFailed(
+                intentId: try XCTUnwrap(raw["intentId"] as? String, label),
+                error: try XCTUnwrap(raw["error"] as? String, label)
+            )
         case "intent/reorder":
             return .intentReorder(
                 threadId: try XCTUnwrap(raw["threadId"] as? String, label),
@@ -547,6 +554,7 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
             threadId: try XCTUnwrap(raw["threadId"] as? String, label),
             text: raw["text"] as? String ?? "",
             createdAt: Self.fixedNow,
+            clientTimestampLocal: Self.fixedLocalTimestamp,
             updatedAt: Self.fixedNow,
             state: try XCTUnwrap(
                 (raw["state"] as? String).flatMap(GaryxIntentState.init(rawValue:)),

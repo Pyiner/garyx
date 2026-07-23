@@ -74,17 +74,20 @@ public struct GaryxStreamInputRequest: Encodable, Equatable, Sendable {
     public var clientIntentId: String?
     public var message: String
     public var attachments: [GaryxPromptAttachment]
+    public var metadata: [String: String]
 
     public init(
         threadId: String,
         clientIntentId: String? = nil,
         message: String,
-        attachments: [GaryxPromptAttachment] = []
+        attachments: [GaryxPromptAttachment] = [],
+        metadata: [String: String] = [:]
     ) {
         self.threadId = threadId
         self.clientIntentId = clientIntentId
         self.message = message
         self.attachments = attachments
+        self.metadata = metadata
     }
 }
 

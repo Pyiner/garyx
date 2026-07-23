@@ -2650,6 +2650,7 @@ export function AppShell() {
     clearLiveStreamState,
     contentView,
     deferredQueueDrainByThreadRef,
+    dispatchComposerSteer,
     dispatchMessageState,
     ensureSelectedThreadId,
     ensureThreadBotRouting,
@@ -4237,6 +4238,13 @@ export function AppShell() {
     initialIntentId?: string,
   ): Promise<void> {
     return gatewayMirror.runQueuedBatch(threadId, initialIntentId);
+  }
+
+  function dispatchComposerSteer(
+    latestIntent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ): Promise<void> {
+    return gatewayMirror.dispatchComposerSteer(latestIntent, options);
   }
 
   function steerQueuedIntent(

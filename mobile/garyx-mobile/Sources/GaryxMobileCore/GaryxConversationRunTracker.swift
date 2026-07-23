@@ -124,7 +124,9 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         threadId: String,
         intentId: String,
         text: String,
-        allowWhileBusy: Bool = false
+        allowWhileBusy: Bool = false,
+        source: GaryxIntentSource = .composerSend,
+        clientTimestampLocal: String
     ) -> Bool {
         let currentRuntime = machine.threadRuntimeByThread[threadId]
         if isThreadBusy(threadId, excludingIntentId: intentId), !allowWhileBusy {
@@ -136,8 +138,9 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
                     intentId: intentId,
                     threadId: threadId,
                     text: text,
+                    clientTimestampLocal: clientTimestampLocal,
                     state: .queuedLocal,
-                    source: .composerSend
+                    source: source
                 ),
                 enqueue: false
             ))
@@ -146,7 +149,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
             threadId: threadId,
             intentId: intentId,
             mode: .syncSend,
-            source: .composerSend,
+            source: source,
             removeFromQueue: false
         ))
         machine.apply(.intentDispatchStarted(intentId: intentId))
@@ -261,29 +264,37 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         ))
     }
 
-    // MARK: Queued steer lifecycle
+    // MARK: Composer steer lifecycle
 
     /// Starts tracking a follow-up input sent while the thread is busy.
-    public mutating func beginQueuedSteer(threadId: String, intentId: String, text: String) {
+    public mutating func beginComposerSteer(
+        threadId: String,
+        intentId: String,
+        text: String,
+        clientTimestampLocal: String
+    ) {
         if machine.intentsById[intentId] == nil {
             machine.apply(.intentCreated(
                 intent: GaryxMessageIntent(
                     intentId: intentId,
                     threadId: threadId,
                     text: text,
-                    state: .queuedLocal,
-                    source: .queueSteer
+                    clientTimestampLocal: clientTimestampLocal,
+                    state: .dispatchRequested,
+                    source: .composerSteer,
+                    dispatchMode: .asyncSteer
                 ),
                 enqueue: false
             ))
+        } else {
+            machine.apply(.intentRequestDispatch(
+                threadId: threadId,
+                intentId: intentId,
+                mode: .asyncSteer,
+                source: .composerSteer,
+                removeFromQueue: false
+            ))
         }
-        machine.apply(.intentRequestDispatch(
-            threadId: threadId,
-            intentId: intentId,
-            mode: .asyncSteer,
-            source: .queueSteer,
-            removeFromQueue: false
-        ))
         machine.apply(.intentDispatchStarted(intentId: intentId))
     }
 

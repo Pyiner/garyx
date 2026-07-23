@@ -21,6 +21,7 @@ struct GaryxPendingQueuedInput {
     var text: String
     var attachments: [GaryxMobileComposerAttachment]
     var clientIntentId: String
+    var clientTimestampLocal: String
 }
 
 struct GaryxEnsuredThread {

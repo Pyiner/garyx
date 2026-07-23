@@ -279,6 +279,7 @@ function buildFixtureIntent(raw) {
     images: [],
     files: [],
     createdAt: '2026-01-01T00:00:00.000Z',
+    clientTimestampLocal: '2026-01-01 00:00:00',
     updatedAt: '2026-01-01T00:00:00.000Z',
     state: raw.state,
     source: raw.source,

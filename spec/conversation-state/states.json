@@ -14,6 +14,7 @@
   ],
   "intentSource": [
     "composer_send",
+    "composer_steer",
     "composer_queue",
     "queue_send",
     "queue_steer",

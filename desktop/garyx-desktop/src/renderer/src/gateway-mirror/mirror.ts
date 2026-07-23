@@ -755,6 +755,13 @@ export class GatewayMirror {
     return this.dispatchOrchestrator.runQueuedBatch(threadId, initialIntentId);
   }
 
+  dispatchComposerSteer(
+    latestIntent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ): Promise<void> {
+    return this.dispatchOrchestrator.dispatchComposerSteer(latestIntent, options);
+  }
+
   steerQueuedIntent(
     latestIntent: MessageIntent,
     options?: { canSteer?: boolean },

@@ -363,6 +363,8 @@ export interface SendMessageInput {
   sessionId?: string;
   // Stable frontend identity for queued/in-flight user intents.
   clientIntentId?: string;
+  // Intent-scoped local commit time. Reused verbatim for every attempt.
+  clientTimestampLocal: string;
   message: string;
   images?: MessageImageAttachment[];
   files?: MessageFileAttachment[];
