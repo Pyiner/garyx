@@ -17,9 +17,41 @@ provider, model-catalog, agent-identity, and settings contracts.
 
 Each top-level run copies the existing generic provider `env` map into its SDK
 launch configuration. The transport only applies that immutable per-run copy to
-the child process and uses Grok's first advertised ACP authentication method.
-It never reads, rotates, rewrites, persists, pools, or retries credentials, and
-it contains no account-selection or credential-failover state.
+the child process and uses Grok's advertised `defaultAuthMethodId` when that
+method is present in `authMethods`, falling back to the first advertised method.
+It never reads, rotates, rewrites, persists, pools, or retries xAI credentials,
+and it contains no account-selection or credential-failover state.
+
+## Native session context
+
+Garyx sends both tool connectivity and system instructions through the ACP
+session boundary. It does not depend on Grok scanning another provider's local
+configuration, pass a system prompt through process arguments, or disguise
+system instructions as the first user message.
+
+- Every `session/new` and `session/load` request carries the same typed ACP
+  `mcpServers` array. Garyx normalizes enabled runtime MCP entries into ACP
+  stdio, HTTP, or SSE servers and appends the per-run Garyx gateway as a
+  reserved HTTP server named `garyx`. Runtime metadata cannot shadow that
+  reserved name.
+- Every `session/new` and `session/load` request carries Garyx's composed system
+  instructions in the session `_meta.rules` extension implemented by Grok Build
+  itself. On creation Grok folds these rules into its own native system prompt
+  under the human-rules section, preserving Grok's coding, tool, and MCP
+  instructions. Loaded sessions retain the system prompt persisted at creation;
+  Grok intentionally does not rewrite a resumed prompt from `rules`.
+- Garyx does not use `systemPromptOverride` for its additive runtime guidance.
+  Grok implements that extension as a full replacement, which would remove the
+  native `search_tool` / `use_tool` MCP contract. A small Grok-specific rule
+  clarifies that logical `mcp__garyx__*` references in shared guidance must be
+  resolved and invoked through those native meta-tools.
+- Thread/runtime metadata and memory remain initial user context because they
+  are per-thread data rather than agent policy. They are prepended only when
+  creating a fresh native session. A resumed turn sends only its current user
+  content.
+- The SDK owns the ACP wire types used at this boundary. The bridge owns
+  normalization from Garyx runtime metadata and construction of the authenticated
+  per-run `garyx` endpoint.
 
 ## Session and stream lifecycle
 

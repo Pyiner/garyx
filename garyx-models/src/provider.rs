@@ -674,6 +674,8 @@ pub struct GrokBuildConfig {
     pub workspace_dir: Option<String>,
     #[serde(default)]
     pub grok_bin: String,
+    #[serde(default = "crate::config::default_mcp_base_url")]
+    pub mcp_base_url: String,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
 }
@@ -693,6 +695,7 @@ impl Default for GrokBuildConfig {
             timeout_seconds: 0.0,
             workspace_dir: None,
             grok_bin: String::new(),
+            mcp_base_url: crate::config::default_mcp_base_url(),
             env: HashMap::new(),
         }
     }

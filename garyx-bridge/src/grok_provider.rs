@@ -12,16 +12,16 @@ use garyx_models::provider::{
     build_prompt_message_with_attachments, stage_image_payloads_for_prompt,
 };
 use grok_agent_sdk::{
-    GrokCancellation, GrokClient, GrokClientConfig, GrokError, GrokEvent, GrokRunOutput,
-    GrokRunRequest,
+    GrokCancellation, GrokClient, GrokClientConfig, GrokError, GrokEvent, GrokMcpEnvVariable,
+    GrokMcpHeader, GrokMcpServer, GrokRunOutput, GrokRunRequest,
 };
 use serde_json::{Value, json};
 
 use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_common::{
-    PendingRateLimits, metadata_bool, metadata_string, normalize_non_empty, resolve_uuid_run_id,
-    runtime_env,
+    PendingRateLimits, garyx_mcp_server, metadata_bool, metadata_string, normalize_non_empty,
+    resolve_uuid_run_id, runtime_env,
 };
 use crate::provider_trait::{
     BridgeError, ClearSessionOutcome, ProviderModelDefaults, ProviderRuntime,
@@ -31,6 +31,15 @@ use crate::provider_trait::{
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
 const CANCEL_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 const CANCEL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+const GROK_NATIVE_MCP_GUIDANCE: &str = concat!(
+    "Grok Build MCP routing:\n",
+    "- Use the native `search_tool` first with the server name and action, then call ",
+    "`use_tool` with the qualified tool name and exact schema returned by the search.\n",
+    "- A `mcp__garyx__<name>` reference in general Garyx guidance is a logical tool ",
+    "reference. In Grok Build, resolve the matching `garyx` MCP tool through ",
+    "`search_tool` and invoke it through `use_tool`; do not call that reference as a ",
+    "direct function name."
+);
 
 #[derive(Clone)]
 struct ActiveGrokRun {
@@ -117,7 +126,7 @@ fn resolve_reasoning_effort(
 
 fn build_prompt_text(
     options: &ProviderRunOptions,
-    include_instructions: bool,
+    include_context: bool,
 ) -> (String, Vec<PromptAttachment>) {
     let mut attachments = attachments_from_metadata(&options.metadata);
     if attachments.is_empty() {
@@ -129,25 +138,208 @@ fn build_prompt_text(
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
     let message =
-        prepend_initial_context_to_user_message(&message, &options.metadata, include_instructions);
+        prepend_initial_context_to_user_message(&message, &options.metadata, include_context);
     let message = build_prompt_message_with_attachments(&message, &attachments);
-    if !include_instructions {
-        return (message, attachments);
-    }
-    let instructions = compose_gary_instructions(
+    (message, attachments)
+}
+
+fn build_session_rules(options: &ProviderRunOptions) -> String {
+    let mut rules = compose_gary_instructions(
         options
             .metadata
             .get("system_prompt")
             .and_then(Value::as_str),
     );
-    let prompt = if message.trim().is_empty() {
-        format!("<system_instructions>\n{instructions}\n</system_instructions>")
-    } else {
-        format!(
-            "<system_instructions>\n{instructions}\n</system_instructions>\n\n<user_request>\n{message}\n</user_request>"
-        )
+    rules.push_str("\n\n");
+    rules.push_str(GROK_NATIVE_MCP_GUIDANCE);
+    rules
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn string_map(value: Option<&Value>) -> Vec<(String, String)> {
+    let Some(entries) = value.and_then(Value::as_object) else {
+        return Vec::new();
     };
-    (prompt, attachments)
+    let mut entries = entries
+        .iter()
+        .filter_map(|(key, value)| {
+            let value = value.as_str()?.trim();
+            (!key.trim().is_empty() && !value.is_empty()).then(|| (key.clone(), value.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+}
+
+fn mcp_headers(
+    server: &serde_json::Map<String, Value>,
+    launch_environment: &HashMap<String, String>,
+) -> Vec<GrokMcpHeader> {
+    let mut headers = string_map(server.get("http_headers"));
+    for (name, value) in string_map(server.get("headers")) {
+        if let Some(existing) = headers
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(&name))
+        {
+            *existing = (name, value);
+        } else {
+            headers.push((name, value));
+        }
+    }
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        && let Some(env_name) = server
+            .get("bearer_token_env")
+            .or_else(|| server.get("bearerTokenEnv"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        && let Some(token) = launch_environment
+            .get(env_name)
+            .cloned()
+            .or_else(|| std::env::var(env_name).ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    {
+        headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
+    }
+    headers.sort_by(|left, right| {
+        left.0
+            .to_ascii_lowercase()
+            .cmp(&right.0.to_ascii_lowercase())
+    });
+    headers
+        .into_iter()
+        .map(|(name, value)| GrokMcpHeader { name, value })
+        .collect()
+}
+
+fn normalize_remote_mcp_server(
+    name: &str,
+    raw_server: &Value,
+    launch_environment: &HashMap<String, String>,
+) -> Option<GrokMcpServer> {
+    let server = raw_server.as_object()?;
+    if !server
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    let transport = server
+        .get("type")
+        .or_else(|| server.get("transport"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let url = server
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if matches!(
+        transport.as_str(),
+        "http" | "streamable_http" | "streamable-http" | "sse"
+    ) || (transport.is_empty() && url.is_some())
+    {
+        let url = url?;
+        let headers = mcp_headers(server, launch_environment);
+        return if transport == "sse" {
+            Some(GrokMcpServer::Sse {
+                name: name.to_owned(),
+                url: url.to_owned(),
+                headers,
+            })
+        } else {
+            Some(GrokMcpServer::Http {
+                name: name.to_owned(),
+                url: url.to_owned(),
+                headers,
+            })
+        };
+    }
+
+    let command = server
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(GrokMcpServer::Stdio {
+        name: name.to_owned(),
+        command: command.to_owned(),
+        args: string_array(server.get("args")),
+        env: string_map(server.get("env"))
+            .into_iter()
+            .map(|(name, value)| GrokMcpEnvVariable { name, value })
+            .collect(),
+    })
+}
+
+fn build_mcp_servers(
+    config: &GrokBuildConfig,
+    options: &ProviderRunOptions,
+    run_id: &str,
+    launch_environment: &HashMap<String, String>,
+) -> Vec<GrokMcpServer> {
+    let mut servers = Vec::new();
+    if let Some(runtime_servers) = options
+        .metadata
+        .get("remote_mcp_servers")
+        .and_then(Value::as_object)
+    {
+        let mut names = runtime_servers.keys().collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            if name.eq_ignore_ascii_case("garyx") {
+                continue;
+            }
+            if let Some(server) =
+                normalize_remote_mcp_server(name, &runtime_servers[name], launch_environment)
+            {
+                servers.push(server);
+            }
+        }
+    }
+    if let Some(server) = garyx_mcp_server(
+        &config.mcp_base_url,
+        &options.thread_id,
+        run_id,
+        &options.metadata,
+    ) {
+        let mut headers = server
+            .headers
+            .into_iter()
+            .map(|(name, value)| GrokMcpHeader { name, value })
+            .collect::<Vec<_>>();
+        headers.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        });
+        servers.push(GrokMcpServer::Http {
+            name: "garyx".to_owned(),
+            url: server.url,
+            headers,
+        });
+    }
+    servers
 }
 
 #[derive(Default)]
@@ -442,8 +634,11 @@ impl ProviderRuntime for GrokBuildProvider {
                     .get(&options.thread_id)
                     .cloned()
             });
-        let include_instructions = existing_session_id.is_none();
-        let (prompt, _staged_attachments) = build_prompt_text(options, include_instructions);
+        let include_initial_context = existing_session_id.is_none();
+        let (prompt, _staged_attachments) = build_prompt_text(options, include_initial_context);
+        let session_rules = build_session_rules(options);
+        let launch_environment = runtime_env(&config.env, &options.metadata);
+        let mcp_servers = build_mcp_servers(&config, options, &run_id, &launch_environment);
         let cancellation = GrokCancellation::default();
         self.active_runs
             .lock()
@@ -465,7 +660,7 @@ impl ProviderRuntime for GrokBuildProvider {
         let client = GrokClient::new(GrokClientConfig {
             binary: normalize_non_empty(Some(&config.grok_bin))
                 .unwrap_or_else(|| "grok".to_owned()),
-            environment: runtime_env(&config.env, &options.metadata),
+            environment: launch_environment,
             max_turns: config.max_turns,
             startup_timeout: Duration::from_secs(30),
             request_timeout: request_timeout(&config),
@@ -479,6 +674,8 @@ impl ProviderRuntime for GrokBuildProvider {
                     session_id: existing_session_id.clone(),
                     model: resolve_model(&config, options),
                     reasoning_effort: resolve_reasoning_effort(&config, options),
+                    rules: Some(session_rules),
+                    mcp_servers,
                 },
                 cancellation,
                 |event| {
@@ -675,6 +872,144 @@ mod tests {
             images: None,
             metadata: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn system_rules_and_user_context_use_distinct_acp_channels() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut options = run_options("thread::grok-context", workspace.path());
+        options.message = "Do the requested work.".to_owned();
+        options.metadata.insert(
+            "system_prompt".to_owned(),
+            Value::String("Follow the custom agent policy.".to_owned()),
+        );
+        options.metadata.insert(
+            "runtime_context".to_owned(),
+            json!({
+                "thread_id": "thread::grok-context",
+                "channel": "api"
+            }),
+        );
+
+        let system_rules = build_session_rules(&options);
+        let (fresh_prompt, _) = build_prompt_text(&options, true);
+        let (resumed_prompt, _) = build_prompt_text(&options, false);
+
+        assert!(system_rules.contains("Garyx runtime guidance:"));
+        assert!(system_rules.contains("Follow the custom agent policy."));
+        assert!(system_rules.contains("Grok Build MCP routing:"));
+        assert!(!fresh_prompt.contains("<system_instructions>"));
+        assert!(!fresh_prompt.contains("Garyx runtime guidance:"));
+        assert!(fresh_prompt.contains("<garyx_thread_metadata>"));
+        assert!(fresh_prompt.contains("Do the requested work."));
+        assert_eq!(resumed_prompt, "Do the requested work.");
+    }
+
+    #[test]
+    fn mcp_servers_are_normalized_for_acp_and_garyx_name_is_reserved() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut options = run_options("thread::grok-mcp", workspace.path());
+        options.metadata.insert(
+            "remote_mcp_servers".to_owned(),
+            json!({
+                "alpha-http": {
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/http",
+                    "bearer_token_env": "TEST_MCP_TOKEN",
+                    "headers": {"X-Test": "yes"}
+                },
+                "beta-stdio": {
+                    "transport": "stdio",
+                    "command": "/usr/bin/example-mcp",
+                    "args": ["--stdio"],
+                    "env": {"MODE": "test"}
+                },
+                "events": {
+                    "type": "sse",
+                    "url": "https://mcp.example.com/events"
+                },
+                "disabled": {
+                    "enabled": false,
+                    "command": "/usr/bin/disabled"
+                },
+                "Garyx": {
+                    "type": "http",
+                    "url": "https://untrusted.example.com/mcp"
+                }
+            }),
+        );
+        options.metadata.insert(
+            "garyx_mcp_headers".to_owned(),
+            json!({"X-Custom": "custom"}),
+        );
+        options.metadata.insert(
+            "garyx_mcp_auth_token".to_owned(),
+            Value::String("test-gateway-token".to_owned()),
+        );
+        let config = GrokBuildConfig {
+            mcp_base_url: "http://127.0.0.1:31337".to_owned(),
+            ..Default::default()
+        };
+        let launch_environment =
+            HashMap::from([("TEST_MCP_TOKEN".to_owned(), "test-token".to_owned())]);
+
+        let servers = build_mcp_servers(&config, &options, "run-1", &launch_environment);
+
+        assert_eq!(
+            servers,
+            vec![
+                GrokMcpServer::Http {
+                    name: "alpha-http".to_owned(),
+                    url: "https://mcp.example.com/http".to_owned(),
+                    headers: vec![
+                        GrokMcpHeader {
+                            name: "Authorization".to_owned(),
+                            value: "Bearer test-token".to_owned(),
+                        },
+                        GrokMcpHeader {
+                            name: "X-Test".to_owned(),
+                            value: "yes".to_owned(),
+                        },
+                    ],
+                },
+                GrokMcpServer::Stdio {
+                    name: "beta-stdio".to_owned(),
+                    command: "/usr/bin/example-mcp".to_owned(),
+                    args: vec!["--stdio".to_owned()],
+                    env: vec![GrokMcpEnvVariable {
+                        name: "MODE".to_owned(),
+                        value: "test".to_owned(),
+                    }],
+                },
+                GrokMcpServer::Sse {
+                    name: "events".to_owned(),
+                    url: "https://mcp.example.com/events".to_owned(),
+                    headers: Vec::new(),
+                },
+                GrokMcpServer::Http {
+                    name: "garyx".to_owned(),
+                    url: "http://127.0.0.1:31337/mcp/auth/test-gateway-token/thread%3A%3Agrok-mcp/run-1".to_owned(),
+                    headers: vec![
+                        GrokMcpHeader {
+                            name: "X-Custom".to_owned(),
+                            value: "custom".to_owned(),
+                        },
+                        GrokMcpHeader {
+                            name: "X-Run-Id".to_owned(),
+                            value: "run-1".to_owned(),
+                        },
+                        GrokMcpHeader {
+                            name: "X-Session-Key".to_owned(),
+                            value: "thread::grok-mcp".to_owned(),
+                        },
+                        GrokMcpHeader {
+                            name: "X-Thread-Id".to_owned(),
+                            value: "thread::grok-mcp".to_owned(),
+                        },
+                    ],
+                },
+            ]
+        );
     }
 
     #[test]

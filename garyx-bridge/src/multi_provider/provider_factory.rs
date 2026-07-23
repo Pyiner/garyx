@@ -124,6 +124,7 @@ fn build_grok_config(
         max_turns: agent_cfg.max_turns,
         timeout_seconds: agent_cfg.timeout_seconds,
         grok_bin: agent_cfg.grok_bin.clone(),
+        mcp_base_url: agent_cfg.mcp_base_url.clone(),
         env: agent_cfg.env.clone(),
         ..Default::default()
     }
@@ -316,6 +317,7 @@ mod tests {
             default_model: "grok-test".to_owned(),
             model_reasoning_effort: "high".to_owned(),
             grok_bin: "/opt/garyx/bin/grok".to_owned(),
+            mcp_base_url: "http://127.0.0.1:31338".to_owned(),
             env: std::collections::HashMap::from([("GROK_TEST_MODE".to_owned(), "1".to_owned())]),
             ..Default::default()
         };
@@ -326,6 +328,7 @@ mod tests {
         assert_eq!(config.model, "grok-test");
         assert_eq!(config.model_reasoning_effort, "high");
         assert_eq!(config.grok_bin, "/opt/garyx/bin/grok");
+        assert_eq!(config.mcp_base_url, "http://127.0.0.1:31338");
         assert_eq!(config.workspace_dir.as_deref(), Some("/tmp/workspace"));
         assert_eq!(
             config.env.get("GROK_TEST_MODE").map(String::as_str),

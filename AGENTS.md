@@ -92,6 +92,9 @@ for personal data and remove it.
   Do not reintroduce caps for user, assistant, or nested tool text.
 - Provider, agent, bot, and channel identity presentation should resolve
   through shared presentation helpers instead of local view switch tables.
+- Grok Build integration is ACP-native: pass MCP servers through `mcpServers`
+  and Garyx instructions through session `_meta.rules`. Do not use
+  `systemPromptOverride`, which replaces Grok's native tool instructions.
 - Provider identity surfaces must reuse the same avatar component and branded
   artwork as Agent surfaces; do not substitute screen-local SF Symbols.
 - A Claude Code `result` is a turn boundary, not a process boundary. Normal

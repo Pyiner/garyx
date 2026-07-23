@@ -285,6 +285,13 @@ fn test_codex_config_defaults() {
 }
 
 #[test]
+fn test_grok_build_config_defaults() {
+    let cfg = GrokBuildConfig::default();
+    assert_eq!(cfg.provider_type, ProviderType::GrokBuild);
+    assert_eq!(cfg.mcp_base_url, "http://127.0.0.1:31337");
+}
+
+#[test]
 fn test_image_payload_serde_roundtrip() {
     let payload = ImagePayload {
         name: "photo.png".to_owned(),

@@ -120,6 +120,83 @@ pub struct GrokRunRequest {
     pub session_id: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    /// Client rules carried by Grok Build's session-scoped ACP `rules`
+    /// extension. Grok folds these into its native system prompt.
+    pub rules: Option<String>,
+    /// MCP servers serialized into the standard ACP `mcpServers` array on
+    /// both `session/new` and `session/load`.
+    pub mcp_servers: Vec<GrokMcpServer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrokMcpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrokMcpEnvVariable {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrokMcpServer {
+    Http {
+        name: String,
+        url: String,
+        headers: Vec<GrokMcpHeader>,
+    },
+    Sse {
+        name: String,
+        url: String,
+        headers: Vec<GrokMcpHeader>,
+    },
+    Stdio {
+        name: String,
+        command: String,
+        args: Vec<String>,
+        env: Vec<GrokMcpEnvVariable>,
+    },
+}
+
+impl GrokMcpServer {
+    fn to_acp_value(&self) -> Value {
+        match self {
+            Self::Http { name, url, headers } => json!({
+                "type": "http",
+                "name": name,
+                "url": url,
+                "headers": headers.iter().map(|header| json!({
+                    "name": header.name,
+                    "value": header.value,
+                })).collect::<Vec<_>>(),
+            }),
+            Self::Sse { name, url, headers } => json!({
+                "type": "sse",
+                "name": name,
+                "url": url,
+                "headers": headers.iter().map(|header| json!({
+                    "name": header.name,
+                    "value": header.value,
+                })).collect::<Vec<_>>(),
+            }),
+            Self::Stdio {
+                name,
+                command,
+                args,
+                env,
+            } => json!({
+                "name": name,
+                "command": command,
+                "args": args,
+                "env": env.iter().map(|variable| json!({
+                    "name": variable.name,
+                    "value": variable.value,
+                })).collect::<Vec<_>>(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -340,6 +417,16 @@ impl GrokClient {
                 .initialize(self.config.startup_timeout, true)
                 .await?;
             let current_model = parse_model_catalog(&initialized).current_model_id;
+            let mcp_servers = request
+                .mcp_servers
+                .iter()
+                .map(GrokMcpServer::to_acp_value)
+                .collect::<Vec<_>>();
+            let rules = request
+                .rules
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
 
             let session_id = if let Some(session_id) = request
                 .session_id
@@ -353,8 +440,8 @@ impl GrokClient {
                         json!({
                             "sessionId": session_id,
                             "cwd": request.cwd,
-                            "mcpServers": [],
-                            "_meta": { "noReplay": true },
+                            "mcpServers": mcp_servers,
+                            "_meta": session_meta(rules, true),
                         }),
                         self.config.request_timeout,
                     )
@@ -366,7 +453,8 @@ impl GrokClient {
                         "session/new",
                         json!({
                             "cwd": request.cwd,
-                            "mcpServers": [],
+                            "mcpServers": mcp_servers,
+                            "_meta": session_meta(rules, false),
                         }),
                         self.config.request_timeout,
                     )
@@ -784,6 +872,17 @@ fn response_session_id(value: &Value) -> Option<String> {
     value_string(value, &["sessionId", "session_id"])
 }
 
+fn session_meta(rules: Option<&str>, no_replay: bool) -> Value {
+    let mut meta = serde_json::Map::new();
+    if no_replay {
+        meta.insert("noReplay".to_owned(), Value::Bool(true));
+    }
+    if let Some(rules) = rules {
+        meta.insert("rules".to_owned(), Value::String(rules.to_owned()));
+    }
+    Value::Object(meta)
+}
+
 fn value_string(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         value
@@ -1065,6 +1164,8 @@ done
                     session_id: None,
                     model: None,
                     reasoning_effort: None,
+                    rules: None,
+                    mcp_servers: Vec::new(),
                 },
                 GrokCancellation::default(),
                 |event| events.push(event),
@@ -1089,6 +1190,133 @@ done
                     }),
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn session_requests_carry_native_system_rules_and_mcp_servers() {
+        let capture_dir = tempfile::tempdir().expect("capture dir");
+        let capture_path = capture_dir.path().join("acp-requests.jsonl");
+        let (_binary_dir, binary) = fake_grok(
+            r#"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$GROK_ACP_CAPTURE"
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}' ;;
+    *'"method":"session/new"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"native-context-session"}}' ;;
+    *'"method":"session/load"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{}}' ;;
+    *'"method":"session/prompt"'*) printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}' ;;
+  esac
+done
+"#,
+        );
+        let client = GrokClient::new(GrokClientConfig {
+            binary,
+            environment: HashMap::from([(
+                "GROK_ACP_CAPTURE".to_owned(),
+                capture_path.to_string_lossy().into_owned(),
+            )]),
+            max_turns: None,
+            startup_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(5),
+        });
+        let mcp_servers = vec![
+            GrokMcpServer::Http {
+                name: "garyx".to_owned(),
+                url: "http://127.0.0.1:31337/mcp/thread/run".to_owned(),
+                headers: vec![GrokMcpHeader {
+                    name: "X-Run-Id".to_owned(),
+                    value: "run".to_owned(),
+                }],
+            },
+            GrokMcpServer::Sse {
+                name: "events".to_owned(),
+                url: "https://mcp.example.com/events".to_owned(),
+                headers: Vec::new(),
+            },
+            GrokMcpServer::Stdio {
+                name: "local".to_owned(),
+                command: "/usr/bin/example-mcp".to_owned(),
+                args: vec!["--stdio".to_owned()],
+                env: vec![GrokMcpEnvVariable {
+                    name: "MODE".to_owned(),
+                    value: "test".to_owned(),
+                }],
+            },
+        ];
+
+        for session_id in [None, Some("native-context-session".to_owned())] {
+            client
+                .run(
+                    GrokRunRequest {
+                        cwd: std::env::current_dir().expect("cwd"),
+                        prompt: "ordinary user message".to_owned(),
+                        session_id,
+                        model: None,
+                        reasoning_effort: None,
+                        rules: Some("native system instructions".to_owned()),
+                        mcp_servers: mcp_servers.clone(),
+                    },
+                    GrokCancellation::default(),
+                    |_| {},
+                )
+                .await
+                .expect("native context run succeeds");
+        }
+
+        let requests = std::fs::read_to_string(&capture_path)
+            .expect("capture")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("valid JSON-RPC capture"))
+            .collect::<Vec<_>>();
+        let new_request = requests
+            .iter()
+            .find(|request| request.get("method") == Some(&json!("session/new")))
+            .expect("session/new request");
+        let load_request = requests
+            .iter()
+            .find(|request| request.get("method") == Some(&json!("session/load")))
+            .expect("session/load request");
+        for request in [new_request, load_request] {
+            assert_eq!(
+                request["params"]["_meta"]["rules"],
+                "native system instructions"
+            );
+            assert_eq!(
+                request["params"]["mcpServers"],
+                json!([
+                    {
+                        "type": "http",
+                        "name": "garyx",
+                        "url": "http://127.0.0.1:31337/mcp/thread/run",
+                        "headers": [{"name": "X-Run-Id", "value": "run"}]
+                    },
+                    {
+                        "type": "sse",
+                        "name": "events",
+                        "url": "https://mcp.example.com/events",
+                        "headers": []
+                    },
+                    {
+                        "name": "local",
+                        "command": "/usr/bin/example-mcp",
+                        "args": ["--stdio"],
+                        "env": [{"name": "MODE", "value": "test"}]
+                    }
+                ])
+            );
+        }
+        assert_eq!(load_request["params"]["_meta"]["noReplay"], true);
+        assert!(new_request["params"]["_meta"].get("noReplay").is_none());
+        let prompt_requests = requests
+            .iter()
+            .filter(|request| request.get("method") == Some(&json!("session/prompt")))
+            .collect::<Vec<_>>();
+        assert_eq!(prompt_requests.len(), 2);
+        assert!(
+            prompt_requests.iter().all(|request| {
+                request["params"]["prompt"][0]["text"] == "ordinary user message"
+            })
         );
     }
 
@@ -1126,6 +1354,8 @@ done
                     session_id: None,
                     model: None,
                     reasoning_effort: None,
+                    rules: None,
+                    mcp_servers: Vec::new(),
                 },
                 GrokCancellation::default(),
                 |event| {
@@ -1218,6 +1448,8 @@ done
                     session_id: Some("native-resume-id".to_owned()),
                     model: None,
                     reasoning_effort: None,
+                    rules: None,
+                    mcp_servers: Vec::new(),
                 },
                 cancellation,
                 |event| events.push(event),
@@ -1276,6 +1508,8 @@ done
                     session_id: Some("missing-native-session".to_owned()),
                     model: None,
                     reasoning_effort: None,
+                    rules: None,
+                    mcp_servers: Vec::new(),
                 },
                 GrokCancellation::default(),
                 |event| events.push(event),
@@ -1361,6 +1595,8 @@ done
                     session_id: None,
                     model: Some("grok-test-model".to_owned()),
                     reasoning_effort: Some("high".to_owned()),
+                    rules: None,
+                    mcp_servers: Vec::new(),
                 },
                 GrokCancellation::default(),
                 |_| {},
