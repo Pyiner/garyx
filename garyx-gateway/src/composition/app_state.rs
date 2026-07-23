@@ -33,6 +33,7 @@ use crate::meetings::MeetingService;
 use crate::prompt_attachment_lifecycle::PromptAttachmentLifecycle;
 use crate::provider_accounts;
 use crate::provider_auth::ClaudeAuthSessionStore;
+use crate::push_notifications::PushNotificationService;
 use crate::routes::RestartTracker;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -72,6 +73,7 @@ pub struct OpsState {
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
     pub garyx_db: Arc<GaryxDbService>,
+    pub(crate) push_notifications: Option<Arc<PushNotificationService>>,
     /// Wakes the SQL-backed quota recovery worker when a new rate-limit row
     /// lands or an account switch/manual retry moves work forward.
     pub(crate) quota_recovery_notify: Arc<Notify>,
@@ -558,6 +560,7 @@ impl AppState {
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
+                push_notifications: self.ops.push_notifications.clone(),
                 quota_recovery_notify: self.ops.quota_recovery_notify.clone(),
                 conversation_admission: self.ops.conversation_admission.clone(),
                 prompt_attachments: self.ops.prompt_attachments.clone(),

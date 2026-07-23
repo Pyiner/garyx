@@ -11,7 +11,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "garyx",
     version = VERSION,
     about = "Garyx – AI chat gateway",
-    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, db\n  Work with context   task, thread, meeting, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, db\n  Work with context   task, thread, meeting, message, push, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -186,6 +186,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: MeetingAction,
     },
+    /// Send manual iOS push notifications
+    #[command(display_order = 46)]
+    Push {
+        #[command(subcommand)]
+        action: PushAction,
+    },
     /// Send an outbound channel message via a bot
     #[command(
         display_order = 42,
@@ -205,6 +211,22 @@ pub(crate) enum Commands {
         file: Option<PathBuf>,
         /// Message text. Required unless --image or --file is provided.
         text: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PushAction {
+    /// Send a notification to every registered iOS device
+    Send {
+        /// Notification title
+        #[arg(long)]
+        title: String,
+        /// Notification body
+        #[arg(long)]
+        body: String,
+        /// Optional thread opened when the notification is tapped
+        #[arg(long)]
+        thread_id: Option<String>,
     },
 }
 

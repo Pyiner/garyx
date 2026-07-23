@@ -36,6 +36,7 @@ mod provider_accounts;
 mod provider_auth;
 mod provider_models;
 mod provider_session_locator;
+pub mod push_notifications;
 mod quota_resend;
 mod recent_thread_projection;
 mod recent_thread_reader;

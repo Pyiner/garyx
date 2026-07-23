@@ -1142,6 +1142,19 @@ impl Default for PluginsConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ApnsConfig {
+    pub key_path: String,
+    pub key_id: String,
+    pub team_id: String,
+    pub topic: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PushConfig {
+    pub apns: ApnsConfig,
+}
+
 /// Root configuration for Garyx.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GaryxConfig {
@@ -1165,6 +1178,8 @@ pub struct GaryxConfig {
     pub mcp_servers: HashMap<String, McpServerConfig>,
     #[serde(default)]
     pub plugins: PluginsConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<PushConfig>,
 }
 
 impl GaryxConfig {

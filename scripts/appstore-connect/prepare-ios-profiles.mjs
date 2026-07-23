@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
 import { createPrivateKey, sign as signBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -151,6 +152,43 @@ async function findBundleId(identifier) {
   return bundleId;
 }
 
+export async function ensurePushNotificationsCapability(
+  bundleId,
+  request = ascRequest,
+) {
+  const response = await request(
+    "GET",
+    `/v1/bundleIds/${encodeURIComponent(
+      bundleId.id,
+    )}/bundleIdCapabilities?limit=200`,
+  );
+  const alreadyEnabled = response.data?.some(
+    (capability) =>
+      capability.attributes?.capabilityType === "PUSH_NOTIFICATIONS",
+  );
+  if (alreadyEnabled) {
+    return { created: false };
+  }
+
+  await request("POST", "/v1/bundleIdCapabilities", {
+    data: {
+      type: "bundleIdCapabilities",
+      attributes: {
+        capabilityType: "PUSH_NOTIFICATIONS",
+      },
+      relationships: {
+        bundleId: {
+          data: {
+            id: bundleId.id,
+            type: "bundleIds",
+          },
+        },
+      },
+    },
+  });
+  return { created: true };
+}
+
 async function findDistributionCertificate(serial) {
   const normalizedSerial = normalizeSerial(serial);
   if (!normalizedSerial) {
@@ -202,12 +240,22 @@ async function createProfile({ name, bundleId, certificate }) {
   return response.data;
 }
 
-async function ensureProfile({ label, bundleIdentifier, certificate, outputDir }) {
+async function ensureProfile({
+  label,
+  bundleIdentifier,
+  bundleId,
+  certificate,
+  outputDir,
+}) {
   const runId = optionalEnv("GITHUB_RUN_ID", String(Date.now()));
   const attempt = optionalEnv("GITHUB_RUN_ATTEMPT", "1");
   const name = `Garyx ${label} App Store ${runId}.${attempt}`;
-  const bundleId = await findBundleId(bundleIdentifier);
-  const profile = await createProfile({ name, bundleId, certificate });
+  const resolvedBundleId = bundleId ?? (await findBundleId(bundleIdentifier));
+  const profile = await createProfile({
+    name,
+    bundleId: resolvedBundleId,
+    certificate,
+  });
   const content = profile.attributes?.profileContent;
   const uuid = profile.attributes?.uuid;
   if (!content || !uuid) {
@@ -228,32 +276,105 @@ async function appendEnv(values) {
   await writeFile(envPath, `${lines.join("\n")}\n`, { flag: "a" });
 }
 
-const appBundleId = optionalEnv("IOS_BUNDLE_ID", "com.garyx.mobile");
-const widgetBundleId = optionalEnv(
-  "IOS_WIDGET_BUNDLE_ID",
-  `${appBundleId}.RecentThreadsWidget`,
-);
-const outputDir = requiredEnv("IOS_PROFILE_INSTALL_DIR");
-const certificate = await findDistributionCertificate(
-  requiredEnv("IOS_DISTRIBUTION_CERTIFICATE_SERIAL"),
-);
+async function main() {
+  const appBundleIdentifier = optionalEnv("IOS_BUNDLE_ID", "com.garyx.mobile");
+  const widgetBundleIdentifier = optionalEnv(
+    "IOS_WIDGET_BUNDLE_ID",
+    `${appBundleIdentifier}.RecentThreadsWidget`,
+  );
+  const outputDir = requiredEnv("IOS_PROFILE_INSTALL_DIR");
+  const certificate = await findDistributionCertificate(
+    requiredEnv("IOS_DISTRIBUTION_CERTIFICATE_SERIAL"),
+  );
 
-const appProfile = await ensureProfile({
-  label: "Mobile",
-  bundleIdentifier: appBundleId,
-  certificate,
-  outputDir,
-});
-const widgetProfile = await ensureProfile({
-  label: "Widget",
-  bundleIdentifier: widgetBundleId,
-  certificate,
-  outputDir,
-});
+  const appBundleId = await findBundleId(appBundleIdentifier);
+  const capability = await ensurePushNotificationsCapability(appBundleId);
+  console.log(
+    capability.created
+      ? `Enabled PUSH_NOTIFICATIONS for ${appBundleIdentifier}.`
+      : `PUSH_NOTIFICATIONS already enabled for ${appBundleIdentifier}.`,
+  );
+  const appProfile = await ensureProfile({
+    label: "Mobile",
+    bundleIdentifier: appBundleIdentifier,
+    bundleId: appBundleId,
+    certificate,
+    outputDir,
+  });
+  // The widget intentionally does not receive a push capability.
+  const widgetProfile = await ensureProfile({
+    label: "Widget",
+    bundleIdentifier: widgetBundleIdentifier,
+    certificate,
+    outputDir,
+  });
 
-await appendEnv({
-  IOS_APP_PROVISIONING_PROFILE_SPECIFIER: appProfile.name,
-  IOS_APP_PROVISIONING_PROFILE_PATH: appProfile.path,
-  IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER: widgetProfile.name,
-  IOS_WIDGET_PROVISIONING_PROFILE_PATH: widgetProfile.path,
-});
+  await appendEnv({
+    IOS_APP_PROVISIONING_PROFILE_SPECIFIER: appProfile.name,
+    IOS_APP_PROVISIONING_PROFILE_PATH: appProfile.path,
+    IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER: widgetProfile.name,
+    IOS_WIDGET_PROVISIONING_PROFILE_PATH: widgetProfile.path,
+  });
+}
+
+async function dryRun() {
+  const bundleId = {
+    id: "TEST_BUNDLE_ID",
+    type: "bundleIds",
+    attributes: { identifier: "com.garyx.mobile" },
+  };
+  const existingCalls = [];
+  const existing = await ensurePushNotificationsCapability(
+    bundleId,
+    async (method, path, body) => {
+      existingCalls.push({ method, path, body });
+      return {
+        data: [
+          {
+            type: "bundleIdCapabilities",
+            attributes: { capabilityType: "PUSH_NOTIFICATIONS" },
+          },
+        ],
+      };
+    },
+  );
+  assert.deepEqual(existing, { created: false });
+  assert.equal(existingCalls.length, 1);
+  assert.equal(existingCalls[0].method, "GET");
+
+  const missingCalls = [];
+  const missing = await ensurePushNotificationsCapability(
+    bundleId,
+    async (method, path, body) => {
+      missingCalls.push({ method, path, body });
+      return method === "GET" ? { data: [] } : { data: { id: "CAPABILITY" } };
+    },
+  );
+  assert.deepEqual(missing, { created: true });
+  assert.equal(missingCalls.length, 2);
+  assert.equal(missingCalls[0].method, "GET");
+  assert.deepEqual(missingCalls[1], {
+    method: "POST",
+    path: "/v1/bundleIdCapabilities",
+    body: {
+      data: {
+        type: "bundleIdCapabilities",
+        attributes: { capabilityType: "PUSH_NOTIFICATIONS" },
+        relationships: {
+          bundleId: {
+            data: { id: "TEST_BUNDLE_ID", type: "bundleIds" },
+          },
+        },
+      },
+    },
+  });
+  console.log(
+    "Dry run passed: existing capability is a no-op; missing capability is created exactly once for the app bundle.",
+  );
+}
+
+if (process.argv.includes("--dry-run")) {
+  await dryRun();
+} else {
+  await main();
+}

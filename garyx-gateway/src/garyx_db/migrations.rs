@@ -698,6 +698,7 @@ impl GaryxDbService {
         self.migrate_thread_create_intent_claim_v1()?;
         self.recover_stale_create_intents()?;
         self.migrate_prompt_attachment_thread_ownership_v2()?;
+        self.migrate_push_device_tokens_v1()?;
         Ok(())
     }
 

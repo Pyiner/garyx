@@ -247,6 +247,7 @@ pub(super) fn normalize_paths(
     diagnostics: &mut ConfigDiagnostics,
 ) {
     normalize_string_path(value, &["sessions", "data_dir"], base_dir, diagnostics);
+    normalize_string_path(value, &["push", "apns", "key_path"], base_dir, diagnostics);
 
     normalize_account_workspace_paths(
         value,
