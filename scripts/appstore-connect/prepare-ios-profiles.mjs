@@ -158,9 +158,7 @@ export async function ensurePushNotificationsCapability(
 ) {
   const response = await request(
     "GET",
-    `/v1/bundleIds/${encodeURIComponent(
-      bundleId.id,
-    )}/bundleIdCapabilities?limit=200`,
+    `/v1/bundleIds/${encodeURIComponent(bundleId.id)}/bundleIdCapabilities`,
   );
   const alreadyEnabled = response.data?.some(
     (capability) =>
