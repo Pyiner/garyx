@@ -308,7 +308,14 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     private let terminalOpeningFrameCount: Int
     private let materializationFrameCount: Int
     private var deliveredFramesInPhase = 0
-    private var referenceFrameInterval: TimeInterval?
+    /// The candidate cadence sample anchoring the current proof.
+    ///
+    /// This is deliberately not a historical minimum. ProMotion may deliver
+    /// the lightweight opening surface at 120 Hz and the materialized
+    /// transcript at a stable 60 Hz. Stability means consecutive frames share
+    /// a cadence; it does not mean every later frame must remain as fast as the
+    /// fastest opening frame.
+    private var cadenceReferenceFrameInterval: TimeInterval?
 
     public init(
         lifecycle: GaryxRouteHostLifecyclePhase = .mounted,
@@ -378,7 +385,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         renderPhase = .live
         hasPresentedLiveTranscript = true
         deliveredFramesInPhase = 0
-        referenceFrameInterval = nil
+        cadenceReferenceFrameInterval = nil
         return resolved
     }
 
@@ -398,7 +405,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
             renderPhase = .openingPage
             hasBegunContentPreparation = false
             deliveredFramesInPhase = 0
-            referenceFrameInterval = nil
+            cadenceReferenceFrameInterval = nil
             return
         }
     }
@@ -421,8 +428,8 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
                 // rows or its message-local skeleton and header spinner.
                 hasBegunContentPreparation = true
             }
-            if let interval, interval > 0 {
-                referenceFrameInterval = min(referenceFrameInterval ?? interval, interval)
+            cadenceReferenceFrameInterval = interval.flatMap {
+                $0 > 0 ? $0 : nil
             }
             deliveredFramesInPhase += 1
             guard deliveredFramesInPhase >= terminalOpeningFrameCount else {
@@ -436,22 +443,34 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
                   interval > 0
             else {
                 deliveredFramesInPhase = 0
+                cadenceReferenceFrameInterval = nil
                 return renderPhase
             }
-            guard let referenceFrameInterval else {
+            guard let cadenceReferenceFrameInterval else {
                 // The transition may reach materialization before UIKit has
                 // delivered an interval sample. Establish a fresh reference
                 // here instead of leaving the reveal proof unable to advance.
-                self.referenceFrameInterval = interval
+                self.cadenceReferenceFrameInterval = interval
                 deliveredFramesInPhase = 0
                 return renderPhase
             }
-            let stabilityCeiling = referenceFrameInterval * 1.25 + 0.0005
-            guard interval <= stabilityCeiling else {
-                deliveredFramesInPhase = 0
-                return renderPhase
+
+            // Compare the candidate cadence and the delivered sample
+            // symmetrically. A discrete display-rate change starts a new proof
+            // at the new cadence; compatible jitter advances that proof
+            // without drifting its reference. A legitimate 120 -> 60 Hz
+            // ProMotion downshift therefore converges instead of remaining
+            // permanently judged against the opening cadence.
+            let cadenceTolerance =
+                min(cadenceReferenceFrameInterval, interval) * 0.25 + 0.0005
+            let cadenceChanged =
+                abs(interval - cadenceReferenceFrameInterval) > cadenceTolerance
+            if cadenceChanged {
+                self.cadenceReferenceFrameInterval = interval
+                deliveredFramesInPhase = 1
+            } else {
+                deliveredFramesInPhase += 1
             }
-            deliveredFramesInPhase += 1
             guard deliveredFramesInPhase >= materializationFrameCount else {
                 return renderPhase
             }
