@@ -1006,7 +1006,9 @@ struct GaryxConversationView: View {
         let identity = conversationScrollIdentity
         // Long transcripts re-layout while scrolling, so a single scrollTo
         // can land short; the later attempts converge on the true bottom.
-        let delays = tailScrollRetryDelays(for: request.reason)
+        let delays = request.reason.retryDelayMilliseconds.map(
+            DispatchTimeInterval.milliseconds
+        )
 
         for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -1025,23 +1027,6 @@ struct GaryxConversationView: View {
                     }
                 }
             }
-        }
-    }
-
-    private func tailScrollRetryDelays(
-        for reason: GaryxConversationScrollState.TailScrollReason
-    ) -> [DispatchTimeInterval] {
-        switch reason.retryHorizon {
-        case .tailGrowth:
-            // Ordinary tail growth during send/streaming should stay pinned,
-            // but long retry chains make the transcript visibly wobble while
-            // the composer and bottom spacer are also settling.
-            return [.milliseconds(0), .milliseconds(40), .milliseconds(140)]
-        case .settling:
-            return [
-                .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
-                .milliseconds(320), .milliseconds(650), .milliseconds(1_000),
-            ]
         }
     }
 
