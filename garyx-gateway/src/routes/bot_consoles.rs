@@ -104,6 +104,19 @@ pub(super) struct ConfiguredChannelAccount {
     workspace_mode: Option<String>,
 }
 
+struct ResolvedConfiguredBot {
+    account: ConfiguredChannelAccount,
+    root_behavior: &'static str,
+    effective_agent_id: Option<String>,
+    main_endpoint: Option<ResolvedMainEndpoint>,
+    plugin: Option<Arc<dyn garyx_channels::plugin::ChannelPlugin>>,
+}
+
+struct ResolvedBotSnapshot {
+    endpoints: Vec<garyx_router::KnownChannelEndpoint>,
+    bots: Vec<ResolvedConfiguredBot>,
+}
+
 pub(super) fn public_workspace_mode(value: Option<&str>) -> &'static str {
     match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
         Some("worktree") => "worktree",
@@ -346,13 +359,6 @@ pub(super) fn account_root_behavior_value(
     }
 }
 
-pub(super) async fn channel_root_behavior(state: &Arc<AppState>, channel: &str) -> &'static str {
-    channel_plugin_for(state, channel)
-        .await
-        .map(|plugin| account_root_behavior_value(plugin.account_root_behavior()))
-        .unwrap_or("open_default")
-}
-
 pub(super) async fn resolve_main_endpoint_with_endpoints(
     state: &Arc<AppState>,
     channel: &str,
@@ -366,22 +372,50 @@ pub(super) async fn resolve_main_endpoint_with_endpoints(
         .map(Into::into)
 }
 
-pub(super) async fn resolve_account_ui_with_endpoints(
+/// Canonical fresh account resolution for both bot listing routes.
+///
+/// Route assembly may adapt presentation fields, but it must never resolve a
+/// main endpoint independently of this snapshot.
+async fn resolve_bot_snapshot(
     state: &Arc<AppState>,
-    channel: &str,
-    account_id: &str,
-    endpoints: &[garyx_router::KnownChannelEndpoint],
-) -> Option<PluginAccountUi> {
-    let plugin_endpoints: Vec<PluginConversationEndpoint> = endpoints
-        .iter()
-        .filter(|endpoint| endpoint.channel == channel && endpoint.account_id == account_id)
-        .map(plugin_conversation_endpoint_value)
-        .collect();
+) -> Result<ResolvedBotSnapshot, garyx_router::ThreadStoreError> {
+    let config = state.config_snapshot();
+    let global_effective_agent_id =
+        garyx_models::resolve_effective_default(&state.ops.custom_agents.snapshot().await)
+            .map(|binding| binding.agent_id);
+    let endpoints = state.channel_endpoints_fresh().await?;
+    let mut bots = Vec::new();
 
-    let plugin = channel_plugin_for(state, channel).await?;
-    plugin
-        .resolve_account_ui(account_id, &plugin_endpoints)
-        .await
+    for account in configured_channel_accounts(&config.channels) {
+        if !account.enabled {
+            continue;
+        }
+        let plugin = channel_plugin_for(state, &account.channel).await;
+        let root_behavior = plugin
+            .as_ref()
+            .map(|plugin| account_root_behavior_value(plugin.account_root_behavior()))
+            .unwrap_or("open_default");
+        let main_endpoint = match plugin.as_ref() {
+            Some(plugin) => plugin
+                .resolve_main_endpoint(&account.account_id, &endpoints)
+                .await
+                .map(Into::into),
+            None => None,
+        };
+        let effective_agent_id = account
+            .agent_id
+            .clone()
+            .or_else(|| global_effective_agent_id.clone());
+        bots.push(ResolvedConfiguredBot {
+            account,
+            root_behavior,
+            effective_agent_id,
+            main_endpoint,
+            plugin,
+        });
+    }
+
+    Ok(ResolvedBotSnapshot { endpoints, bots })
 }
 
 pub(super) fn resolve_default_open_endpoint_from_account_ui(
@@ -497,57 +531,36 @@ pub(super) async fn resolve_main_endpoint_by_key(
     Ok(None)
 }
 
-#[derive(Deserialize)]
-pub struct BotListParams {
-    #[serde(default)]
-    pub include_endpoints: bool,
-}
-
 /// GET /api/configured-bots - list all configured channel bot accounts from config
-pub async fn list_configured_bots(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<BotListParams>,
-) -> axum::response::Response {
-    let config = state.config_snapshot();
-    let global_effective_agent_id =
-        garyx_models::resolve_effective_default(&state.ops.custom_agents.snapshot().await)
-            .map(|binding| binding.agent_id);
-    let endpoints = if params.include_endpoints {
-        match state.channel_endpoints_fresh().await {
-            Ok(endpoints) => endpoints,
-            Err(error) => return thread_store_error_response(&error).into_response(),
-        }
-    } else {
-        Vec::new()
+pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    let ResolvedBotSnapshot { endpoints, bots } = match resolve_bot_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => return thread_store_error_response(&error).into_response(),
     };
-    let mut bots = Vec::new();
+    let mut values = Vec::new();
 
-    for account in configured_channel_accounts(&config.channels) {
-        if !account.enabled {
-            continue;
-        }
-        let root_behavior = channel_root_behavior(&state, &account.channel).await;
-        let account_ui = if params.include_endpoints {
-            resolve_account_ui_with_endpoints(
-                &state,
-                &account.channel,
-                &account.account_id,
-                &endpoints,
-            )
-            .await
-        } else {
-            None
-        };
-        let main_endpoint = if params.include_endpoints {
-            resolve_main_endpoint_with_endpoints(
-                &state,
-                &account.channel,
-                &account.account_id,
-                &endpoints,
-            )
-            .await
-        } else {
-            None
+    for bot in bots {
+        let ResolvedConfiguredBot {
+            account,
+            root_behavior,
+            effective_agent_id,
+            main_endpoint,
+            plugin,
+        } = bot;
+        let plugin_endpoints = endpoints
+            .iter()
+            .filter(|endpoint| {
+                endpoint.channel == account.channel && endpoint.account_id == account.account_id
+            })
+            .map(plugin_conversation_endpoint_value)
+            .collect::<Vec<_>>();
+        let account_ui = match plugin {
+            Some(plugin) => {
+                plugin
+                    .resolve_account_ui(&account.account_id, &plugin_endpoints)
+                    .await
+            }
+            None => None,
         };
         let default_open_endpoint = if root_behavior == "expand_only" {
             None
@@ -562,11 +575,7 @@ pub async fn list_configured_bots(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
-        let effective_agent_id = account
-            .agent_id
-            .clone()
-            .or_else(|| global_effective_agent_id.clone());
-        bots.push(json!({
+        values.push(json!({
             "channel": account.channel,
             "account_id": account.account_id,
             "display_name": display_name,
@@ -585,44 +594,33 @@ pub async fn list_configured_bots(
         }));
     }
 
-    Json(json!({ "bots": bots })).into_response()
+    Json(json!({ "bots": values })).into_response()
 }
 
 /// GET /api/bot-consoles - list aggregated bot console summaries
-pub async fn list_bot_consoles(
-    State(state): State<Arc<AppState>>,
-    Query(_params): Query<BotListParams>,
-) -> axum::response::Response {
-    let config = state.config_snapshot();
-    let global_effective_agent_id =
-        garyx_models::resolve_effective_default(&state.ops.custom_agents.snapshot().await)
-            .map(|binding| binding.agent_id);
-    let endpoints = match state.channel_endpoints_fresh().await {
-        Ok(endpoints) => endpoints,
+pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    let ResolvedBotSnapshot { endpoints, bots } = match resolve_bot_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
         Err(error) => return thread_store_error_response(&error).into_response(),
     };
     let mut groups = Vec::<Value>::new();
     let mut group_indexes = HashMap::<String, usize>::new();
 
-    for account in configured_channel_accounts(&config.channels) {
-        if !account.enabled {
-            continue;
-        }
+    for bot in bots {
+        let ResolvedConfiguredBot {
+            account,
+            root_behavior,
+            effective_agent_id,
+            main_endpoint,
+            plugin: _,
+        } = bot;
         let id = format!("{}::{}", account.channel, account.account_id);
-        let root_behavior = channel_root_behavior(&state, &account.channel).await;
         let account_endpoints = endpoints
             .iter()
             .filter(|endpoint| {
                 endpoint.channel == account.channel && endpoint.account_id == account.account_id
             })
             .collect::<Vec<_>>();
-        let main_endpoint = resolve_main_endpoint_with_endpoints(
-            &state,
-            &account.channel,
-            &account.account_id,
-            &endpoints,
-        )
-        .await;
         let default_open_endpoint = if root_behavior == "expand_only" {
             None
         } else if let Some(endpoint) = main_endpoint.as_ref() {
@@ -639,10 +637,6 @@ pub async fn list_bot_consoles(
             .as_ref()
             .and_then(|endpoint| endpoint.thread_id.clone());
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
-        let effective_agent_id = account
-            .agent_id
-            .clone()
-            .or_else(|| global_effective_agent_id.clone());
         group_indexes.insert(id.clone(), groups.len());
         groups.push(json!({
             "id": id,

@@ -10,6 +10,19 @@ function normalizedThreadId(threadId: string): string {
   return threadId.trim();
 }
 
+export function botMainThreadsFromConfiguredBots(
+  configuredBots: ConfiguredBot[],
+): Record<string, string> {
+  const mapped: Record<string, string> = {};
+  for (const bot of configuredBots) {
+    const mainThreadId = bot.mainEndpointThreadId?.trim();
+    if (mainThreadId) {
+      mapped[`${bot.channel}::${bot.accountId}`] = mainThreadId;
+    }
+  }
+  return mapped;
+}
+
 function endpointReferencesThread(
   endpoint: DesktopChannelEndpoint | null | undefined,
   threadId: string,

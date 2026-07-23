@@ -6041,7 +6041,7 @@ async fn thread_store_backend_failure_answers_500_not_404() {
         "/api/threads/history",
         "/api/threads/history?include_messages=true",
         "/api/channel-endpoints",
-        "/api/configured-bots?include_endpoints=true",
+        "/api/configured-bots",
         "/api/bot-consoles",
         "/api/bot/status?bot_id=telegram:main",
     ] {
@@ -6229,7 +6229,7 @@ async fn endpoint_listing_surfaces_live_outage_despite_recent_cache_hit() {
         .store(true, std::sync::atomic::Ordering::SeqCst);
     for uri in [
         "/api/channel-endpoints",
-        "/api/configured-bots?include_endpoints=true",
+        "/api/configured-bots",
         "/api/bot-consoles",
         "/api/bot/status?bot_id=telegram:main",
     ] {
@@ -10547,7 +10547,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
     let router = build_router(state);
 
     let request = authed_request()
-        .uri("/api/configured-bots?include_endpoints=true")
+        .uri("/api/configured-bots")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -10628,6 +10628,101 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
 }
 
 #[tokio::test]
+async fn desktop_bot_routes_agree_on_projected_feishu_main_endpoint() {
+    let mut config = test_config();
+    config
+        .channels
+        .plugin_channel_mut("feishu")
+        .accounts
+        .insert(
+            "test_account".to_owned(),
+            garyx_models::config::feishu_account_to_plugin_entry(
+                &garyx_models::config::FeishuAccount {
+                    app_id: "cli_test_app".to_owned(),
+                    app_secret: "cli_test_secret".to_owned(),
+                    enabled: true,
+                    domain: garyx_models::config::FeishuDomain::Feishu,
+                    name: Some("Test Bot".to_owned()),
+                    agent_id: Some("claude".to_owned()),
+                    workspace_dir: Some("/tmp/test-bot-workspace".to_owned()),
+                    owner_target: None,
+                    require_mention: true,
+                    topic_session_mode: garyx_models::config::TopicSessionMode::Disabled,
+                    meeting_entities: true,
+                },
+            ),
+        );
+    let state = AppStateBuilder::new(config).build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::projected-feishu-main",
+            serde_json::json!({
+                "thread_id": "thread::projected-feishu-main",
+                "label": "Test User",
+                "workspace_dir": "/tmp/test-bot-workspace",
+                "updated_at": "2026-07-24T00:00:00Z",
+                "channel_bindings": [{
+                    "channel": "feishu",
+                    "account_id": "test_account",
+                    "binding_key": "ou_test_user_1000000001",
+                    "chat_id": "ou_test_user_1000000001",
+                    "delivery_target_type": "open_id",
+                    "delivery_target_id": "ou_test_user_1000000001",
+                    "display_label": "Test User",
+                    "last_inbound_at": "2026-07-24T00:00:00Z"
+                }]
+            }),
+        )
+        .await
+        .unwrap();
+    let router = build_router(state);
+
+    // These are the exact two paths requested together by desktop hydration.
+    let (configured_status, configured_payload) =
+        authed_get_json(&router, "/api/configured-bots").await;
+    let (consoles_status, consoles_payload) = authed_get_json(&router, "/api/bot-consoles").await;
+    assert_eq!(configured_status, StatusCode::OK);
+    assert_eq!(consoles_status, StatusCode::OK);
+
+    let configured = configured_payload["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["channel"] == "feishu" && entry["account_id"] == "test_account")
+        .unwrap();
+    let console = consoles_payload["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["channel"] == "feishu" && entry["account_id"] == "test_account")
+        .unwrap();
+
+    assert_eq!(console["main_endpoint_status"], "resolved");
+    assert_eq!(
+        console["main_endpoint"]["source"],
+        "existing_private_endpoint"
+    );
+    assert_eq!(
+        console["main_endpoint_thread_id"],
+        "thread::projected-feishu-main"
+    );
+    assert_eq!(
+        configured["main_endpoint_status"], console["main_endpoint_status"],
+        "desktop bot routes must agree whether the main endpoint resolved"
+    );
+    assert_eq!(
+        configured["main_endpoint"], console["main_endpoint"],
+        "desktop bot routes must expose one main-endpoint resolution"
+    );
+    assert_eq!(
+        configured["main_endpoint_thread_id"], console["main_endpoint_thread_id"],
+        "desktop bot routes must expose one main thread"
+    );
+}
+
+#[tokio::test]
 async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without_valid_agent() {
     let mut config = test_config();
     config
@@ -10681,7 +10776,7 @@ async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/configured-bots?include_endpoints=true")
+        .uri("/api/configured-bots")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -10977,7 +11072,7 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles?include_endpoints=true")
+        .uri("/api/bot-consoles")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -11041,7 +11136,7 @@ async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles?include_endpoints=true")
+        .uri("/api/bot-consoles")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();

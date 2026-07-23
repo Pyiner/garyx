@@ -210,3 +210,98 @@ test('keeps the bot draft when gateway reconciliation returns the same stale thr
   assert.equal(values.pendingBotId, 'weixin::test-bot');
   assert.equal(values.composerPhase, '');
 });
+
+test('opens a refreshed bot-console main thread when configured-bot resolution is stale', async () => {
+  const unresolvedGroup = makeBotGroup({
+    status: 'idle',
+    endpointCount: 0,
+    boundEndpointCount: 0,
+    mainEndpoint: null,
+    mainThreadId: null,
+    defaultOpenEndpoint: null,
+    defaultOpenThreadId: null,
+    endpoints: [],
+  });
+  const initialState = {
+    ...makeDesktopState(unresolvedGroup),
+    endpoints: [],
+    configuredBots: [{
+      channel: unresolvedGroup.channel,
+      accountId: unresolvedGroup.accountId,
+      displayName: unresolvedGroup.title,
+      rootBehavior: unresolvedGroup.rootBehavior,
+      mainEndpointStatus: 'unresolved',
+      mainEndpoint: null,
+      mainEndpointThreadId: null,
+      workspaceDir: unresolvedGroup.workspaceDir,
+    }],
+    botMainThreads: {},
+    botConsoles: [],
+  };
+  const boundEndpoint = makeEndpoint({ threadId: 'thread::bound-main' });
+  const refreshedState = {
+    ...initialState,
+    botConsoles: [makeBotGroup({
+      mainEndpointStatus: 'resolved',
+      mainEndpoint: boundEndpoint,
+      mainThreadId: boundEndpoint.threadId,
+      defaultOpenEndpoint: boundEndpoint,
+      defaultOpenThreadId: boundEndpoint.threadId,
+      endpoints: [boundEndpoint],
+    })],
+  };
+  const openedThreadIds = [];
+  const values = {
+    draftActive: false,
+    selectedThreadId: 'thread::previous',
+    pendingWorkspacePath: null,
+    pendingBotId: null,
+  };
+
+  await activateBotDraftThread({
+    platform: {
+      getState: async () => refreshedState,
+      addWorkspaceByPath: async () => {
+        throw new Error('unexpected workspace mutation');
+      },
+    },
+    desktopState: initialState,
+    group: unresolvedGroup,
+    onState: () => {},
+    onOpenExistingThread: async () => {
+      throw new Error('main thread id should be preferred');
+    },
+    onOpenThreadById: async (threadId) => {
+      openedThreadIds.push(threadId);
+      values.draftActive = false;
+      values.selectedThreadId = threadId;
+      return true;
+    },
+    shouldKeepNewDraft: (groupId, initialWorkspacePath) =>
+      values.draftActive &&
+      values.selectedThreadId === null &&
+      values.pendingBotId === groupId &&
+      values.pendingWorkspacePath === initialWorkspacePath,
+    shouldOpenResolvedThread: (groupId, initialWorkspacePath) =>
+      values.draftActive &&
+      values.selectedThreadId === null &&
+      values.pendingBotId === groupId &&
+      values.pendingWorkspacePath === initialWorkspacePath,
+    setError: () => {},
+    enterBotDraft: (workspacePath, botId) => {
+      values.draftActive = true;
+      values.selectedThreadId = null;
+      values.pendingWorkspacePath = workspacePath;
+      values.pendingBotId = botId;
+    },
+    setPendingWorkspacePath: (value) => {
+      values.pendingWorkspacePath = value;
+    },
+    syncComposerPhase: () => {},
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(openedThreadIds, ['thread::bound-main']);
+  assert.equal(values.draftActive, false);
+  assert.equal(values.selectedThreadId, 'thread::bound-main');
+});

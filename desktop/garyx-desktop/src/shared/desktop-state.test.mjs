@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { desktopStateWithoutThread, mergeRetainedHiddenSessions } from './desktop-state.ts';
+import {
+  botMainThreadsFromConfiguredBots,
+  desktopStateWithoutThread,
+  mergeRetainedHiddenSessions,
+} from './desktop-state.ts';
 
 function thread(id) {
   return {
@@ -133,6 +137,28 @@ test('desktopStateWithoutThread removes archived thread and visible associations
   assert.deepEqual(next.botMainThreads, {
     'other-channel::test-account': keptThread.id,
   });
+});
+
+test('resolved configured bots produce desktop main-thread bindings', () => {
+  assert.deepEqual(
+    botMainThreadsFromConfiguredBots([
+      {
+        channel: 'feishu',
+        accountId: 'test-account',
+        mainEndpointStatus: 'resolved',
+        mainEndpointThreadId: ' thread::bound-main ',
+      },
+      {
+        channel: 'telegram',
+        accountId: 'unbound-account',
+        mainEndpointStatus: 'unresolved',
+        mainEndpointThreadId: null,
+      },
+    ]),
+    {
+      'feishu::test-account': 'thread::bound-main',
+    },
+  );
 });
 
 test('hidden session summaries survive full-state refreshes', () => {

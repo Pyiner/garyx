@@ -4,7 +4,6 @@ import { dirname, join, basename } from 'node:path';
 
 import { app } from 'electron';
 
-import { mergeRetainedHiddenSessions } from '../shared/desktop-state';
 import {
   ensureHiddenSessionsLoaded,
   forgetHiddenSession,
@@ -34,7 +33,11 @@ import {
   type DesktopChannelEndpoint,
   type DesktopSessionProviderHint,
 } from '@shared/contracts';
-import { desktopStateWithoutThread } from '@shared/desktop-state';
+import {
+  botMainThreadsFromConfiguredBots,
+  desktopStateWithoutThread,
+  mergeRetainedHiddenSessions,
+} from '@shared/desktop-state';
 import { normalizeGatewayHeadersBlock } from '../shared/gateway-headers.ts';
 import {
   archiveRemoteThread,
@@ -652,18 +655,6 @@ function withSortedEntities(
   };
 }
 
-function reconcileBotMainThreads(configuredBots: ConfiguredBot[]): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const bot of configuredBots) {
-    const botId = `${bot.channel}::${bot.accountId}`;
-    const mainThreadId = bot.mainEndpointThreadId?.trim();
-    if (mainThreadId) {
-      next[botId] = mainThreadId;
-    }
-  }
-  return next;
-}
-
 type RemoteFetchSource = DesktopRemoteStateError['source'];
 
 type RemoteFetchResult<T> =
@@ -1137,7 +1128,7 @@ async function mergeRemoteDesktopState(
     configuredBots,
     botConsoles,
     automations,
-    botMainThreads: reconcileBotMainThreads(configuredBots),
+    botMainThreads: botMainThreadsFromConfiguredBots(configuredBots),
     remoteErrors,
   });
 
