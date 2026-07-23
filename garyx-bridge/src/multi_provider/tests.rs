@@ -3717,20 +3717,6 @@ async fn assert_busy_dispatch_persists_full_metadata(path: QueuedDispatchPath) {
         ("task_dispatch_reason".to_owned(), json!("created")),
         ("restart_wake".to_owned(), json!(true)),
         ("restart_wake_id".to_owned(), json!("wake-1")),
-        ("schedule_followup_job_id".to_owned(), json!("followup-1")),
-        (
-            "schedule_followup_scheduled_at".to_owned(),
-            json!("2026-07-21T09:00:00Z"),
-        ),
-        (
-            "schedule_followup_scheduled_for".to_owned(),
-            json!("2026-07-21T09:01:00Z"),
-        ),
-        ("schedule_followup_reason".to_owned(), json!("quota")),
-        (
-            "schedule_followup_originating_run_id".to_owned(),
-            json!("run-origin"),
-        ),
     ]);
     request.metadata.extend(source_family_metadata.clone());
     for key in super::persistence::RUNTIME_ONLY_METADATA_KEYS {

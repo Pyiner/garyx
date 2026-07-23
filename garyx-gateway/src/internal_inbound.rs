@@ -167,10 +167,10 @@ pub(crate) async fn dispatch_internal_message_to_thread(
         .unwrap_or_else(|| "loop".to_owned());
 
     extra_metadata.insert("internal_dispatch".to_owned(), Value::Bool(true));
-    // Internal dispatch is a front door for synthetic user turns (followups,
-    // quota auto-resends, scheduled automation prompts); give the resulting
-    // run the same managed-MCP context a chat-API message gets so provider
-    // runs keep their gateway-managed servers.
+    // Internal dispatch is a front door for synthetic user turns (task
+    // notifications, restart wakes, scheduled automation prompts); give the
+    // resulting run the same managed-MCP context a chat-API message gets so
+    // provider runs keep their gateway-managed servers.
     {
         let config = state.config_snapshot();
         let gateway_auth_token = config.gateway.auth_token.trim();

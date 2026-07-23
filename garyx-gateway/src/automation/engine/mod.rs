@@ -12,8 +12,6 @@ mod model;
 mod schedule;
 mod store;
 
-#[cfg(test)]
-pub(crate) use execution::build_followup_body;
 use log::{cron_info, cron_warn};
 pub(crate) use model::validate_cron_job;
 
@@ -238,11 +236,9 @@ impl CronService {
 
     /// List jobs visible to user-facing surfaces (default).
     ///
-    /// System-managed jobs (e.g. those scheduled by the
-    /// `schedule_followup` MCP tool) are filtered out so they don't pollute
-    /// the user's automation list. Use [`Self::list_all`] when the caller
-    /// genuinely needs every job — including the system-managed ones — such
-    /// as the scheduler's own internal accounting or tests.
+    /// System-managed jobs are filtered out so they don't pollute the user's
+    /// automation list. Use [`Self::list_all`] when the caller genuinely needs
+    /// every job, including system-managed ones.
     pub async fn list(&self) -> Vec<CronJob> {
         self.jobs
             .read()
@@ -303,30 +299,6 @@ impl CronService {
         self.jobs.write().await.insert(job.id.clone(), job.clone());
         cron_info!(job_id = %cfg.id, "cron job added");
         Ok(job)
-    }
-
-    /// Insert-or-replace a job by id, atomically capturing any prior job.
-    ///
-    /// Used by `schedule_followup` to dedupe per `(thread_id, run_id)` —
-    /// callers derive a deterministic id and call `upsert`; the returned
-    /// `previous` slot tells them whether they replaced an existing schedule
-    /// (and, if so, what its terms were).
-    pub async fn upsert(&self, cfg: CronJobConfig) -> std::io::Result<(CronJob, Option<CronJob>)> {
-        validate_cron_schedule(&cfg.schedule)?;
-        ensure_dirs(&self.data_dir).await?;
-        let new_job = CronJob::from_config(&cfg);
-        let previous = self
-            .jobs
-            .write()
-            .await
-            .insert(new_job.id.clone(), new_job.clone());
-        persist_job(&self.data_dir, &new_job).await?;
-        if previous.is_some() {
-            cron_info!(job_id = %cfg.id, "cron job replaced via upsert");
-        } else {
-            cron_info!(job_id = %cfg.id, "cron job added via upsert");
-        }
-        Ok((new_job, previous))
     }
 
     /// Update an existing job in-place, preserving runtime counters/state.

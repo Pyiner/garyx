@@ -124,11 +124,9 @@ pub async fn cron_runs(
 // ---------------------------------------------------------------------------
 //
 // Debug observability for system-managed cron jobs (AXON-692). The default
-// user-facing `GET /api/cron/jobs` filters `system == true` jobs out, so
-// `schedule_followup`-created followups are invisible there. When an incident
-// like "agent promised a followup but it never fired" needs triage, SREs /
-// developers reach for this endpoint to see the pending system jobs and each
-// job's recent RunRecord history.
+// user-facing `GET /api/cron/jobs` filters `system == true` jobs out. This
+// endpoint lets SREs and developers inspect pending system jobs and each job's
+// recent RunRecord history.
 //
 // Auth: registered under the protected router, so `enforce_gateway_auth`
 // already gates it — loopback requests pass, everything else needs a valid
@@ -179,13 +177,6 @@ pub(super) fn debug_job_json(job: &super::engine::CronJob, recent_runs: Vec<Valu
         garyx_models::config::CronJobKind::AutomationPrompt => {
             json!({ "type": "automation_prompt" })
         }
-        garyx_models::config::CronJobKind::InternalDispatch { payload } => json!({
-            "type": "internal_dispatch",
-            "reason": payload.reason,
-            "originating_run_id": payload.originating_run_id,
-            "scheduled_at": payload.scheduled_at.to_rfc3339(),
-            "delay_seconds_requested": payload.delay_seconds_requested,
-        }),
     };
     json!({
         "id": job.id,

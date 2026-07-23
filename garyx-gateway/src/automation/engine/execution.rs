@@ -1,16 +1,13 @@
-//! Job execution: the scheduler tick, claim/prepare/execute/settle flow,
-//! agent-turn dispatch through the injected execution environment, and the
-//! `schedule_followup` retry driver.
+//! Job execution: the scheduler tick, claim/prepare/execute/settle flow, and
+//! agent-turn dispatch through the injected execution environment.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
-use chrono::{DateTime, Local, Utc};
-use garyx_models::config::{CronAction, CronJobKind, InternalDispatchJobPayload};
+use chrono::Utc;
+use garyx_models::config::CronAction;
 use garyx_models::thread_logs::ThreadLogEvent;
-use garyx_router::ThreadStoreExt;
 use garyx_router::{ThreadEnsureOptions, delete_thread_record};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -40,79 +37,6 @@ use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
 use garyx_models::thread_logs::ThreadLogSink;
 #[cfg(test)]
 use garyx_router::MessageRouter;
-
-/// Maximum number of *retries* (i.e. attempts after the first) for a transient
-/// internal-dispatch failure before the followup is dropped. Total
-/// attempts are `FOLLOWUP_MAX_RETRIES + 1`.
-pub(super) const FOLLOWUP_MAX_RETRIES: u32 = 3;
-
-/// Base delay for exponential backoff between internal-dispatch retries. The
-/// nth retry waits `FOLLOWUP_RETRY_BASE_BACKOFF * 2^n` (≈200ms, 400ms, 800ms).
-pub(super) const FOLLOWUP_RETRY_BASE_BACKOFF: Duration = Duration::from_millis(200);
-
-/// Classification of a single internal-dispatch attempt outcome.
-///
-/// `Dropped` is non-retryable — the target thread is gone (deleted) or the job
-/// is structurally unable to dispatch, so retrying cannot help. `Transient` is
-/// a network/internal failure worth retrying with backoff.
-#[derive(Debug)]
-pub(super) enum FollowupAttemptError {
-    /// Non-retryable: drop the followup immediately with this reason.
-    Dropped(String),
-    /// Retryable transient failure carrying the underlying error text.
-    Transient(String),
-}
-
-/// Render the synthetic user-turn body for a fired `schedule_followup` job.
-///
-/// The body has two sections: a `<garyx_followup_metadata>` block so the
-/// resumed agent (and telemetry) can identify the turn as a followup, and
-/// then the verbatim prompt the caller passed to `schedule_followup`.
-///
-/// `scheduled_for` is the wall-clock time the cron tick actually fired at —
-/// equal to `payload.scheduled_at + payload.delay_seconds_requested` unless a
-/// later `schedule_followup` call replaced the job. The metadata exposes
-/// both so the resumed agent can reason about the actual delay it
-/// experienced.
-pub(crate) fn build_followup_body(
-    schedule_id: &str,
-    payload: &InternalDispatchJobPayload,
-    scheduled_for: DateTime<Utc>,
-) -> String {
-    let mut lines = Vec::with_capacity(8);
-    lines.push("<garyx_followup_metadata>".to_owned());
-    lines.push(format!("schedule_id: {schedule_id}"));
-    // Agent-facing timestamps: gateway-machine local wall-clock time
-    // (`YYYY-MM-DD HH:MM:SS`, timezone implicit) so the resumed agent
-    // reasons about the delay in the user's wall-clock time.
-    lines.push(format!(
-        "scheduled_at: {}",
-        payload
-            .scheduled_at
-            .with_timezone(&Local)
-            .format("%Y-%m-%d %H:%M:%S")
-    ));
-    lines.push(format!(
-        "scheduled_for: {}",
-        scheduled_for
-            .with_timezone(&Local)
-            .format("%Y-%m-%d %H:%M:%S")
-    ));
-    lines.push(format!(
-        "delay_seconds_requested: {}",
-        payload.delay_seconds_requested
-    ));
-    if let Some(reason) = payload.reason.as_deref() {
-        lines.push(format!("reason: {reason}"));
-    }
-    if let Some(originating) = payload.originating_run_id.as_deref() {
-        lines.push(format!("originating_run_id: {originating}"));
-    }
-    lines.push("</garyx_followup_metadata>".to_owned());
-    lines.push(String::new());
-    lines.push(payload.prompt.clone());
-    lines.join("\n")
-}
 
 impl CronService {
     /// Execute a specific job immediately.
@@ -236,12 +160,7 @@ impl CronService {
             let Some(job) = map.get(id) else {
                 return true;
             };
-            match &job.kind {
-                CronJobKind::InternalDispatch { .. } => true,
-                CronJobKind::AutomationPrompt => {
-                    matches!(job.action, CronAction::SystemEvent | CronAction::AgentTurn)
-                }
-            }
+            matches!(job.action, CronAction::SystemEvent | CronAction::AgentTurn)
         };
         if !requires_provider_runtime {
             return true;
@@ -306,7 +225,6 @@ impl CronService {
         match status {
             JobRunStatus::Success => "success",
             JobRunStatus::Failed => "failed",
-            JobRunStatus::FailedDropped => "dropped",
             JobRunStatus::Running => "running",
             JobRunStatus::NeverRun => "unknown",
         }
@@ -575,80 +493,36 @@ impl CronService {
         // effective one; the requested id stays in logs as the dispatch
         // correlation id.
         let mut record_run_id = run_id.clone();
-        let (status, error) = match &job.kind {
-            CronJobKind::InternalDispatch { payload } => {
-                if job.system && crate::quota_resend::is_legacy_quota_recovery_job(&job.id) {
-                    cron_info!(
-                        job_id = %job.id,
-                        run_id = %run_id,
-                        "legacy quota cron ignored because durable SQL recovery owns the generation"
-                    );
-                    return RunRecord {
-                        job_id: job.id.clone(),
-                        run_id,
-                        started_at,
-                        finished_at: Some(Utc::now()),
-                        duration_ms: Some(0),
-                        status: JobRunStatus::Success,
-                        thread_id: Self::trimmed_non_empty(job.thread_id.as_deref()),
-                        error: None,
-                    };
-                }
-                // Boundary fallback: classify drop-vs-transient and
-                // retry transient dispatch failures with exponential backoff.
-                // Any terminal failure (thread gone, or retry budget exhausted)
-                // becomes `FailedDropped` with the reason recorded in the run
-                // record — never a silent drop.
-                match Self::dispatch_internal_followup_with_retry(
-                    job,
-                    &run_id,
-                    payload,
-                    env,
-                    FOLLOWUP_RETRY_BASE_BACKOFF,
-                )
-                .await
-                {
-                    Ok(()) => (JobRunStatus::Success, None),
-                    Err(reason) => (JobRunStatus::FailedDropped, Some(reason)),
-                }
+        let (status, error) = match &job.action {
+            CronAction::Log => {
+                cron_info!(job_id = %job.id, "cron log action fired");
+                (JobRunStatus::Success, None)
             }
-            CronJobKind::AutomationPrompt => match &job.action {
-                CronAction::Log => {
-                    cron_info!(job_id = %job.id, "cron log action fired");
-                    (JobRunStatus::Success, None)
-                }
-                CronAction::SystemEvent | CronAction::AgentTurn => {
-                    let message = job
-                        .message
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_default()
-                        .to_owned();
-                    if message.is_empty() {
-                        (
-                            JobRunStatus::Failed,
-                            Some("cron message payload is empty".to_owned()),
-                        )
-                    } else {
-                        match Self::dispatch_agent_turn(
-                            job,
-                            &run_id,
-                            &message,
-                            active_agent_runs,
-                            env,
-                        )
+            CronAction::SystemEvent | CronAction::AgentTurn => {
+                let message = job
+                    .message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_default()
+                    .to_owned();
+                if message.is_empty() {
+                    (
+                        JobRunStatus::Failed,
+                        Some("cron message payload is empty".to_owned()),
+                    )
+                } else {
+                    match Self::dispatch_agent_turn(job, &run_id, &message, active_agent_runs, env)
                         .await
-                        {
-                            Ok(effective_run_id) => {
-                                record_run_id = effective_run_id;
-                                (JobRunStatus::Success, None)
-                            }
-                            Err(e) => (JobRunStatus::Failed, Some(e)),
+                    {
+                        Ok(effective_run_id) => {
+                            record_run_id = effective_run_id;
+                            (JobRunStatus::Success, None)
                         }
+                        Err(e) => (JobRunStatus::Failed, Some(e)),
                     }
                 }
-            },
+            }
         };
 
         let finished_at = Utc::now();
@@ -673,192 +547,11 @@ impl CronService {
         }
     }
 
-    /// Build a synthetic user-turn body from a `schedule_followup` payload and
-    /// inject it into the originating thread via
-    /// [`dispatch_internal_message_to_thread`].
-    ///
-    /// The synthetic body is prefixed with a `<garyx_followup_metadata>` block
-    /// so the resumed agent can correlate the followup with its own earlier
-    /// `schedule_followup` call (and so telemetry can distinguish followups
-    /// from organic user input).
-    /// Drive [`Self::dispatch_internal_followup_once`] with bounded
-    /// exponential-backoff retry.
-    ///
-    /// Returns `Ok(())` on success (possibly after retries) or `Err(reason)`
-    /// when the followup is dropped — either non-retryably (thread gone) or
-    /// because the retry budget was exhausted. The reason string is recorded in
-    /// the run record so a drop is never silent.
-    pub(super) async fn dispatch_internal_followup_with_retry(
-        job: &CronJob,
-        run_id: &str,
-        payload: &InternalDispatchJobPayload,
-        env: &AutomationExecEnv,
-        base_backoff: Duration,
-    ) -> Result<(), String> {
-        Self::run_followup_with_retry(
-            FOLLOWUP_MAX_RETRIES,
-            base_backoff,
-            &job.id,
-            run_id,
-            |_attempt| Self::dispatch_internal_followup_once(job, run_id, payload, env),
-        )
-        .await
-    }
-
-    /// Generic retry driver shared by production and tests.
-    ///
-    /// Calls `attempt` (receiving the zero-based attempt index) until it
-    /// succeeds, hits a non-retryable `Dropped` outcome, or exhausts
-    /// `max_retries` transient failures. Every drop path emits a warn event
-    /// so drops are observable; the nth retry sleeps `base_backoff * 2^n`.
-    pub(super) async fn run_followup_with_retry<F, Fut>(
-        max_retries: u32,
-        base_backoff: Duration,
-        job_id: &str,
-        run_id: &str,
-        mut attempt: F,
-    ) -> Result<(), String>
-    where
-        F: FnMut(u32) -> Fut,
-        Fut: std::future::Future<Output = Result<(), FollowupAttemptError>>,
-    {
-        let mut last_error = String::new();
-        for n in 0..=max_retries {
-            match attempt(n).await {
-                Ok(()) => return Ok(()),
-                Err(FollowupAttemptError::Dropped(reason)) => {
-                    cron_warn!(job_id = %job_id,
-                        run_id = %run_id,
-                        reason = %reason,
-                        "schedule_followup dropped (non-retryable)"
-                    );
-                    return Err(reason);
-                }
-                Err(FollowupAttemptError::Transient(error)) => {
-                    last_error = error;
-                    if n < max_retries {
-                        let backoff = base_backoff * 2u32.pow(n);
-                        cron_warn!(job_id = %job_id,
-                            run_id = %run_id,
-                            attempt = n + 1,
-                            max_attempts = max_retries + 1,
-                            backoff_ms = backoff.as_millis() as u64,
-                            error = %last_error,
-                            "schedule_followup dispatch failed; retrying after backoff"
-                        );
-                        if !backoff.is_zero() {
-                            tokio::time::sleep(backoff).await;
-                        }
-                    }
-                }
-            }
-        }
-
-        let reason = format!(
-            "dispatch failed after {} retries: {}",
-            max_retries, last_error
-        );
-        cron_warn!(job_id = %job_id,
-            run_id = %run_id,
-            reason = %reason,
-            "schedule_followup dropped (retry budget exhausted)"
-        );
-        Err(reason)
-    }
-
-    /// Perform a single internal-dispatch attempt, classifying the outcome into
-    /// retryable vs non-retryable.
-    ///
-    /// Builds a synthetic user-turn body from a `schedule_followup` payload and
-    /// injects it into the originating thread via
-    /// [`dispatch_internal_message_to_thread`]. The body is prefixed with a
-    /// `<garyx_followup_metadata>` block so the resumed agent can correlate the
-    /// followup with its own earlier `schedule_followup` call (and so telemetry
-    /// can distinguish followups from organic user input).
-    ///
-    /// A missing thread_id / unavailable gateway state, or a thread that is no
-    /// longer present in the thread store, yields `Dropped` (retrying cannot
-    /// help). Any other dispatch error yields `Transient`.
-    pub(super) async fn dispatch_internal_followup_once(
-        job: &CronJob,
-        run_id: &str,
-        payload: &InternalDispatchJobPayload,
-        env: &AutomationExecEnv,
-    ) -> Result<(), FollowupAttemptError> {
-        let thread_id = Self::trimmed_non_empty(job.thread_id.as_deref()).ok_or_else(|| {
-            FollowupAttemptError::Dropped(format!(
-                "cron internal-dispatch job {} is missing thread_id",
-                job.id
-            ))
-        })?;
-
-        // Explicit pre-check: if the originating thread was deleted before the
-        // followup fired, drop it now rather than relying on string-matching the
-        // dispatch error.
-        if env.thread_store.get_logged(&thread_id).await.is_none() {
-            return Err(FollowupAttemptError::Dropped(format!(
-                "thread not found: {thread_id}"
-            )));
-        }
-
-        let scheduled_for = job.next_run;
-        let body = build_followup_body(&job.id, payload, scheduled_for);
-
-        let mut extra_metadata = HashMap::new();
-        extra_metadata.insert(
-            "schedule_followup".to_owned(),
-            serde_json::Value::Bool(true),
-        );
-        extra_metadata.insert(
-            "schedule_followup_job_id".to_owned(),
-            serde_json::Value::String(job.id.clone()),
-        );
-        extra_metadata.insert(
-            "schedule_followup_scheduled_at".to_owned(),
-            serde_json::Value::String(payload.scheduled_at.to_rfc3339()),
-        );
-        extra_metadata.insert(
-            "schedule_followup_scheduled_for".to_owned(),
-            serde_json::Value::String(scheduled_for.to_rfc3339()),
-        );
-        if let Some(reason) = payload.reason.as_deref() {
-            extra_metadata.insert(
-                "schedule_followup_reason".to_owned(),
-                serde_json::Value::String(reason.to_owned()),
-            );
-        }
-        if let Some(originating) = payload.originating_run_id.as_deref() {
-            extra_metadata.insert(
-                "schedule_followup_originating_run_id".to_owned(),
-                serde_json::Value::String(originating.to_owned()),
-            );
-        }
-
-        env.port
-            .dispatch_internal_message(&thread_id, run_id, &body, extra_metadata)
-            .await
-            .map(|_outcome| ())
-            .map_err(|error| match error {
-                AutomationDispatchError::StateUnavailable => {
-                    FollowupAttemptError::Dropped("gateway app state is unavailable".to_owned())
-                }
-                // A thread deleted between the pre-check and dispatch surfaces
-                // here as the dispatch sentinel — still a non-retryable drop.
-                AutomationDispatchError::Dispatch(error) => {
-                    if error.starts_with("thread not found") {
-                        FollowupAttemptError::Dropped(error)
-                    } else {
-                        FollowupAttemptError::Transient(error)
-                    }
-                }
-            })
-    }
-
     /// Dispatch a scheduled prompt into an existing thread through the
     /// internal-inbound front door: the message is injected exactly like a
     /// user message (router inbound semantics, transcript user turn, busy
-    /// queueing, channel echo), sharing the pipeline with `schedule_followup`
-    /// and the quota auto-resend instead of starting a bridge run directly.
+    /// queueing, channel echo), sharing the pipeline with other internal
+    /// synthetic turns instead of starting a bridge run directly.
     ///
     /// Returns the run id that owns the reply — the requested one for a fresh
     /// run, or the already-active run's id when the prompt was queued into it
@@ -1030,10 +723,10 @@ impl CronService {
 
         // Front door: any scheduled turn that resolved to a real, existing
         // thread dispatches through the same internal-inbound pipeline as
-        // `schedule_followup` and the quota auto-resend — the prompt behaves
-        // exactly like a user message (router inbound semantics, transcript
-        // user turn, busy queueing, channel echo). Thread-less pseudo-targets
-        // are invalid and never reach the bridge.
+        // other synthetic turns — the prompt behaves exactly like a user
+        // message (router inbound semantics, transcript user turn, busy
+        // queueing, channel echo). Thread-less pseudo-targets are invalid and
+        // never reach the bridge.
         if thread_record.is_some() {
             return Self::dispatch_agent_turn_via_thread(
                 job,

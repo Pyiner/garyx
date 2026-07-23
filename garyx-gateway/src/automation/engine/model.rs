@@ -23,12 +23,6 @@ use super::schedule::{
 pub enum JobRunStatus {
     Success,
     Failed,
-    /// Terminal failure where the run was intentionally dropped rather than
-    /// retried further: the target thread is gone, or a transient dispatch
-    /// failure exhausted its retry budget. Distinct from `Failed` so a dropped
-    /// followup is treated as terminal (one-shot jobs are disabled, see
-    /// `CronJob::settle_after_run`) and never silently re-fires.
-    FailedDropped,
     Running,
     NeverRun,
 }
@@ -226,16 +220,8 @@ impl CronJob {
     }
 
     /// Apply post-run bookkeeping after a run produced `status`, returning
-    /// whether the job file should be deleted (`delete_after_run` on a terminal
-    /// outcome). Single source of truth for both the `run_now` and `tick` paths.
-    ///
-    /// `Success` advances/disables the schedule as before. `FailedDropped` is a
-    /// *terminal* failure: one-shot jobs are disabled so a dropped followup is
-    /// not re-claimed every tick (`is_due` only exempts past-at-registration
-    /// jobs, so a fired-but-not-advanced `Once` job would otherwise re-fire
-    /// indefinitely), and `delete_after_run` is honored just like `Success`.
-    /// All other statuses keep the prior behavior (bump counters, leave the
-    /// schedule untouched).
+    /// whether the job file should be deleted. Single source of truth for both
+    /// the `run_now` and `tick` paths.
     pub(super) fn settle_after_run(
         &mut self,
         status: &JobRunStatus,
@@ -244,20 +230,12 @@ impl CronJob {
         self.last_status = status.clone();
         match status {
             JobRunStatus::Success => self.advance(),
-            JobRunStatus::FailedDropped => {
-                self.last_run_at = Some(started_at);
-                self.run_count += 1;
-                if matches!(self.schedule, CronSchedule::Once { .. }) {
-                    self.enabled = false;
-                }
-            }
             _ => {
                 self.last_run_at = Some(started_at);
                 self.run_count += 1;
             }
         }
-        self.delete_after_run
-            && matches!(status, JobRunStatus::Success | JobRunStatus::FailedDropped)
+        self.delete_after_run && matches!(status, JobRunStatus::Success)
     }
 
     /// Is this job due to run?
@@ -292,9 +270,6 @@ pub(super) fn uses_generated_automation_thread_job(job: &CronJob) -> bool {
 /// not query mutable stores: target existence is rechecked by the execution
 /// path, while this closes the historical thread-less pseudo-run bypass.
 pub(crate) fn validate_cron_job(job: &CronJob) -> Option<String> {
-    if matches!(job.kind, CronJobKind::InternalDispatch { .. }) {
-        return None;
-    }
     match job.action {
         CronAction::AgentTurn => {
             let thread_id = job
