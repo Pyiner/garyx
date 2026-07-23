@@ -194,9 +194,15 @@ pub struct QueuedStreamingInput {
 enum DispatchExecutionMode {
     Legacy,
     Durable {
-        planned_active_run_id: Option<String>,
+        active_run_plan: DurableActiveRunPlan,
         pending_input_id: String,
     },
+}
+
+enum DurableActiveRunPlan {
+    NoActiveRun,
+    QueueTo { run_id: String },
+    Replace { run_id: String },
 }
 
 struct RunLifecycleTerminalGuard {
@@ -242,7 +248,7 @@ pub struct DurableDispatchPlan {
     request: AgentRunRequest,
     run_lease: Option<ThreadRunLease>,
     thread_dispatch_guard: OwnedMutexGuard<()>,
-    planned_active_run_id: Option<String>,
+    active_run_plan: DurableActiveRunPlan,
     pending_input_id: String,
 }
 
@@ -278,24 +284,28 @@ impl DurableDispatchPlan {
     }
 
     pub fn effective_run_id(&self) -> &str {
-        self.planned_active_run_id
-            .as_deref()
-            .unwrap_or(&self.request.run_id)
+        match &self.active_run_plan {
+            DurableActiveRunPlan::QueueTo { run_id } => run_id,
+            DurableActiveRunPlan::NoActiveRun | DurableActiveRunPlan::Replace { .. } => {
+                &self.request.run_id
+            }
+        }
     }
 
     pub fn pending_input_id(&self) -> Option<&str> {
-        self.planned_active_run_id
-            .as_ref()
-            .map(|_| self.pending_input_id.as_str())
+        matches!(self.active_run_plan, DurableActiveRunPlan::QueueTo { .. })
+            .then_some(self.pending_input_id.as_str())
     }
 
     pub fn outcome(&self) -> AgentDispatchOutcome {
-        match &self.planned_active_run_id {
-            Some(effective_run_id) => AgentDispatchOutcome::QueuedToActiveRun {
-                effective_run_id: effective_run_id.clone(),
+        match &self.active_run_plan {
+            DurableActiveRunPlan::QueueTo { run_id } => AgentDispatchOutcome::QueuedToActiveRun {
+                effective_run_id: run_id.clone(),
                 pending_input_id: self.pending_input_id.clone(),
             },
-            None => AgentDispatchOutcome::Started,
+            DurableActiveRunPlan::NoActiveRun | DurableActiveRunPlan::Replace { .. } => {
+                AgentDispatchOutcome::Started
+            }
         }
     }
 }
@@ -325,6 +335,52 @@ async fn planned_active_run_id_for_thread(
         return Some(run_id);
     }
     active_run_id_for_thread(inner, thread_id).await
+}
+
+async fn active_run_supports_streaming_input(
+    bridge: &MultiProviderBridge,
+    thread_id: &str,
+    run_id: &str,
+) -> bool {
+    let provider_key = bridge
+        .inner
+        .run_index
+        .read()
+        .await
+        .active_runs
+        .get(run_id)
+        .cloned();
+    let provider_key = match provider_key {
+        Some(provider_key) => Some(provider_key),
+        None => bridge
+            .inner
+            .thread_affinity
+            .read()
+            .await
+            .get(thread_id)
+            .cloned(),
+    };
+    let Some(provider_key) = provider_key else {
+        return false;
+    };
+    bridge
+        .get_provider(&provider_key)
+        .await
+        .is_some_and(|provider| provider.supports_streaming_input())
+}
+
+async fn durable_active_run_plan(
+    bridge: &MultiProviderBridge,
+    thread_id: &str,
+) -> DurableActiveRunPlan {
+    let Some(run_id) = planned_active_run_id_for_thread(&bridge.inner, thread_id).await else {
+        return DurableActiveRunPlan::NoActiveRun;
+    };
+    if active_run_supports_streaming_input(bridge, thread_id, &run_id).await {
+        DurableActiveRunPlan::QueueTo { run_id }
+    } else {
+        DurableActiveRunPlan::Replace { run_id }
+    }
 }
 
 async fn has_active_streaming_run_for_thread(inner: &super::state::Inner, thread_id: &str) -> bool {
@@ -893,13 +949,12 @@ impl MultiProviderBridge {
             lease.ensure_valid().map_err(|error| error.to_string())?;
         }
         let thread_dispatch_guard = self.acquire_thread_dispatch_guard(&request.thread_id).await;
-        let planned_active_run_id =
-            planned_active_run_id_for_thread(&self.inner, &request.thread_id).await;
+        let active_run_plan = durable_active_run_plan(self, &request.thread_id).await;
         Ok(DurableDispatchPlan {
             request,
             run_lease,
             thread_dispatch_guard,
-            planned_active_run_id,
+            active_run_plan,
             pending_input_id,
         })
     }
@@ -915,7 +970,7 @@ impl MultiProviderBridge {
             request,
             run_lease,
             thread_dispatch_guard,
-            planned_active_run_id,
+            active_run_plan,
             pending_input_id,
         } = plan;
         self.start_admitted_run_with_guard(
@@ -924,7 +979,7 @@ impl MultiProviderBridge {
             response_callback,
             thread_dispatch_guard,
             DispatchExecutionMode::Durable {
-                planned_active_run_id,
+                active_run_plan,
                 pending_input_id,
             },
         )
@@ -933,7 +988,8 @@ impl MultiProviderBridge {
     }
 
     /// Plan direct follow-up input without staging a pending record or calling
-    /// the provider. A missing active run is a stable, side-effect-free plan.
+    /// the provider. A missing queue-capable active run is a stable,
+    /// side-effect-free plan so callers can fall back to a replacement run.
     #[allow(clippy::too_many_arguments)]
     pub async fn prepare_durable_stream_input(
         &self,
@@ -946,7 +1002,15 @@ impl MultiProviderBridge {
         pending_input_id: String,
     ) -> DurableStreamInputPlan {
         let thread_dispatch_guard = self.acquire_thread_dispatch_guard(&thread_id).await;
-        let planned_active_run_id = planned_active_run_id_for_thread(&self.inner, &thread_id).await;
+        let planned_active_run_id =
+            match planned_active_run_id_for_thread(&self.inner, &thread_id).await {
+                Some(run_id)
+                    if active_run_supports_streaming_input(self, &thread_id, &run_id).await =>
+                {
+                    Some(run_id)
+                }
+                _ => None,
+            };
         DurableStreamInputPlan {
             thread_id,
             message,
@@ -1108,7 +1172,7 @@ impl MultiProviderBridge {
                 .await
             }
             DispatchExecutionMode::Durable {
-                planned_active_run_id: Some(_),
+                active_run_plan: DurableActiveRunPlan::QueueTo { .. },
                 pending_input_id,
             } => {
                 self.add_streaming_input_with_metadata_exact(
@@ -1124,13 +1188,17 @@ impl MultiProviderBridge {
                 .await
             }
             DispatchExecutionMode::Durable {
-                planned_active_run_id: None,
+                active_run_plan:
+                    DurableActiveRunPlan::NoActiveRun | DurableActiveRunPlan::Replace { .. },
                 ..
             } => None,
         };
         if let Some(queued) = queued {
             if let DispatchExecutionMode::Durable {
-                planned_active_run_id: Some(expected_run_id),
+                active_run_plan:
+                    DurableActiveRunPlan::QueueTo {
+                        run_id: expected_run_id,
+                    },
                 ..
             } = &dispatch_mode
                 && queued.run_id != *expected_run_id
@@ -1169,7 +1237,7 @@ impl MultiProviderBridge {
         if matches!(
             &dispatch_mode,
             DispatchExecutionMode::Durable {
-                planned_active_run_id: Some(_),
+                active_run_plan: DurableActiveRunPlan::QueueTo { .. },
                 ..
             }
         ) {
@@ -1177,9 +1245,28 @@ impl MultiProviderBridge {
                 "durable queued provider handoff outcome is ambiguous".to_owned(),
             ));
         }
-        if matches!(&dispatch_mode, DispatchExecutionMode::Legacy)
-            && has_active_streaming_run_for_thread(&self.inner, &thread_id).await
-        {
+        let active_run_to_replace = match &dispatch_mode {
+            DispatchExecutionMode::Legacy => {
+                planned_active_run_id_for_thread(&self.inner, &thread_id).await
+            }
+            DispatchExecutionMode::Durable {
+                active_run_plan:
+                    DurableActiveRunPlan::Replace {
+                        run_id: expected_run_id,
+                    },
+                ..
+            } => match planned_active_run_id_for_thread(&self.inner, &thread_id).await {
+                Some(active_run_id) if active_run_id == *expected_run_id => Some(active_run_id),
+                Some(active_run_id) => {
+                    return Err(BridgeError::SessionError(format!(
+                        "durable replacement plan changed active run from {expected_run_id} to {active_run_id}",
+                    )));
+                }
+                None => None,
+            },
+            DispatchExecutionMode::Durable { .. } => None,
+        };
+        if active_run_to_replace.is_some() {
             let mut interrupted = provider.interrupt_streaming_session(&thread_id).await;
             let mut aborted_runs = Vec::new();
             if !interrupted {
@@ -1211,6 +1298,7 @@ impl MultiProviderBridge {
                 )
                 .with_run_id(run_id.clone())
                 .with_field("provider_key", json!(provider_key.clone()))
+                .with_field("replaced_run_id", json!(active_run_to_replace))
                 .with_field("aborted_runs", json!(aborted_runs))
                 .with_field("message", json!(summarize_text(&message, 160))),
             )

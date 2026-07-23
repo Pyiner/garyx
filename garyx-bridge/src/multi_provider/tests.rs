@@ -878,6 +878,10 @@ impl ProviderRuntime for QueuedInputProvider {
         Ok(())
     }
 
+    fn supports_streaming_input(&self) -> bool {
+        true
+    }
+
     async fn run_streaming(
         &self,
         options: &ProviderRunOptions,
@@ -4339,6 +4343,102 @@ async fn test_concurrent_start_agent_run_interrupts_non_streaming_follow_up() {
         provider.abort_count() >= 1,
         "non-streaming follow-up should interrupt the in-flight run before restarting"
     );
+
+    provider.release_run();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+async fn durable_dispatch_interrupts_non_streaming_follow_up_instead_of_becoming_ambiguous() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(InterruptingFollowUpProvider::new());
+    let entered_run = provider.entered_run();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::durable-interrupt-follow-up";
+    store.set(thread_id, json!({})).await.unwrap();
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    let first = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(
+            thread_id,
+            "start run",
+            "run-durable-interrupt-follow-up-1",
+            "api",
+            "main",
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(first, None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while provider.run_invocations() < 1 {
+            entered_run.notified().await;
+        }
+    })
+    .await
+    .expect("first run should start");
+
+    let stream_input_plan = bridge
+        .prepare_durable_stream_input(
+            thread_id.to_owned(),
+            "follow-up".to_owned(),
+            None,
+            None,
+            None,
+            Some("intent::durable-interrupt".to_owned()),
+            "pending::durable-stream-interrupt".to_owned(),
+        )
+        .await;
+    assert!(
+        stream_input_plan.effective_run_id().is_none(),
+        "direct stream-input must let the caller fall back when the active provider cannot queue"
+    );
+    assert!(
+        bridge
+            .execute_durable_stream_input(stream_input_plan)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let second = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(
+            thread_id,
+            "follow-up",
+            "run-durable-interrupt-follow-up-2",
+            "api",
+            "main",
+        ),
+    )
+    .await
+    .unwrap();
+    let plan = bridge
+        .prepare_durable_dispatch(second, "pending::durable-interrupt".to_owned())
+        .await
+        .unwrap();
+    let outcome = bridge
+        .execute_durable_dispatch(plan, None)
+        .await
+        .expect("non-streaming follow-up must have a deterministic replacement outcome");
+    assert_eq!(
+        outcome,
+        garyx_models::provider::AgentDispatchOutcome::Started
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while provider.run_invocations() < 2 {
+            entered_run.notified().await;
+        }
+    })
+    .await
+    .expect("replacement run should start after interrupting the first run");
+    assert_eq!(provider.max_concurrent_runs(), 1);
+    assert!(provider.abort_count() >= 1);
 
     provider.release_run();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
