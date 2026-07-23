@@ -62,14 +62,16 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertTrue(state.presentsConversationPage)
         XCTAssertFalse(state.showsFullScreenPlaceholder)
         XCTAssertEqual(state.renderPhase, .openingPage)
-        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertFalse(state.mountsLiveTranscript)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertFalse(state.allowsTranscriptInteraction)
         XCTAssertFalse(state.hasBegunContentPreparation)
 
         state.apply(lifecycle: .appeared)
 
         XCTAssertTrue(state.presentsConversationPage)
         XCTAssertFalse(state.showsFullScreenPlaceholder)
-        XCTAssertTrue(state.showsOpeningPage)
+        XCTAssertTrue(state.showsOpeningTranscriptCover)
         XCTAssertFalse(state.hasBegunContentPreparation)
     }
 
@@ -81,12 +83,16 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         state.apply(lifecycle: .active)
         XCTAssertFalse(state.hasBegunContentPreparation)
         XCTAssertEqual(state.renderPhase, .openingPage)
-        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertFalse(state.mountsLiveTranscript)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertFalse(state.allowsTranscriptInteraction)
         XCTAssertTrue(state.needsPresentedFrameClock)
 
         XCTAssertEqual(state.presentedFrame(interval: nil), .openingPage)
         XCTAssertTrue(state.hasBegunContentPreparation)
-        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertFalse(state.mountsLiveTranscript)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertFalse(state.allowsTranscriptInteraction)
         state.apply(lifecycle: .active)
     }
 
@@ -137,13 +143,15 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         state.apply(lifecycle: .active)
 
         XCTAssertEqual(state.presentedFrame(interval: nil), .openingPage)
-        XCTAssertFalse(state.mountsLiveConversation)
+        XCTAssertFalse(state.mountsLiveTranscript)
         XCTAssertEqual(
             state.presentedFrame(interval: 1.0 / 120.0),
             .materializingConversation
         )
-        XCTAssertTrue(state.mountsLiveConversation)
-        XCTAssertTrue(state.showsOpeningPage)
+        XCTAssertTrue(state.mountsLiveTranscript)
+        XCTAssertTrue(state.showsOpeningTranscriptCover)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertFalse(state.allowsTranscriptInteraction)
         XCTAssertTrue(state.needsPresentedFrameClock)
 
         XCTAssertEqual(
@@ -155,10 +163,11 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
             .materializingConversation
         )
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
-        XCTAssertTrue(state.hasPresentedLiveConversation)
-        XCTAssertFalse(state.showsOpeningPage)
+        XCTAssertTrue(state.hasPresentedLiveTranscript)
+        XCTAssertFalse(state.showsOpeningTranscriptCover)
         XCTAssertFalse(state.needsPresentedFrameClock)
-        XCTAssertTrue(state.allowsLiveConversationInteraction)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertTrue(state.allowsTranscriptInteraction)
     }
 
     func testLiveImplementationHandoffWaitsForStableMaterializationFrame() {
@@ -173,7 +182,8 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .materializingConversation)
         XCTAssertTrue(state.hasBegunContentPreparation)
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
-        XCTAssertTrue(state.allowsLiveConversationInteraction)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertTrue(state.allowsTranscriptInteraction)
     }
 
     func testInFlightHistoryRefreshCannotOwnTranscriptInteractionHandoff() {
@@ -197,9 +207,10 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
             .materializingConversation
         )
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
-        XCTAssertTrue(state.hasPresentedLiveConversation)
-        XCTAssertTrue(state.allowsLiveConversationInteraction)
-        XCTAssertFalse(state.showsOpeningPage)
+        XCTAssertTrue(state.hasPresentedLiveTranscript)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertTrue(state.allowsTranscriptInteraction)
+        XCTAssertFalse(state.showsOpeningTranscriptCover)
     }
 
     func testMissedMaterializationFrameRestartsStabilityProof() {
@@ -280,8 +291,8 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
 
         XCTAssertTrue(state.hasBegunContentPreparation)
         XCTAssertEqual(state.renderPhase, .live)
-        XCTAssertTrue(state.mountsLiveConversation)
-        XCTAssertFalse(state.showsOpeningPage)
+        XCTAssertTrue(state.mountsLiveTranscript)
+        XCTAssertFalse(state.showsOpeningTranscriptCover)
         state.apply(lifecycle: .active)
         XCTAssertEqual(state.renderPhase, .live)
     }
@@ -307,6 +318,29 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
             .ready
         )
         XCTAssertFalse(state.rendersWarmupSurface)
+    }
+
+    func testComposerInteractionIsIndependentOfEveryTranscriptRenderPhase() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 1
+        )
+        state.apply(lifecycle: .active)
+
+        XCTAssertEqual(state.renderPhase, .openingPage)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertFalse(state.allowsTranscriptInteraction)
+
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertFalse(state.allowsTranscriptInteraction)
+
+        XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
+        XCTAssertTrue(state.allowsComposerInteraction)
+        XCTAssertTrue(state.allowsTranscriptInteraction)
     }
 
 }

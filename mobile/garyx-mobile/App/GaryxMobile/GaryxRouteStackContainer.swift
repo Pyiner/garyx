@@ -12,7 +12,7 @@ struct GaryxRouteStackContainerCallbacks {
         GaryxRouteHostLifecyclePhase
     ) -> Void = { _, _ in }
     var hasPresentedFrameDemand: @MainActor () -> Bool = { false }
-    var presentedFrame: @MainActor () -> Void = {}
+    var presentedFrame: @MainActor (TimeInterval) -> Void = { _ in }
     var phaseChanged: @MainActor (GaryxPresentationTransactionPhase) -> Void = { _ in }
     var commitReleased: @MainActor (
         GaryxRoutePresentationNode,
@@ -278,8 +278,8 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             isActive: { [weak self] in
                 self?.callbacks.hasPresentedFrameDemand() == true
             },
-            onFrame: { [weak self] in
-                self?.callbacks.presentedFrame()
+            onFrame: { [weak self] timestamp in
+                self?.callbacks.presentedFrame(timestamp)
             }
         )
 

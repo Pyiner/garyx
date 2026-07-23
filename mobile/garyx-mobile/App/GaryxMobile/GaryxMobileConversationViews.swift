@@ -16,6 +16,20 @@ private func garyxDismissKeyboard() {
     )
 }
 
+/// Transcript content-plane background shared by startup prewarming and the
+/// live message region. Its owner supplies the resolved content size; placing
+/// it behind row content makes blank taps explicit without participating in
+/// link, long-press, or disclosure hit testing.
+struct GaryxTranscriptBlankSpaceTapLayer: View {
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+    }
+}
+
 /// Single preference key carrying BOTH transcript content edges. The top
 /// sentinel and the bottom anchor each contribute their half and SwiftUI
 /// reduces them within one layout pass, so `onPreferenceChange` delivers an
@@ -167,9 +181,9 @@ struct GaryxConversationView: View {
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @Environment(\.garyxMotion) private var motion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var isComposerFocused: Bool
     private let liveStore: GaryxConversationLiveStore
+    private let transcriptStaging: GaryxConversationTranscriptStaging?
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
     /// the scroll-to-bottom control reads its projections.
@@ -195,14 +209,34 @@ struct GaryxConversationView: View {
     /// `Expanded` back first, then unmounts on completion.
     @State private var runtimePanelPresented = false
     @State private var runtimePanelExpanded = false
-    init(destination: GaryxRouteDestination) {
+    init(
+        destination: GaryxRouteDestination,
+        transcriptStaging: GaryxConversationTranscriptStaging? = nil
+    ) {
         liveStore = GaryxConversationLiveStore(destination: destination)
+        self.transcriptStaging = transcriptStaging
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
-                messageScroll(proxy: proxy)
+                if mountsLiveTranscript {
+                    liveTranscript(proxy: proxy)
+                        .allowsHitTesting(allowsTranscriptInteraction)
+                }
+
+                if let transcriptStaging {
+                    // Keep the lightweight continuity pixels mounted after
+                    // reveal. Changing compositor opacity is cheaper than
+                    // tearing down this tree on the handoff frame.
+                    GaryxConversationOpeningTranscriptView(
+                        metadata: transcriptStaging.metadata,
+                        snapshotThreadID: transcriptStaging.snapshotThreadID
+                    )
+                    .opacity(transcriptStaging.renderPhase == .live ? 0 : 0.999)
+                    .allowsHitTesting(!transcriptStaging.allowsTranscriptInteraction)
+                    .accessibilityHidden(true)
+                }
 
                 // The new-thread empty state lives outside the transcript
                 // scroll so it stays anchored between the header and the
@@ -285,86 +319,14 @@ struct GaryxConversationView: View {
                 .animation(motion.animation(.scrollLatest), value: showsScrollToBottomButton)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onAppear {
-                    GaryxConversationSendJitterProbe.shared?.attach(
-                        routeIdentity: liveStore.routeIdentity,
-                        scrollView: { [hostScrollViewBox] in
-                            hostScrollViewBox.currentScrollView()
-                        },
-                        bottommostRow: { [rowGeometryBox] in
-                            rowGeometryBox.bottommostRow()
-                        },
-                        rowMinY: { [rowGeometryBox] rowID in
-                            rowGeometryBox.minY(of: rowID)
-                        }
-                    )
-                    updateScrollState(proxy: proxy) { $0.threadOpened() }
-                    resetTailThinkingPresentation(proxy: proxy)
-                    scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
-                }
-                .onDisappear {
-                    GaryxConversationSendJitterProbe.shared?.detach(
-                        routeIdentity: liveStore.routeIdentity
-                    )
-                }
-                .onChange(of: liveStore.routeIdentity) { _, _ in
-                    setRuntimePanelVisible(false)
-                    pendingHistoryPrefetchThreadId = nil
-                    updateScrollState(proxy: proxy) { $0.threadOpened() }
-                    resetTailThinkingPresentation(proxy: proxy)
-                }
-                .onChange(of: messageScrollObservation) { oldValue, newValue in
-                    defer {
-                        prefetchOlderHistoryIfNeeded()
-                    }
-                    updateScrollState(proxy: proxy) {
-                        $0.messagesChanged(
-                            previous: oldValue.value,
-                            current: newValue.value,
-                            id: \.id,
-                            previousScopeIdentity: oldValue.scopeIdentity,
-                            currentScopeIdentity: newValue.scopeIdentity,
-                            hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
-                        )
-                    }
-                    scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
-                }
-                .onChange(of: renderRowScrollObservation) { oldValue, newValue in
-                    let restore = scrollStateBox.state.renderRowsChanged(
-                        previousIds: oldValue.value,
-                        currentIds: newValue.value,
-                        previousScopeIdentity: oldValue.scopeIdentity,
-                        currentScopeIdentity: newValue.scopeIdentity,
-                        hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
-                    )
-                    if let restore {
-                        // Captured BEFORE the new rows lay out: the geometry
-                        // box still holds the anchor row's pre-prepend
-                        // content-space position.
-                        scheduleReadingAnchorRestore(
-                            restore,
-                            capturedAnchorMinY: rowGeometryBox.minY(of: restore.anchorRowId),
-                            proxy: proxy
-                        )
-                    }
-                    rowGeometryBox.retain(only: Set(newValue.value))
-                    scheduleTranscriptSnapshot(rowIDs: newValue.value)
-                }
-                .onChange(of: liveStore.isThinking(in: model)) { _, _ in
-                    syncTailThinkingPresentation(proxy: proxy)
-                }
-                .onChange(of: isComposerFocused) { _, isFocused in
-                    guard isFocused else { return }
-                    updateScrollState(proxy: proxy) { $0.composerFocused() }
-                }
-                .onChange(of: bottomChromeHeight) { _, _ in
-                    updateScrollState(proxy: proxy) { $0.bottomChromeChanged() }
-                }
         }
         .garyxPageBackground()
         .garyxAdaptiveTopBar {
             GaryxConversationHeader(
                 liveStore: liveStore,
+                stagedMetadata: stagedHeaderMetadata,
+                showsStagedLoading: showsStagedHeaderLoading,
+                preparesRuntimeModels: preparesHeaderRuntimeModels,
                 isRuntimePanelPresented: runtimePanelPresented,
                 onToggleRuntimePanel: {
                     setRuntimePanelVisible(!runtimePanelPresented)
@@ -401,10 +363,121 @@ struct GaryxConversationView: View {
         // Refreshing the capsules list prunes a remotely-deleted capsule's cached
         // preview HTML and bumps the cache epoch, so mounted chat thumbnails
         // re-validate to "deleted".
-        .task(id: "\(liveStore.routeIdentity):\(liveStore.hasCapsuleCards(in: model))") {
-            guard liveStore.hasCapsuleCards(in: model) else { return }
+        .task(
+            id: "\(liveStore.routeIdentity):\(mountsLiveTranscript):"
+                + "\(liveStore.hasCapsuleCards(in: model))"
+        ) {
+            guard mountsLiveTranscript,
+                  liveStore.hasCapsuleCards(in: model) else { return }
             await model.refreshCapsules()
         }
+    }
+
+    private var mountsLiveTranscript: Bool {
+        transcriptStaging?.mountsLiveTranscript ?? true
+    }
+
+    private var allowsTranscriptInteraction: Bool {
+        transcriptStaging?.allowsTranscriptInteraction ?? true
+    }
+
+    private var stagedHeaderMetadata: GaryxConversationOpeningMetadata? {
+        // The model-free metadata protects the moving destination only. Move
+        // the production runtime-backed header into place as soon as the
+        // terminal materialization window opens so reveal itself is only a
+        // transcript compositor handoff.
+        guard transcriptStaging?.renderPhase == .openingPage else { return nil }
+        return transcriptStaging?.metadata
+    }
+
+    private var showsStagedHeaderLoading: Bool {
+        transcriptStaging?.renderPhase == .openingPage && transcriptStaging != nil
+    }
+
+    private var preparesHeaderRuntimeModels: Bool {
+        transcriptStaging?.renderPhase != .openingPage
+    }
+
+    private func liveTranscript(proxy: ScrollViewProxy) -> some View {
+        messageScroll(proxy: proxy)
+            .onAppear {
+                GaryxConversationSendJitterProbe.shared?.attach(
+                    routeIdentity: liveStore.routeIdentity,
+                    scrollView: { [hostScrollViewBox] in
+                        hostScrollViewBox.currentScrollView()
+                    },
+                    bottommostRow: { [rowGeometryBox] in
+                        rowGeometryBox.bottommostRow()
+                    },
+                    rowMinY: { [rowGeometryBox] rowID in
+                        rowGeometryBox.minY(of: rowID)
+                    }
+                )
+                updateScrollState(proxy: proxy) { $0.threadOpened() }
+                if isComposerFocused {
+                    updateScrollState(proxy: proxy) { $0.composerFocused() }
+                }
+                resetTailThinkingPresentation(proxy: proxy)
+                scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
+            }
+            .onDisappear {
+                GaryxConversationSendJitterProbe.shared?.detach(
+                    routeIdentity: liveStore.routeIdentity
+                )
+            }
+            .onChange(of: liveStore.routeIdentity) { _, _ in
+                setRuntimePanelVisible(false)
+                pendingHistoryPrefetchThreadId = nil
+                updateScrollState(proxy: proxy) { $0.threadOpened() }
+                resetTailThinkingPresentation(proxy: proxy)
+            }
+            .onChange(of: messageScrollObservation) { oldValue, newValue in
+                defer {
+                    prefetchOlderHistoryIfNeeded()
+                }
+                updateScrollState(proxy: proxy) {
+                    $0.messagesChanged(
+                        previous: oldValue.value,
+                        current: newValue.value,
+                        id: \.id,
+                        previousScopeIdentity: oldValue.scopeIdentity,
+                        currentScopeIdentity: newValue.scopeIdentity,
+                        hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
+                    )
+                }
+                scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
+            }
+            .onChange(of: renderRowScrollObservation) { oldValue, newValue in
+                let restore = scrollStateBox.state.renderRowsChanged(
+                    previousIds: oldValue.value,
+                    currentIds: newValue.value,
+                    previousScopeIdentity: oldValue.scopeIdentity,
+                    currentScopeIdentity: newValue.scopeIdentity,
+                    hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
+                )
+                if let restore {
+                    // Captured BEFORE the new rows lay out: the geometry box
+                    // still holds the anchor row's pre-prepend content-space
+                    // position.
+                    scheduleReadingAnchorRestore(
+                        restore,
+                        capturedAnchorMinY: rowGeometryBox.minY(of: restore.anchorRowId),
+                        proxy: proxy
+                    )
+                }
+                rowGeometryBox.retain(only: Set(newValue.value))
+                scheduleTranscriptSnapshot(rowIDs: newValue.value)
+            }
+            .onChange(of: liveStore.isThinking(in: model)) { _, _ in
+                syncTailThinkingPresentation(proxy: proxy)
+            }
+            .onChange(of: isComposerFocused) { _, isFocused in
+                guard isFocused else { return }
+                updateScrollState(proxy: proxy) { $0.composerFocused() }
+            }
+            .onChange(of: bottomChromeHeight) { _, _ in
+                updateScrollState(proxy: proxy) { $0.bottomChromeChanged() }
+            }
     }
 
     @ViewBuilder
@@ -512,129 +585,150 @@ struct GaryxConversationView: View {
 
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            // Deliberately an eager VStack: LazyVStack's estimated row
-            // heights put the synthetic bottom anchor below the real
-            // content end, so scroll-to-tail landed in blank phantom space
-            // that the anchor-based metrics could not detect. Long-thread
-            // scroll cost is controlled by keeping per-frame measurements
-            // out of SwiftUI state (`scrollStateBox`) instead.
-            VStack(alignment: .leading, spacing: 14) {
+            ZStack(alignment: .topLeading) {
+                // Give short transcripts a viewport-height content plane. The
+                // gesture owner is attached after this ZStack resolves, so for
+                // long transcripts it expands to the full scroll content height
+                // instead of remaining behind only the first visible page.
                 Color.clear
-                    .frame(height: 1)
-                    .background {
-                        GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: GaryxConversationContentEdgesKey.self,
-                                value: GaryxConversationContentEdges(
-                                    top: geometry.frame(in: .named("garyx-conversation-scroll")).minY
-                                )
-                            )
-                        }
-                    }
+                    .containerRelativeFrame(.vertical) { length, _ in length }
+                    .allowsHitTesting(false)
 
-                let turnRows = routeTurnRows
-                if turnRows.isEmpty,
-                   liveStore.isLoadingInitialHistory(
-                       in: model,
-                       isCanonicalTop: routeContext.isCanonicalTop
-                   ) {
-                    GaryxThreadHistoryLoadingView()
-                        .padding(.top, 12)
-                        .onAppear {
-                            GaryxRoutePushPerformanceProbe.shared?.markConversationMessageLoading()
+                VStack(alignment: .leading) {
+                    // Deliberately an eager VStack: LazyVStack's estimated row
+                    // heights put the synthetic bottom anchor below the real
+                    // content end, so scroll-to-tail landed in blank phantom space
+                    // that the anchor-based metrics could not detect. Long-thread
+                    // scroll cost is controlled by keeping per-frame measurements
+                    // out of SwiftUI state (`scrollStateBox`) instead.
+                    VStack(alignment: .leading, spacing: 14) {
+                        Color.clear
+                            .frame(height: 1)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: GaryxConversationContentEdgesKey.self,
+                                        value: GaryxConversationContentEdges(
+                                            top: geometry.frame(in: .named("garyx-conversation-scroll")).minY
+                                        )
+                                    )
+                                }
+                            }
+
+                        let turnRows = routeTurnRows
+                        if turnRows.isEmpty,
+                           liveStore.isLoadingInitialHistory(
+                               in: model,
+                               isCanonicalTop: routeContext.isCanonicalTop
+                           )
+                        {
+                            GaryxThreadHistoryLoadingView()
+                                .padding(.top, 12)
+                                .onAppear {
+                                    GaryxRoutePushPerformanceProbe.shared?.markConversationMessageLoading()
+                                }
+                        } else if turnRows.isEmpty {
+                            if liveStore.isThinking(in: model) {
+                                if showsDebouncedTailThinking {
+                                    GaryxThinkingLabel()
+                                        .padding(.top, 96)
+                                        .transition(.opacity)
+                                }
+                            } else if liveStore.threadID != nil {
+                                GaryxSelectedThreadEmptyConversationView()
+                                    .padding(.top, 96)
+                            }
+                        } else {
+                            if liveStore.hasMoreRenderableHistory(
+                                in: model,
+                                isCanonicalTop: routeContext.isCanonicalTop
+                            ) {
+                                // Older history loads automatically as the reader nears
+                                // the top (two-stage: reveal window-hidden in-memory rows
+                                // first, then page the network — TASK-1751 P3). This row
+                                // is the top boundary sentinel plus the only loading
+                                // affordance; there is no manual load button.
+                                GaryxEarlierHistoryLoadingIndicator(
+                                    isLoading: model.isLoadingOlderThreadHistory
+                                )
+                                .onAppear {
+                                    prefetchOlderHistoryIfNeeded()
+                                }
+                            }
+                            GaryxMobileTurnRowsView(
+                                rows: turnRows,
+                                prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
+                                onNearHistoryBoundary: {
+                                    prefetchOlderHistoryIfNeeded()
+                                },
+                                onRowContentMinYChange: { rowId, minY in
+                                    // Plain box write: content-space geometry never
+                                    // changes from scrolling, so this only fires on
+                                    // layout changes and never invalidates the body.
+                                    rowGeometryBox.record(rowId, minY: minY)
+                                }
+                            )
+                            if showsDebouncedTailThinking {
+                                GaryxThinkingLabel()
+                                    .id(tailThinkingAnchorId)
+                                    .transition(.opacity)
+                            }
+                            if let rateLimit = liveStore.rateLimit(in: model),
+                               let threadId = liveStore.threadID
+                            {
+                                GaryxRateLimitBanner(rateLimit: rateLimit) {
+                                    try await model.retryThreadQuotaRecovery(threadId: threadId)
+                                }
+                                .transition(motion.transition(.transcriptAppear))
+                            }
                         }
-                } else if turnRows.isEmpty {
-                    if liveStore.isThinking(in: model) {
-                        if showsDebouncedTailThinking {
-                            GaryxThinkingLabel()
-                                .padding(.top, 96)
-                                .transition(.opacity)
-                        }
-                    } else if liveStore.threadID != nil {
-                        GaryxSelectedThreadEmptyConversationView()
-                            .padding(.top, 96)
                     }
-                } else {
-                    if liveStore.hasMoreRenderableHistory(
-                        in: model,
-                        isCanonicalTop: routeContext.isCanonicalTop
-                    ) {
-                        // Older history loads automatically as the reader nears
-                        // the top (two-stage: reveal window-hidden in-memory rows
-                        // first, then page the network — TASK-1751 P3). This row
-                        // is the top boundary sentinel plus the only loading
-                        // affordance; there is no manual load button.
-                        GaryxEarlierHistoryLoadingIndicator(
-                            isLoading: model.isLoadingOlderThreadHistory
-                        )
-                        .onAppear {
-                            prefetchOlderHistoryIfNeeded()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    // Content coordinate space for row geometry: scroll-invariant, so
+                    // a row's minY here only moves when the layout itself changes —
+                    // the ruler for exact prepend compensation.
+                    .coordinateSpace(name: garyxConversationContentSpaceName)
+                    .garyxVerticalScrollContentWidth(alignment: .topLeading)
+                    // Resolve the hosting UIScrollView for exact older-history
+                    // prepend offset compensation. Must sit on content INSIDE the
+                    // scroll view so the superview walk reaches it.
+                    .background(GaryxEnclosingScrollViewReader(box: hostScrollViewBox))
+                    // Do not attach a count-driven animation to the transcript
+                    // container. A send changes the message count, composer height,
+                    // spacer, and bottom anchor in the same layout pass; animating the
+                    // whole stack makes the scroll view visibly wobble.
+
+                    Color.clear
+                        .frame(height: conversationBottomChromeClearance)
+                        .accessibilityHidden(true)
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(conversationBottomAnchorId)
+                        .accessibilityHidden(true)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: GaryxConversationContentEdgesKey.self,
+                                    value: GaryxConversationContentEdges(
+                                        bottom: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
+                                    )
+                                )
+                            }
                         }
-                    }
-                    GaryxMobileTurnRowsView(
-                        rows: turnRows,
-                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
-                        onNearHistoryBoundary: {
-                            prefetchOlderHistoryIfNeeded()
-                        },
-                        onRowContentMinYChange: { rowId, minY in
-                            // Plain box write: content-space geometry never
-                            // changes from scrolling, so this only fires on
-                            // layout changes and never invalidates the body.
-                            rowGeometryBox.record(rowId, minY: minY)
-                        }
-                    )
-                    if showsDebouncedTailThinking {
-                        GaryxThinkingLabel()
-                            .id(tailThinkingAnchorId)
-                            .transition(.opacity)
-                    }
-                    if let rateLimit = liveStore.rateLimit(in: model),
-                       let threadId = liveStore.threadID {
-                        GaryxRateLimitBanner(rateLimit: rateLimit) {
-                            try await model.retryThreadQuotaRecovery(threadId: threadId)
-                        }
-                        .transition(motion.transition(.transcriptAppear))
-                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 18)
-            .padding(.bottom, 24)
-            // Content coordinate space for row geometry: scroll-invariant, so
-            // a row's minY here only moves when the layout itself changes —
-            // the ruler for exact prepend compensation.
-            .coordinateSpace(name: garyxConversationContentSpaceName)
-            .garyxVerticalScrollContentWidth(alignment: .topLeading)
-            // Resolve the hosting UIScrollView for exact older-history
-            // prepend offset compensation. Must sit on content INSIDE the
-            // scroll view so the superview walk reaches it.
-            .background(GaryxEnclosingScrollViewReader(box: hostScrollViewBox))
-            // Do not attach a count-driven animation to the transcript
-            // container. A send changes the message count, composer height,
-            // spacer, and bottom anchor in the same layout pass; animating the
-            // whole stack makes the scroll view visibly wobble.
-
-            Color.clear
-                .frame(height: conversationBottomChromeClearance)
-                .accessibilityHidden(true)
-
-            Color.clear
-                .frame(height: 1)
-                .id(conversationBottomAnchorId)
-                .accessibilityHidden(true)
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: GaryxConversationContentEdgesKey.self,
-                            value: GaryxConversationContentEdges(
-                                bottom: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
-                            )
-                        )
-                    }
-                }
+            // Resolve the blank-space owner from the complete content plane:
+            // max(viewport height, intrinsic transcript height). Row links,
+            // long presses, and disclosures remain above this background.
+            .background {
+                GaryxTranscriptBlankSpaceTapLayer(action: dismissComposerKeyboard)
+            }
         }
         .id(conversationScrollIdentity)
+        .accessibilityIdentifier("garyx-conversation-transcript")
         .garyxBottomAnchoredTranscript()
         // The transcript is laid out top-down: short conversations start at
         // the top of the viewport. Tail anchoring is driven explicitly by the
@@ -661,8 +755,8 @@ struct GaryxConversationView: View {
             }
             applyMetrics(metrics, proxy: proxy)
         }
-        .scrollDisabled(isComposerFocused || sidebarDragActive)
-        .scrollDismissesKeyboard(.never)
+        .scrollDisabled(sidebarDragActive)
+        .scrollDismissesKeyboard(.interactively)
         .garyxUserScrollInteraction { isInteracting in
             updateScrollState(proxy: proxy) {
                 $0.userScrollInteractionChanged(isInteracting: isInteracting)
@@ -673,27 +767,6 @@ struct GaryxConversationView: View {
         // exactly one meaning here — reach for older history (isPulledPastTop).
         // Keeping pull-to-refresh would bind two conflicting intents to the
         // same gesture.
-        .overlay {
-            if isComposerFocused {
-                GeometryReader { geometry in
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            dismissComposerKeyboard()
-                        }
-                        .gesture(
-                            DragGesture(minimumDistance: 6, coordinateSpace: .local)
-                                .onChanged { value in
-                                    guard !startsInLeadingNavigationEdge(
-                                        x: value.startLocation.x,
-                                        width: geometry.size.width
-                                    ) else { return }
-                                    dismissComposerKeyboard()
-                                }
-                        )
-                }
-            }
-        }
     }
 
     private var showsNewThreadEmptyState: Bool {
@@ -1026,20 +1099,18 @@ struct GaryxConversationView: View {
     }
 
     private func dismissComposerKeyboard() {
-        guard isComposerFocused else { return }
         isComposerFocused = false
         garyxDismissKeyboard()
     }
 
-    private func startsInLeadingNavigationEdge(x: CGFloat, width: CGFloat) -> Bool {
-        let leadingInset = layoutDirection == .rightToLeft ? width - x : x
-        return leadingInset <= GaryxRouteTransitionCalibration.edgeZoneWidth
-    }
 }
 
 struct GaryxConversationHeader: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let liveStore: GaryxConversationLiveStore
+    let stagedMetadata: GaryxConversationOpeningMetadata?
+    let showsStagedLoading: Bool
+    let preparesRuntimeModels: Bool
     let isRuntimePanelPresented: Bool
     let onToggleRuntimePanel: () -> Void
     let onDismissRuntimePanel: () -> Void
@@ -1064,6 +1135,9 @@ struct GaryxConversationHeader: View {
                 } else {
                     GaryxThreadRuntimeHeaderControl(
                         routeSummary: liveStore.summary(in: model),
+                        presentationTitle: stagedMetadata?.title,
+                        presentationTarget: stagedMetadata?.agentTarget,
+                        preparesRuntimeModels: preparesRuntimeModels,
                         isHidden: isRuntimePanelPresented,
                         onToggle: onToggleRuntimePanel
                     )
@@ -1107,7 +1181,7 @@ struct GaryxConversationHeader: View {
                             Task { await model.deleteSelectedThread() }
                         }
                     } label: {
-                        if liveStore.isLoadingInitialHistory(in: model, isCanonicalTop: true) {
+                        if showsHeaderLoading {
                             GaryxToolbarIcon {
                                 GaryxInkSpinner()
                             }
@@ -1117,9 +1191,7 @@ struct GaryxConversationHeader: View {
                     }
                     .buttonStyle(GaryxPressableRowStyle(prepares: .threadPinChanged))
                     .accessibilityLabel(
-                        liveStore.isLoadingInitialHistory(in: model, isCanonicalTop: true)
-                            ? "Loading thread"
-                            : "Thread actions"
+                        showsHeaderLoading ? "Loading thread" : "Thread actions"
                     )
                 }
             }
@@ -1163,6 +1235,11 @@ struct GaryxConversationHeader: View {
         }
     }
 
+    private var showsHeaderLoading: Bool {
+        showsStagedLoading
+            || liveStore.isLoadingInitialHistory(in: model, isCanonicalTop: true)
+    }
+
     @ViewBuilder
     private var threadBotMenuLabel: some View {
         if let group = model.selectedThreadBotGroup {
@@ -1194,6 +1271,9 @@ struct GaryxConversationHeader: View {
 private struct GaryxThreadRuntimeHeaderControl: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let routeSummary: GaryxThreadSummary?
+    let presentationTitle: String?
+    let presentationTarget: GaryxMobileAgentTarget?
+    let preparesRuntimeModels: Bool
     /// While the morph surface is presented it renders this control's twin
     /// at the same anchor rect, so the in-bar original hides without
     /// leaving layout (keeping the anchor alive for the collapse morph).
@@ -1202,12 +1282,18 @@ private struct GaryxThreadRuntimeHeaderControl: View {
 
     private var selectedThread: GaryxThreadSummary? { routeSummary }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
-    private var title: String { selectedThread?.title ?? model.draftThreadTitle }
+    private var title: String {
+        normalized(presentationTitle) ?? selectedThread?.title ?? model.draftThreadTitle
+    }
+
+    private var target: GaryxMobileAgentTarget? {
+        presentationTarget ?? model.selectedThreadAgentTarget
+    }
 
     private var providerType: String {
         normalized(runtime?.providerType)
             ?? normalized(selectedThread?.providerType)
-            ?? normalized(model.selectedThreadAgentTarget?.providerType)
+            ?? normalized(target?.providerType)
             ?? ""
     }
 
@@ -1218,7 +1304,10 @@ private struct GaryxThreadRuntimeHeaderControl: View {
             // hoisted into the container's shared pass and draws over the
             // title/avatar (iOS 26), so the surface must never live in a
             // `.background` here.
-            GaryxThreadRuntimeCompactRow()
+            GaryxThreadRuntimeCompactContentRow(
+                title: title,
+                target: target
+            )
                 .garyxAdaptiveGlass(
                     .regular,
                     isInteractive: false,
@@ -1239,7 +1328,8 @@ private struct GaryxThreadRuntimeHeaderControl: View {
         .anchorPreference(key: GaryxThreadRuntimeChromeAnchorKey.self, value: .bounds) { $0 }
         .layoutPriority(1)
         .task(id: providerType) {
-            guard !providerType.isEmpty,
+            guard preparesRuntimeModels,
+                  !providerType.isEmpty,
                   model.providerModelsByType[providerType] == nil else {
                 return
             }

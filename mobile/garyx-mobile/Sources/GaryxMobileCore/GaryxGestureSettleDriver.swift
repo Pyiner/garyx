@@ -12,8 +12,13 @@ public protocol GaryxGestureSettleTimeSource: AnyObject {
 /// implementation; Core tests supply a manually advanced source.
 public protocol GaryxGestureSettleFrameSource: AnyObject {
     var onFrame: (() -> Void)? { get set }
+    var latestFrameTimestamp: TimeInterval? { get }
     func start()
     func invalidate()
+}
+
+public extension GaryxGestureSettleFrameSource {
+    var latestFrameTimestamp: TimeInterval? { nil }
 }
 
 /// Refresh-rate-independent driver for one scalar spring settle.
@@ -27,7 +32,7 @@ public final class GaryxGestureSettleDriver {
 
     private struct SupplementalFrameObserver {
         let isActive: () -> Bool
-        let onFrame: () -> Void
+        let onFrame: (TimeInterval) -> Void
     }
 
     private struct ActiveSettle {
@@ -64,7 +69,7 @@ public final class GaryxGestureSettleDriver {
     /// navigation boundary.
     public func setSupplementalFrameObserver(
         isActive: @escaping () -> Bool,
-        onFrame: @escaping () -> Void
+        onFrame: @escaping (TimeInterval) -> Void
     ) {
         supplementalFrameObserver = SupplementalFrameObserver(
             isActive: isActive,
@@ -128,7 +133,9 @@ public final class GaryxGestureSettleDriver {
 
     private func handleFrame() {
         if supplementalFrameObserver?.isActive() == true {
-            supplementalFrameObserver?.onFrame()
+            supplementalFrameObserver?.onFrame(
+                frameSource.latestFrameTimestamp ?? timeSource.now
+            )
         }
 
         guard let activeSettle else {
