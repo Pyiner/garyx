@@ -1,166 +1,16 @@
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
 import test from "node:test";
 
-const moduleStub = (source) =>
-  `data:text/javascript,${encodeURIComponent(source)}`;
-
-const reactStub = moduleStub(`
-  export const useContext = () => null;
-  export const useEffect = (effect, deps) =>
-    globalThis.__composerSendHookRuntime.useEffect(effect, deps);
-  export const useLayoutEffect = (effect, deps) =>
-    globalThis.__composerSendHookRuntime.useLayoutEffect(effect, deps);
-  export const useRef = (initialValue) =>
-    globalThis.__composerSendHookRuntime.useRef(initialValue);
-`);
-const messageScrollerStub = moduleStub(`
-  export const useMessageScroller = () =>
-    globalThis.__composerSendHookRuntime.useMessageScroller();
-`);
-const gatewayMirrorReactStub = moduleStub(
-  "export const GatewayMirrorContext = {};",
-);
-const transcriptMaterializeStub = moduleStub(`
-  export const messagesNearEarlierUserTurnBoundary = () => false;
-`);
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "react") {
-      return { shortCircuit: true, url: reactStub };
-    }
-    if (specifier === "@/components/ui/message-scroller") {
-      return { shortCircuit: true, url: messageScrollerStub };
-    }
-    if (
-      specifier === "../../gateway-mirror/react" &&
-      context.parentURL?.endsWith("/thread-transcript-scroll.ts")
-    ) {
-      return { shortCircuit: true, url: gatewayMirrorReactStub };
-    }
-    if (
-      specifier === "../../gateway-mirror/transcript-materialize" &&
-      context.parentURL?.endsWith("/thread-transcript-scroll.ts")
-    ) {
-      return { shortCircuit: true, url: transcriptMaterializeStub };
-    }
-    if (
-      specifier === "./transcript-scroll-anchor" &&
-      context.parentURL?.endsWith("/thread-transcript-scroll.ts")
-    ) {
-      return nextResolve(`${specifier}.ts`, context);
-    }
-    return nextResolve(specifier, context);
-  },
-});
-
-const {
-  TranscriptScrollBridge,
-  useTailThinkingScrollStability,
-} = await import("./app-shell/components/thread-transcript-scroll.ts");
-const { deriveThreadActivityModel } = await import(
-  "./app-shell/thread-activity.ts"
-);
-const { buildThreadViewRowsWithLocalUsers } = await import(
-  "./render-view-model.ts"
-);
-
-class HookInstance {
-  constructor() {
-    this.cursor = 0;
-    this.dependencies = [];
-    this.layoutEffects = [];
-    this.passiveEffects = [];
-    this.refs = [];
-  }
-
-  render(renderHook) {
-    this.cursor = 0;
-    this.layoutEffects = [];
-    this.passiveEffects = [];
-    globalThis.__composerSendHookRuntime = this;
-    renderHook();
-  }
-
-  useRef(initialValue) {
-    const index = this.cursor++;
-    if (!this.refs[index]) {
-      this.refs[index] = { current: initialValue };
-    }
-    return this.refs[index];
-  }
-
-  useLayoutEffect(effect, dependencies) {
-    this.#registerEffect(this.layoutEffects, effect, dependencies);
-  }
-
-  useEffect(effect, dependencies) {
-    this.#registerEffect(this.passiveEffects, effect, dependencies);
-  }
-
-  useMessageScroller() {
-    return this.messageScroller;
-  }
-
-  runLayoutEffects() {
-    globalThis.__composerSendHookRuntime = this;
-    for (const effect of this.layoutEffects) {
-      effect();
-    }
-  }
-
-  runPassiveEffects() {
-    globalThis.__composerSendHookRuntime = this;
-    for (const effect of this.passiveEffects) {
-      effect();
-    }
-  }
-
-  #registerEffect(queue, effect, dependencies) {
-    const index = this.cursor++;
-    const previous = this.dependencies[index];
-    const changed =
-      !previous ||
-      previous.length !== dependencies.length ||
-      dependencies.some((dependency, dependencyIndex) => {
-        return !Object.is(dependency, previous[dependencyIndex]);
-      });
-    this.dependencies[index] = dependencies;
-    if (changed) {
-      queue.push(effect);
-    }
-  }
-}
-
-class FakeHTMLElement {
-  constructor(rect = {}) {
-    this.hidden = false;
-    this.isConnected = true;
-    this.previousElementSibling = null;
-    this.rect = rect;
-  }
-
-  getBoundingClientRect() {
-    return {
-      bottom: this.rect.bottom ?? 0,
-      height: this.rect.height ?? 0,
-      top: this.rect.top ?? 0,
-    };
-  }
-}
-
-globalThis.HTMLElement = FakeHTMLElement;
-globalThis.getComputedStyle = () => ({ rowGap: "14px" });
-
-function styleDeclaration() {
-  const values = new Map();
-  return {
-    getPropertyValue: (property) => values.get(property) ?? "",
-    removeProperty: (property) => values.delete(property),
-    setProperty: (property, value) => values.set(property, value),
-  };
-}
+import { deriveThreadActivityModel } from "./app-shell/thread-activity.ts";
+import { tailThinkingScrollReserve } from "./app-shell/components/transcript-scroll-anchor.ts";
+import {
+  applyTranscriptScrollTransaction,
+  beginTranscriptScrollTransaction,
+  decideTranscriptBottomScroll,
+  messageTailSignature,
+  settleTranscriptScrollTransaction,
+} from "./app-shell/components/transcript-scroll-transaction.ts";
+import { buildThreadViewRowsWithLocalUsers } from "./render-view-model.ts";
 
 function renderStateFixture() {
   return {
@@ -188,7 +38,7 @@ function renderStateFixture() {
   };
 }
 
-test("composer send keeps the optimistic user row and thinking tail above the composer", () => {
+test("composer send force-bottom transaction keeps the optimistic row and thinking tail visible", () => {
   const threadId = "thread::scroll-repro";
   const committedMessages = [
     {
@@ -242,120 +92,98 @@ test("composer send keeps the optimistic user row and thinking tail above the co
   const rowGap = 14;
   const thinkingHeight = 24;
   const optimisticBubbleHeight = 80;
-  const tailReserve = thinkingHeight + rowGap;
+  const tailReserve = tailThinkingScrollReserve(
+    thinkingHeight,
+    rowGap,
+    true,
+  );
   const runningBottomPadding =
     composerScrollClip + composerMessageClearance - tailReserve;
   const optimisticRowExtent = optimisticBubbleHeight + rowGap;
   const latestScrollTop = beforeScrollTop + optimisticRowExtent;
 
-  const anchorDocumentTop = beforeScrollTop + 34;
-  const anchor = new FakeHTMLElement();
-  const priorUser = new FakeHTMLElement();
-  const optimisticRow = new FakeHTMLElement();
-  const thinkingRow = new FakeHTMLElement({ height: thinkingHeight });
-  thinkingRow.previousElementSibling = optimisticRow;
-  const content = new FakeHTMLElement();
-  let showTailThinking = false;
-  let viewport;
-  anchor.getBoundingClientRect = () => {
-    const top = anchorDocumentTop - viewport.scrollTop;
-    return { bottom: top + 66, height: 66, top };
-  };
-  content.querySelectorAll = (selector) =>
-    selector === '[data-slot="message-scroller-item"]'
-      ? [anchor, priorUser]
-      : [];
-  content.querySelector = (selector) =>
-    selector === '[data-tail-thinking-row="true"]' && showTailThinking
-      ? thinkingRow
-      : null;
-  viewport = {
+  const viewport = {
     clientHeight,
-    contains: (candidate) => candidate === anchor,
-    getBoundingClientRect: () => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      top: 0,
-    }),
-    querySelector: (selector) =>
-      selector === '[data-slot="message-scroller-content"]' ? content : null,
-    scrollHeight: beforeScrollTop + clientHeight,
-    scrollTo: ({ top }) => {
-      viewport.scrollTop = top;
-    },
+    contains: () => true,
+    scrollHeight: latestScrollTop + clientHeight,
     scrollTop: beforeScrollTop,
-    style: styleDeclaration(),
   };
-  const messagesRef = { current: viewport };
-  const scrollIntent = {
-    pendingThreadBottomSnapRef: { current: null },
-    forceMessagesBottomSnapRef: { current: false },
-    shouldStickMessagesToBottomRef: { current: true },
-    pendingMessagesPrependAnchorRef: { current: null },
-    lastRenderedMessageThreadRef: { current: null },
-    lastRenderedMessageCountRef: { current: 0 },
-    lastRenderedMessageTailSignatureRef: { current: "0" },
-    selectedThreadIdRef: { current: threadId },
+  const anchorDocumentTop = beforeScrollTop + 34;
+  const anchorElement = {
+    isConnected: true,
+    getBoundingClientRect: () => ({
+      top: anchorDocumentTop - viewport.scrollTop,
+    }),
   };
+  const priorTailSignature = messageTailSignature(committedMessages);
+  const bottomDecision = decideTranscriptBottomScroll({
+    activeMessages,
+    currentThreadId: threadId,
+    forceBottomSnap: true,
+    historyLoading: false,
+    pendingThreadBottomSnap: threadId,
+    previousTailSignature: priorTailSignature,
+    previousThreadId: threadId,
+    shouldStickToBottom: true,
+  });
 
-  const tailHook = new HookInstance();
-  const bridgeHook = new HookInstance();
-  bridgeHook.messageScroller = {
-    scrollToEnd: () => {
-      viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
+  assert.equal(bottomDecision.forceSnap, true);
+  assert.equal(bottomDecision.shouldSnapToBottom, true);
+  assert.equal(bottomDecision.messageTailChanged, true);
+
+  const transaction = beginTranscriptScrollTransaction({
+    active: null,
+    anchor: {
+      element: anchorElement,
+      viewportTop: 34,
     },
+    forceBottom:
+      bottomDecision.forceSnap && bottomDecision.shouldSnapToBottom,
+    preserveTailAnchor: true,
+    revision: 1,
+    scopeKey: threadId,
+  });
+  assert.equal(transaction?.mode, "force-bottom");
+  assert.ok(transaction);
+
+  let followBottomCalls = 0;
+  const followBottom = () => {
+    followBottomCalls += 1;
+    viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
   };
+  applyTranscriptScrollTransaction(viewport, transaction, followBottom);
+  assert.equal(viewport.scrollTop, latestScrollTop);
 
-  tailHook.render(() =>
-    useTailThinkingScrollStability({
-      messagesRef,
-      scopeKey: threadId,
-      showTailThinking: false,
-    }),
+  const resizeTransaction = beginTranscriptScrollTransaction({
+    active: transaction,
+    anchor: {
+      element: anchorElement,
+      viewportTop: 34,
+    },
+    forceBottom: false,
+    preserveTailAnchor: true,
+    revision: 2,
+    scopeKey: threadId,
+  });
+  assert.strictEqual(
+    resizeTransaction,
+    transaction,
+    "a ResizeObserver anchor pass cannot downgrade force-bottom",
   );
-  bridgeHook.render(() =>
-    TranscriptScrollBridge({
-      activeMessages: committedMessages,
-      activeThreadMessageKey: threadId,
-      historyLoading: false,
-      scrollIntent,
-    }),
-  );
-  // React commits descendant layout effects before the parent ThreadPage hook.
-  bridgeHook.runLayoutEffects();
-  tailHook.runLayoutEffects();
-  tailHook.runPassiveEffects();
 
-  showTailThinking = true;
-  viewport.scrollHeight = latestScrollTop + clientHeight;
-  scrollIntent.pendingThreadBottomSnapRef.current = threadId;
-  scrollIntent.forceMessagesBottomSnapRef.current = true;
-  scrollIntent.shouldStickMessagesToBottomRef.current = true;
-
-  tailHook.render(() =>
-    useTailThinkingScrollStability({
-      messagesRef,
-      scopeKey: threadId,
-      showTailThinking: true,
-    }),
+  // Model the competing observer correction that used to restore the prior
+  // row anchor, then re-apply the coordinator's authoritative transaction.
+  viewport.scrollTop = beforeScrollTop;
+  applyTranscriptScrollTransaction(
+    viewport,
+    resizeTransaction,
+    followBottom,
   );
-  bridgeHook.render(() =>
-    TranscriptScrollBridge({
-      activeMessages,
-      activeThreadMessageKey: threadId,
-      historyLoading: false,
-      scrollIntent,
-    }),
-  );
-  bridgeHook.runLayoutEffects();
+  assert.equal(followBottomCalls, 2);
   assert.equal(
-    viewport.scrollTop,
-    latestScrollTop,
-    "the forced dispatch snap reaches the latest content first",
+    settleTranscriptScrollTransaction(resizeTransaction, resizeTransaction),
+    null,
   );
-  assert.equal(scrollIntent.pendingThreadBottomSnapRef.current, null);
-  assert.equal(scrollIntent.forceMessagesBottomSnapRef.current, false);
-  tailHook.runLayoutEffects();
 
   const bottomDistance =
     viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
@@ -379,6 +207,5 @@ test("composer send keeps the optimistic user row and thinking tail above the co
       tailVisibleAboveComposer: true,
       userBubbleClearsComposer: true,
     },
-    "the parent tail anchor restoration must not undo a forced composer-send snap",
   );
 });

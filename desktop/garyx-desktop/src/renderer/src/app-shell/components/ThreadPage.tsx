@@ -50,8 +50,7 @@ import type { MessageIntent } from "../../message-machine";
 import type { ComposerPendingUpload } from "../useMessageDispatchController";
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import {
-  TranscriptScrollBridge,
-  useTailThinkingScrollStability,
+  TranscriptScrollCoordinator,
   useThreadTranscriptScroll,
   type TranscriptScrollIntent,
 } from "./thread-transcript-scroll";
@@ -749,11 +748,6 @@ export function ThreadPage({
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const threadMainRef = useRef<HTMLDivElement | null>(null);
   const isSideChatSurface = surfaceVariant === "side-chat";
-  useTailThinkingScrollStability({
-    messagesRef,
-    scopeKey: activeThreadMessageKey ?? selectedThreadId,
-    showTailThinking,
-  });
   // Resolve render_state seq refs against committed bodies by the raw record
   // seq stamped at the wire boundary (TranscriptMessage.seq). The message id is
   // unreliable here — optimistic reconciliation rewrites it to a stable id.
@@ -1104,10 +1098,13 @@ export function ThreadPage({
             <ArrowDown aria-hidden size={16} strokeWidth={2} />
             <span className="sr-only">{t("Scroll to latest")}</span>
           </MessageScrollerButton>
-          <TranscriptScrollBridge
+          <TranscriptScrollCoordinator
             activeMessages={activeMessages}
             activeThreadMessageKey={activeThreadMessageKey}
             historyLoading={historyLoading}
+            messagesRef={messagesRef}
+            scopeKey={activeThreadMessageKey ?? selectedThreadId}
+            showTailThinking={showTailThinking}
             scrollIntent={scrollIntent}
           />
           </MessageScroller>

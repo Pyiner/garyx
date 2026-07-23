@@ -6,6 +6,11 @@ import {
   restoreTranscriptScrollAnchor,
   tailThinkingScrollReserve,
 } from "./app-shell/components/transcript-scroll-anchor.ts";
+import {
+  applyTranscriptScrollTransaction,
+  beginTranscriptScrollTransaction,
+  settleTranscriptScrollTransaction,
+} from "./app-shell/components/transcript-scroll-transaction.ts";
 
 const read = (relativePath) =>
   readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -67,8 +72,8 @@ test("the old out-of-flow anchor chrome design is fully removed", () => {
   );
   assert.match(
     transcriptScroll,
-    /useTailThinkingScrollStability/,
-    "tail lifecycle stability belongs to the transcript scroll owner",
+    /TranscriptScrollCoordinator/,
+    "tail lifecycle stability belongs to the single transcript scroll owner",
   );
   assert.match(
     threadPage,
@@ -143,5 +148,54 @@ test("thinking-to-first-output is an atomic visual-anchor handoff", () => {
     }),
     { correction: -36, scrollTop: 3_530 },
     "the first assistant glyph cannot consume the prior tail clearance as a jump",
+  );
+});
+
+test("tail anchor preservation remains authoritative through the resize pass", () => {
+  const viewport = {
+    contains: (candidate) => candidate === anchor,
+    scrollTop: 3_568,
+  };
+  const anchorDocumentTop = 3_564;
+  const anchor = {
+    isConnected: true,
+    getBoundingClientRect: () => ({
+      top: anchorDocumentTop - viewport.scrollTop,
+    }),
+  };
+  const transaction = beginTranscriptScrollTransaction({
+    active: null,
+    anchor: {
+      element: anchor,
+      viewportTop: 34,
+    },
+    forceBottom: false,
+    preserveTailAnchor: true,
+    revision: 1,
+    scopeKey: "thread::tail-stability",
+  });
+  assert.equal(transaction?.mode, "preserve-tail-anchor");
+  assert.ok(transaction);
+
+  const unexpectedFollowBottom = () => {
+    assert.fail("a preserve-tail-anchor transaction must not follow bottom");
+  };
+  applyTranscriptScrollTransaction(
+    viewport,
+    transaction,
+    unexpectedFollowBottom,
+  );
+  assert.equal(viewport.scrollTop, 3_530);
+
+  viewport.scrollTop = 3_568;
+  applyTranscriptScrollTransaction(
+    viewport,
+    transaction,
+    unexpectedFollowBottom,
+  );
+  assert.equal(viewport.scrollTop, 3_530);
+  assert.equal(
+    settleTranscriptScrollTransaction(transaction, transaction),
+    null,
   );
 });
