@@ -71,7 +71,6 @@ function mapAutomationStatus(
     case "never_run":
       return "success";
     case "failed":
-    case "failed_dropped":
       return "failed";
     default:
       throw new GatewayContractError(path, "must be a current JobRunStatus");

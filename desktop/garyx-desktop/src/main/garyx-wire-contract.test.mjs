@@ -159,12 +159,12 @@ test("task DTOs accept only the canonical snake_case principal shape", async () 
   );
 });
 
-test("automation activity replays canonical camelCase and maps failed_dropped", async () => {
+test("automation activity replays canonical camelCase", async () => {
   const canonical = {
     items: [
       {
         runId: "run::automation-test",
-        status: "failed_dropped",
+        status: "failed",
         startedAt: "2026-01-02T03:04:05Z",
         finishedAt: "2026-01-02T03:05:05Z",
         durationMs: 60_000,
