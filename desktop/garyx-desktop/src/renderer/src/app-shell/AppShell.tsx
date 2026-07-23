@@ -1403,12 +1403,11 @@ export function AppShell() {
     sidebarDesiredOpen,
     toggleSidebarCollapsedLegacy,
   ]);
-  // Batch 5b scroll colocation: the DOM-bound effects/scheduler live in
-  // ThreadPage's useThreadTranscriptScroll; the shell keeps the scroll
-  // INTENT bundle (it must survive viewport unmounts — automations pre-arm
-  // snaps from other views, and the dispatch/lifecycle orchestration
-  // requests snaps regardless of the active view) plus the snap API those
-  // writers call.
+  // Batch 5b scroll colocation: the DOM-bound handlers/coordinator live in
+  // ThreadPage; the shell keeps the scroll INTENT bundle (it must survive
+  // viewport unmounts — automations pre-arm snaps from other views, and the
+  // dispatch/lifecycle orchestration requests snaps regardless of the active
+  // view) plus the snap API those writers call.
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const pendingMessagesPrependAnchorRef = useRef<{
     threadId: string;

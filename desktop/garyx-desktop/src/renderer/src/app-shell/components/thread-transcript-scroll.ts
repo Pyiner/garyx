@@ -5,7 +5,7 @@
 // and the floating scroll-to-end button. What remains here is Garyx
 // wiring: the shell-owned scroll INTENT bundle (pending bottom snaps,
 // stick/force flags, prepend bookkeeping) consumed inside the provider
-// by TranscriptScrollBridge, plus the scroll-triggered older-page loads.
+// by TranscriptScrollCoordinator, plus the scroll-triggered older-page loads.
 // The intent refs stay in the AppShell shell — they must survive
 // viewport unmounts: automations pre-arm a bottom snap from the
 // automation view, and dispatch/lifecycle orchestration requests snaps
@@ -19,10 +19,17 @@ import { messagesNearEarlierUserTurnBoundary } from "../../gateway-mirror/transc
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import type { UiTranscriptMessage } from "../types";
 import {
-  restoreTranscriptScrollAnchor,
   tailThinkingScrollReserve,
   type TranscriptScrollAnchorSnapshot,
 } from "./transcript-scroll-anchor";
+import {
+  applyTranscriptScrollTransaction,
+  beginTranscriptScrollTransaction,
+  decideTranscriptBottomScroll,
+  settleTranscriptScrollTransaction,
+  type TranscriptScrollTransaction,
+} from "./transcript-scroll-transaction";
+export { messageTailSignature } from "./transcript-scroll-transaction";
 
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
 
@@ -108,132 +115,6 @@ function syncTailThinkingScrollReserve(viewport: HTMLElement): boolean {
   }
   viewport.style.setProperty(TAIL_THINKING_RESERVE_PROPERTY, nextValue);
   return true;
-}
-
-type TailThinkingLayoutSnapshot = {
-  anchor: TranscriptScrollAnchorSnapshot | null;
-  scopeKey: string | null;
-  showTailThinking: boolean;
-};
-
-/**
- * Keep the transcript's visual row anchor stable across the in-flow thinking
- * row lifecycle. The row consumes measured space from the existing composer
- * clearance, and a same-frame ResizeObserver correction runs after the
- * MessageScroller's own bottom-follow observer. No timer or out-of-flow chrome
- * participates in the transaction.
- */
-export function useTailThinkingScrollStability({
-  messagesRef,
-  scopeKey,
-  showTailThinking,
-}: {
-  messagesRef: React.RefObject<HTMLDivElement | null>;
-  scopeKey: string | null;
-  showTailThinking: boolean;
-}): void {
-  const currentStateRef = useRef({ scopeKey, showTailThinking });
-  currentStateRef.current = { scopeKey, showTailThinking };
-  const stableLayoutRef = useRef<TailThinkingLayoutSnapshot | null>(null);
-  const pendingAnchorRef = useRef<TranscriptScrollAnchorSnapshot | null>(null);
-
-  const captureStableLayout = (viewport: HTMLElement) => {
-    const current = currentStateRef.current;
-    stableLayoutRef.current = {
-      anchor: captureTranscriptScrollAnchor(viewport),
-      scopeKey: current.scopeKey,
-      showTailThinking: current.showTailThinking,
-    };
-  };
-
-  useLayoutEffect(() => {
-    const viewport = messagesRef.current;
-    if (!viewport) {
-      stableLayoutRef.current = null;
-      pendingAnchorRef.current = null;
-      return;
-    }
-
-    const previous = stableLayoutRef.current;
-    pendingAnchorRef.current =
-      previous &&
-      previous.scopeKey === scopeKey &&
-      previous.showTailThinking !== showTailThinking
-        ? previous.anchor
-        : null;
-    syncTailThinkingScrollReserve(viewport);
-    restoreTranscriptScrollAnchor(viewport, pendingAnchorRef.current);
-    captureStableLayout(viewport);
-  }, [messagesRef, scopeKey, showTailThinking]);
-
-  useEffect(() => {
-    const viewport = messagesRef.current;
-    const content = viewport ? transcriptContent(viewport) : null;
-    if (!viewport || !content || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    let disposed = false;
-    const observer = new ResizeObserver(() => {
-      if (disposed) {
-        return;
-      }
-      const stableBeforeResize = stableLayoutRef.current?.anchor ?? null;
-      const reserveChanged = syncTailThinkingScrollReserve(viewport);
-      const transactionAnchor = pendingAnchorRef.current;
-      const anchor =
-        transactionAnchor ?? (reserveChanged ? stableBeforeResize : null);
-      if (!anchor) {
-        captureStableLayout(viewport);
-        return;
-      }
-
-      restoreTranscriptScrollAnchor(viewport, anchor);
-      queueMicrotask(() => {
-        // ResizeObserver callbacks share one delivery round. Correct once more
-        // after every observer (including MessageScroller's) has run, then
-        // retire this tail transaction before the next transcript update.
-        if (!disposed && pendingAnchorRef.current === transactionAnchor) {
-          restoreTranscriptScrollAnchor(viewport, anchor);
-          pendingAnchorRef.current = null;
-          captureStableLayout(viewport);
-        }
-      });
-    });
-    observer.observe(content);
-
-    const handleScroll = () => {
-      if (!pendingAnchorRef.current) {
-        captureStableLayout(viewport);
-      }
-    };
-    viewport.addEventListener("scroll", handleScroll, { passive: true });
-    captureStableLayout(viewport);
-
-    return () => {
-      disposed = true;
-      observer.disconnect();
-      viewport.removeEventListener("scroll", handleScroll);
-      viewport.style.removeProperty(TAIL_THINKING_RESERVE_PROPERTY);
-      pendingAnchorRef.current = null;
-      stableLayoutRef.current = null;
-    };
-  }, [messagesRef]);
-}
-
-export function messageTailSignature(messages: UiTranscriptMessage[]): string {
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage) {
-    return "0";
-  }
-  return [
-    messages.length,
-    lastMessage.id,
-    lastMessage.role,
-    lastMessage.text.length,
-    lastMessage.pending ? "1" : "0",
-    lastMessage.localState || "",
-  ].join(":");
 }
 
 /**
@@ -364,95 +245,300 @@ export function useThreadTranscriptScroll({
   };
 }
 
-type TranscriptScrollBridgeProps = {
+type TailThinkingLayoutSnapshot = {
+  anchor: TranscriptScrollAnchorSnapshot | null;
+  scopeKey: string | null;
+  showTailThinking: boolean;
+};
+
+type TranscriptScrollCoordinatorProps = {
   activeMessages: UiTranscriptMessage[];
   activeThreadMessageKey: string | null;
   historyLoading: boolean;
+  messagesRef: React.RefObject<HTMLDivElement | null>;
+  scopeKey: string | null;
+  showTailThinking: boolean;
   scrollIntent: TranscriptScrollIntent | null;
 };
 
 /**
- * Consumes the shell's scroll intents from inside the MessageScroller
- * provider: thread-switch and requested bottom snaps run through the
- * primitive's scrollToEnd (which also re-arms following-bottom mode),
- * while prepend anchors are simply retired because the viewport already
- * restored the position via preserveScrollOnPrepend. Renders nothing.
+ * Single owner for every transcript viewport mutation that must coordinate
+ * with the in-flow tail row. Force-bottom and tail-anchor preservation are one
+ * explicit transaction, so a tail lifecycle effect (including its repeated
+ * ResizeObserver pass) cannot roll back a composer dispatch snap.
  */
-export function TranscriptScrollBridge({
+export function TranscriptScrollCoordinator({
   activeMessages,
   activeThreadMessageKey,
   historyLoading,
+  messagesRef,
+  scopeKey,
+  showTailThinking,
   scrollIntent,
-}: TranscriptScrollBridgeProps): null {
+}: TranscriptScrollCoordinatorProps): null {
   const { scrollToEnd } = useMessageScroller();
+  const scrollToEndRef = useRef(scrollToEnd);
+  scrollToEndRef.current = scrollToEnd;
+  const currentStateRef = useRef({ scopeKey, showTailThinking });
+  currentStateRef.current = { scopeKey, showTailThinking };
+  const stableLayoutRef = useRef<TailThinkingLayoutSnapshot | null>(null);
+  const transactionRef = useRef<TranscriptScrollTransaction | null>(null);
+  const transactionRevisionRef = useRef(0);
+  const settlementFrameRef = useRef<number | null>(null);
+
+  const captureStableLayout = (viewport: HTMLElement) => {
+    const current = currentStateRef.current;
+    stableLayoutRef.current = {
+      anchor: captureTranscriptScrollAnchor(viewport),
+      scopeKey: current.scopeKey,
+      showTailThinking: current.showTailThinking,
+    };
+  };
+
+  const followBottom = () => {
+    scrollToEndRef.current({ behavior: "auto" });
+  };
+
+  const scheduleTransactionSettlement = (
+    viewport: HTMLElement,
+    transaction: TranscriptScrollTransaction,
+  ) => {
+    if (settlementFrameRef.current !== null) {
+      window.cancelAnimationFrame(settlementFrameRef.current);
+    }
+    settlementFrameRef.current = window.requestAnimationFrame(() => {
+      settlementFrameRef.current = null;
+      if (
+        messagesRef.current !== viewport ||
+        transactionRef.current?.revision !== transaction.revision
+      ) {
+        return;
+      }
+      // ResizeObserver normally settles first. This frame-boundary pass is the
+      // deterministic fallback when the browser does not deliver a resize.
+      applyTranscriptScrollTransaction(viewport, transaction, followBottom);
+      transactionRef.current = settleTranscriptScrollTransaction(
+        transactionRef.current,
+        transaction,
+      );
+      captureStableLayout(viewport);
+    });
+  };
 
   useLayoutEffect(() => {
-    if (!scrollIntent) {
+    const viewport = messagesRef.current;
+    if (!viewport) {
+      stableLayoutRef.current = null;
+      transactionRef.current = null;
       return;
     }
-    const {
-      forceMessagesBottomSnapRef,
-      lastRenderedMessageCountRef,
-      lastRenderedMessageTailSignatureRef,
-      lastRenderedMessageThreadRef,
-      pendingMessagesPrependAnchorRef,
-      pendingThreadBottomSnapRef,
-      shouldStickMessagesToBottomRef,
-    } = scrollIntent;
-    const currentThreadId = activeThreadMessageKey;
-    const currentCount = activeMessages.length;
-    const currentTailSignature = messageTailSignature(activeMessages);
-    const prependAnchor = pendingMessagesPrependAnchorRef.current;
-    if (prependAnchor) {
-      if (prependAnchor.threadId === currentThreadId) {
-        shouldStickMessagesToBottomRef.current = false;
-      }
-      pendingMessagesPrependAnchorRef.current = null;
-      lastRenderedMessageThreadRef.current = currentThreadId;
-      lastRenderedMessageCountRef.current = currentCount;
-      lastRenderedMessageTailSignatureRef.current = currentTailSignature;
-      return;
-    }
-    const previousThreadId = lastRenderedMessageThreadRef.current;
-    const previousTailSignature = lastRenderedMessageTailSignatureRef.current;
-    const threadChanged = currentThreadId !== previousThreadId;
-    const tailChanged = currentTailSignature !== previousTailSignature;
-    const pendingSnapMatches =
-      pendingThreadBottomSnapRef.current === currentThreadId;
-    const forceSnap =
-      pendingSnapMatches && forceMessagesBottomSnapRef.current;
-    const shouldSnapToBottom = Boolean(
-      currentThreadId &&
-      currentCount > 0 &&
-      !historyLoading &&
-      (threadChanged ||
-        forceSnap ||
-        (pendingSnapMatches && shouldStickMessagesToBottomRef.current)),
+
+    const previousLayout = stableLayoutRef.current;
+    const tailLifecycleChanged = Boolean(
+      previousLayout &&
+        previousLayout.scopeKey === scopeKey &&
+        previousLayout.showTailThinking !== showTailThinking,
     );
+    const intentRefs = scrollIntent;
+    const decision = intentRefs
+      ? decideTranscriptBottomScroll({
+          activeMessages,
+          currentThreadId: activeThreadMessageKey,
+          forceBottomSnap:
+            intentRefs.forceMessagesBottomSnapRef.current,
+          historyLoading,
+          pendingThreadBottomSnap:
+            intentRefs.pendingThreadBottomSnapRef.current,
+          previousTailSignature:
+            intentRefs.lastRenderedMessageTailSignatureRef.current,
+          previousThreadId:
+            intentRefs.lastRenderedMessageThreadRef.current,
+          shouldStickToBottom:
+            intentRefs.shouldStickMessagesToBottomRef.current,
+        })
+      : null;
+    const prependAnchor =
+      intentRefs?.pendingMessagesPrependAnchorRef.current ?? null;
+    const forceBottom = Boolean(
+      !prependAnchor && decision?.forceSnap && decision.shouldSnapToBottom,
+    );
+    if (tailLifecycleChanged || forceBottom) {
+      transactionRevisionRef.current += 1;
+    }
+    transactionRef.current = beginTranscriptScrollTransaction({
+      active: prependAnchor ? null : transactionRef.current,
+      anchor: previousLayout?.anchor ?? null,
+      forceBottom,
+      preserveTailAnchor: tailLifecycleChanged,
+      revision: transactionRevisionRef.current,
+      scopeKey,
+    });
 
-    if (shouldSnapToBottom) {
-      scrollToEnd({ behavior: "auto" });
-      pendingThreadBottomSnapRef.current = null;
-      forceMessagesBottomSnapRef.current = false;
-      if (threadChanged || forceSnap) {
-        shouldStickMessagesToBottomRef.current = true;
+    syncTailThinkingScrollReserve(viewport);
+
+    if (prependAnchor) {
+      if (intentRefs && prependAnchor.threadId === activeThreadMessageKey) {
+        intentRefs.shouldStickMessagesToBottomRef.current = false;
       }
-    } else if (
-      currentThreadId &&
-      !historyLoading &&
-      tailChanged &&
-      shouldStickMessagesToBottomRef.current
-    ) {
-      scrollToEnd({ behavior: "auto" });
-    } else if (pendingSnapMatches && currentCount > 0 && !historyLoading) {
-      pendingThreadBottomSnapRef.current = null;
-      forceMessagesBottomSnapRef.current = false;
+      if (intentRefs && decision) {
+        intentRefs.pendingMessagesPrependAnchorRef.current = null;
+        intentRefs.lastRenderedMessageThreadRef.current = activeThreadMessageKey;
+        intentRefs.lastRenderedMessageCountRef.current = decision.currentCount;
+        intentRefs.lastRenderedMessageTailSignatureRef.current =
+          decision.currentTailSignature;
+      }
+      const transaction = transactionRef.current;
+      if (transaction) {
+        applyTranscriptScrollTransaction(viewport, transaction, followBottom);
+        scheduleTransactionSettlement(viewport, transaction);
+      }
+      captureStableLayout(viewport);
+      return;
     }
 
-    lastRenderedMessageThreadRef.current = currentThreadId;
-    lastRenderedMessageCountRef.current = currentCount;
-    lastRenderedMessageTailSignatureRef.current = currentTailSignature;
-  }, [activeThreadMessageKey, activeMessages, historyLoading, scrollIntent, scrollToEnd]);
+    const transaction = transactionRef.current;
+    if (transaction?.mode === "force-bottom") {
+      applyTranscriptScrollTransaction(viewport, transaction, followBottom);
+    } else if (decision?.shouldSnapToBottom) {
+      followBottom();
+    } else if (decision?.shouldFollowMessageTail) {
+      followBottom();
+    }
+    if (transaction?.mode === "preserve-tail-anchor") {
+      applyTranscriptScrollTransaction(viewport, transaction, followBottom);
+    }
+
+    if (intentRefs && decision) {
+      if (decision.shouldSnapToBottom) {
+        intentRefs.pendingThreadBottomSnapRef.current = null;
+        intentRefs.forceMessagesBottomSnapRef.current = false;
+        if (decision.threadChanged || decision.forceSnap) {
+          intentRefs.shouldStickMessagesToBottomRef.current = true;
+        }
+      } else if (
+        decision.pendingSnapMatches &&
+        decision.currentCount > 0 &&
+        !historyLoading
+      ) {
+        intentRefs.pendingThreadBottomSnapRef.current = null;
+        intentRefs.forceMessagesBottomSnapRef.current = false;
+      }
+      intentRefs.lastRenderedMessageThreadRef.current =
+        activeThreadMessageKey;
+      intentRefs.lastRenderedMessageCountRef.current = decision.currentCount;
+      intentRefs.lastRenderedMessageTailSignatureRef.current =
+        decision.currentTailSignature;
+    }
+
+    if (transaction) {
+      scheduleTransactionSettlement(viewport, transaction);
+    } else if (settlementFrameRef.current !== null) {
+      window.cancelAnimationFrame(settlementFrameRef.current);
+      settlementFrameRef.current = null;
+    }
+    captureStableLayout(viewport);
+  }, [
+    activeThreadMessageKey,
+    activeMessages,
+    historyLoading,
+    messagesRef,
+    scopeKey,
+    scrollIntent,
+    showTailThinking,
+  ]);
+
+  useEffect(() => {
+    const viewport = messagesRef.current;
+    const content = viewport ? transcriptContent(viewport) : null;
+    if (!viewport || !content) {
+      return;
+    }
+
+    let disposed = false;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            if (disposed) {
+              return;
+            }
+            const stableBeforeResize =
+              stableLayoutRef.current?.anchor ?? null;
+            const reserveChanged =
+              syncTailThinkingScrollReserve(viewport);
+            let transaction = transactionRef.current;
+            if (!transaction && reserveChanged) {
+              transactionRevisionRef.current += 1;
+              transaction = beginTranscriptScrollTransaction({
+                active: null,
+                anchor: stableBeforeResize,
+                forceBottom: false,
+                preserveTailAnchor: true,
+                revision: transactionRevisionRef.current,
+                scopeKey: currentStateRef.current.scopeKey,
+              });
+              transactionRef.current = transaction;
+            }
+            if (!transaction) {
+              captureStableLayout(viewport);
+              return;
+            }
+
+            applyTranscriptScrollTransaction(
+              viewport,
+              transaction,
+              followBottom,
+            );
+            queueMicrotask(() => {
+              // Every ResizeObserver shares one delivery round. Re-apply the
+              // same transaction after MessageScroller's observer, then settle.
+              if (
+                disposed ||
+                transactionRef.current?.revision !== transaction.revision
+              ) {
+                return;
+              }
+              applyTranscriptScrollTransaction(
+                viewport,
+                transaction,
+                followBottom,
+              );
+              transactionRef.current = settleTranscriptScrollTransaction(
+                transactionRef.current,
+                transaction,
+              );
+              if (settlementFrameRef.current !== null) {
+                window.cancelAnimationFrame(
+                  settlementFrameRef.current,
+                );
+                settlementFrameRef.current = null;
+              }
+              captureStableLayout(viewport);
+            });
+          });
+    observer?.observe(content);
+
+    const handleScroll = () => {
+      if (!transactionRef.current) {
+        captureStableLayout(viewport);
+      }
+    };
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    captureStableLayout(viewport);
+
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      viewport.removeEventListener("scroll", handleScroll);
+      viewport.style.removeProperty(TAIL_THINKING_RESERVE_PROPERTY);
+      if (settlementFrameRef.current !== null) {
+        window.cancelAnimationFrame(settlementFrameRef.current);
+        settlementFrameRef.current = null;
+      }
+      transactionRef.current = null;
+      stableLayoutRef.current = null;
+    };
+  }, [messagesRef]);
 
   return null;
 }
