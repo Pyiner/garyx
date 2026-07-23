@@ -1,0 +1,167 @@
+{
+  "type": "thread_render_frame",
+  "thread_id": "thread::task-2661-scroll-repro",
+  "events": [
+    {
+      "type": "committed_message",
+      "thread_id": "thread::task-2661-scroll-repro",
+      "seq": 237,
+      "message": {
+        "role": "user",
+        "internal": true,
+        "content": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-1003\" status=\"in_review\" title=\"Design review (Test Agent)\">\nThe synthetic design review is ready.\n</garyx_task_notification>",
+        "text": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-1003\" status=\"in_review\" title=\"Design review (Test Agent)\">\nThe synthetic design review is ready.\n</garyx_task_notification>",
+        "timestamp": "2026-07-23T18:59:10Z"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::task-2661-scroll-repro",
+      "seq": 238,
+      "message": {
+        "role": "assistant",
+        "content": "Review accepted. Applying the findings.",
+        "text": "Review accepted. Applying the findings.",
+        "timestamp": "2026-07-23T18:59:17Z"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::task-2661-scroll-repro",
+      "seq": 270,
+      "message": {
+        "role": "tool_use",
+        "content": {
+          "id": "tool-use-102",
+          "input": {
+            "file_path": "/Users/test/project/docs/research.md"
+          },
+          "name": "search_replace"
+        },
+        "tool_name": "search_replace",
+        "tool_use_id": "tool-use-102",
+        "timestamp": "2026-07-23T19:02:11Z"
+      }
+    },
+    {
+      "type": "committed_message",
+      "thread_id": "thread::task-2661-scroll-repro",
+      "seq": 273,
+      "message": {
+        "role": "tool_result",
+        "content": {
+          "output": "The synthetic fixture file was updated."
+        },
+        "text": "The synthetic fixture file was updated.",
+        "tool_use_id": "tool-use-102",
+        "is_error": false,
+        "timestamp": "2026-07-23T19:02:11Z"
+      }
+    }
+  ],
+  "render_state": {
+    "based_on_seq": 274,
+    "rows": [
+      {
+        "kind": "user_turn",
+        "id": "user_turn:seq:237",
+        "user": {
+          "id": "seq:237",
+          "seq": 237,
+          "role": "user",
+          "presentation": {
+            "kind": "task_notification",
+            "event": "ready_for_review",
+            "status": "in_review",
+            "task_id": "#TASK-1003",
+            "title": "Design review (Test Agent)"
+          }
+        },
+        "activity": [
+          {
+            "kind": "step",
+            "id": "step:assistant_step:seq:238",
+            "steps": [
+              {
+                "kind": "assistant_message",
+                "id": "assistant_step:seq:238",
+                "message": {
+                  "id": "seq:238",
+                  "seq": 238,
+                  "role": "assistant"
+                },
+                "streaming": false
+              },
+              {
+                "kind": "tool_group",
+                "id": "tool_group:active-tail",
+                "status": "active",
+                "entries": [
+                  {
+                    "id": "tool_entry:tool-use-102",
+                    "tool_use_id": "tool-use-102",
+                    "status": "completed",
+                    "tool_use": {
+                      "id": "seq:270",
+                      "seq": 270,
+                      "role": "tool_use"
+                    },
+                    "tool_result": {
+                      "id": "seq:273",
+                      "seq": 273,
+                      "role": "tool_result"
+                    },
+                    "projection": {
+                      "tool_name": "search_replace",
+                      "kind": "generic",
+                      "visibility": "normal",
+                      "call": {
+                        "root": "content",
+                        "path": [
+                          "input",
+                          "file_path"
+                        ],
+                        "format": "path",
+                        "label": "file"
+                      },
+                      "result": {
+                        "root": "content",
+                        "path": [
+                          "output"
+                        ],
+                        "format": "text",
+                        "label": "result"
+                      },
+                      "status": "completed"
+                    }
+                  }
+                ]
+              }
+            ],
+            "final_message": null,
+            "running": true,
+            "started_at": "2026-07-23T18:59:10Z",
+            "finished_at": null
+          }
+        ],
+        "started_at": "2026-07-23T18:59:10Z",
+        "finished_at": null
+      }
+    ],
+    "tailActivity": "tool_active",
+    "activeToolGroupId": "tool_group:active-tail",
+    "progress_locus": "tool_group",
+    "filtered_placeholders": [],
+    "window": null
+  },
+  "reproduction": {
+    "source_row_count": 11,
+    "reported_working_elapsed_seconds": 144,
+    "warm_reentry_has_snapshot_pixels": true,
+    "opening_frame_intervals": [
+      null,
+      0.008333333333333333
+    ],
+    "materialization_frame_interval": 0.016666666666666666
+  }
+}
