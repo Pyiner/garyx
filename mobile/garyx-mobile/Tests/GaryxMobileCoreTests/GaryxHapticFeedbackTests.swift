@@ -12,10 +12,6 @@ final class GaryxHapticFeedbackTests: XCTestCase {
                 pattern: .impact(.medium),
                 preparationPoint: .gestureBegan
             ),
-            .interactiveBackCommitted: .init(
-                pattern: .impact(.light),
-                preparationPoint: .gestureBegan
-            ),
             .messageActionMenuPresented: .init(
                 pattern: .impact(.light),
                 preparationPoint: .gestureBegan

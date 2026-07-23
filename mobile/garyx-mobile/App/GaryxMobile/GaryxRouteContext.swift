@@ -62,14 +62,40 @@ extension EnvironmentValues {
 @MainActor
 final class GaryxRouteHostContextStore: ObservableObject {
     @Published private(set) var context: GaryxRouteContext
+    private var semanticContext: GaryxRouteContext
+    private var hasDeferredObservation = false
 
     init(_ context: GaryxRouteContext) {
         self.context = context
+        semanticContext = context
     }
 
-    func apply(_ next: GaryxRouteContext) {
-        guard context != next else { return }
-        context = next
+    func apply(
+        _ next: GaryxRouteContext,
+        deferringObservationUntilRendererIdle: Bool = false
+    ) {
+        guard semanticContext != next else {
+            if !deferringObservationUntilRendererIdle {
+                publishDeferredObservationIfNeeded()
+            }
+            return
+        }
+        semanticContext = next
+        if deferringObservationUntilRendererIdle {
+            hasDeferredObservation = context != next
+        } else {
+            hasDeferredObservation = false
+            if context != next {
+                context = next
+            }
+        }
+    }
+
+    func publishDeferredObservationIfNeeded() {
+        guard hasDeferredObservation else { return }
+        hasDeferredObservation = false
+        guard context != semanticContext else { return }
+        context = semanticContext
     }
 }
 

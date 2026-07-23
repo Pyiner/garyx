@@ -2,8 +2,9 @@ import SwiftUI
 import UIKit
 
 /// Main-actor bridge between product navigation intents and the UIKit-owned
-/// canonical stack. The container remains the only path writer; this store is
-/// its observable projection for application state and tests.
+/// canonical stack. The container remains the only path writer. Canonical
+/// truth updates at release, while its SwiftUI observation is held until the
+/// renderer is idle so moving UIKit frames never trigger a graph update.
 @MainActor
 final class GaryxProductionRouteStore: ObservableObject {
     struct NavigationPreparation {
@@ -27,7 +28,7 @@ final class GaryxProductionRouteStore: ObservableObject {
         let onVisible: (() -> Void)?
     }
 
-    @Published private(set) var path: [GaryxRouteEntry] = []
+    private(set) var path: [GaryxRouteEntry] = []
     @Published private(set) var hasPresentationBarrier = false
     let presentationCoordinator = GaryxPresentationLeaseCoordinator()
 
@@ -38,6 +39,7 @@ final class GaryxProductionRouteStore: ObservableObject {
     private var pendingPlans: [GaryxNavigationIntentID: PendingRoutePlan] = [:]
     private var activePlan: PendingRoutePlan?
     private var preparedConversationEntry: GaryxRouteEntry?
+    private var hasDeferredCanonicalPathObservation = false
     var presentationBarrierActivated:
         @MainActor (GaryxObservableSettlementTiming) -> Void = { _ in }
     private var navigationScopes: @MainActor () -> GaryxGatewayScopeRegistry = {
@@ -320,7 +322,10 @@ final class GaryxProductionRouteStore: ObservableObject {
         return true
     }
 
-    func applyCanonicalPath(_ canonicalPath: [GaryxRouteEntry]) {
+    func applyCanonicalPath(
+        _ canonicalPath: [GaryxRouteEntry],
+        deferringObservationUntilRendererIdle: Bool = false
+    ) {
         guard path != canonicalPath else { return }
         let topologyChanged = path.map(\.id) != canonicalPath.map(\.id)
         canonicalProjection = GaryxCanonicalRouteState(
@@ -329,6 +334,11 @@ final class GaryxProductionRouteStore: ObservableObject {
                 ? canonicalProjection.stackRevision &+ 1
                 : canonicalProjection.stackRevision
         )
+        if deferringObservationUntilRendererIdle {
+            hasDeferredCanonicalPathObservation = true
+        } else {
+            objectWillChange.send()
+        }
         path = canonicalPath
     }
 
@@ -350,6 +360,10 @@ final class GaryxProductionRouteStore: ObservableObject {
     }
 
     func rendererBecameIdle() {
+        if hasDeferredCanonicalPathObservation {
+            hasDeferredCanonicalPathObservation = false
+            objectWillChange.send()
+        }
         intentCoordinator.setTransactionStatus(.terminal)
         drainAdmissiblePlans()
     }
@@ -511,6 +525,8 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         var drawerGestureOccurrenceID: GaryxHorizontalRevealHostOccurrenceID?
         var taskTreeGestureOccurrenceID: GaryxHorizontalRevealHostOccurrenceID?
         var preferences: GaryxRouteVisualPreferences
+        private var transitionOwnsObservableProjection = false
+        private var deferredCanonicalProjection: [GaryxRouteEntry]?
 
         init(
             store: GaryxProductionRouteStore,
@@ -523,6 +539,22 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             self.rootSurfaceOccurrenceID = rootSurfaceOccurrenceID
             revealHostOccurrenceID = Self.makeHostOccurrenceID(rootSurfaceOccurrenceID)
             self.preferences = preferences
+        }
+
+        func transitionWillBegin(_ kind: GaryxRouteTransitionKind) {
+            transitionOwnsObservableProjection = kind == .pop
+        }
+
+        func deferCanonicalProjectionIfMoving(_ path: [GaryxRouteEntry]) -> Bool {
+            guard transitionOwnsObservableProjection else { return false }
+            deferredCanonicalProjection = path
+            return true
+        }
+
+        func rendererBecameIdle() -> [GaryxRouteEntry]? {
+            transitionOwnsObservableProjection = false
+            defer { deferredCanonicalProjection = nil }
+            return deferredCanonicalProjection
         }
 
         func transitionRootSurface(
@@ -563,6 +595,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             observableSettlement: .afterViewGraphUpdate
         )
         let pushProbe = GaryxRoutePushPerformanceProbe.shared
+        let popProbe = GaryxRoutePopPerformanceProbe.shared
         let sendJitterProbe = GaryxConversationSendJitterProbe.shared
         let routeLifecycleRegistry = GaryxRouteLifecycleRegistry()
         #if DEBUG
@@ -584,8 +617,10 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         callbacks.presentedFrame = { timestamp in
             routeLifecycleRegistry.presentedFrame(at: timestamp)
         }
-        callbacks.transitionWillBegin = { kind in
+        callbacks.transitionWillBegin = { [weak revealCoordinator] kind in
+            revealCoordinator?.transitionWillBegin(kind)
             pushProbe?.transitionWillBegin(kind: kind)
+            popProbe?.transitionWillBegin(kind: kind)
         }
         callbacks.transitionHostsMounted = {
             pushProbe?.transitionHostsMounted()
@@ -593,6 +628,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
         callbacks.phaseChanged = { [weak store] phase in
             store?.routePhaseChanged(phase)
             pushProbe?.transitionPhaseChanged(phase)
+            popProbe?.transitionPhaseChanged(phase)
             #if DEBUG
             diagnostics?.transitionPhaseChanged(phase)
             #endif
@@ -605,11 +641,21 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
                 destinationKey: destination.composerKey
             )
         }
-        callbacks.canonicalPathChanged = { [weak store, weak model] path in
-            pushProbe?.canonicalProjectionWillApply()
-            store?.applyCanonicalPath(path)
-            model?.applyCanonicalRouteProjection(path)
-            pushProbe?.canonicalProjectionDidApply()
+        callbacks.canonicalPathChanged = {
+            [weak store, weak model, weak revealCoordinator] path in
+            let defersObservableProjection =
+                revealCoordinator?.deferCanonicalProjectionIfMoving(path) == true
+            store?.applyCanonicalPath(
+                path,
+                deferringObservationUntilRendererIdle: defersObservableProjection
+            )
+            if defersObservableProjection {
+                model?.commitCanonicalRouteDataOwnership(path)
+            } else {
+                pushProbe?.canonicalProjectionWillApply()
+                model?.applyCanonicalRouteProjection(path)
+                pushProbe?.canonicalProjectionDidApply()
+            }
             #if DEBUG
             diagnostics?.canonicalPathChanged(path)
             #endif
@@ -624,8 +670,15 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             store?.visibleRouteActivated(node)
             pushProbe?.visibleRouteActivated()
         }
-        callbacks.rendererBecameIdle = { [weak store] in
+        callbacks.rendererBecameIdle = {
+            [weak store, weak model, weak revealCoordinator] in
+            if let path = revealCoordinator?.rendererBecameIdle() {
+                pushProbe?.canonicalProjectionWillApply()
+                model?.applyCommittedCanonicalRouteProjection(path)
+                pushProbe?.canonicalProjectionDidApply()
+            }
             store?.rendererBecameIdle()
+            popProbe?.rendererBecameIdle()
         }
         store.configureNavigationScopes { [weak model] in
             model?.gatewayScopeRegistry ?? GaryxGatewayScopeRegistry(
@@ -674,6 +727,7 @@ private struct GaryxProductionRouteStack: UIViewControllerRepresentable {
             ? .rightToLeft
             : .leftToRight
         pushProbe?.install(in: container)
+        popProbe?.install(in: container, model: model, store: store)
         sendJitterProbe?.install(in: container)
         let drawerInteraction = model.drawerRevealInteraction
         container.homeLeadingEdgeInteraction = GaryxRouteEdgePanInteraction(
@@ -988,6 +1042,9 @@ private final class GaryxProductionRouteDiagnostics {
 
     func terminalReached(_ terminal: GaryxPresentationTerminalState) {
         terminalOutcome = "\(terminal.outcome.rawValue)-\(terminal.visibility.rawValue)"
+        if let container {
+            recordComposerState(in: container, phase: .terminal)
+        }
         publishStatus()
     }
 
@@ -998,19 +1055,7 @@ private final class GaryxProductionRouteDiagnostics {
         timestamp: CFTimeInterval
     ) {
         checkedFrameCount += 1
-        let adapters = composerAdapters(in: container.view)
-        liveAdapterCount = adapters.filter(\.isLive).count
-        focusedAdapterCount = adapters.filter(\.isFirstResponder).count
-        if focusAtTransactionStart < 0 {
-            focusAtTransactionStart = focusedAdapterCount
-        }
-        if let previousFocusedAdapterCount,
-           previousFocusedAdapterCount > 0,
-           focusedAdapterCount == 0,
-           focusLossPhase == "none" {
-            focusLossPhase = phase.rawValue
-        }
-        previousFocusedAdapterCount = focusedAdapterCount
+        recordComposerState(in: container, phase: phase)
         let expected = GaryxRouteTransitionGeometry.visualState(
             kind: .pop,
             policy: container.visualPolicyForActiveTransaction ?? .spatial,
@@ -1054,6 +1099,25 @@ private final class GaryxProductionRouteDiagnostics {
         }
         container.view.bringSubviewToFront(statusLabel)
         publishStatus(in: container)
+    }
+
+    private func recordComposerState(
+        in container: GaryxRouteStackContainer,
+        phase: GaryxPresentationTransactionPhase
+    ) {
+        let adapters = composerAdapters(in: container.view)
+        liveAdapterCount = adapters.filter(\.isLive).count
+        focusedAdapterCount = adapters.filter(\.isFirstResponder).count
+        if focusAtTransactionStart < 0 {
+            focusAtTransactionStart = focusedAdapterCount
+        }
+        if let previousFocusedAdapterCount,
+           previousFocusedAdapterCount > 0,
+           focusedAdapterCount == 0,
+           focusLossPhase == "none" {
+            focusLossPhase = phase.rawValue
+        }
+        previousFocusedAdapterCount = focusedAdapterCount
     }
 
     private func publishStatus(in container: GaryxRouteStackContainer? = nil) {

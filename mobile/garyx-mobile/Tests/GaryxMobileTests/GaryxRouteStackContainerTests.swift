@@ -593,6 +593,105 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertEqual(canvasFrame.maxY, root.view.bounds.maxY, accuracy: 0.5)
     }
 
+    func testProductionInteractivePopCommitDefersObservableRouteProjectionUntilIdle() throws {
+        let suiteName = "GaryxRoutePopBodyStabilityTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = GaryxProductionRouteStore()
+        let model = GaryxMobileModel(defaults: defaults)
+        let route = entry(
+            2667,
+            destination: .panel("interactive-pop-body-stability")
+        )
+        store.applyCanonicalPath([route])
+        model.applyCanonicalRouteProjection([route])
+        let rootSurfaceOccurrenceID = GaryxRootSurfaceOccurrenceID(rawValue: 2_667)
+        model.applyGlobalRevealRootSurfaceTransition(
+            .navigationShellBegan(rootSurfaceOccurrenceID)
+        )
+        let bodyCounter = BodyCounter()
+        let root = UIHostingController(
+            rootView: GaryxProductionRouteCanvas(
+                rootSurfaceOccurrenceID: rootSurfaceOccurrenceID,
+                store: store,
+                model: model,
+                homeContent: AnyView(
+                    RouteContextCountingView(node: .home, counter: bodyCounter)
+                ),
+                routeContent: { node in
+                    AnyView(RouteContextCountingView(node: node, counter: bodyCounter))
+                },
+                onOpenDrawer: {}
+            )
+        )
+        let window = makeTestWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = root
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        root.view.frame = window.bounds
+        root.view.layoutIfNeeded()
+        pumpMainRunLoop(duration: 0.1)
+
+        let container = try XCTUnwrap(
+            descendants(of: root).compactMap { $0 as? GaryxRouteStackContainer }.first
+        )
+        XCTAssertTrue(container.beginInteractivePop())
+        container.updateInteractivePop(logicalTranslation: container.view.bounds.width * 0.82)
+        pumpMainRunLoop(duration: 0.01)
+        let bodyCountAtRelease = bodyCounter.count
+        var storePublicationCount = 0
+        var modelPublicationCount = 0
+        let storePublication = store.objectWillChange.sink {
+            storePublicationCount += 1
+        }
+        let modelPublication = model.objectWillChange.sink {
+            modelPublicationCount += 1
+        }
+
+        XCTAssertEqual(
+            container.endInteractivePop(logicalVelocity: container.view.bounds.width),
+            .committed
+        )
+        XCTAssertEqual(container.metrics.transitionPhase, .commitSettle)
+        XCTAssertEqual(
+            storePublicationCount,
+            0,
+            "canonical truth must not publish through the route store during moving settle"
+        )
+        XCTAssertEqual(
+            modelPublicationCount,
+            0,
+            "legacy route projections must wait until the renderer is idle"
+        )
+        XCTAssertTrue(store.path.isEmpty, "canonical truth changes at release")
+        XCTAssertTrue(
+            model.navigationState.presentsContent,
+            "the observable projection stays frozen while route pixels move"
+        )
+        pumpMainRunLoop(duration: 0.05)
+
+        XCTAssertEqual(container.metrics.transitionPhase, .commitSettle)
+        XCTAssertEqual(
+            bodyCounter.count,
+            bodyCountAtRelease,
+            "canonical commit must not publish observable route state into moving hosts"
+        )
+        let terminalDeadline = Date().addingTimeInterval(2)
+        while container.metrics.transitionPhase != .active, Date() < terminalDeadline {
+            pumpMainRunLoop(duration: 0.01)
+        }
+        XCTAssertEqual(container.metrics.transitionPhase, .active)
+        XCTAssertFalse(model.navigationState.presentsContent)
+        XCTAssertGreaterThan(storePublicationCount, 0)
+        XCTAssertGreaterThan(modelPublicationCount, 0)
+        withExtendedLifetime((storePublication, modelPublication)) {}
+    }
+
     func testProductionRouteCanvasRebindsRevealOwnerWhenRootUpdatesInPlace() throws {
         let suiteName = "GaryxRouteCanvasRootOccurrenceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -1860,6 +1959,26 @@ final class GaryxRouteStackContainerTests: XCTestCase {
                 "Synthetic home"
             case .entry(let entry):
                 "Synthetic \(entry.id.rawValue)"
+            }
+        }
+    }
+
+    private struct RouteContextCountingView: View {
+        @Environment(\.garyxRouteContext) private var routeContext
+        let node: GaryxRoutePresentationNode
+        let counter: BodyCounter
+
+        var body: some View {
+            counter.record()
+            return Text("\(label)-\(routeContext.lifecycle.rawValue)")
+        }
+
+        private var label: String {
+            switch node {
+            case .home:
+                "home"
+            case .entry(let entry):
+                entry.id.rawValue
             }
         }
     }

@@ -1667,6 +1667,8 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
     private var adapters: [GaryxRouteInstanceID: WeakAdapter] = [:]
     private var liveOccurrenceID: GaryxRouteInstanceID?
     private var routeActivation: RouteActivation?
+    private var capturesRouteCommitSnapshot = false
+    private var deferredRouteSnapshot: Snapshot?
     private var finalizationTask: Task<Void, Never>?
     private var sendCommitInFlightSessionID: GaryxComposerInputSessionID?
     private var pendingActivation: (scope: GaryxGatewayScope, key: GaryxComposerKey, ticket: UInt64)?
@@ -1917,9 +1919,11 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         }
         guard activation.commitReleased() else { return }
 
+        capturesRouteCommitSnapshot = true
         let close = sourceOccurrenceID
             .flatMap { adapters[$0]?.value }
-            .map { $0.finalizeInput() }
+            .map { $0.finalizeInput(preservingFocusUntilRouteTerminal: true) }
+        capturesRouteCommitSnapshot = false
         // finalizeInput synchronously publishes unmarked text. Re-read only
         // after that callback; a temporarily absent host uses the reducer's
         // exact current sequence and an empty producer set as a virtual close.
@@ -1935,7 +1939,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
                 activation: activation,
                 terminal: nil,
                 reservationIDAtRelease: nil,
-                sourceWasFocused: false,
+                sourceWasFocused: close?.wasFocused ?? false,
                 sourceRequiresFinalization: false
             )
             return
@@ -1954,7 +1958,6 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
             return
         }
         inputState = state
-        snapshot.isReadOnly = true
         liveOccurrenceID = nil
         routeActivation = RouteActivation(
             sourceOccurrenceID: sourceOccurrenceID,
@@ -1973,6 +1976,7 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         if terminal.outcome == .cancelled {
             routeActivation.activation.cancelled()
             self.routeActivation = nil
+            deferredRouteSnapshot = nil
             if let sourceOccurrenceID = routeActivation.sourceOccurrenceID {
                 liveOccurrenceID = sourceOccurrenceID
             }
@@ -1982,6 +1986,11 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         }
         routeActivation.terminal = terminal
         self.routeActivation = routeActivation
+        publishDeferredRouteSnapshot(readOnly: true)
+        if routeActivation.sourceWasFocused,
+           let sourceOccurrenceID = routeActivation.sourceOccurrenceID {
+            adapters[sourceOccurrenceID]?.value?.releaseFinalizedFocus()
+        }
         cancelPendingInput(
             terminal.visibility == .superseded
                 ? .superseded
@@ -2803,11 +2812,27 @@ final class GaryxComposerPayloadCoordinator: ObservableObject {
         if let projection {
             routeProjections[ScopedComposerKey(scope: entry.scope, key: entry.destination)] = projection
         }
-        snapshot = Snapshot(
+        let baseSnapshot = deferredRouteSnapshot ?? snapshot
+        let nextSnapshot = Snapshot(
             projection: projection,
             isReadOnly: readOnly,
-            revision: snapshot.revision &+ 1
+            revision: baseSnapshot.revision &+ 1
         )
+        if capturesRouteCommitSnapshot
+            || (routeActivation != nil && routeActivation?.terminal == nil) {
+            deferredRouteSnapshot = nextSnapshot
+        } else {
+            snapshot = nextSnapshot
+        }
+    }
+
+    private func publishDeferredRouteSnapshot(readOnly: Bool) {
+        var nextSnapshot = deferredRouteSnapshot ?? snapshot
+        deferredRouteSnapshot = nil
+        nextSnapshot.isReadOnly = readOnly
+        if snapshot != nextSnapshot {
+            snapshot = nextSnapshot
+        }
     }
 
     private func advanceRouteActivationIfReady() {

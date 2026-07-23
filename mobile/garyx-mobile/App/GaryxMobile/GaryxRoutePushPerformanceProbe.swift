@@ -1,3 +1,4 @@
+import Combine
 import QuartzCore
 import UIKit
 
@@ -461,6 +462,197 @@ final class GaryxRoutePushPerformanceProbe: NSObject {
     private func milliseconds(_ value: CFTimeInterval) -> String {
         guard value >= 0 else { return "-1" }
         return String(format: "%.3f", value * 1_000)
+    }
+}
+
+/// Opt-in cadence probe for the production interactive-pop path.
+///
+/// Unlike the geometry diagnostics, this probe does no view traversal and
+/// publishes no UIKit or accessibility state while route pixels are moving.
+/// Its display link therefore measures the transaction without becoming a
+/// material part of the work being measured.
+@MainActor
+final class GaryxRoutePopPerformanceProbe: NSObject {
+    static let shared: GaryxRoutePopPerformanceProbe? = {
+        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_ROUTE_POP_PROBE"] == "1"
+        else { return nil }
+        return GaryxRoutePopPerformanceProbe()
+    }()
+
+    private let statusLabel = UILabel()
+    private weak var container: GaryxRouteStackContainer?
+    private var displayLink: CADisplayLink?
+    private var isRecording = false
+    private var phase = GaryxPresentationTransactionPhase.active
+    private var transactionCount = 0
+    private var frameCount = 0
+    private var settleFrameCount = 0
+    private var hitchCount = 0
+    private var settleHitchCount = 0
+    private var maximumFrameInterval: CFTimeInterval = 0
+    private var maximumFrameBudget: CFTimeInterval = 0
+    private var previousTimestamp: CFTimeInterval?
+    private var previousFrameBudget: CFTimeInterval?
+    private var worstPhase = GaryxPresentationTransactionPhase.active
+    private var modelPublicationCount = 0
+    private var storePublicationCount = 0
+    private var composerPublicationCount = 0
+    private var movingModelPublicationCount = 0
+    private var movingStorePublicationCount = 0
+    private var movingComposerPublicationCount = 0
+    private var observationTokens: Set<AnyCancellable> = []
+
+    func install(
+        in container: GaryxRouteStackContainer,
+        model: GaryxMobileModel,
+        store: GaryxProductionRouteStore
+    ) {
+        guard self.container == nil else { return }
+        self.container = container
+        model.objectWillChange.sink { [weak self] in
+            guard let self, isRecording else { return }
+            modelPublicationCount += 1
+            if phase != .terminal && phase != .active {
+                movingModelPublicationCount += 1
+            }
+        }
+        .store(in: &observationTokens)
+        store.objectWillChange.sink { [weak self] in
+            guard let self, isRecording else { return }
+            storePublicationCount += 1
+            if phase != .terminal && phase != .active {
+                movingStorePublicationCount += 1
+            }
+        }
+        .store(in: &observationTokens)
+        model.composerPayloadCoordinator.objectWillChange.sink { [weak self] in
+            guard let self, isRecording else { return }
+            composerPublicationCount += 1
+            if phase != .terminal && phase != .active {
+                movingComposerPublicationCount += 1
+            }
+        }
+        .store(in: &observationTokens)
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .monospacedSystemFont(ofSize: 8, weight: .regular)
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.94)
+        statusLabel.numberOfLines = 2
+        statusLabel.isUserInteractionEnabled = false
+        statusLabel.accessibilityIdentifier = "route-pop-probe-report"
+        statusLabel.text = "GARYX_ROUTE_POP_PROBE state=ready"
+        statusLabel.accessibilityValue = statusLabel.text
+        container.view.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.leadingAnchor.constraint(
+                equalTo: container.view.leadingAnchor,
+                constant: 8
+            ),
+            statusLabel.trailingAnchor.constraint(
+                equalTo: container.view.trailingAnchor,
+                constant: -8
+            ),
+            statusLabel.bottomAnchor.constraint(
+                equalTo: container.view.safeAreaLayoutGuide.bottomAnchor,
+                constant: -4
+            ),
+        ])
+
+        let link = CADisplayLink(target: self, selector: #selector(stepDisplayLink(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(
+            minimum: 80,
+            maximum: 120,
+            preferred: 120
+        )
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    func transitionWillBegin(kind: GaryxRouteTransitionKind) {
+        guard kind == .pop else { return }
+        transactionCount += 1
+        isRecording = true
+        phase = .preCommit
+        frameCount = 0
+        settleFrameCount = 0
+        hitchCount = 0
+        settleHitchCount = 0
+        maximumFrameInterval = 0
+        maximumFrameBudget = 0
+        previousTimestamp = nil
+        previousFrameBudget = nil
+        worstPhase = .preCommit
+        modelPublicationCount = 0
+        storePublicationCount = 0
+        composerPublicationCount = 0
+        movingModelPublicationCount = 0
+        movingStorePublicationCount = 0
+        movingComposerPublicationCount = 0
+    }
+
+    func transitionPhaseChanged(_ phase: GaryxPresentationTransactionPhase) {
+        guard isRecording else { return }
+        self.phase = phase
+    }
+
+    func rendererBecameIdle() {
+        guard isRecording else { return }
+        isRecording = false
+        let report = [
+            "GARYX_ROUTE_POP_PROBE",
+            "state=complete",
+            "transactions=\(transactionCount)",
+            "frames=\(frameCount)",
+            "settleFrames=\(settleFrameCount)",
+            "hitches=\(hitchCount)",
+            "settleHitches=\(settleHitchCount)",
+            "maxGapMs=\(milliseconds(maximumFrameInterval))",
+            "maxBudgetMs=\(milliseconds(maximumFrameBudget))",
+            "worstPhase=\(worstPhase.rawValue)",
+            "modelPublications=\(modelPublicationCount)",
+            "storePublications=\(storePublicationCount)",
+            "composerPublications=\(composerPublicationCount)",
+            "movingModelPublications=\(movingModelPublicationCount)",
+            "movingStorePublications=\(movingStorePublicationCount)",
+            "movingComposerPublications=\(movingComposerPublicationCount)",
+        ].joined(separator: " ")
+        statusLabel.text = report
+        statusLabel.accessibilityValue = report
+        if let container {
+            container.view.bringSubviewToFront(statusLabel)
+        }
+    }
+
+    @objc
+    private func stepDisplayLink(_ link: CADisplayLink) {
+        guard isRecording else { return }
+        let frameBudget = max(link.targetTimestamp - link.timestamp, link.duration)
+        if let previousTimestamp {
+            let interval = link.timestamp - previousTimestamp
+            let budget = max(previousFrameBudget ?? frameBudget, frameBudget)
+            frameCount += 1
+            maximumFrameBudget = max(maximumFrameBudget, budget)
+            if interval > maximumFrameInterval {
+                maximumFrameInterval = interval
+                worstPhase = phase
+            }
+            if phase == .commitSettle || phase == .cancelSettle {
+                settleFrameCount += 1
+            }
+            if interval > budget * 1.5 {
+                hitchCount += 1
+                if phase == .commitSettle || phase == .cancelSettle {
+                    settleHitchCount += 1
+                }
+            }
+        }
+        previousTimestamp = link.timestamp
+        previousFrameBudget = frameBudget
+    }
+
+    private func milliseconds(_ value: CFTimeInterval) -> String {
+        String(format: "%.2f", value * 1_000)
     }
 }
 
