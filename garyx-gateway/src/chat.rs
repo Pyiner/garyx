@@ -618,12 +618,9 @@ async fn run_durable_chat_start(
         }
     };
     let requested_run_id = plan.requested_run_id().to_owned();
+    let has_planned_active_run = plan.has_active_run();
     let planned_outcome = plan.outcome();
-    if matches!(
-        planned_outcome,
-        AgentDispatchOutcome::QueuedToActiveRun { .. }
-    ) && let Some(claim) = quota_recovery_claim.as_ref()
-    {
+    if has_planned_active_run && let Some(claim) = quota_recovery_claim.as_ref() {
         match state
             .ops
             .garyx_db

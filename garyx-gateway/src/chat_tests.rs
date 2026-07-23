@@ -50,6 +50,7 @@ struct QueueAcceptingProvider {
     started: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
     queued_inputs: Arc<AtomicUsize>,
+    supports_streaming_input: bool,
 }
 struct WorkspaceRecordingProvider {
     observed_workspace_dir: Arc<Mutex<Option<Option<String>>>>,
@@ -275,7 +276,7 @@ impl ProviderRuntime for QueueAcceptingProvider {
     }
 
     fn supports_streaming_input(&self) -> bool {
-        true
+        self.supports_streaming_input
     }
 
     async fn add_streaming_input(&self, _thread_id: &str, _input: QueuedUserInput) -> bool {
@@ -1037,11 +1038,13 @@ async fn test_chat_start_same_durable_intent_dispatches_provider_exactly_once() 
     );
 }
 
-#[tokio::test]
-async fn quota_recovery_never_queues_continue_into_an_active_run() {
-    let thread_id = "thread::quota-busy-race";
-    let active_run_id = "run::already-active";
-    let blocked_run_id = "run::quota-blocked";
+async fn assert_quota_recovery_never_displaces_active_run(
+    supports_streaming_input: bool,
+    suffix: &str,
+) {
+    let thread_id = format!("thread::quota-busy-race-{suffix}");
+    let active_run_id = format!("run::already-active-{suffix}");
+    let blocked_run_id = format!("run::quota-blocked-{suffix}");
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let queued_inputs = Arc::new(AtomicUsize::new(0));
@@ -1064,6 +1067,7 @@ async fn quota_recovery_never_queues_continue_into_an_active_run() {
                 started: started.clone(),
                 release: release.clone(),
                 queued_inputs: queued_inputs.clone(),
+                supports_streaming_input,
             }),
         )
         .await;
@@ -1080,7 +1084,7 @@ async fn quota_recovery_never_queues_continue_into_an_active_run() {
         .threads
         .thread_store
         .set(
-            thread_id,
+            &thread_id,
             json!({
                 "thread_id": thread_id,
                 "agent_id": "claude",
@@ -1097,15 +1101,15 @@ async fn quota_recovery_never_queues_continue_into_an_active_run() {
     state
         .ops
         .garyx_db
-        .write_thread_record_with_projections(thread_id, "{}", None, None)
+        .write_thread_record_with_projections(&thread_id, "{}", None, None)
         .unwrap();
 
     let active = AdmittedRun::thread_bound(
         state.threads.thread_store.clone(),
         AgentRunRequest::new(
-            thread_id,
+            &thread_id,
             "user run",
-            active_run_id,
+            &active_run_id,
             "api",
             "main",
             Default::default(),
@@ -1122,9 +1126,9 @@ async fn quota_recovery_never_queues_continue_into_an_active_run() {
         .ops
         .garyx_db
         .register_quota_recovery_job(crate::garyx_db::NewQuotaRecoveryJob {
-            thread_id,
+            thread_id: &thread_id,
             provider: "claude_code",
-            blocked_run_id,
+            blocked_run_id: &blocked_run_id,
             blocked_seq: 1,
             quota_window: Some("primary"),
             reset_at: Some("2026-07-23T00:00:00Z"),
@@ -1186,6 +1190,10 @@ async fn quota_recovery_never_queues_continue_into_an_active_run() {
     assert_eq!(payload.0["error"], "quota_recovery_active_run");
     assert_eq!(queued_inputs.load(Ordering::SeqCst), 0);
     assert!(
+        bridge.is_run_active(&active_run_id).await,
+        "quota recovery must leave the user's active run untouched"
+    );
+    assert!(
         state
             .ops
             .garyx_db
@@ -1206,6 +1214,16 @@ async fn quota_recovery_never_queues_continue_into_an_active_run() {
     );
 
     release.notify_one();
+}
+
+#[tokio::test]
+async fn quota_recovery_never_queues_continue_into_an_active_run() {
+    assert_quota_recovery_never_displaces_active_run(true, "streaming").await;
+}
+
+#[tokio::test]
+async fn quota_recovery_never_replaces_a_non_streaming_active_run() {
+    assert_quota_recovery_never_displaces_active_run(false, "non-streaming").await;
 }
 
 #[tokio::test]

@@ -283,6 +283,10 @@ impl DurableDispatchPlan {
         &self.request.run_id
     }
 
+    pub fn has_active_run(&self) -> bool {
+        !matches!(self.active_run_plan, DurableActiveRunPlan::NoActiveRun)
+    }
+
     pub fn effective_run_id(&self) -> &str {
         match &self.active_run_plan {
             DurableActiveRunPlan::QueueTo { run_id } => run_id,
