@@ -38,7 +38,8 @@ final class GaryxComposerWorkspaceModeAvailabilityTests: XCTestCase {
             model.runTracker.beginLocalDispatch(
                 threadId: "thread-elsewhere",
                 intentId: "intent-elsewhere",
-                text: "long agent run"
+                text: "long agent run",
+                clientTimestampLocal: "2026-01-01 00:00:00"
             )
         )
         model.runTracker.confirmChatStartAccepted(

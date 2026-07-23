@@ -618,30 +618,35 @@ export function SideChatPanel({
       streamBusy;
 
     if (sendingThread) {
-      const intent = buildIntent({
-        threadId,
-        text: prompt,
-        images: promptImages,
-        files: promptFiles,
-        source: "composer_queue",
-        state: "queued_local",
-      });
-      mirror.dispatchMachineAction({
-        type: "intent/created",
-        intent,
-        enqueue: true,
-      });
-      deferredQueueDrainByThreadRef.current[threadId] = true;
-      clearSideComposerDraft(sourceThreadId);
-      setError(null);
-
       const followUpBehavior = options?.useAlternateFollowUpBehavior
         ? settingsDraft.followUpBehavior === "steer"
           ? "queue"
           : "steer"
         : settingsDraft.followUpBehavior;
-      if (followUpBehavior === "steer" && sideChatCanSteerQueuedPrompt) {
-        await mirror.steerQueuedIntent(intent, {
+      const dispatchAsSteer =
+        followUpBehavior === "steer" && sideChatCanSteerQueuedPrompt;
+      const intent = buildIntent({
+        threadId,
+        text: prompt,
+        images: promptImages,
+        files: promptFiles,
+        source: dispatchAsSteer ? "composer_steer" : "composer_queue",
+        state: dispatchAsSteer ? "dispatch_requested" : "queued_local",
+        dispatchMode: dispatchAsSteer ? "async_steer" : undefined,
+      });
+      mirror.dispatchMachineAction({
+        type: "intent/created",
+        intent,
+        enqueue: !dispatchAsSteer,
+      });
+      if (!dispatchAsSteer) {
+        deferredQueueDrainByThreadRef.current[threadId] = true;
+      }
+      clearSideComposerDraft(sourceThreadId);
+      setError(null);
+
+      if (dispatchAsSteer) {
+        await mirror.dispatchComposerSteer(intent, {
           canSteer: sideChatCanSteerQueuedPrompt,
         });
       }

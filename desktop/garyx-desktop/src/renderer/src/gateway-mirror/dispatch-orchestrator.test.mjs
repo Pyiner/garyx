@@ -42,6 +42,7 @@ function testIntent(id, overrides = {}) {
     images: [],
     files: [],
     createdAt: "2026-07-04T10:00:00.000Z",
+    clientTimestampLocal: "2026-07-04 10:00:00",
     updatedAt: "2026-07-04T10:00:00.000Z",
     state: overrides.state ?? "dispatch_requested",
     source: overrides.source ?? "composer_send",
@@ -288,7 +289,14 @@ function makeSide(name, script, options = {}) {
     canSteerQueuedPrompt: options.canSteerQueuedPrompt ?? true,
     inferProviderTypeForThread: () => "claude_code",
     openChatStream: async (input) => {
-      record("ipc.openChatStream", { input: { threadId: input.threadId, clientIntentId: input.clientIntentId, message: input.message } });
+      record("ipc.openChatStream", {
+        input: {
+          threadId: input.threadId,
+          clientIntentId: input.clientIntentId,
+          clientTimestampLocal: input.clientTimestampLocal,
+          message: input.message,
+        },
+      });
       const step = script.openChatStream.shift();
       if (!step) {
         throw new Error("script exhausted: openChatStream");
@@ -299,7 +307,14 @@ function makeSide(name, script, options = {}) {
       return step.result;
     },
     sendStreamingInput: async (input) => {
-      record("ipc.sendStreamingInput", { input: { threadId: input.threadId, clientIntentId: input.clientIntentId, message: input.message } });
+      record("ipc.sendStreamingInput", {
+        input: {
+          threadId: input.threadId,
+          clientIntentId: input.clientIntentId,
+          clientTimestampLocal: input.clientTimestampLocal,
+          message: input.message,
+        },
+      });
       const step = script.sendStreamingInput.shift();
       if (!step) {
         throw new Error("script exhausted: sendStreamingInput");
@@ -339,6 +354,8 @@ function makeSide(name, script, options = {}) {
       orchestrator.sendIntentOnce(threadId, intentId, opts),
     runQueuedBatch: (threadId, initialIntentId) =>
       orchestrator.runQueuedBatch(threadId, initialIntentId),
+    dispatchComposerSteer: (intent, opts) =>
+      orchestrator.dispatchComposerSteer(intent, opts),
     steerQueuedIntent: (intent, opts) =>
       orchestrator.steerQueuedIntent(intent, opts),
     interruptThread: (threadId) => orchestrator.interruptThread(threadId),
@@ -702,6 +719,199 @@ test("dual-run: a failing queued intent requeues to the front and stops the drai
   assert.equal(requeue.action.source, "queue_send");
 });
 
+test("dual-run: composer steer dispatches directly and tracks the provider ack", async () => {
+  const intent = testIntent("composer-steer-1", {
+    state: "dispatch_requested",
+    source: "composer_steer",
+    dispatchMode: "async_steer",
+  });
+  const { mirror } = await dualRun(
+    {
+      sendStreamingInput: [
+        {
+          result: {
+            status: "queued",
+            threadId: THREAD_ID,
+            clientIntentId: intent.intentId,
+            pendingInputId: "pending-composer-steer",
+          },
+        },
+      ],
+    },
+    async (side) => {
+      side.dispatchMessageState({ type: "intent/created", intent, enqueue: false });
+      await side.run.dispatchComposerSteer(intent);
+      return null;
+    },
+  );
+
+  assert.deepEqual(
+    mirror.messageStateRef.current.queueByThread[THREAD_ID] || [],
+    [],
+  );
+  assert.equal(
+    mirror.messageStateRef.current.intentsById[intent.intentId].state,
+    "awaiting_provider_ack",
+  );
+  assert.deepEqual(
+    mirror.liveStream.ref.current[THREAD_ID].pendingAckIntentIds,
+    [intent.intentId],
+  );
+});
+
+test("dual-run: composer steer failure is terminal, queue-free, and mapped to an error row", async () => {
+  const intent = testIntent("composer-steer-error", {
+    state: "dispatch_requested",
+    source: "composer_steer",
+    dispatchMode: "async_steer",
+  });
+  const { mirror } = await dualRun(
+    { sendStreamingInput: [{ error: "steer transport failed" }] },
+    async (side) => {
+      side.dispatchMessageState({ type: "intent/created", intent, enqueue: false });
+      await side.run.dispatchComposerSteer(intent);
+      return null;
+    },
+  );
+
+  assert.equal(
+    mirror.messageStateRef.current.intentsById[intent.intentId].state,
+    "failed",
+  );
+  assert.deepEqual(
+    mirror.messageStateRef.current.queueByThread[THREAD_ID] || [],
+    [],
+  );
+  const errorRow = mirror.messagesByThreadRef.current[THREAD_ID].find(
+    (entry) => entry.role === "user" && entry.intentId === intent.intentId,
+  );
+  assert.equal(errorRow.localState, "error");
+  assert.equal(errorRow.error, true);
+  assert.deepEqual(
+    mirror.liveStream.ref.current[THREAD_ID].pendingAckIntentIds,
+    [],
+  );
+  assert.equal(
+    mirror.trace.some(
+      (entry) => entry.kind === "setError" && entry.error !== null,
+    ),
+    false,
+  );
+});
+
+test("dual-run: composer steer run-ended race falls back with the same intent and no queue transit", async () => {
+  const intent = testIntent("composer-steer-fallback", {
+    state: "dispatch_requested",
+    source: "composer_steer",
+    dispatchMode: "async_steer",
+  });
+  const { mirror } = await dualRun(
+    {
+      sendStreamingInput: [
+        {
+          result: {
+            status: "no_active_session",
+            threadId: THREAD_ID,
+            clientIntentId: intent.intentId,
+          },
+        },
+      ],
+      openChatStream: [{ result: acceptedResult("run-composer-fallback") }],
+    },
+    async (side) => {
+      side.dispatchMessageState({ type: "intent/created", intent, enqueue: false });
+      await side.run.dispatchComposerSteer(intent);
+      return null;
+    },
+  );
+
+  const streamInput = mirror.trace.find(
+    (entry) => entry.kind === "ipc.sendStreamingInput",
+  );
+  const chatStart = mirror.trace.find(
+    (entry) => entry.kind === "ipc.openChatStream",
+  );
+  assert.equal(streamInput.input.clientIntentId, intent.intentId);
+  assert.equal(chatStart.input.clientIntentId, intent.intentId);
+  assert.equal(
+    streamInput.input.clientTimestampLocal,
+    intent.clientTimestampLocal,
+  );
+  assert.equal(
+    chatStart.input.clientTimestampLocal,
+    intent.clientTimestampLocal,
+  );
+  assert.deepEqual(
+    mirror.messageStateRef.current.queueByThread[THREAD_ID] || [],
+    [],
+  );
+  const dispatchRequests = mirror.trace
+    .filter(
+      (entry) =>
+        entry.kind === "action" &&
+        entry.action.type === "intent/request-dispatch",
+    )
+    .map((entry) => ({
+      mode: entry.action.mode,
+      source: entry.action.source,
+      removeFromQueue: entry.action.removeFromQueue,
+    }));
+  assert.deepEqual(dispatchRequests, [
+    {
+      mode: "sync_send",
+      source: "composer_steer",
+      removeFromQueue: false,
+    },
+  ]);
+});
+
+test("dual-run: composer steer sync fallback failure stays inline and retryable", async () => {
+  const intent = testIntent("composer-steer-fallback-error", {
+    state: "dispatch_requested",
+    source: "composer_steer",
+    dispatchMode: "async_steer",
+  });
+  const { mirror } = await dualRun(
+    {
+      sendStreamingInput: [
+        {
+          result: {
+            status: "no_active_session",
+            threadId: THREAD_ID,
+            clientIntentId: intent.intentId,
+          },
+        },
+      ],
+      openChatStream: [{ error: "provider rejected input" }],
+    },
+    async (side) => {
+      side.dispatchMessageState({ type: "intent/created", intent, enqueue: false });
+      await side.run.dispatchComposerSteer(intent);
+      return null;
+    },
+  );
+
+  assert.equal(
+    mirror.messageStateRef.current.intentsById[intent.intentId].state,
+    "failed",
+  );
+  assert.deepEqual(
+    mirror.messageStateRef.current.queueByThread[THREAD_ID] || [],
+    [],
+  );
+  const errorRow = mirror.messagesByThreadRef.current[THREAD_ID].find(
+    (entry) => entry.role === "user" && entry.intentId === intent.intentId,
+  );
+  assert.equal(errorRow.localState, "error");
+  assert.equal(errorRow.error, true);
+  assert.equal(
+    mirror.trace.some(
+      (entry) => entry.kind === "setError" && entry.error !== null,
+    ),
+    false,
+  );
+});
+
 test("dual-run: steering a queued intent tracks the provider ack", async () => {
   const intent = testIntent("steer-1", {
     state: "queued_local",
@@ -778,26 +988,45 @@ test("dual-run: a non-queued steer result falls back to a sync send", async () =
   assert.deepEqual(requests, ["async_steer", "sync_send"]);
 });
 
-test("dual-run: a steer transport error requeues the intent", async () => {
+test("dual-run: a queued steer transport error restores the original queue position", async () => {
+  const first = testIntent("queue-first", {
+    state: "queued_local",
+    source: "composer_queue",
+    dispatchMode: undefined,
+  });
   const intent = testIntent("steer-error-1", {
     state: "queued_local",
     source: "composer_queue",
+    dispatchMode: undefined,
   });
   const { mirror } = await dualRun(
     { sendStreamingInput: [{ error: "fetch failed" }] },
     async (side) => {
+      side.dispatchMessageState({ type: "intent/created", intent: first, enqueue: true });
       side.dispatchMessageState({ type: "intent/created", intent, enqueue: true });
       await side.run.steerQueuedIntent(intent);
       return null;
     },
   );
 
-  const requeue = mirror.trace.find(
+  const restored = mirror.trace.find(
     (entry) =>
-      entry.kind === "action" && entry.action.type === "intent/requeue-front",
+      entry.kind === "action" &&
+      entry.action.type === "intent/queue-steer-failed",
   );
-  assert.equal(requeue.action.source, "queue_steer");
-  assert.equal(requeue.action.error, "fetch failed");
+  assert.equal(restored.action.error, "fetch failed");
+  assert.deepEqual(
+    mirror.messageStateRef.current.queueByThread[THREAD_ID],
+    [first.intentId, intent.intentId],
+  );
+  assert.equal(
+    mirror.messageStateRef.current.intentsById[intent.intentId].state,
+    "queued_local",
+  );
+  assert.equal(
+    mirror.messageStateRef.current.intentsById[intent.intentId].dispatchMode,
+    undefined,
+  );
   const live = mirror.liveStream.ref.current[THREAD_ID];
   assert.deepEqual(live.pendingAckIntentIds, []);
 });

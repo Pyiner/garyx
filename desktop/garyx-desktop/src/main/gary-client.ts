@@ -33,6 +33,8 @@ export type {
 } from "./garyx-client/http.ts";
 export {
   ThreadStreamGapError,
+  buildChatStartRequestBody,
+  buildStreamInputRequestBody,
   streamThreadEvents,
   openChatStream,
   sendStreamingInput,

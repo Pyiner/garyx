@@ -48,13 +48,15 @@ One user-initiated send ("intent") moves through:
 
 ### IntentSource
 
-`composer_send`, `composer_queue`, `queue_send`, `queue_steer`, `retry`.
+`composer_send`, `composer_steer`, `composer_queue`, `queue_send`,
+`queue_steer`, `retry`.
 
 ### IntentDispatchMode
 
 - `sync_send` — primary send; the thread is busy until the run finishes.
 - `async_steer` — follow-up input sent while a run is active; queued by the
-  gateway as a pending input and acknowledged via `user_ack`.
+  gateway as a pending input and acknowledged via `user_ack`. A composer steer
+  is never a member of the client-side queue.
 
 ### ThreadRuntimeState
 
@@ -167,6 +169,9 @@ The machine state is:
 Action semantics (reference: `message-machine.ts` reducer). The notable
 non-obvious rules, all covered by fixtures:
 
+- A composer steer is created directly in `dispatch_requested` with mode
+  `async_steer`, source `composer_steer`, and `enqueue: false`. It never
+  transits through `queued_local` or `queueByThread`.
 - `intent/request-dispatch` on an unknown intent is a complete no-op — it
   must not touch the queue either.
 - `intent/cancelled` always removes the id from the thread queue, even when
@@ -183,6 +188,10 @@ non-obvious rules, all covered by fixtures:
   `remoteThreadKey`, `pendingInputId`, and `responseText`, sets `source`
   (default `queue_send`), and prepends the id to the queue unless already
   present.
+- `intent/queue-steer-failed` applies only to a manual steer of an existing
+  queue member. It restores `queued_local`, clears only the in-flight
+  `dispatchMode`, records the error, and leaves the queue and all other intent
+  fields in place.
 - `intent/reorder` clamps the target index to the queue bounds and is a
   no-op when the id is absent or the index does not change.
 - `thread/runtime` overwrites `activeIntentId`, `remoteRunId`, and
@@ -201,6 +210,23 @@ Provider-ack helpers (also fixture-covered):
 - `shouldTrackProviderAckAfterStreamInputResponse(intent)` is false once the
   intent is in `awaiting_history`, `completed`, `failed`, `interrupted`, or
   `cancelled`.
+
+Dispatch-path rules:
+
+- Composer steer failure is terminal `failed`. Its optimistic user row becomes
+  `TranscriptEntryState.error` in the message scroll stream and uses the same
+  retry affordance as a failed `sync_send`; it is never requeued, and the
+  conversation failure is not duplicated in a toast or overlay.
+- If the active run ends during a composer steer, the same dispatch resolves
+  to `sync_send` with the same intent id, source, payload, and intent-scoped
+  `client_timestamp_local`. This is not a queue operation.
+- A manual `queue_steer` leaves its entry at the original queue index until the
+  gateway accepts it. Failure restores `queued_local` in place and never uses
+  `intent/requeue-front`.
+- `client_timestamp_local` is stamped once when the intent is created and is
+  immutable for that intent. Every `chat/start` and `stream-input` attempt,
+  including retry and run-ended fallback paths, sends that stored value
+  verbatim.
 
 ## Activity And Render State
 

@@ -8,6 +8,7 @@ private struct GaryxOptimisticSendPresentation {
     let text: String
     let attachments: [GaryxMobileComposerAttachment]
     let clientIntentId: String
+    let clientTimestampLocal: String
     let userMessage: GaryxMobileMessage
     let assistantId: String
     let initialThreadId: String?
@@ -300,6 +301,7 @@ extension GaryxMobileModel {
         clientIntentId: String
     ) -> GaryxOptimisticSendPresentation {
         let runtimeGeneration = gatewayRequestToken
+        let clientTimestampLocal = Self.localChatTimestamp()
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let userMessage = GaryxMobileMessage(
             id: Self.userOriginMessageId(clientIntentId),
@@ -346,7 +348,8 @@ extension GaryxMobileModel {
                 threadId: initialThreadId,
                 intentId: clientIntentId,
                 text: visibleUserText,
-                allowWhileBusy: allowBusyFollowUp
+                allowWhileBusy: allowBusyFollowUp,
+                clientTimestampLocal: clientTimestampLocal
             )
             if !beganRunDispatch {
                 shouldDispatch = false
@@ -363,6 +366,7 @@ extension GaryxMobileModel {
             text: text,
             attachments: attachments,
             clientIntentId: clientIntentId,
+            clientTimestampLocal: clientTimestampLocal,
             userMessage: userMessage,
             assistantId: assistantId,
             initialThreadId: initialThreadId,
@@ -419,6 +423,7 @@ extension GaryxMobileModel {
         let text = presentation.text
         let attachments = presentation.attachments
         let clientIntentId = presentation.clientIntentId
+        let clientTimestampLocal = presentation.clientTimestampLocal
         let userMessage = presentation.userMessage
         let visibleUserText = userMessage.text
         let assistantId = presentation.assistantId
@@ -513,7 +518,8 @@ extension GaryxMobileModel {
                 threadId: thread.id,
                 intentId: clientIntentId,
                 text: visibleUserText,
-                allowWhileBusy: allowBusyFollowUp && thread.id == optimisticThreadId
+                allowWhileBusy: allowBusyFollowUp && thread.id == optimisticThreadId,
+                clientTimestampLocal: clientTimestampLocal
             ) else {
                 markLatestLocalUserFailed(for: thread.id, message: "Thread is busy")
                 markStreamingAssistantComplete(for: thread.id, removeEmpty: true)
@@ -539,6 +545,7 @@ extension GaryxMobileModel {
                 message: text,
                 attachments: attachments,
                 clientIntentId: clientIntentId,
+                clientTimestampLocal: clientTimestampLocal,
                 workspacePath: workspacePath,
                 assistantMessageId: assistantId,
                 delivery: delivery,
@@ -583,6 +590,7 @@ extension GaryxMobileModel {
         in thread: GaryxThreadSummary
     ) async {
         let clientIntentId = "mobile-\(UUID().uuidString)"
+        let clientTimestampLocal = Self.localChatTimestamp()
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let userMessage = GaryxMobileMessage(
             id: Self.userOriginMessageId(clientIntentId),
@@ -601,7 +609,8 @@ extension GaryxMobileModel {
             threadId: thread.id,
             text: text,
             attachments: attachments,
-            clientIntentId: clientIntentId
+            clientIntentId: clientIntentId,
+            clientTimestampLocal: clientTimestampLocal
         )
         pendingQueuedInputsByIntentId[clientIntentId] = queued
         threadSummaryLeaseOwner.replaceComposerReferences(
@@ -609,7 +618,12 @@ extension GaryxMobileModel {
             threadIds: [thread.id],
             summaries: cachedThreadSummary(for: thread.id).map { [$0] } ?? []
         )
-        runTracker.beginQueuedSteer(threadId: thread.id, intentId: clientIntentId, text: visibleUserText)
+        runTracker.beginComposerSteer(
+            threadId: thread.id,
+            intentId: clientIntentId,
+            text: visibleUserText,
+            clientTimestampLocal: clientTimestampLocal
+        )
         await submitQueuedInputViaGateway(queued)
     }
 
@@ -627,7 +641,10 @@ extension GaryxMobileModel {
                     threadId: queued.threadId,
                     clientIntentId: queued.clientIntentId,
                     message: queued.text,
-                    attachments: queued.attachments.map(\.promptAttachment)
+                    attachments: queued.attachments.map(\.promptAttachment),
+                    metadata: [
+                        "client_timestamp_local": queued.clientTimestampLocal,
+                    ]
                 )
             )
             try Task.checkCancellation()
@@ -676,13 +693,15 @@ extension GaryxMobileModel {
                     intentId: queued.clientIntentId,
                     error: message
                 )
-                markLocalInputFailed(
+                let markedInput = markLocalInputFailed(
                     threadId: queued.threadId,
                     clientIntentId: queued.clientIntentId,
                     pendingInputId: nil,
                     message: message
                 )
-                lastError = message
+                if !markedInput {
+                    lastError = message
+                }
             }
         }
     }
@@ -735,7 +754,9 @@ extension GaryxMobileModel {
             runTracker.beginLocalDispatch(
                 threadId: queued.threadId,
                 intentId: queued.clientIntentId,
-                text: queued.text
+                text: queued.text,
+                source: .composerSteer,
+                clientTimestampLocal: queued.clientTimestampLocal
             )
             refreshHomeThreadsAfterLocalRunStart()
             activeAssistantMessageIdsByThread[queued.threadId] = assistantId
@@ -748,12 +769,13 @@ extension GaryxMobileModel {
                 message: queued.text,
                 attachments: queued.attachments,
                 clientIntentId: queued.clientIntentId,
+                clientTimestampLocal: queued.clientTimestampLocal,
                 workspacePath: workspacePath,
                 assistantMessageId: assistantId
             )
         } catch {
             guard runtimeGeneration == gatewayRequestToken else { return }
-            markLocalInputFailed(
+            let markedInput = markLocalInputFailed(
                 threadId: queued.threadId,
                 clientIntentId: queued.clientIntentId,
                 pendingInputId: nil,
@@ -767,7 +789,9 @@ extension GaryxMobileModel {
                 error: displayMessage(for: error)
             )
             refreshHomeThreadsAfterLocalRunStateChange()
-            lastError = displayMessage(for: error)
+            if !markedInput {
+                lastError = displayMessage(for: error)
+            }
         }
     }
 
@@ -776,6 +800,7 @@ extension GaryxMobileModel {
         message: String,
         attachments: [GaryxMobileComposerAttachment],
         clientIntentId: String,
+        clientTimestampLocal: String,
         workspacePath: String?,
         assistantMessageId: String,
         delivery: GaryxComposerDeliveryHandle? = nil,
@@ -792,7 +817,7 @@ extension GaryxMobileModel {
                 metadata: [
                     "client": "garyx-mobile",
                     "client_intent_id": clientIntentId,
-                    "client_timestamp_local": Self.localChatTimestamp(),
+                    "client_timestamp_local": clientTimestampLocal,
                 ]
             )
             if let delivery {

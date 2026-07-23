@@ -176,6 +176,9 @@ final class GaryxGatewayClientTests: XCTestCase {
                     name: "note.md",
                     mediaType: "text/markdown"
                 ),
+            ],
+            metadata: [
+                "client_timestamp_local": "2026-07-23T22:29:21.000+08:00",
             ]
         )
 
@@ -184,8 +187,40 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(object?["threadId"] as? String, "thread::test")
         XCTAssertEqual(object?["clientIntentId"] as? String, "intent-test")
         XCTAssertEqual(object?["message"] as? String, "follow up")
+        XCTAssertEqual(
+            (object?["metadata"] as? [String: String])?["client_timestamp_local"],
+            "2026-07-23T22:29:21.000+08:00"
+        )
         let attachments = try XCTUnwrap(object?["attachments"] as? [[String: Any]])
         XCTAssertEqual(attachments.first?["path"] as? String, "/workspace/project/note.md")
+    }
+
+    func testIntentScopedTimestampMakesChatRequestBodiesAttemptInvariant() throws {
+        let timestamp = "2026-07-23T22:29:21.000+08:00"
+        let start = GaryxStartChatRequest(
+            threadId: "thread::stable-attempt",
+            message: "Stable synthetic message",
+            metadata: [
+                "client_intent_id": "intent-stable-attempt",
+                "client_timestamp_local": timestamp,
+            ]
+        )
+        let streamInput = GaryxStreamInputRequest(
+            threadId: "thread::stable-attempt",
+            clientIntentId: "intent-stable-attempt",
+            message: "Stable synthetic message",
+            metadata: [
+                "client_timestamp_local": timestamp,
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        XCTAssertEqual(try encoder.encode(start), try encoder.encode(start))
+        XCTAssertEqual(
+            try encoder.encode(streamInput),
+            try encoder.encode(streamInput)
+        )
     }
 
     func testAgentRequestEncodesExpectedUpdatedAtToken() throws {

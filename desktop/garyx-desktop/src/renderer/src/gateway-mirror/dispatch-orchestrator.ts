@@ -326,6 +326,9 @@ export class DispatchOrchestrator {
     options?: {
       seedUserBubble?: boolean;
       seededTurn?: SeededTurn;
+      removeFromQueueOnAccept?: boolean;
+      failurePolicy?: "terminal" | "preserve_queue";
+      suppressGlobalError?: boolean;
     },
   ): Promise<boolean> {
     const deps = this.requireDeps();
@@ -377,6 +380,7 @@ export class DispatchOrchestrator {
       const result = await deps.openChatStream({
         threadId,
         clientIntentId: intent.intentId,
+        clientTimestampLocal: intent.clientTimestampLocal,
         message: intent.text,
         images: intent.images,
         files: intent.files,
@@ -419,7 +423,7 @@ export class DispatchOrchestrator {
             intentId: intent.intentId,
             runId: result.runId,
             threadId: resultThreadId,
-            removeFromQueue: false,
+            removeFromQueue: options?.removeFromQueueOnAccept ?? false,
           });
         }
         setDesktopState((current) => {
@@ -481,7 +485,7 @@ export class DispatchOrchestrator {
           runId: result.runId,
           threadId: resultThreadId,
           responseText: result.response,
-          removeFromQueue: false,
+          removeFromQueue: options?.removeFromQueueOnAccept ?? false,
         });
       }
       this.dispatchMessageState({
@@ -588,6 +592,24 @@ export class DispatchOrchestrator {
       const errorState: TranscriptEntryState = interrupted
         ? "interrupted"
         : "error";
+      if (options?.failurePolicy === "preserve_queue") {
+        this.clearLiveStreamState(threadId);
+        setError(message);
+        this.dispatchMessageState({
+          type: "intent/queue-steer-failed",
+          intentId: intent.intentId,
+          error: message,
+        });
+        this.port.setThreadRuntimeState(
+          threadId,
+          interrupted ? "interrupting" : "failed",
+          {
+            activeIntentId: intent.intentId,
+            error: message,
+          },
+        );
+        return false;
+      }
       const liveState = this.getLiveStreamState(threadId);
       const failedIntentId = liveState?.activeIntentId || intent.intentId;
       const recoveryResult = reconcileAssistantEntriesForGatewayRecovery(
@@ -632,7 +654,9 @@ export class DispatchOrchestrator {
       }
 
       this.clearLiveStreamState(threadId);
-      setError(message);
+      if (!options?.suppressGlobalError) {
+        setError(message);
+      }
       this.dispatchMessageState({
         type: interrupted ? "intent/interrupted" : "intent/failed",
         intentId: failedIntentId,
@@ -786,8 +810,23 @@ export class DispatchOrchestrator {
     }
   }
 
+  async dispatchComposerSteer(
+    latestIntent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ): Promise<void> {
+    await this.dispatchSteerIntent(latestIntent, "composer", options);
+  }
+
   async steerQueuedIntent(
     latestIntent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ): Promise<void> {
+    await this.dispatchSteerIntent(latestIntent, "queue", options);
+  }
+
+  private async dispatchSteerIntent(
+    latestIntent: MessageIntent,
+    kind: "composer" | "queue",
     options?: { canSteer?: boolean },
   ): Promise<void> {
     const deps = this.requireDeps();
@@ -800,23 +839,39 @@ export class DispatchOrchestrator {
     if (!(options?.canSteer ?? canSteerQueuedPrompt)) {
       return;
     }
-    if (latestIntent.state !== "queued_local") {
+    const queueIntentIds = this.queueIntentIdsForThread(threadId);
+    const isComposerSteer =
+      kind === "composer" &&
+      latestIntent.state === "dispatch_requested" &&
+      latestIntent.source === "composer_steer" &&
+      latestIntent.dispatchMode === "async_steer" &&
+      !queueIntentIds.includes(latestIntent.intentId);
+    const isQueueSteer =
+      kind === "queue" &&
+      latestIntent.state === "queued_local" &&
+      queueIntentIds.includes(latestIntent.intentId);
+    if (!isComposerSteer && !isQueueSteer) {
       return;
     }
     const epoch = this.connectionEpoch;
 
-    this.dispatchMessageState({
-      type: "intent/request-dispatch",
-      threadId: threadId,
-      intentId: latestIntent.intentId,
-      mode: "async_steer",
-      source: "queue_steer",
-      removeFromQueue: false,
-    });
+    if (isQueueSteer) {
+      this.dispatchMessageState({
+        type: "intent/request-dispatch",
+        threadId,
+        intentId: latestIntent.intentId,
+        mode: "async_steer",
+        source: "queue_steer",
+        removeFromQueue: false,
+      });
+    }
     this.dispatchMessageState({
       type: "intent/dispatch-started",
       intentId: latestIntent.intentId,
     });
+    const composerSeededTurn = isComposerSteer
+      ? this.appendSeededTurn(threadId, latestIntent)
+      : undefined;
 
     setError(null);
     requestMessagesBottomSnap(threadId, true);
@@ -842,6 +897,7 @@ export class DispatchOrchestrator {
       const result = await deps.sendStreamingInput({
         threadId,
         clientIntentId: latestIntent.intentId,
+        clientTimestampLocal: latestIntent.clientTimestampLocal,
         message: latestIntent.text,
         images: latestIntent.images,
         files: latestIntent.files,
@@ -865,7 +921,7 @@ export class DispatchOrchestrator {
           runId: activeRunId,
           threadId: resultThreadId,
           pendingInputId: result.pendingInputId,
-          removeFromQueue: true,
+          removeFromQueue: isQueueSteer,
           awaitProviderAck: true,
         });
         this.port.updateThreadLiveStream(resultThreadId, (current) => ({
@@ -897,30 +953,26 @@ export class DispatchOrchestrator {
       );
       this.dispatchMessageState({
         type: "intent/request-dispatch",
-        threadId: threadId,
+        threadId,
         intentId: latestIntent.intentId,
         mode: "sync_send",
-        source: "queue_steer",
-        removeFromQueue: true,
+        source: isComposerSteer ? "composer_steer" : "queue_steer",
+        removeFromQueue: false,
       });
-      this.dispatchMessageState({
-        type: "intent/dispatch-started",
-        intentId: latestIntent.intentId,
-      });
+      const queueFallbackSeededTurn = isQueueSteer
+        ? this.appendSeededTurn(threadId, latestIntent)
+        : undefined;
       const didSucceed = await this.sendIntentOnce(threadId, latestIntent.intentId, {
-        seedUserBubble: true,
+        seededTurn: composerSeededTurn || queueFallbackSeededTurn,
+        removeFromQueueOnAccept: isQueueSteer,
+        failurePolicy: isQueueSteer ? "preserve_queue" : "terminal",
+        suppressGlobalError: isComposerSteer,
       });
       if (this.connectionEpoch !== epoch) {
         return;
       }
-      if (!didSucceed) {
-        this.dispatchMessageState({
-          type: "intent/requeue-front",
-          threadId: threadId,
-          intentId: latestIntent.intentId,
-          source: "queue_steer",
-          error: this.intentForId(latestIntent.intentId)?.error,
-        });
+      if (!didSucceed && isQueueSteer) {
+        this.removeOptimisticIntentEntries(threadId, latestIntent.intentId);
       }
     } catch (steerError) {
       if (this.connectionEpoch !== epoch) {
@@ -940,15 +992,79 @@ export class DispatchOrchestrator {
         steerError instanceof Error
           ? steerError.message
           : "Failed to steer follow-up";
-      setError(message);
-      this.dispatchMessageState({
-        type: "intent/requeue-front",
-        threadId: threadId,
-        intentId: latestIntent.intentId,
-        source: "queue_steer",
-        error: message,
-      });
+      if (isComposerSteer) {
+        this.markComposerSteerFailed(latestIntent, message);
+      } else {
+        setError(message);
+        this.dispatchMessageState({
+          type: "intent/queue-steer-failed",
+          intentId: latestIntent.intentId,
+          error: message,
+        });
+      }
     }
+  }
+
+  private markComposerSteerFailed(
+    intent: MessageIntent,
+    message: string,
+  ): void {
+    this.dispatchMessageState({
+      type: "intent/failed",
+      intentId: intent.intentId,
+      error: message,
+    });
+    this.port.updateMessagesByThread((current) => {
+      const existing = current[intent.threadId] || [];
+      let foundUser = false;
+      const entries = existing.map((entry) => {
+        if (
+          entry.role !== "user" ||
+          entry.intentId !== intent.intentId ||
+          entry.localState === "remote_final"
+        ) {
+          return entry;
+        }
+        foundUser = true;
+        return {
+          ...entry,
+          error: true,
+          localState: "error" as TranscriptEntryState,
+        };
+      });
+      if (foundUser) {
+        return {
+          ...current,
+          [intent.threadId]: entries,
+        };
+      }
+      return {
+        ...current,
+        [intent.threadId]: [
+          ...entries,
+          {
+            ...seededUserBubble(intent),
+            error: true,
+            localState: "error",
+          },
+        ],
+      };
+    });
+  }
+
+  private removeOptimisticIntentEntries(
+    threadId: string,
+    intentId: string,
+  ): void {
+    this.port.updateMessagesByThread((current) => ({
+      ...current,
+      [threadId]: (current[threadId] || []).filter((entry) => {
+        return (
+          entry.intentId !== intentId ||
+          entry.localState === "remote_final"
+        );
+      }),
+    }));
   }
 
   private markInterruptedAssistantEntries(

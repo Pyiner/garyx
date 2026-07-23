@@ -1430,7 +1430,8 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
             model.runTracker.beginLocalDispatch(
                 threadId: "delivery-thread",
                 intentId: "delivery-model-intent",
-                text: payload.text
+                text: payload.text,
+                clientTimestampLocal: "2026-01-01 00:00:00"
             )
         )
 
@@ -1440,6 +1441,7 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
                 message: payload.text,
                 attachments: [],
                 clientIntentId: "delivery-model-intent",
+                clientTimestampLocal: "2026-01-01 00:00:00",
                 workspacePath: nil,
                 assistantMessageId: "delivery-assistant",
                 delivery: payload.delivery,
@@ -1535,6 +1537,7 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
                 message: payload.text,
                 attachments: [],
                 clientIntentId: payload.clientIntentID,
+                clientTimestampLocal: "2026-01-01 00:00:00",
                 workspacePath: nil,
                 assistantMessageId: "attempt-failure-assistant",
                 delivery: payload.delivery

@@ -2,10 +2,17 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
+    private static let fixedLocalTimestamp = "2026-01-01 00:00:00"
+
     func testDurableBarrierRollbackRestoresBusyRuntimeAndCancelsOnlyNewIntent() {
         var tracker = GaryxConversationRunTracker()
 
-        XCTAssertTrue(tracker.beginLocalDispatch(threadId: "t1", intentId: "i1", text: "start"))
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "i1",
+            text: "start",
+            clientTimestampLocal: Self.fixedLocalTimestamp
+        ))
         tracker.confirmChatStartAccepted(
             requestedThreadId: "t1",
             acceptedThreadId: "t1",
@@ -18,7 +25,8 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
             threadId: "t1",
             intentId: "i2",
             text: "follow up",
-            allowWhileBusy: true
+            allowWhileBusy: true,
+            clientTimestampLocal: Self.fixedLocalTimestamp
         ))
         tracker.rollbackLocalDispatch(
             threadId: "t1",
@@ -35,7 +43,12 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
     func testCommittedRunCompleteClearsLocalDispatchWithoutStreamEvent() {
         var tracker = GaryxConversationRunTracker()
 
-        XCTAssertTrue(tracker.beginLocalDispatch(threadId: "t1", intentId: "i1", text: "hello"))
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "i1",
+            text: "hello",
+            clientTimestampLocal: Self.fixedLocalTimestamp
+        ))
         tracker.confirmChatStartAccepted(
             requestedThreadId: "t1",
             acceptedThreadId: "t1",
@@ -56,14 +69,28 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
     func testCommittedUserAckClearsQueuedPendingAckWithoutClosingRun() {
         var tracker = GaryxConversationRunTracker()
 
-        XCTAssertTrue(tracker.beginLocalDispatch(threadId: "t1", intentId: "i1", text: "start"))
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "i1",
+            text: "start",
+            clientTimestampLocal: Self.fixedLocalTimestamp
+        ))
         tracker.confirmChatStartAccepted(
             requestedThreadId: "t1",
             acceptedThreadId: "t1",
             intentId: "i1",
             runId: "run-1"
         )
-        tracker.beginQueuedSteer(threadId: "t1", intentId: "q1", text: "follow up")
+        tracker.beginComposerSteer(
+            threadId: "t1",
+            intentId: "q1",
+            text: "follow up",
+            clientTimestampLocal: Self.fixedLocalTimestamp
+        )
+        XCTAssertEqual(tracker.machine.intentsById["q1"]?.source, .composerSteer)
+        XCTAssertEqual(tracker.machine.intentsById["q1"]?.dispatchMode, .asyncSteer)
+        XCTAssertEqual(tracker.machine.intentsById["q1"]?.state, .dispatching)
+        XCTAssertEqual(tracker.machine.queueByThread["t1"] ?? [], [])
         tracker.confirmQueuedSteerAccepted(
             threadId: "t1",
             intentId: "q1",
@@ -81,7 +108,12 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
     func testBackgroundCommittedTerminalClosesQueuedIntentWithoutGlobalStream() {
         var tracker = GaryxConversationRunTracker()
 
-        tracker.beginQueuedSteer(threadId: "background-thread", intentId: "q1", text: "queued")
+        tracker.beginComposerSteer(
+            threadId: "background-thread",
+            intentId: "q1",
+            text: "queued",
+            clientTimestampLocal: Self.fixedLocalTimestamp
+        )
         tracker.confirmQueuedSteerAccepted(
             threadId: "background-thread",
             intentId: "q1",
@@ -102,7 +134,12 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
     func testCommittedInterruptClearsRuntimeAndMarksIntentInterrupted() {
         var tracker = GaryxConversationRunTracker()
 
-        XCTAssertTrue(tracker.beginLocalDispatch(threadId: "t1", intentId: "i1", text: "start"))
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "i1",
+            text: "start",
+            clientTimestampLocal: Self.fixedLocalTimestamp
+        ))
         tracker.confirmChatStartAccepted(
             requestedThreadId: "t1",
             acceptedThreadId: "t1",

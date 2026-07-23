@@ -102,7 +102,188 @@
       ]
     },
     {
-      "name": "async steer waits for provider ack and survives duplicate accepted events",
+      "name": "composer steer dispatches directly without entering the client queue",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "composer-steer-1",
+              "threadId": "t1",
+              "text": "follow up now",
+              "state": "dispatch_requested",
+              "source": "composer_steer",
+              "dispatchMode": "async_steer"
+            }
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "composer-steer-1": {
+                "state": "dispatch_requested",
+                "source": "composer_steer",
+                "dispatchMode": "async_steer"
+              }
+            },
+            "queues": { "t1": [] }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/dispatch-started",
+            "intentId": "composer-steer-1"
+          }
+        },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "composer-steer-1",
+            "runId": "run-composer-steer",
+            "threadId": "t1",
+            "pendingInputId": "pending-composer-steer",
+            "removeFromQueue": false,
+            "awaitProviderAck": true
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "composer-steer-1": {
+                "state": "awaiting_provider_ack",
+                "source": "composer_steer",
+                "dispatchMode": "async_steer",
+                "pendingInputId": "pending-composer-steer"
+              }
+            },
+            "queues": { "t1": [] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "composer steer failure is terminal and never enters the client queue",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "composer-steer-failed",
+              "threadId": "t1",
+              "text": "follow up fails",
+              "state": "dispatch_requested",
+              "source": "composer_steer",
+              "dispatchMode": "async_steer"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/dispatch-started",
+            "intentId": "composer-steer-failed"
+          }
+        },
+        {
+          "action": {
+            "type": "intent/failed",
+            "intentId": "composer-steer-failed",
+            "error": "steer transport failed"
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "composer-steer-failed": {
+                "state": "failed",
+                "source": "composer_steer",
+                "dispatchMode": "async_steer",
+                "error": "steer transport failed"
+              }
+            },
+            "queues": { "t1": [] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "composer steer resolves a run-ended race as the same sync dispatch",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "composer-steer-fallback",
+              "threadId": "t1",
+              "text": "follow up after run",
+              "state": "dispatch_requested",
+              "source": "composer_steer",
+              "dispatchMode": "async_steer"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/dispatch-started",
+            "intentId": "composer-steer-fallback"
+          }
+        },
+        {
+          "action": {
+            "type": "intent/request-dispatch",
+            "threadId": "t1",
+            "intentId": "composer-steer-fallback",
+            "mode": "sync_send",
+            "source": "composer_steer",
+            "removeFromQueue": false
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "composer-steer-fallback": {
+                "state": "dispatch_requested",
+                "source": "composer_steer",
+                "dispatchMode": "sync_send"
+              }
+            },
+            "queues": { "t1": [] }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/dispatch-started",
+            "intentId": "composer-steer-fallback"
+          }
+        },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "composer-steer-fallback",
+            "runId": "run-sync-fallback",
+            "threadId": "t1",
+            "removeFromQueue": false
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "composer-steer-fallback": {
+                "state": "remote_accepted",
+                "source": "composer_steer",
+                "dispatchMode": "sync_send",
+                "remoteRunId": "run-sync-fallback"
+              }
+            },
+            "queues": { "t1": [] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "manual queue steer waits for provider ack and survives duplicate accepted events",
       "steps": [
         {
           "action": {
@@ -161,6 +342,73 @@
             "intents": {
               "s1": { "state": "awaiting_provider_ack", "pendingInputId": "p-1" }
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "manual queue steer failure restores queued state at the original index",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "queue-first",
+              "threadId": "t1",
+              "text": "first",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "queue-steer-failed",
+              "threadId": "t1",
+              "text": "second",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/request-dispatch",
+            "threadId": "t1",
+            "intentId": "queue-steer-failed",
+            "mode": "async_steer",
+            "source": "queue_steer",
+            "removeFromQueue": false
+          }
+        },
+        {
+          "action": {
+            "type": "intent/dispatch-started",
+            "intentId": "queue-steer-failed"
+          }
+        },
+        {
+          "action": {
+            "type": "intent/queue-steer-failed",
+            "intentId": "queue-steer-failed",
+            "error": "manual steer failed"
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "queue-steer-failed": {
+                "state": "queued_local",
+                "source": "queue_steer",
+                "dispatchMode": null,
+                "error": "manual steer failed"
+              }
+            },
+            "queues": { "t1": ["queue-first", "queue-steer-failed"] }
           }
         }
       ]

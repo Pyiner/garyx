@@ -30,6 +30,7 @@ export type IntentState = (typeof INTENT_STATES)[number];
 
 export const INTENT_SOURCES = [
   'composer_send',
+  'composer_steer',
   'composer_queue',
   'queue_send',
   'queue_steer',
@@ -44,6 +45,7 @@ export interface MessageIntent {
   images: MessageImageAttachment[];
   files: MessageFileAttachment[];
   createdAt: string;
+  clientTimestampLocal: string;
   updatedAt: string;
   state: IntentState;
   source: IntentSource;
@@ -151,6 +153,11 @@ export type MessageMachineAction =
       source?: IntentSource;
     }
   | {
+      type: 'intent/queue-steer-failed';
+      intentId: string;
+      error: string;
+    }
+  | {
       type: 'intent/reorder';
       threadId: string;
       intentId: string;
@@ -185,6 +192,16 @@ export const initialMessageMachineState: MessageMachineState = {
   threadRuntimeByThread: {},
 };
 
+export function formatLocalChatTimestamp(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
 export function buildIntent(input: {
   threadId: string;
   text: string;
@@ -194,7 +211,8 @@ export function buildIntent(input: {
   state: IntentState;
   dispatchMode?: IntentDispatchMode;
 }): MessageIntent {
-  const now = new Date().toISOString();
+  const committedAt = new Date();
+  const now = committedAt.toISOString();
   return {
     intentId: `intent:${crypto.randomUUID()}`,
     threadId: input.threadId,
@@ -202,6 +220,7 @@ export function buildIntent(input: {
     images: [...(input.images || [])],
     files: [...(input.files || [])],
     createdAt: now,
+    clientTimestampLocal: formatLocalChatTimestamp(committedAt),
     updatedAt: now,
     state: input.state,
     source: input.source,
@@ -546,6 +565,13 @@ export function messageMachineReducer(
         },
       };
     }
+
+    case 'intent/queue-steer-failed':
+      return patchIntent(state, action.intentId, {
+        state: 'queued_local',
+        dispatchMode: undefined,
+        error: action.error,
+      });
 
     case 'intent/reorder': {
       const queue = reorderQueueIntent(

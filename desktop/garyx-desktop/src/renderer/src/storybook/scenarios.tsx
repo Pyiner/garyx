@@ -112,6 +112,7 @@ function intent(
     images: [],
     files: [],
     createdAt: timestamp(messageSerial),
+    clientTimestampLocal: '2026-07-23 22:29:21',
     updatedAt: timestamp(messageSerial),
     state,
     source: 'composer_queue',

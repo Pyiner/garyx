@@ -118,16 +118,6 @@ function serializeMessageAttachments(
   };
 }
 
-function formatLocalChatTimestamp(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  const seconds = String(date.getSeconds()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-}
-
 function resolveInputThreadId(input: SendMessageInput): string {
   return input.threadId || input.sessionId || "";
 }
@@ -880,11 +870,7 @@ export async function openChatStream(
   response: string;
   status: OpenChatStreamResult["status"];
 }> {
-  const threadId = resolveInputThreadId(input);
-  const serializedAttachments = serializeMessageAttachments(
-    input.images,
-    input.files,
-  );
+  const body = buildChatStartRequestBody(settings, input, workspacePath);
   const payloadValue = await requestJson<unknown>(
     settings,
     "/api/chat/start",
@@ -892,22 +878,7 @@ export async function openChatStream(
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        message: input.message,
-        attachments: serializedAttachments.attachments,
-        images: serializedAttachments.images,
-        files: serializedAttachments.files,
-        threadId,
-        accountId: settings.accountId,
-        fromId: settings.fromId,
-        waitForResponse: false,
-        timeoutSeconds: settings.timeoutSeconds,
-        workspacePath: workspacePath || undefined,
-        metadata: {
-          client_timestamp_local: formatLocalChatTimestamp(),
-          client_intent_id: input.clientIntentId,
-        },
-      }),
+      body,
       signal: AbortSignal.timeout(8000),
     },
   );
@@ -936,6 +907,34 @@ export async function openChatStream(
   };
 }
 
+export function buildChatStartRequestBody(
+  settings: DesktopSettings,
+  input: SendMessageInput,
+  workspacePath?: string | null,
+): string {
+  const threadId = resolveInputThreadId(input);
+  const serializedAttachments = serializeMessageAttachments(
+    input.images,
+    input.files,
+  );
+  return JSON.stringify({
+    message: input.message,
+    attachments: serializedAttachments.attachments,
+    images: serializedAttachments.images,
+    files: serializedAttachments.files,
+    threadId,
+    accountId: settings.accountId,
+    fromId: settings.fromId,
+    waitForResponse: false,
+    timeoutSeconds: settings.timeoutSeconds,
+    workspacePath: workspacePath || undefined,
+    metadata: {
+      client_timestamp_local: input.clientTimestampLocal,
+      client_intent_id: input.clientIntentId,
+    },
+  });
+}
+
 function optionalChatResponseString(
   payload: Record<string, unknown>,
   field: string,
@@ -952,10 +951,6 @@ export async function sendStreamingInput(
   input: SendMessageInput,
 ): Promise<SendStreamingInputResult> {
   const threadId = resolveInputThreadId(input);
-  const serializedAttachments = serializeMessageAttachments(
-    input.images,
-    input.files,
-  );
   try {
     const payloadValue = await requestJson<unknown>(
       settings,
@@ -964,14 +959,7 @@ export async function sendStreamingInput(
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          threadId,
-          clientIntentId: input.clientIntentId,
-          message: input.message,
-          attachments: serializedAttachments.attachments,
-          images: serializedAttachments.images,
-          files: serializedAttachments.files,
-        }),
+        body: buildStreamInputRequestBody(input),
         signal: AbortSignal.timeout(8000),
       },
     );
@@ -1027,6 +1015,24 @@ export async function sendStreamingInput(
     threadId,
     clientIntentId: input.clientIntentId,
   };
+}
+
+export function buildStreamInputRequestBody(input: SendMessageInput): string {
+  const serializedAttachments = serializeMessageAttachments(
+    input.images,
+    input.files,
+  );
+  return JSON.stringify({
+    threadId: resolveInputThreadId(input),
+    clientIntentId: input.clientIntentId,
+    message: input.message,
+    attachments: serializedAttachments.attachments,
+    images: serializedAttachments.images,
+    files: serializedAttachments.files,
+    metadata: {
+      client_timestamp_local: input.clientTimestampLocal,
+    },
+  });
 }
 
 export async function interruptThread(
