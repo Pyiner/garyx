@@ -135,6 +135,36 @@ public struct GaryxConversationScrollObservation<Value: Equatable>: Equatable {
     }
 }
 
+/// Fire-time facts used by the tail-scroll settlement state machine.
+///
+/// The adapter only reports these facts. Core owns the decision to authorize
+/// a position write, including the existing reader-interaction policy and the
+/// target-placement/geometry settlement policy.
+public struct GaryxConversationTailScrollAttemptInput: Equatable {
+    public enum TargetPlacement: Equatable {
+        /// The scroll surface has not reported a complete geometry frame yet.
+        case unknown
+        /// The transcript tail currently holds the target placement.
+        case satisfied
+        /// The transcript tail is currently away from the target placement.
+        case unsatisfied
+    }
+
+    public let policyAllowsAttempt: Bool
+    public let targetPlacement: TargetPlacement
+    public let geometryEpoch: UInt64
+
+    public init(
+        policyAllowsAttempt: Bool,
+        targetPlacement: TargetPlacement,
+        geometryEpoch: UInt64
+    ) {
+        self.policyAllowsAttempt = policyAllowsAttempt
+        self.targetPlacement = targetPlacement
+        self.geometryEpoch = geometryEpoch
+    }
+}
+
 // MARK: - Tail thinking presentation
 
 /// Presentation-only debounce for the server-owned tail thinking state.
@@ -290,6 +320,14 @@ public struct GaryxConversationScrollState: Equatable {
     /// collapsed tail row) must not regenerate a repair on every frame, or
     /// the reader can never scroll away from the tail.
     private var hadVisibleTailGap = false
+    /// Monotonic signal for transcript geometry that can change the result of
+    /// a bottom-anchor write. Content reducers advance it before their request
+    /// is scheduled; measured content/viewport size changes advance it again
+    /// when late Markdown, image, tool-row, keyboard, or chrome layout lands.
+    ///
+    /// Pure scrolling moves both content edges together and therefore leaves
+    /// this epoch unchanged.
+    public private(set) var tailGeometryEpoch: UInt64 = 0
 
     public init() {}
 
@@ -330,6 +368,7 @@ public struct GaryxConversationScrollState: Equatable {
         isHistoryPrepend: Bool,
         hasTailContent: Bool
     ) -> TailScrollRequest? {
+        markTailGeometryChanged()
         self.hasTailContent = hasTailContent
         guard hasTailContent, !isHistoryPrepend else { return nil }
         if isInitialLoad {
@@ -373,6 +412,7 @@ public struct GaryxConversationScrollState: Equatable {
     /// The tail thinking indicator appeared (run started with no visible
     /// activity yet).
     public mutating func thinkingIndicatorShown() -> TailScrollRequest? {
+        markTailGeometryChanged()
         hasTailContent = true
         guard isFollowingTail else { return nil }
         return TailScrollRequest(reason: .tailUpdate, animated: false)
@@ -390,6 +430,9 @@ public struct GaryxConversationScrollState: Equatable {
         hasTailContent: Bool
     ) -> TailScrollRequest? {
         let previousMetrics = self.metrics
+        if Self.tailLayoutGeometryChanged(from: previousMetrics, to: metrics) {
+            markTailGeometryChanged()
+        }
         self.metrics = metrics
         self.hasTailContent = hasTailContent
         guard metrics.viewportHeight > 0 else { return nil }
@@ -489,6 +532,7 @@ public struct GaryxConversationScrollState: Equatable {
 
     /// The floating bottom chrome (composer tray) changed height.
     public mutating func bottomChromeChanged() -> TailScrollRequest? {
+        markTailGeometryChanged()
         guard isFollowingTail, hasTailContent else { return nil }
         return TailScrollRequest(reason: .repair, animated: false)
     }
@@ -500,6 +544,31 @@ public struct GaryxConversationScrollState: Equatable {
     }
 
     // MARK: Scheduled scroll retries
+
+    /// Complete fire-time input for the Core-owned settlement scheduler.
+    ///
+    /// A complete layout frame is required before placement can settle. Until
+    /// both content edges and the viewport are known, retries remain eligible
+    /// so an early zero-delay attempt cannot terminate the chain before the
+    /// transcript materializes.
+    public func tailScrollAttemptInput(
+        index: Int,
+        reason: TailScrollReason
+    ) -> GaryxConversationTailScrollAttemptInput {
+        let targetPlacement: GaryxConversationTailScrollAttemptInput.TargetPlacement
+        if metrics.viewportHeight <= 0 || metrics.contentTopOffset == nil {
+            targetPlacement = .unknown
+        } else if metrics.isNearBottom {
+            targetPlacement = .satisfied
+        } else {
+            targetPlacement = .unsatisfied
+        }
+        return GaryxConversationTailScrollAttemptInput(
+            policyAllowsAttempt: shouldRunTailScrollAttempt(index: index, reason: reason),
+            targetPlacement: targetPlacement,
+            geometryEpoch: tailGeometryEpoch
+        )
+    }
 
     /// Whether a delayed retry of a scheduled tail scroll should still run.
     ///
@@ -525,6 +594,29 @@ public struct GaryxConversationScrollState: Equatable {
             }
             return isFollowingTail && (metrics.isNearBottom || metrics.hasVisibleTailGap)
         }
+    }
+
+    private mutating func markTailGeometryChanged() {
+        tailGeometryEpoch &+= 1
+    }
+
+    private static func tailLayoutGeometryChanged(
+        from previous: GaryxConversationLayoutMetrics,
+        to current: GaryxConversationLayoutMetrics
+    ) -> Bool {
+        let contentHeightChanged: Bool
+        switch (previous.contentHeight, current.contentHeight) {
+        case let (.some(previousHeight), .some(currentHeight)):
+            contentHeightChanged =
+                abs(currentHeight - previousHeight) > stableLayoutTolerance
+        case (.none, .none):
+            contentHeightChanged = false
+        case (.some, .none), (.none, .some):
+            contentHeightChanged = true
+        }
+        let viewportChanged =
+            abs(current.viewportHeight - previous.viewportHeight) > stableLayoutTolerance
+        return contentHeightChanged || viewportChanged
     }
 
     // MARK: History paging
@@ -608,12 +700,22 @@ public struct GaryxConversationScrollState: Equatable {
         currentScopeIdentity: String,
         hasTailContent: Bool
     ) -> ReadingAnchorRestore? {
+        let threadUnchanged = previousScopeIdentity == currentScopeIdentity
+        guard !threadUnchanged || previousIds != currentIds else { return nil }
         let isHistoryPrepend = Self.preservesScrollForPrependedHistory(
             previousIds: previousIds,
             currentIds: currentIds,
-            threadUnchanged: previousScopeIdentity == currentScopeIdentity
+            threadUnchanged: threadUnchanged
         )
-        guard isHistoryPrepend, let anchorRowId = previousIds.first else { return nil }
+        guard isHistoryPrepend, let anchorRowId = previousIds.first else {
+            // Render-only row changes can alter transcript height without a
+            // corresponding message-body reducer event. They do not choose a
+            // scroll action here, but they must qualify a still-attempting
+            // token's next fire-time settlement check.
+            markTailGeometryChanged()
+            self.hasTailContent = hasTailContent
+            return nil
+        }
         // Keep the tail bookkeeping current; a history prepend never yields
         // a tail scroll (`contentChanged` returns nil for prepends).
         _ = contentChanged(
@@ -642,18 +744,41 @@ public struct GaryxConversationScrollState: Equatable {
     }
 }
 
-/// Invalidates superseded tail-scroll retry chains.
+/// Owns tail-scroll retry-chain arbitration and target settlement.
 ///
-/// The view owns the actual delayed work; this Core policy only issues tokens
-/// and decides whether a queued attempt still belongs to the current chain.
+/// The view owns only the delayed callbacks and the actual position write.
+/// Every callback asks this state machine for authorization at fire time:
+///
+/// `requested -> attempting -> settled`
+///                         `-> superseded`
+///
+/// A satisfied target with unchanged geometry settles the token permanently.
+/// An unsatisfied target or geometry movement since the last authorized write
+/// permits the next attempt. Scheduling a newer request preserves the existing
+/// retry-horizon arbitration while explicitly superseding affected tokens.
 public struct GaryxConversationTailScrollScheduler: Equatable {
+    public enum Lifecycle: Equatable {
+        case requested
+        case attempting
+        case settled
+        case superseded
+    }
+
     public struct Token: Equatable {
         fileprivate let retryHorizon: GaryxConversationScrollState.TailScrollRetryHorizon
         fileprivate let generation: Int
     }
 
+    private struct Chain: Equatable {
+        let generation: Int
+        var lifecycle: Lifecycle
+        var lastAuthorizedGeometryEpoch: UInt64?
+    }
+
     private var tailGrowthGeneration = 0
     private var settlingGeneration = 0
+    private var tailGrowthChain: Chain?
+    private var settlingChain: Chain?
 
     public init() {}
 
@@ -667,28 +792,100 @@ public struct GaryxConversationTailScrollScheduler: Equatable {
             // opening/manual/repair chain whose late attempts are needed for
             // heavy transcript layout settling.
             tailGrowthGeneration &+= 1
-            return Token(
+            let token = Token(
                 retryHorizon: .tailGrowth,
                 generation: tailGrowthGeneration
             )
+            tailGrowthChain = Chain(
+                generation: token.generation,
+                lifecycle: .requested,
+                lastAuthorizedGeometryEpoch: nil
+            )
+            return token
         case .settling:
             // A fresh long-horizon chain covers every earlier attempt. Cancel
             // both lanes so stale short retries cannot outlive the new owner.
             settlingGeneration &+= 1
             tailGrowthGeneration &+= 1
-            return Token(
+            tailGrowthChain = nil
+            let token = Token(
                 retryHorizon: .settling,
                 generation: settlingGeneration
             )
+            settlingChain = Chain(
+                generation: token.generation,
+                lifecycle: .requested,
+                lastAuthorizedGeometryEpoch: nil
+            )
+            return token
         }
     }
 
     public func isCurrent(_ token: Token) -> Bool {
+        lifecycle(of: token) != .superseded
+    }
+
+    public func lifecycle(of token: Token) -> Lifecycle {
+        guard let chain = chain(for: token), chain.generation == token.generation else {
+            return .superseded
+        }
+        return chain.lifecycle
+    }
+
+    /// Authorize one queued attempt from pure fire-time inputs.
+    ///
+    /// The first policy-eligible attempt moves the request into `attempting`
+    /// and is always authorized. Later attempts run only while the target is
+    /// unsatisfied, geometry moved after the last write, or placement is not
+    /// observable yet. Stable satisfied placement is terminal for the token.
+    public mutating func authorizeAttempt(
+        _ token: Token,
+        input: GaryxConversationTailScrollAttemptInput
+    ) -> Bool {
+        guard var chain = chain(for: token),
+              chain.generation == token.generation,
+              chain.lifecycle != .settled,
+              input.policyAllowsAttempt else {
+            return false
+        }
+
+        if chain.lifecycle == .requested {
+            chain.lifecycle = .attempting
+            chain.lastAuthorizedGeometryEpoch = input.geometryEpoch
+            setChain(chain, for: token.retryHorizon)
+            return true
+        }
+
+        if input.targetPlacement == .satisfied,
+           chain.lastAuthorizedGeometryEpoch == input.geometryEpoch {
+            chain.lifecycle = .settled
+            setChain(chain, for: token.retryHorizon)
+            return false
+        }
+
+        chain.lastAuthorizedGeometryEpoch = input.geometryEpoch
+        setChain(chain, for: token.retryHorizon)
+        return true
+    }
+
+    private func chain(for token: Token) -> Chain? {
         switch token.retryHorizon {
         case .tailGrowth:
-            token.generation == tailGrowthGeneration
+            tailGrowthChain
         case .settling:
-            token.generation == settlingGeneration
+            settlingChain
+        }
+    }
+
+    private mutating func setChain(
+        _ chain: Chain,
+        for retryHorizon: GaryxConversationScrollState.TailScrollRetryHorizon
+    ) {
+        switch retryHorizon {
+        case .tailGrowth:
+            tailGrowthChain = chain
+        case .settling:
+            settlingChain = chain
         }
     }
 }

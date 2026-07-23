@@ -3,8 +3,6 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxExistingThreadLoadingJitterReproTests: XCTestCase {
-    /// EXPECTED FAILURE (#TASK-2630).
-    ///
     /// `task-2610-markdown-table-frame.json` is an already-sanitized capture
     /// of canonical transcript seq 103...116 plus the matching idle
     /// `render_state` (`based_on_seq = 116`, `window.floor_seq = 103`,
@@ -17,8 +15,8 @@ final class GaryxExistingThreadLoadingJitterReproTests: XCTestCase {
     /// 2. the captured history arrives once and replaces the message loader;
     /// 3. the exact same snapshot/body input is reduced again: no server data,
     ///    row identity, row set, or visible geometry changes;
-    /// 4. the initial-load scroll token nevertheless authorizes six delayed
-    ///    bottom-anchor writes after loading ended.
+    /// 4. the initial-load scroll token confirms stable target placement and
+    ///    settles without authorizing any delayed bottom-anchor writes.
     ///
     /// The final assertion is the headless equivalent of the reported
     /// post-loading jitter: stable rows must not keep mutating scroll position.
@@ -98,6 +96,29 @@ final class GaryxExistingThreadLoadingJitterReproTests: XCTestCase {
         )
         XCTAssertFalse(scheduler.isCurrent(mountToken))
 
+        // The zero-delay attempt lands on the measured transcript tail. Its
+        // geometry epoch includes the loaded capture before authorization, so
+        // the unchanged frame below cannot justify a second position write.
+        XCTAssertNil(
+            scrollState.metricsChanged(
+                GaryxConversationLayoutMetrics(
+                    contentTopOffset: -2_000,
+                    contentBottomOffset: 800,
+                    viewportHeight: 800
+                ),
+                hasTailContent: true
+            )
+        )
+        XCTAssertTrue(
+            scheduler.authorizeAttempt(
+                loadingCompletionToken,
+                input: scrollState.tailScrollAttemptInput(
+                    index: 0,
+                    reason: loadingCompletionRequest.reason
+                )
+            )
+        )
+
         let unchangedRequest = scrollState.messagesChanged(
             previous: geometry,
             current: geometry,
@@ -123,10 +144,12 @@ final class GaryxExistingThreadLoadingJitterReproTests: XCTestCase {
             .enumerated()
             .compactMap { index, delay -> Int? in
                 guard delay > 0,
-                      scheduler.isCurrent(loadingCompletionToken),
-                      scrollState.shouldRunTailScrollAttempt(
-                          index: index,
-                          reason: loadingCompletionRequest.reason
+                      scheduler.authorizeAttempt(
+                          loadingCompletionToken,
+                          input: scrollState.tailScrollAttemptInput(
+                              index: index,
+                              reason: loadingCompletionRequest.reason
+                          )
                       )
                 else {
                     return nil
@@ -138,10 +161,11 @@ final class GaryxExistingThreadLoadingJitterReproTests: XCTestCase {
             postLoadingScrollWrites,
             [],
             """
-            EXPECTED FAILURE (#TASK-2630): equal captured rows still authorize \
-            delayed scrollTo(bottom) writes after the loading row disappears
+            Equal captured rows with stable target placement must settle the \
+            opening token without delayed scrollTo(bottom) writes.
             """
         )
+        XCTAssertEqual(scheduler.lifecycle(of: loadingCompletionToken), .settled)
     }
 
     private func loadCapture() throws -> GaryxThreadRenderFrame {

@@ -1013,9 +1013,17 @@ struct GaryxConversationView: View {
         for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 DispatchQueue.main.async {
-                    guard tailScrollSchedulerBox.state.isCurrent(token),
-                          identity == conversationScrollIdentity,
-                          scrollStateBox.state.shouldRunTailScrollAttempt(index: index, reason: request.reason) else {
+                    guard identity == conversationScrollIdentity else {
+                        return
+                    }
+                    let input = scrollStateBox.state.tailScrollAttemptInput(
+                        index: index,
+                        reason: request.reason
+                    )
+                    guard tailScrollSchedulerBox.state.authorizeAttempt(
+                        token,
+                        input: input
+                    ) else {
                         return
                     }
                     if request.animated && index == 0 {
