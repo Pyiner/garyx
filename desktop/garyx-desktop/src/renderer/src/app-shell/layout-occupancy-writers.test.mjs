@@ -58,9 +58,10 @@ const rendererSourceUrls = rendererSourceFiles(
 const rendererSources = rendererSourceUrls.map((url) =>
   readFileSync(url, "utf8"),
 );
+// Inspector visibility is no longer legacy React state: the keyed
+// ThreadSideToolsVisibility contract test owns that assertion.
 const legacySetterNames = [
   "setOpenCapsuleTabsLegacy",
-  "setInspectorOpenLegacy",
   "setRecentThreadsRailOpenLegacy",
   "setBotConversationGroupIdLegacy",
 ];

@@ -596,7 +596,6 @@
 }
 
 .side-tool-chat-thread .composer-shell-wrap {
-  bottom: calc(30px + var(--padding-panel));
   width: calc(100% - 20px);
 }
 
