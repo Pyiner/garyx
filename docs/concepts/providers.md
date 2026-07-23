@@ -9,6 +9,7 @@ an agent. Garyx ships with these CLI-backed providers:
 | `codex_app_server` | [Codex CLI](https://github.com/openai/codex) app-server | OpenAI account login via `codex login`. |
 | `traex` | TRAE CLI app-server | CLI-managed local login. |
 | `antigravity` | Google Antigravity CLI | CLI-managed OAuth session. |
+| `grok_build` | Grok Build CLI over its native ACP stdio mode | Authentication managed by the ordinary `grok` binary. |
 
 Providers are not pinned per agent — Garyx auto-detects which CLIs are
 installed at startup and registers their provider adapters when the backing
@@ -28,12 +29,13 @@ When a message lands on a thread:
    provider, with optional fallbacks.
 3. Spawn the provider CLI. Claude uses the Agent SDK transport; the configured
    SDK executable is either the embedded `cctty` runner or native `claude`.
+   Grok uses the standard ACP protocol exposed by `grok agent stdio`.
 4. Persist committed transcript records, then stream `committed_message`
    content/control frames back to the channel that triggered the run.
 
-Resume tokens (Claude Code / Codex SDK session ids) are kept per-thread, so
-a single Telegram chat preserves context across many runs without you
-managing that state explicitly.
+Resume tokens (including native Grok ACP session IDs) are kept per-thread, so
+a single Telegram chat preserves context across many runs without you managing
+that state explicitly.
 
 ## Authenticating Claude Code
 
@@ -66,11 +68,14 @@ launchd-spawned processes.
 
 ```bash
 codex login           # OpenAI account
+grok login            # Grok Build
 ```
 
-Codex persists its own credentials. Traex and Antigravity likewise use their
-CLI-managed login flows. As long as the CLI binary is on the gateway's `PATH`,
-Garyx will pick it up automatically.
+Codex and Grok persist their own credentials. Traex and Antigravity likewise
+use their CLI-managed login flows. Garyx talks to one ordinary Grok process
+through ACP and does not manage accounts or retry with alternate credentials.
+As long as the CLI binary is on the gateway's `PATH`, Garyx will pick it up
+automatically.
 
 ## What happens when a token expires
 

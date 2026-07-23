@@ -16,11 +16,16 @@ public enum GaryxProviderSettingsPresentation {
         case claudeCode
         /// CLI/OAuth providers: read-only "Managed on the Mac app" row.
         case managedOAuth
+        /// Grok Build: read-only ordinary CLI authentication row.
+        case managedCLI
     }
 
     public static func authSection(for provider: GaryxModelProviderDefault) -> AuthSection {
         if provider.providerType == "claude_code" {
             return .claudeCode
+        }
+        if provider.providerType == "grok_build" {
+            return .managedCLI
         }
         return .managedOAuth
     }

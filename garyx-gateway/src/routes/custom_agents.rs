@@ -25,6 +25,7 @@ pub(super) fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<V
         ProviderType::CodexAppServer => ("codex", "Codex"),
         ProviderType::Traex => ("traex", "Traex"),
         ProviderType::AntigravityCli => ("gemini", "Antigravity"),
+        ProviderType::GrokBuild => ("grok", "Grok"),
     };
     Some(json!({
         "key": key,

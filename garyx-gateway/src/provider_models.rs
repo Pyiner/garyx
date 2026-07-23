@@ -199,6 +199,39 @@ pub(crate) async fn list_provider_models(
                 error: discovery.error,
             }
         }
+        ProviderType::GrokBuild => {
+            let aliases = &["grok", "grok_build", "grok-build"];
+            let configured_model =
+                configured_default_model(config, ProviderType::GrokBuild, aliases);
+            let configured_reasoning =
+                configured_default_reasoning_effort(config, ProviderType::GrokBuild, aliases);
+            let discovery = match fresh_cached_discovery("grok_acp") {
+                Some(discovery) => discovery,
+                None => discover_or_fallback(
+                    "grok_acp",
+                    fetch_grok_models(config).await,
+                    grok_unavailable_models,
+                ),
+            };
+            let default_model = configured_model.or(discovery.default_model.clone());
+            let reasoning_efforts =
+                reasoning_efforts_for_default_model(&discovery.models, default_model.as_deref());
+            ProviderModelsResponse {
+                provider_type,
+                supports_model_selection: !discovery.models.is_empty(),
+                supports_reasoning_effort_selection: provider_supports_reasoning_effort_selection(
+                    &discovery.models,
+                ),
+                models: discovery.models,
+                reasoning_efforts,
+                supports_service_tier_selection: false,
+                service_tiers: Vec::new(),
+                default_model,
+                default_reasoning_effort: configured_reasoning,
+                source: discovery.source,
+                error: discovery.error,
+            }
+        }
     }
 }
 
@@ -211,9 +244,10 @@ pub(crate) fn builtin_provider_catalog_default(
             reasoning_effort: None,
             service_tier: None,
         },
-        ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::Traex => {
-            ProviderCatalogDefault::default()
-        }
+        ProviderType::ClaudeCode
+        | ProviderType::CodexAppServer
+        | ProviderType::Traex
+        | ProviderType::GrokBuild => ProviderCatalogDefault::default(),
     }
 }
 
@@ -222,6 +256,7 @@ mod cache;
 mod catalog;
 mod claude_code;
 mod codex;
+mod grok;
 mod process_rpc;
 
 use app_server::*;
@@ -229,6 +264,7 @@ use cache::*;
 use catalog::*;
 use claude_code::*;
 use codex::*;
+use grok::*;
 use process_rpc::*;
 
 #[cfg(test)]

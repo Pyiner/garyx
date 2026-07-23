@@ -396,7 +396,7 @@ fn builtin_map() -> HashMap<String, CustomAgentProfile> {
 }
 
 fn sorted_profiles(agents: &HashMap<String, CustomAgentProfile>) -> Vec<CustomAgentProfile> {
-    const BUILTIN_ORDER: &[&str] = &["claude", "codex", "traex", "antigravity"];
+    const BUILTIN_ORDER: &[&str] = &["claude", "codex", "traex", "antigravity", "grok"];
     let builtin_rank = |agent_id: &str| {
         BUILTIN_ORDER
             .iter()

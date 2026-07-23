@@ -58,6 +58,7 @@ fn builtin_provider_agent_id_detection_is_limited_to_builtin_profiles() {
     assert!(is_builtin_provider_agent_id("claude"));
     assert!(is_builtin_provider_agent_id(" codex "));
     assert!(is_builtin_provider_agent_id("traex"));
+    assert!(is_builtin_provider_agent_id("grok"));
     assert!(!is_builtin_provider_agent_id("removed-provider"));
     assert!(!is_builtin_provider_agent_id("plain-claude"));
     assert!(!is_builtin_provider_agent_id("codex-reviewer"));
@@ -82,7 +83,7 @@ fn is_valid_env_key_matches_posix_env_names() {
 #[test]
 fn builtin_provider_profiles_include_desktop_provider_avatars() {
     let profiles = builtin_provider_agent_profiles();
-    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+    for agent_id in ["claude", "codex", "traex", "antigravity", "grok"] {
         let avatar_data_url = profiles
             .iter()
             .find(|profile| profile.agent_id == agent_id)

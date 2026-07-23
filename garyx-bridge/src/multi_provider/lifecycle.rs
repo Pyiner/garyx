@@ -152,11 +152,31 @@ impl MultiProviderBridge {
             }
         };
 
+        let grok_default_agent_cfg = configured_default_provider_config(
+            config,
+            ProviderType::GrokBuild,
+            &["grok", "grok_build", "grok-build"],
+        );
+        let grok_default_key = match self
+            .get_or_create_provider(&grok_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered Grok Build default provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::debug!(error = %error, "optional Grok Build provider unavailable");
+                None
+            }
+        };
+
         let default_provider_configs = vec![
             default_agent_cfg.clone(),
             codex_default_agent_cfg.clone(),
             traex_default_agent_cfg.clone(),
             antigravity_default_agent_cfg.clone(),
+            grok_default_agent_cfg.clone(),
         ];
         self.replace_default_provider_configs(default_provider_configs)
             .await;
@@ -212,6 +232,9 @@ impl MultiProviderBridge {
             desired_provider_keys.insert(key.clone());
         }
         if let Some(ref key) = antigravity_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
+        if let Some(ref key) = grok_default_key {
             desired_provider_keys.insert(key.clone());
         }
         desired_provider_keys.extend(configured_agent_provider_keys);
@@ -397,6 +420,10 @@ impl MultiProviderBridge {
             ),
             "antigravity" | "agy" | "antigravity_cli" => Some(
                 self.default_provider_config_for_type(ProviderType::AntigravityCli)
+                    .await,
+            ),
+            "grok" | "grok_build" | "grok-build" => Some(
+                self.default_provider_config_for_type(ProviderType::GrokBuild)
                     .await,
             ),
             _ => None,

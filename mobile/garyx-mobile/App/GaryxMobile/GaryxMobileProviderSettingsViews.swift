@@ -1212,6 +1212,10 @@ struct GaryxModelProviderDefaultsSheet: View {
             GaryxFormGroupedSection(title: "Authentication") {
                 GaryxFormReadOnlyRow(title: "OAuth", value: "Managed on the Mac app")
             }
+        case .managedCLI:
+            GaryxFormGroupedSection(title: "Authentication") {
+                GaryxFormReadOnlyRow(title: "Grok CLI", value: "Managed by grok on the gateway host")
+            }
         }
     }
 

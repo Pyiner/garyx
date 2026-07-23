@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use chrono::Utc;
 use garyx_models::config::{GaryxConfig, TelegramAccount, telegram_account_to_plugin_entry};
@@ -293,6 +294,75 @@ struct InterruptingFollowUpProvider {
     abort_count: AtomicUsize,
     active_runs: AtomicUsize,
     max_concurrent_runs: AtomicUsize,
+}
+
+struct PreemptiveAbortProvider {
+    entered_run: Arc<Notify>,
+    active: Arc<AtomicBool>,
+    abort_observed_active_transport: AtomicBool,
+}
+
+impl PreemptiveAbortProvider {
+    fn new() -> Self {
+        Self {
+            entered_run: Arc::new(Notify::new()),
+            active: Arc::new(AtomicBool::new(false)),
+            abort_observed_active_transport: AtomicBool::new(false),
+        }
+    }
+}
+
+struct PreemptiveRunGuard(Arc<AtomicBool>);
+
+impl Drop for PreemptiveRunGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderRuntime for PreemptiveAbortProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::GrokBuild
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        _options: &ProviderRunOptions,
+        _on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.active.store(true, Ordering::SeqCst);
+        let _guard = PreemptiveRunGuard(Arc::clone(&self.active));
+        self.entered_run.notify_one();
+        std::future::pending::<()>().await;
+        unreachable!()
+    }
+
+    fn abort_before_task_cancel(&self) -> bool {
+        true
+    }
+
+    async fn abort(&self, _run_id: &str) -> bool {
+        self.abort_observed_active_transport
+            .store(self.active.load(Ordering::SeqCst), Ordering::SeqCst);
+        true
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(session_key.to_owned())
+    }
 }
 
 impl ClearSessionProvider {
@@ -2274,6 +2344,34 @@ async fn test_abort_run() {
             .expect("run lifecycle channel"),
         RunLifecycleEvent::Terminal { ref run_id, .. } if run_id == "run-1"
     ));
+}
+
+#[tokio::test]
+async fn test_abort_run_flushes_preemptive_provider_before_dropping_task() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(PreemptiveAbortProvider::new());
+    let entered_run = Arc::clone(&provider.entered_run);
+    bridge.register_provider("grok", provider.clone()).await;
+    bridge.set_default_provider_key("grok").await;
+
+    bridge
+        .start_agent_run(
+            run_request("sess", "hello", "run-preemptive", "api", "main"),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), entered_run.notified())
+        .await
+        .expect("provider run should start");
+
+    assert!(bridge.abort_run("run-preemptive").await);
+    assert!(
+        provider
+            .abort_observed_active_transport
+            .load(Ordering::SeqCst),
+        "provider abort must run while its stdio transport task is alive"
+    );
 }
 
 #[tokio::test]

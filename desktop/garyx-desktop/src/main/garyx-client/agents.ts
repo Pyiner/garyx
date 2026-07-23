@@ -58,7 +58,13 @@ function normalizeProviderIconKey(
   value: unknown,
   path: string,
 ): DesktopProviderIconKey {
-  if (value === "claude" || value === "codex" || value === "traex" || value === "gemini") {
+  if (
+    value === "claude" ||
+    value === "codex" ||
+    value === "traex" ||
+    value === "gemini" ||
+    value === "grok"
+  ) {
     return value;
   }
   throw new GatewayContractError(path, "must be a current provider icon key");
@@ -94,7 +100,8 @@ function mapAgentProviderType(value: unknown, path: string): DesktopCustomAgent[
     value !== "claude_code" &&
     value !== "codex_app_server" &&
     value !== "traex" &&
-    value !== "antigravity"
+    value !== "antigravity" &&
+    value !== "grok_build"
   ) {
     throw new GatewayContractError(path, "must be a current provider type");
   }

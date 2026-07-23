@@ -202,6 +202,9 @@ export function presentProviderReadyError(
   if (providerType === "traex") {
     return "Traex is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
+  if (providerType === "grok_build") {
+    return "Grok is not ready on this Mac. Check that the grok CLI is installed, logged in, and available on the Garyx gateway PATH.";
+  }
   if (providerType === "claude_code") {
     return "Claude Code is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
   }

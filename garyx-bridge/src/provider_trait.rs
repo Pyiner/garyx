@@ -162,6 +162,13 @@ pub trait ProviderRuntime: Send + Sync {
         let _ = env;
     }
 
+    /// Whether provider-level abort must run before Garyx drops the owning
+    /// task. Stdio protocols use this to flush their native cancel frame while
+    /// the child process and transport are still alive.
+    fn abort_before_task_cancel(&self) -> bool {
+        false
+    }
+
     /// Abort a running request. Returns `true` if the abort was acted upon.
     async fn abort(&self, run_id: &str) -> bool {
         let _ = run_id;

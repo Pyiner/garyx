@@ -89,6 +89,7 @@ fn provider_model_config_key(provider_type: &ProviderType) -> Result<&'static st
         ProviderType::CodexAppServer => Ok("codex"),
         ProviderType::Traex => Ok("traex"),
         ProviderType::AntigravityCli => Ok("antigravity"),
+        ProviderType::GrokBuild => Ok("grok"),
     }
 }
 
@@ -120,6 +121,11 @@ fn provider_descriptors() -> Vec<ProviderDescriptor> {
             label: "Antigravity",
             provider_type: ProviderType::AntigravityCli,
             key: "antigravity",
+        },
+        ProviderDescriptor {
+            label: "Grok",
+            provider_type: ProviderType::GrokBuild,
+            key: "grok",
         },
     ]
 }
@@ -217,7 +223,7 @@ fn provider_config_auth_label(descriptor: &ProviderDescriptor, usage: Option<&Va
                 "not signed in".to_owned()
             }
         }
-        ProviderType::Traex => "local CLI".to_owned(),
+        ProviderType::Traex | ProviderType::GrokBuild => "local CLI".to_owned(),
     }
 }
 
@@ -587,21 +593,30 @@ fn format_provider_show_table(descriptor: &ProviderDescriptor, config: &Value) -
     .expect("write string");
     writeln!(output).expect("write string");
     writeln!(output, "Advanced").expect("write string");
-    writeln!(
-        output,
-        "  Claude CLI mode: {}",
-        display_or_default(
-            provider_config_string(config, "claude_cli_mode"),
-            "(default)"
+    if descriptor.provider_type == ProviderType::GrokBuild {
+        writeln!(
+            output,
+            "  Grok binary: {}",
+            display_or_default(provider_config_string(config, "grok_bin"), "grok (PATH)")
         )
-    )
-    .expect("write string");
-    writeln!(
-        output,
-        "  Claude CLI path: {}",
-        display_or_default(provider_config_string(config, "claude_cli_path"), "(auto)")
-    )
-    .expect("write string");
+        .expect("write string");
+    } else {
+        writeln!(
+            output,
+            "  Claude CLI mode: {}",
+            display_or_default(
+                provider_config_string(config, "claude_cli_mode"),
+                "(default)"
+            )
+        )
+        .expect("write string");
+        writeln!(
+            output,
+            "  Claude CLI path: {}",
+            display_or_default(provider_config_string(config, "claude_cli_path"), "(auto)")
+        )
+        .expect("write string");
+    }
     writeln!(
         output,
         "  Workspace dir: {}",
@@ -1211,6 +1226,10 @@ mod tests {
             provider_model_config_key(&ProviderType::AntigravityCli).unwrap(),
             "antigravity"
         );
+        assert_eq!(
+            provider_model_config_key(&ProviderType::GrokBuild).unwrap(),
+            "grok"
+        );
     }
 
     #[test]
@@ -1245,6 +1264,22 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn grok_provider_show_uses_its_native_binary_label() {
+        let descriptor = provider_descriptor_for_slug("grok_build").expect("Grok descriptor");
+        let rendered = format_provider_show_table(
+            &descriptor,
+            &json!({
+                "provider_type": "grok_build",
+                "provider_id": "grok",
+                "grok_bin": "/opt/garyx/bin/grok"
+            }),
+        );
+
+        assert!(rendered.contains("Grok binary: /opt/garyx/bin/grok"));
+        assert!(!rendered.contains("Claude CLI"));
     }
 
     #[tokio::test]
@@ -1424,7 +1459,7 @@ mod tests {
 
         let rows = provider_list_rows(&settings, Some(&usage));
 
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 5);
         assert_eq!(rows[0]["provider"], "Claude Code");
         assert_eq!(rows[0]["usage"], "73% wk");
         let codex = rows
@@ -1433,5 +1468,12 @@ mod tests {
             .expect("codex row");
         assert_eq!(codex["auth"], "not signed in");
         assert_eq!(codex["default_model"], "codex-test-model");
+        let grok = rows
+            .iter()
+            .find(|row| row["type"] == "grok_build")
+            .expect("Grok row");
+        assert_eq!(grok["provider"], "Grok");
+        assert_eq!(grok["auth"], "local CLI");
+        assert_eq!(grok["usage"], "No quota data");
     }
 }

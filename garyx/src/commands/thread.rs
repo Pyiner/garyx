@@ -624,6 +624,7 @@ fn provider_type_display(value: Option<&str>) -> &'static str {
         "claude_code" => "Claude",
         "traex" => "Traex",
         "antigravity" => "Antigravity",
+        "grok_build" => "Grok",
         _ => "-",
     }
 }
@@ -661,6 +662,11 @@ mod tests {
                 std::time::Duration::from_secs(8),
             ]
         );
+    }
+
+    #[test]
+    fn provider_type_display_includes_grok_build() {
+        assert_eq!(provider_type_display(Some("grok_build")), "Grok");
     }
 
     #[test]

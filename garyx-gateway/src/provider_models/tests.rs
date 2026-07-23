@@ -80,6 +80,30 @@ async fn antigravity_model_catalog_defaults_to_claude_opus() {
 }
 
 #[tokio::test]
+async fn grok_catalog_uses_acp_source_and_configured_defaults() {
+    clear_provider_model_discovery_cache_for_tests();
+    let mut config = GaryxConfig::default();
+    config.agents.insert(
+        "grok".to_owned(),
+        json!({
+            "provider_type": "grok_build",
+            "default_model": "grok-test-model",
+            "model_reasoning_effort": "high",
+            "grok_bin": "/path/that/does/not/exist/grok"
+        }),
+    );
+
+    let response = list_provider_models(&config, ProviderType::GrokBuild).await;
+
+    assert_eq!(response.provider_type, ProviderType::GrokBuild);
+    assert_eq!(response.source, "grok_acp");
+    assert_eq!(response.default_model.as_deref(), Some("grok-test-model"));
+    assert_eq!(response.default_reasoning_effort.as_deref(), Some("high"));
+    assert!(!response.supports_service_tier_selection);
+    assert!(response.error.is_some());
+}
+
+#[tokio::test]
 async fn claude_code_model_catalog_supports_selection_and_reasoning() {
     let response = list_provider_models(&GaryxConfig::default(), ProviderType::ClaudeCode).await;
 

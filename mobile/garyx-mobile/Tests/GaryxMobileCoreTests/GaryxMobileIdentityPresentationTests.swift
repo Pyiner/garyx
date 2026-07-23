@@ -29,6 +29,11 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
             GaryxProviderPresentation.make(providerType: "traex").fallbackAssetName,
             "ProviderTrae"
         )
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "grok_build").displayName, "Grok")
+        XCTAssertEqual(
+            GaryxProviderPresentation.make(providerType: "grok_build").fallbackAssetName,
+            "ProviderGrok"
+        )
     }
 
     func testProviderPresentationCanonicalizesRuntimeAliases() {
@@ -48,6 +53,9 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
             GaryxProviderPresentation.make(providerType: "trae_cli").displayName,
             "Traex"
         )
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "grok-build").displayName, "Grok")
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "Grok Build").kind, .grok)
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "Grok Build").displayName, "Grok")
     }
 
     func testProviderPresentationUsesAgentAndProviderForAvatarFallbacks() {

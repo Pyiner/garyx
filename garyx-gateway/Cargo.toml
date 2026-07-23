@@ -19,6 +19,7 @@ garyx-router = { workspace = true }
 garyx-bridge = { workspace = true }
 claude-agent-sdk = { workspace = true }
 garyx-channels = { workspace = true }
+grok-agent-sdk = { workspace = true }
 cctty = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

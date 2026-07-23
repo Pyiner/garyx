@@ -5,12 +5,13 @@ final class GaryxModelProviderDefaultsTests: XCTestCase {
     func testProviderTableContainsOnlyExternalRuntimes() {
         XCTAssertEqual(
             GaryxModelProviderDefaults.providers.map(\.providerType),
-            ["claude_code", "codex_app_server", "antigravity", "traex"]
+            ["claude_code", "codex_app_server", "antigravity", "traex", "grok_build"]
         )
         XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "claude_code")?.configKey, "claude")
         XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "codex_app_server")?.configKey, "codex")
         XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "antigravity")?.configKey, "antigravity")
         XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "traex")?.configKey, "traex")
+        XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "grok_build")?.configKey, "grok")
         XCTAssertNil(GaryxModelProviderDefaults.provider(for: "unknown"))
     }
 
@@ -19,6 +20,7 @@ final class GaryxModelProviderDefaultsTests: XCTestCase {
         XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "codex_app_server")?.usageProviderId, "codex")
         XCTAssertEqual(GaryxModelProviderDefaults.provider(for: "antigravity")?.usageProviderId, "antigravity")
         XCTAssertNil(GaryxModelProviderDefaults.provider(for: "traex")?.usageProviderId)
+        XCTAssertNil(GaryxModelProviderDefaults.provider(for: "grok_build")?.usageProviderId)
     }
 
     func testUpdateWritesDefaultsAndPreservesExistingRuntimeConfig() throws {
@@ -100,6 +102,19 @@ final class GaryxModelProviderDefaultsTests: XCTestCase {
         XCTAssertEqual(
             GaryxModelProviderDefaults.hostRuntimeFields(in: settings, provider: antigravity),
             [GaryxProviderHostField(label: "Antigravity binary", value: "/usr/local/bin/antigravity")]
+        )
+    }
+
+    func testHostRuntimeFieldsExposeGrokBinaryWithoutAccountState() throws {
+        let grok = try XCTUnwrap(GaryxModelProviderDefaults.provider(for: "grok_build"))
+        let settings: [String: GaryxJSONValue] = [
+            "agents": .object([
+                "grok": .object(["grok_bin": .string("/usr/local/bin/grok")]),
+            ]),
+        ]
+        XCTAssertEqual(
+            GaryxModelProviderDefaults.hostRuntimeFields(in: settings, provider: grok),
+            [GaryxProviderHostField(label: "Grok binary", value: "/usr/local/bin/grok")]
         )
     }
 }

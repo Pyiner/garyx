@@ -56,6 +56,7 @@ public enum GaryxModelProviderDefaults {
             fallbackDefaultModel: "Claude Opus 4.6 (Thinking)"
         ),
         GaryxModelProviderDefault(providerType: "traex", configKey: "traex", fallbackDefaultModel: ""),
+        GaryxModelProviderDefault(providerType: "grok_build", configKey: "grok", fallbackDefaultModel: ""),
     ]
 
     public static func provider(for providerType: String) -> GaryxModelProviderDefault? {
@@ -160,6 +161,8 @@ public enum GaryxModelProviderDefaults {
             append("Codex home", "codex_home")
         case "antigravity":
             append("Antigravity binary", "antigravity_bin")
+        case "grok_build":
+            append("Grok binary", "grok_bin")
         default:
             break
         }

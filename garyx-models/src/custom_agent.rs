@@ -72,6 +72,7 @@ const BUILTIN_CODEX_AVATAR_PNG: &[u8] = include_bytes!("../assets/builtin_agent_
 const BUILTIN_GEMINI_AVATAR_PNG: &[u8] =
     include_bytes!("../assets/builtin_agent_avatars/gemini.png");
 const BUILTIN_TRAE_AVATAR_PNG: &[u8] = include_bytes!("../assets/builtin_agent_avatars/trae.png");
+const BUILTIN_GROK_AVATAR_PNG: &[u8] = include_bytes!("../assets/builtin_agent_avatars/grok.png");
 
 fn builtin_avatar_data_url(bytes: &[u8]) -> String {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -152,13 +153,30 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             created_at: now.clone(),
             updated_at: now.clone(),
         },
+        CustomAgentProfile {
+            agent_id: "grok".to_owned(),
+            display_name: "Grok".to_owned(),
+            provider_type: ProviderType::GrokBuild,
+            model: String::new(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+            provider_env: HashMap::new(),
+            default_workspace_dir: None,
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_GROK_AVATAR_PNG)),
+            system_prompt: String::new(),
+            built_in: true,
+            enabled: true,
+            standalone: true,
+            created_at: now.clone(),
+            updated_at: now,
+        },
     ]
 }
 
 pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
     matches!(
         agent_id.trim(),
-        "claude" | "codex" | "traex" | "antigravity"
+        "claude" | "codex" | "traex" | "antigravity" | "grok"
     )
 }
 

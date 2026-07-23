@@ -398,7 +398,7 @@ async fn chat_ws_missing_explicit_thread_is_not_found_with_all_agents_disabled()
     )
     .await;
     let client = reqwest::Client::new();
-    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+    for agent_id in ["claude", "codex", "traex", "antigravity", "grok"] {
         let response = client
             .patch(format!("http://{addr}/api/custom-agents/{agent_id}/toggle"))
             .bearer_auth(TEST_GATEWAY_TOKEN)
@@ -515,7 +515,7 @@ async fn stale_bot_endpoint_reenters_fresh_gate_for_http_and_ws_without_bridge_c
     );
 
     let client = reqwest::Client::new();
-    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+    for agent_id in ["claude", "codex", "traex", "antigravity", "grok"] {
         let response = client
             .patch(format!("http://{addr}/api/custom-agents/{agent_id}/toggle"))
             .bearer_auth(TEST_GATEWAY_TOKEN)

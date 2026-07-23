@@ -12,6 +12,7 @@ const providers = [
     mobileAsset: 'ProviderAntigravity',
   },
   { appAsset: 'trae', modelAsset: 'trae', mobileAsset: 'ProviderTrae' },
+  { appAsset: 'grok', modelAsset: 'grok', mobileAsset: 'ProviderGrok' },
 ];
 
 test('Mac and iOS Provider avatars match the built-in Agent artwork', async () => {

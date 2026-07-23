@@ -14,6 +14,7 @@ function state(overrides = {}) {
 
 test('provider model catalog loads before a provider is attempted', () => {
   assert.equal(shouldRequestProviderModelCatalog(state(), 'claude_code'), true);
+  assert.equal(shouldRequestProviderModelCatalog(state(), 'grok_build'), true);
 });
 
 test('provider model catalog does not reload when a catalog is already present', () => {

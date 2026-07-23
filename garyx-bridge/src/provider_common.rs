@@ -76,6 +76,17 @@ pub(crate) fn runtime_env_overlay(
     env
 }
 
+/// Snapshot the ordinary provider environment plus Garyx's generic task CLI
+/// context for one top-level run.
+pub(crate) fn runtime_env(
+    config_env: &HashMap<String, String>,
+    metadata: &HashMap<String, Value>,
+) -> HashMap<String, String> {
+    let mut env = config_env.clone();
+    env.extend(task_cli_env(metadata));
+    env
+}
+
 pub(crate) struct GaryxMcpServer {
     pub(crate) url: String,
     pub(crate) headers: HashMap<String, String>,

@@ -120,7 +120,7 @@ pub fn resolve_effective_default(
         return Some(binding);
     }
 
-    const BUILTIN_ORDER: &[&str] = &["claude", "codex", "traex", "antigravity"];
+    const BUILTIN_ORDER: &[&str] = &["claude", "codex", "traex", "antigravity", "grok"];
     for agent_id in BUILTIN_ORDER {
         if let Ok(binding) = ensure_enabled_for_new_binding(snapshot, agent_id) {
             return Some(binding);

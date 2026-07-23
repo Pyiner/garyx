@@ -1038,6 +1038,7 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::Traex => "Traex",
         ProviderType::AntigravityCli => "Antigravity",
         ProviderType::ClaudeCode => "Claude",
+        ProviderType::GrokBuild => "Grok",
     }
 }
 

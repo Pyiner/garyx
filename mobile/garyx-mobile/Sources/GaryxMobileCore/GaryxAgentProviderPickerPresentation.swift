@@ -24,6 +24,7 @@ public enum GaryxAgentProviderPickerPresentation {
         "codex_app_server",
         "traex",
         "antigravity",
+        "grok_build",
     ]
 
     public static var standardOptions: [GaryxAgentProviderPickerOption] {

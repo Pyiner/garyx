@@ -9,7 +9,8 @@ export type FixedModelProviderKey =
   | 'claude_code'
   | 'codex_app_server'
   | 'antigravity'
-  | 'traex';
+  | 'traex'
+  | 'grok_build';
 
 export type FixedModelProviderRow = {
   key: FixedModelProviderKey;
@@ -59,6 +60,13 @@ export const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     agentId: 'traex',
     label: 'Traex',
     providerType: 'traex',
+    defaultModel: '(provider default)',
+  },
+  {
+    key: 'grok_build',
+    agentId: 'grok',
+    label: 'Grok',
+    providerType: 'grok_build',
     defaultModel: '(provider default)',
   },
 ];

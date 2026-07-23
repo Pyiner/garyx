@@ -30,6 +30,9 @@ pub enum ProviderType {
     /// OAuth-backed CLI session and transcript files.
     #[serde(rename = "antigravity", alias = "agy", alias = "antigravity_cli")]
     AntigravityCli,
+    /// xAI Grok Build CLI provider, driven directly over ACP stdio.
+    #[serde(rename = "grok_build", alias = "grok", alias = "grok-build")]
+    GrokBuild,
 }
 
 impl ProviderType {
@@ -39,6 +42,7 @@ impl ProviderType {
             Self::CodexAppServer => "codex_app_server",
             Self::Traex => "traex",
             Self::AntigravityCli => "antigravity",
+            Self::GrokBuild => "grok_build",
         }
     }
 
@@ -48,6 +52,7 @@ impl ProviderType {
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "traex" | "trae" | "trae_cli" | "traecli" => Some(Self::Traex),
             "antigravity" | "agy" | "antigravity_cli" => Some(Self::AntigravityCli),
+            "grok" | "grok_build" | "grok-build" => Some(Self::GrokBuild),
             _ => None,
         }
     }
@@ -643,6 +648,51 @@ impl Default for AntigravityCliConfig {
             antigravity_bin: String::new(),
             antigravity_brain_root: String::new(),
             model: String::new(),
+            env: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for the native Grok Build ACP provider.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GrokBuildConfig {
+    #[serde(default = "default_grok_provider_type")]
+    pub provider_type: ProviderType,
+
+    #[serde(default)]
+    pub default_model: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub model_reasoning_effort: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<i64>,
+    #[serde(default)]
+    pub timeout_seconds: f64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub grok_bin: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+}
+
+fn default_grok_provider_type() -> ProviderType {
+    ProviderType::GrokBuild
+}
+
+impl Default for GrokBuildConfig {
+    fn default() -> Self {
+        Self {
+            provider_type: ProviderType::GrokBuild,
+            default_model: String::new(),
+            model: String::new(),
+            model_reasoning_effort: String::new(),
+            max_turns: None,
+            timeout_seconds: 0.0,
+            workspace_dir: None,
+            grok_bin: String::new(),
             env: HashMap::new(),
         }
     }
