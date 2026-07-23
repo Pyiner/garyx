@@ -352,7 +352,11 @@ const TranscriptRenderRow = memo(function TranscriptRenderRow({
           variant={entry.message.error ? "destructive" : "ghost"}
         >
           <BubbleContent
-            className={entry.message.error ? "rounded-[20px]" : "border-0"}
+            className={
+              entry.message.error
+                ? "rounded-[20px]"
+                : "message-assistant-bubble-content border-0"
+            }
           >
             <RichMessageContent
               altPrefix={entry.message.role}

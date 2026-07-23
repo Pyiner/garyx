@@ -393,6 +393,16 @@
   word-break: normal;
 }
 
+/* Assistant bubbles shrink to fit short prose, but code blocks are
+   contain: inline-size and cannot widen the fit-content bubble themselves,
+   so their width would inherit the message's longest prose line — an
+   arbitrary value that differs per message. A message containing a code
+   block therefore opts out of shrink-to-fit and uses the full bubble
+   width, keeping every code block at one consistent width. */
+.message-assistant-bubble-content:has([data-streamdown="code-block"]) {
+  width: 100%;
+}
+
 .message-rich [data-streamdown="code-block"] {
   position: relative;
   display: block;
