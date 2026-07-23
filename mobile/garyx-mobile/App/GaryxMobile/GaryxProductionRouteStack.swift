@@ -433,9 +433,10 @@ final class GaryxProductionRouteStore: ObservableObject {
             assertionFailure("terminal navigation plan was rejected by the route renderer")
         } else if let destination = plan.entries.last?.destination,
                   case .conversation(let threadID) = destination {
-            // A prepared host appeared before the probe started. Re-report
-            // its exact opening treatment while the accepted transaction is
-            // still synchronous and before the first animated frame.
+            // A prepared host appeared before the probe started. Re-report its
+            // opening chrome while the accepted transaction is still
+            // synchronous and before the first animated frame. Transcript
+            // treatment is live-derived by the mounted conversation.
             GaryxConversationRouteMetadataCache.shared
                 .metadata(forThreadID: threadID)
                 .markPushPresentation()

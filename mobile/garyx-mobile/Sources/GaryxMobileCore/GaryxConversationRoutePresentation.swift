@@ -49,21 +49,125 @@ public enum GaryxConversationRoutePresentationPolicy {
     }
 }
 
-/// Selects only the transcript treatment for the first destination frame.
-/// Existing local messages are content, even while the gateway refresh is in
-/// flight; a message skeleton is valid only when there is nothing local to
-/// render. Page chrome is never part of this decision.
-public enum GaryxConversationOpeningTranscriptPresentation: Equatable, Sendable {
-    case localMessages
-    case loading
+/// The one visible treatment for a conversation transcript region.
+///
+/// This value is derived from live inputs whenever they change. It is never
+/// cached in route-opening metadata, so an asynchronous disk restore naturally
+/// replaces the skeleton with content without creating a second presentation
+/// authority.
+public enum GaryxConversationTranscriptTreatment: Equatable, Sendable {
+    case skeleton
+    case content
 }
 
-public enum GaryxConversationOpeningTranscriptPolicy {
-    public static func presentation(
+/// The complete live input needed to decide the transcript treatment.
+///
+/// A server-owned render snapshot or already-rendered transcript pixels are
+/// both renderable content. When neither exists, the initial-history oracle
+/// decides between the shared skeleton and the ordinary content branch (which
+/// may contain the settled empty state).
+public enum GaryxConversationTranscriptTreatmentPolicy {
+    public static func treatment(
         localRenderableRowCount: Int,
-        hasRenderedSnapshot: Bool = false
-    ) -> GaryxConversationOpeningTranscriptPresentation {
-        localRenderableRowCount > 0 || hasRenderedSnapshot ? .localMessages : .loading
+        hasRenderedSnapshot: Bool,
+        hasTranscriptSnapshotPixels: Bool = false,
+        isAwaitingInitialHistory: Bool
+    ) -> GaryxConversationTranscriptTreatment {
+        if localRenderableRowCount > 0
+            || hasRenderedSnapshot
+            || hasTranscriptSnapshotPixels
+        {
+            return .content
+        }
+        return isAwaitingInitialHistory ? .skeleton : .content
+    }
+}
+
+/// Inputs shared by the Core composition policy and the route presentation
+/// state. Keeping this as one value prevents the cover and live transcript
+/// from deriving different treatments for the same frame.
+public struct GaryxConversationTranscriptPresentationInput: Equatable, Sendable {
+    public let treatment: GaryxConversationTranscriptTreatment
+    public let hasTranscriptSnapshotPixels: Bool
+
+    public init(
+        treatment: GaryxConversationTranscriptTreatment,
+        hasTranscriptSnapshotPixels: Bool
+    ) {
+        self.treatment = treatment
+        self.hasTranscriptSnapshotPixels = hasTranscriptSnapshotPixels
+    }
+}
+
+/// A truthful, opaque continuity surface shown while the live transcript graph
+/// materializes. Snapshot pixels are content; the skeleton is the exact same
+/// skeleton treatment the mounted live graph would render.
+public enum GaryxConversationOpeningTranscriptCover: Equatable, Sendable {
+    case skeleton
+    case snapshotPixels
+
+    public var treatment: GaryxConversationTranscriptTreatment {
+        switch self {
+        case .skeleton:
+            .skeleton
+        case .snapshotPixels:
+            .content
+        }
+    }
+}
+
+/// Exactly one transcript surface is visible in a frame. The live graph may be
+/// mounted behind an opaque opening cover for hitch preparation, but it cannot
+/// become a second visible layer.
+public enum GaryxConversationTranscriptPresentation: Equatable, Sendable {
+    case openingCover(GaryxConversationOpeningTranscriptCover)
+    case live(GaryxConversationTranscriptTreatment)
+
+    public var treatment: GaryxConversationTranscriptTreatment {
+        switch self {
+        case .openingCover(let cover):
+            cover.treatment
+        case .live(let treatment):
+            treatment
+        }
+    }
+
+    public var showsOpeningCover: Bool {
+        if case .openingCover = self {
+            return true
+        }
+        return false
+    }
+}
+
+/// Core-owned composition of the frame clock and the single live treatment.
+///
+/// A cover is legal only when it can show the same treatment as the live
+/// transcript. Content without cached pixels therefore resolves directly to
+/// the live surface, irrespective of the current choreography phase.
+public enum GaryxConversationTranscriptPresentationPolicy {
+    public static func coverIsLegal(
+        for input: GaryxConversationTranscriptPresentationInput
+    ) -> Bool {
+        input.treatment == .skeleton || input.hasTranscriptSnapshotPixels
+    }
+
+    public static func presentation(
+        renderPhase: GaryxConversationRouteRenderPhase,
+        input: GaryxConversationTranscriptPresentationInput
+    ) -> GaryxConversationTranscriptPresentation {
+        guard renderPhase != .live else {
+            return .live(input.treatment)
+        }
+        guard coverIsLegal(for: input) else {
+            return .live(input.treatment)
+        }
+        switch input.treatment {
+        case .skeleton:
+            return .openingCover(.skeleton)
+        case .content:
+            return .openingCover(.snapshotPixels)
+        }
     }
 }
 
@@ -232,10 +336,6 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         renderPhase != .openingPage
     }
 
-    public var showsOpeningTranscriptCover: Bool {
-        renderPhase != .live
-    }
-
     /// Interaction belongs to the real transcript only after the compositor
     /// handoff. Before then, its cover is a brief transition-continuity layer
     /// and must not outlive the materialization stability proof.
@@ -250,6 +350,36 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
 
     public var needsPresentedFrameClock: Bool {
         lifecycle == .active && !hasPresentedLiveTranscript
+    }
+
+    /// Reconciles the choreography clock with the live transcript treatment.
+    ///
+    /// The policy itself is pure and also drives SwiftUI's visible surface. If
+    /// it says an opening cover would be illegal, an active route immediately
+    /// promotes to `.live` instead of completing a stability proof behind
+    /// stale pixels. Inactive routes defer the lifecycle mutation until
+    /// activation while the pure presentation still prevents an illegal frame.
+    @discardableResult
+    public mutating func reconcileTranscriptPresentation(
+        _ input: GaryxConversationTranscriptPresentationInput
+    ) -> GaryxConversationTranscriptPresentation {
+        let resolved = GaryxConversationTranscriptPresentationPolicy.presentation(
+            renderPhase: renderPhase,
+            input: input
+        )
+        guard lifecycle == .active,
+              renderPhase != .live,
+              case .live = resolved
+        else {
+            return resolved
+        }
+
+        hasBegunContentPreparation = true
+        renderPhase = .live
+        hasPresentedLiveTranscript = true
+        deliveredFramesInPhase = 0
+        referenceFrameInterval = nil
+        return resolved
     }
 
     public mutating func apply(

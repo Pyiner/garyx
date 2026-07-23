@@ -62,14 +62,20 @@ final class GaryxExistingThreadLoadingJitterReproTests: XCTestCase {
         XCTAssertEqual(presentation.renderPhase, .live)
         XCTAssertTrue(presentation.allowsTranscriptInteraction)
         XCTAssertEqual(
-            GaryxConversationOpeningTranscriptPolicy.presentation(localRenderableRowCount: 0),
-            .loading
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: 0,
+                hasRenderedSnapshot: false,
+                isAwaitingInitialHistory: true
+            ),
+            .skeleton
         )
         XCTAssertEqual(
-            GaryxConversationOpeningTranscriptPolicy.presentation(
-                localRenderableRowCount: loadedRows.count
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: loadedRows.count,
+                hasRenderedSnapshot: true,
+                isAwaitingInitialHistory: false
             ),
-            .localMessages,
+            .content,
             "the captured rows must replace the loading presentation"
         )
 

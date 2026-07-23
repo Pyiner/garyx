@@ -2,21 +2,48 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxConversationRoutePresentationTests: XCTestCase {
-    func testOpeningTranscriptUsesLocalMessagesWhileRefreshRuns() {
+    func testTranscriptTreatmentRecomputesFromLiveHistoryInputs() {
         XCTAssertEqual(
-            GaryxConversationOpeningTranscriptPolicy.presentation(localRenderableRowCount: 3),
-            .localMessages
-        )
-        XCTAssertEqual(
-            GaryxConversationOpeningTranscriptPolicy.presentation(localRenderableRowCount: 0),
-            .loading
-        )
-        XCTAssertEqual(
-            GaryxConversationOpeningTranscriptPolicy.presentation(
-                localRenderableRowCount: 0,
-                hasRenderedSnapshot: true
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: 3,
+                hasRenderedSnapshot: false,
+                isAwaitingInitialHistory: true
             ),
-            .localMessages
+            .content
+        )
+        XCTAssertEqual(
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: 0,
+                hasRenderedSnapshot: false,
+                isAwaitingInitialHistory: true
+            ),
+            .skeleton
+        )
+        XCTAssertEqual(
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: 0,
+                hasRenderedSnapshot: true,
+                isAwaitingInitialHistory: true
+            ),
+            .content
+        )
+        XCTAssertEqual(
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: 0,
+                hasRenderedSnapshot: false,
+                hasTranscriptSnapshotPixels: true,
+                isAwaitingInitialHistory: true
+            ),
+            .content
+        )
+        XCTAssertEqual(
+            GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: 0,
+                hasRenderedSnapshot: false,
+                isAwaitingInitialHistory: false
+            ),
+            .content,
+            "settled empty history belongs to the ordinary content branch"
         )
     }
 
@@ -71,7 +98,10 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
 
         XCTAssertTrue(state.presentsConversationPage)
         XCTAssertFalse(state.showsFullScreenPlaceholder)
-        XCTAssertTrue(state.showsOpeningTranscriptCover)
+        XCTAssertEqual(
+            presentation(state, input: skeletonInput),
+            .openingCover(.skeleton)
+        )
         XCTAssertFalse(state.hasBegunContentPreparation)
     }
 
@@ -149,7 +179,10 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
             .materializingConversation
         )
         XCTAssertTrue(state.mountsLiveTranscript)
-        XCTAssertTrue(state.showsOpeningTranscriptCover)
+        XCTAssertEqual(
+            presentation(state, input: skeletonInput),
+            .openingCover(.skeleton)
+        )
         XCTAssertTrue(state.allowsComposerInteraction)
         XCTAssertFalse(state.allowsTranscriptInteraction)
         XCTAssertTrue(state.needsPresentedFrameClock)
@@ -164,10 +197,145 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         )
         XCTAssertEqual(state.presentedFrame(interval: 1.0 / 120.0), .live)
         XCTAssertTrue(state.hasPresentedLiveTranscript)
-        XCTAssertFalse(state.showsOpeningTranscriptCover)
+        XCTAssertEqual(
+            presentation(state, input: skeletonInput),
+            .live(.skeleton)
+        )
         XCTAssertFalse(state.needsPresentedFrameClock)
         XCTAssertTrue(state.allowsComposerInteraction)
         XCTAssertTrue(state.allowsTranscriptInteraction)
+    }
+
+    func testS1ContentWithoutSnapshotPixelsShortCircuitsDirectlyToLive() {
+        var state = GaryxConversationRoutePresentationState()
+        state.apply(lifecycle: .active)
+
+        XCTAssertEqual(
+            presentation(state, input: contentWithoutPixelsInput),
+            .live(.content),
+            "an illegal content cover is never part of the visible composition"
+        )
+        XCTAssertEqual(
+            state.reconcileTranscriptPresentation(contentWithoutPixelsInput),
+            .live(.content)
+        )
+        XCTAssertEqual(state.renderPhase, .live)
+        XCTAssertTrue(state.mountsLiveTranscript)
+        XCTAssertTrue(state.hasBegunContentPreparation)
+        XCTAssertTrue(state.hasPresentedLiveTranscript)
+        XCTAssertTrue(state.allowsTranscriptInteraction)
+        XCTAssertFalse(state.needsPresentedFrameClock)
+    }
+
+    func testS1SnapshotPixelsKeepAnOpaqueContentCoverLegal() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 2
+        )
+        state.apply(lifecycle: .active)
+
+        XCTAssertEqual(
+            state.reconcileTranscriptPresentation(contentWithPixelsInput),
+            .openingCover(.snapshotPixels)
+        )
+        XCTAssertEqual(state.renderPhase, .openingPage)
+        XCTAssertEqual(
+            state.presentedFrame(interval: 1.0 / 120.0),
+            .materializingConversation
+        )
+        XCTAssertTrue(state.mountsLiveTranscript)
+        XCTAssertEqual(
+            presentation(state, input: contentWithPixelsInput),
+            .openingCover(.snapshotPixels)
+        )
+        XCTAssertTrue(
+            GaryxConversationTranscriptPresentationPolicy.coverIsLegal(
+                for: contentWithPixelsInput
+            )
+        )
+    }
+
+    func testS2SkeletonIsTheOnlyTreatmentAcrossTheNormalCoverHandoff() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 2
+        )
+        state.apply(lifecycle: .active)
+
+        var observed = [presentation(state, input: skeletonInput)]
+        state.presentedFrame(interval: 1.0 / 120.0)
+        observed.append(presentation(state, input: skeletonInput))
+        state.presentedFrame(interval: 1.0 / 120.0)
+        observed.append(presentation(state, input: skeletonInput))
+        state.presentedFrame(interval: 1.0 / 120.0)
+        observed.append(presentation(state, input: skeletonInput))
+
+        XCTAssertEqual(
+            observed,
+            [
+                .openingCover(.skeleton),
+                .openingCover(.skeleton),
+                .openingCover(.skeleton),
+                .live(.skeleton),
+            ]
+        )
+        XCTAssertEqual(observed.map(\.treatment), Array(repeating: .skeleton, count: 4))
+        XCTAssertEqual(
+            presentation(state, input: contentWithoutPixelsInput),
+            .live(.content),
+            "the first renderable row atomically replaces the live skeleton"
+        )
+    }
+
+    func testS3IncrementalLiveFramesStayOnTheContentTreatment() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 1
+        )
+        state.apply(lifecycle: .active)
+        state.presentedFrame(interval: 1.0 / 120.0)
+        state.presentedFrame(interval: 1.0 / 120.0)
+        XCTAssertEqual(state.renderPhase, .live)
+
+        let incrementalInputs = [1, 2, 3].map {
+            input(
+                localRenderableRowCount: $0,
+                hasRenderedSnapshot: true,
+                isAwaitingInitialHistory: false,
+                hasTranscriptSnapshotPixels: false
+            )
+        }
+        XCTAssertEqual(
+            incrementalInputs.map { presentation(state, input: $0) },
+            Array(repeating: .live(.content), count: 3)
+        )
+    }
+
+    func testS4RetryKeepsSkeletonOnlyWhileNoLocalContentExists() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 1
+        )
+        state.apply(lifecycle: .active)
+        state.presentedFrame(interval: 1.0 / 120.0)
+        state.presentedFrame(interval: 1.0 / 120.0)
+
+        XCTAssertEqual(
+            presentation(state, input: skeletonInput),
+            .live(.skeleton),
+            "a cold-start retry keeps the same skeleton across cover handoff"
+        )
+        let rowsArrivedDuringRetry = input(
+            localRenderableRowCount: 1,
+            hasRenderedSnapshot: true,
+            isAwaitingInitialHistory: true,
+            hasTranscriptSnapshotPixels: false
+        )
+        XCTAssertEqual(
+            presentation(state, input: rowsArrivedDuringRetry),
+            .live(.content),
+            "retry activity cannot cover locally renderable rows with a skeleton"
+        )
     }
 
     func testLiveImplementationHandoffWaitsForStableMaterializationFrame() {
@@ -210,7 +378,10 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertTrue(state.hasPresentedLiveTranscript)
         XCTAssertTrue(state.allowsComposerInteraction)
         XCTAssertTrue(state.allowsTranscriptInteraction)
-        XCTAssertFalse(state.showsOpeningTranscriptCover)
+        XCTAssertEqual(
+            presentation(state, input: skeletonInput),
+            .live(.skeleton)
+        )
     }
 
     func testMissedMaterializationFrameRestartsStabilityProof() {
@@ -292,7 +463,10 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertTrue(state.hasBegunContentPreparation)
         XCTAssertEqual(state.renderPhase, .live)
         XCTAssertTrue(state.mountsLiveTranscript)
-        XCTAssertFalse(state.showsOpeningTranscriptCover)
+        XCTAssertEqual(
+            presentation(state, input: skeletonInput),
+            .live(.skeleton)
+        )
         state.apply(lifecycle: .active)
         XCTAssertEqual(state.renderPhase, .live)
     }
@@ -343,4 +517,57 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertTrue(state.allowsTranscriptInteraction)
     }
 
+    private var skeletonInput: GaryxConversationTranscriptPresentationInput {
+        input(
+            localRenderableRowCount: 0,
+            hasRenderedSnapshot: false,
+            isAwaitingInitialHistory: true,
+            hasTranscriptSnapshotPixels: false
+        )
+    }
+
+    private var contentWithoutPixelsInput: GaryxConversationTranscriptPresentationInput {
+        input(
+            localRenderableRowCount: 1,
+            hasRenderedSnapshot: true,
+            isAwaitingInitialHistory: true,
+            hasTranscriptSnapshotPixels: false
+        )
+    }
+
+    private var contentWithPixelsInput: GaryxConversationTranscriptPresentationInput {
+        input(
+            localRenderableRowCount: 0,
+            hasRenderedSnapshot: false,
+            isAwaitingInitialHistory: true,
+            hasTranscriptSnapshotPixels: true
+        )
+    }
+
+    private func input(
+        localRenderableRowCount: Int,
+        hasRenderedSnapshot: Bool,
+        isAwaitingInitialHistory: Bool,
+        hasTranscriptSnapshotPixels: Bool
+    ) -> GaryxConversationTranscriptPresentationInput {
+        GaryxConversationTranscriptPresentationInput(
+            treatment: GaryxConversationTranscriptTreatmentPolicy.treatment(
+                localRenderableRowCount: localRenderableRowCount,
+                hasRenderedSnapshot: hasRenderedSnapshot,
+                hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels,
+                isAwaitingInitialHistory: isAwaitingInitialHistory
+            ),
+            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels
+        )
+    }
+
+    private func presentation(
+        _ state: GaryxConversationRoutePresentationState,
+        input: GaryxConversationTranscriptPresentationInput
+    ) -> GaryxConversationTranscriptPresentation {
+        GaryxConversationTranscriptPresentationPolicy.presentation(
+            renderPhase: state.renderPhase,
+            input: input
+        )
+    }
 }

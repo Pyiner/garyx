@@ -278,9 +278,10 @@ extension GaryxMobileModel {
         )
     }
 
-    /// True while the selected thread is fetching its initial transcript, either
-    /// during the in-flight request or before the first page has loaded. Drives
-    /// the empty-state loading view and the toolbar loading indicator together.
+    /// True while the selected thread is fetching its initial transcript,
+    /// either during the in-flight request or before the first page has loaded.
+    /// This drives header chrome only; the transcript region derives its
+    /// single treatment from live Core inputs.
     var isSelectedThreadLoadingInitialHistory: Bool {
         isLoadingSelectedThreadHistory || isSelectedThreadAwaitingInitialHistory
     }
