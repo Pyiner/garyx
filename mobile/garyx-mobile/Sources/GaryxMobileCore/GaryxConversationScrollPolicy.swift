@@ -218,6 +218,24 @@ public struct GaryxConversationScrollState: Equatable {
                 .settling
             }
         }
+
+        /// Production retry clock consumed by the SwiftUI adapter.
+        ///
+        /// Keeping the clock beside the authorization policy makes the whole
+        /// scroll-write timeline deterministic in SwiftPM tests. The adapter
+        /// still owns `ScrollViewProxy.scrollTo`; Core owns when its queued
+        /// attempts become eligible.
+        public var retryDelayMilliseconds: [Int] {
+            switch retryHorizon {
+            case .tailGrowth:
+                // Ordinary tail growth during send/streaming should stay
+                // pinned, but a long retry chain visibly wobbles the
+                // transcript while composer geometry also settles.
+                [0, 40, 140]
+            case .settling:
+                [0, 16, 40, 140, 320, 650, 1_000]
+            }
+        }
     }
 
     public enum TailScrollRetryHorizon: Equatable {
