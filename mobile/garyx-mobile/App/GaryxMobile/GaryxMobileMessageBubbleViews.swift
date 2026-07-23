@@ -375,7 +375,7 @@ struct GaryxTaskNotificationCard: View {
     @ScaledMetric(relativeTo: .body) private var bodyFontLineHeight: CGFloat = UIFont
         .preferredFont(forTextStyle: .body).lineHeight
     @ScaledMetric(relativeTo: .body) private var bodyLineSpacing: CGFloat = 5
-    @State private var naturalBodyHeight: CGFloat = 0
+    @State private var naturalBodyHeight: CGFloat?
 
     init(
         notification: GaryxTaskNotification,
@@ -395,12 +395,18 @@ struct GaryxTaskNotificationCard: View {
         (bodyFontLineHeight + bodyLineSpacing) * 10
     }
 
+    private var bodyLayout: GaryxTaskNotificationBodyLayout? {
+        naturalBodyHeight.map {
+            GaryxTaskNotificationOverflow.collapsedBodyLayout(
+                naturalHeight: Double($0),
+                clampHeight: Double(clampHeight),
+                epsilon: 0.5
+            )
+        }
+    }
+
     private var bodyOverflows: Bool {
-        GaryxTaskNotificationOverflow.overflows(
-            naturalHeight: Double(naturalBodyHeight),
-            clampHeight: Double(clampHeight),
-            epsilon: 0.5
-        )
+        bodyLayout?.showsExpand ?? false
     }
 
     var body: some View {
@@ -435,22 +441,23 @@ struct GaryxTaskNotificationCard: View {
             .onGeometryChange(for: CGSize.self) { geometry in
                 geometry.size
             } action: { size in
+                let measuredLayout = GaryxTaskNotificationOverflow.collapsedBodyLayout(
+                    naturalHeight: Double(size.height),
+                    clampHeight: Double(clampHeight),
+                    epsilon: 0.5
+                )
                 onMeasurement(
                     GaryxTaskNotificationCardMeasurement(
                         naturalHeight: size.height,
                         clampHeight: clampHeight,
-                        overflows: GaryxTaskNotificationOverflow.overflows(
-                            naturalHeight: Double(size.height),
-                            clampHeight: Double(clampHeight),
-                            epsilon: 0.5
-                        )
+                        overflows: measuredLayout.isTruncated
                     )
                 )
-                if abs(naturalBodyHeight - size.height) > 0.25 {
+                if naturalBodyHeight.map({ abs($0 - size.height) > 0.25 }) ?? true {
                     naturalBodyHeight = size.height
                 }
             }
-            .frame(maxHeight: clampHeight, alignment: .top)
+            .frame(height: bodyLayout.map { CGFloat($0.displayedHeight) }, alignment: .top)
             .clipped()
 
             if bodyOverflows {

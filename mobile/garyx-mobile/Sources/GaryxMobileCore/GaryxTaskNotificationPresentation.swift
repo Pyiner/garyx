@@ -65,6 +65,40 @@ public enum GaryxTaskNotificationOverflow {
     }
 }
 
+public struct GaryxTaskNotificationBodyLayout: Equatable, Sendable {
+    public let naturalHeight: Double
+    public let displayedHeight: Double
+    public let clampHeight: Double
+    public let isTruncated: Bool
+
+    public var showsExpand: Bool {
+        isTruncated
+    }
+}
+
+public extension GaryxTaskNotificationOverflow {
+    /// Pure presentation rule for the collapsed card. Short bodies keep their
+    /// natural height; only bodies beyond the clamp are truncated and expose
+    /// the expansion affordance.
+    static func collapsedBodyLayout(
+        naturalHeight: Double,
+        clampHeight: Double,
+        epsilon: Double
+    ) -> GaryxTaskNotificationBodyLayout {
+        let isTruncated = overflows(
+            naturalHeight: naturalHeight,
+            clampHeight: clampHeight,
+            epsilon: epsilon
+        )
+        return GaryxTaskNotificationBodyLayout(
+            naturalHeight: naturalHeight,
+            displayedHeight: min(naturalHeight, clampHeight),
+            clampHeight: clampHeight,
+            isTruncated: isTruncated
+        )
+    }
+}
+
 public struct GaryxTaskNotificationSelection: Identifiable, Equatable, Sendable {
     public struct ID: Hashable, Sendable {
         public let messageId: String

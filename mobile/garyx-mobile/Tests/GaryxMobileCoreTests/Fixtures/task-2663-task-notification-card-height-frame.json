@@ -1,0 +1,94 @@
+{
+  "frame": {
+    "type": "thread_render_frame",
+    "thread_id": "thread::task-notification-card-height-repro",
+    "events": [
+      {
+        "type": "committed_message",
+        "thread_id": "thread::task-notification-card-height-repro",
+        "seq": 222,
+        "message": {
+          "role": "user",
+          "internal": true,
+          "content": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-2656\" status=\"in_review\" title=\"AGE design review (Antigravity)\">\nOn it. Let me read through all the required documents and code first.\n</garyx_task_notification>\n\nView details: garyx task get #TASK-2656\n\nReview next:\nIf changes are needed, move the task back to in progress and send feedback to the task thread:\ngaryx task update #TASK-2656 --status in_progress --note \"needs changes: summary\"\n\nIf approved, mark it done:\ngaryx task update #TASK-2656 --status done --note \"approved by reviewer\"",
+          "text": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-2656\" status=\"in_review\" title=\"AGE design review (Antigravity)\">\nOn it. Let me read through all the required documents and code first.\n</garyx_task_notification>\n\nView details: garyx task get #TASK-2656\n\nReview next:\nIf changes are needed, move the task back to in progress and send feedback to the task thread:\ngaryx task update #TASK-2656 --status in_progress --note \"needs changes: summary\"\n\nIf approved, mark it done:\ngaryx task update #TASK-2656 --status done --note \"approved by reviewer\""
+        }
+      },
+      {
+        "type": "committed_message",
+        "thread_id": "thread::task-notification-card-height-repro",
+        "seq": 237,
+        "message": {
+          "role": "user",
+          "internal": true,
+          "content": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-2655\" status=\"in_review\" title=\"AGE design review (Codex)\">\nCompleted the design review: [codex-design-2026-07-24.md](/Users/test/project/reviews/codex-design-2026-07-24.md:1).\n\nVerdict: **REVISE, confidence 0.95**. Key finding: the claimed short/long efficiency gap is manually encoded in `projected_path`; event-only scoring gives identical results even after adding 1,000 reads. I also reproduced scorer and checker exploits.\n\nValidation passed, temporary probes were removed, and the concurrent review was untouched. Garyx will automatically move #TASK-2655 to `in_review` when this run ends; its guard correctly rejected a manual transition.\n</garyx_task_notification>\n\nView details: garyx task get #TASK-2655\n\nReview next:\nIf changes are needed, move the task back to in progress and send feedback to the task thread:\ngaryx task update #TASK-2655 --status in_progress --note \"needs changes: summary\"\n\nIf approved, mark it done:\ngaryx task update #TASK-2655 --status done --note \"approved by reviewer\"",
+          "text": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-2655\" status=\"in_review\" title=\"AGE design review (Codex)\">\nCompleted the design review: [codex-design-2026-07-24.md](/Users/test/project/reviews/codex-design-2026-07-24.md:1).\n\nVerdict: **REVISE, confidence 0.95**. Key finding: the claimed short/long efficiency gap is manually encoded in `projected_path`; event-only scoring gives identical results even after adding 1,000 reads. I also reproduced scorer and checker exploits.\n\nValidation passed, temporary probes were removed, and the concurrent review was untouched. Garyx will automatically move #TASK-2655 to `in_review` when this run ends; its guard correctly rejected a manual transition.\n</garyx_task_notification>\n\nView details: garyx task get #TASK-2655\n\nReview next:\nIf changes are needed, move the task back to in progress and send feedback to the task thread:\ngaryx task update #TASK-2655 --status in_progress --note \"needs changes: summary\"\n\nIf approved, mark it done:\ngaryx task update #TASK-2655 --status done --note \"approved by reviewer\""
+        }
+      }
+    ],
+    "render_state": {
+      "based_on_seq": 237,
+      "rows": [
+        {
+          "kind": "user_turn",
+          "id": "user_turn:seq:222",
+          "user": {
+            "id": "seq:222",
+            "seq": 222,
+            "role": "user",
+            "presentation": {
+              "event": "ready_for_review",
+              "kind": "task_notification",
+              "status": "in_review",
+              "task_id": "#TASK-2656",
+              "title": "AGE design review (Antigravity)"
+            }
+          },
+          "activity": [],
+          "started_at": "2026-07-23T18:58:38Z",
+          "finished_at": "2026-07-23T18:58:58Z"
+        },
+        {
+          "kind": "user_turn",
+          "id": "user_turn:seq:237",
+          "user": {
+            "id": "seq:237",
+            "seq": 237,
+            "role": "user",
+            "presentation": {
+              "event": "ready_for_review",
+              "kind": "task_notification",
+              "status": "in_review",
+              "task_id": "#TASK-2655",
+              "title": "AGE design review (Codex)"
+            }
+          },
+          "activity": [],
+          "started_at": "2026-07-23T18:59:10Z",
+          "finished_at": "2026-07-23T19:02:28Z"
+        }
+      ],
+      "tailActivity": "none",
+      "activeToolGroupId": null,
+      "progress_locus": "none",
+      "filtered_placeholders": [],
+      "window": {
+        "floor_seq": 222,
+        "has_more_above": true
+      }
+    }
+  },
+  "reference_layout": {
+    "collapsed_line_limit": 10,
+    "cards": [
+      {
+        "task_id": "#TASK-2656",
+        "natural_line_count": 2
+      },
+      {
+        "task_id": "#TASK-2655",
+        "natural_line_count": 11
+      }
+    ]
+  }
+}
