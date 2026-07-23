@@ -76,6 +76,16 @@ struct GaryxConversationLiveStore {
             && model.isSelectedThreadLoadingInitialHistory
     }
 
+    func isAwaitingInitialHistory(in model: GaryxMobileModel, isCanonicalTop: Bool) -> Bool {
+        isCanonicalTop && model.selectedThread?.id == threadID
+            && model.isSelectedThreadAwaitingInitialHistory
+    }
+
+    func hasRenderedSnapshot(in model: GaryxMobileModel) -> Bool {
+        guard let threadID else { return false }
+        return model.renderSnapshot(for: threadID) != nil
+    }
+
     private func renderInput(in model: GaryxMobileModel) -> GaryxConversationRouteRenderInput {
         let threadMessages = threadID.map { model.cachedMessages(for: $0) } ?? []
         let snapshot = threadID.flatMap { model.renderSnapshot(for: $0) }

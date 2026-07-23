@@ -219,22 +219,31 @@ struct GaryxConversationView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
+            let turnRows = routeTurnRows
+            let presentationInput = transcriptPresentationInput(turnRows: turnRows)
+            let transcriptPresentation = transcriptPresentation(for: presentationInput)
+
             ZStack(alignment: .bottom) {
-                if mountsLiveTranscript {
-                    liveTranscript(proxy: proxy)
-                        .allowsHitTesting(allowsTranscriptInteraction)
+                if mountsLiveTranscript(for: transcriptPresentation) {
+                    liveTranscript(
+                        proxy: proxy,
+                        treatment: presentationInput.treatment,
+                        turnRows: turnRows
+                    )
+                    .allowsHitTesting(
+                        allowsTranscriptInteraction(for: transcriptPresentation)
+                    )
+                    .accessibilityHidden(transcriptPresentation.showsOpeningCover)
                 }
 
-                if let transcriptStaging {
-                    // Keep the lightweight continuity pixels mounted after
-                    // reveal. Changing compositor opacity is cheaper than
-                    // tearing down this tree on the handoff frame.
+                if case .openingCover(let cover) = transcriptPresentation,
+                   let transcriptStaging
+                {
                     GaryxConversationOpeningTranscriptView(
-                        metadata: transcriptStaging.metadata,
+                        cover: cover,
                         snapshotThreadID: transcriptStaging.snapshotThreadID
                     )
-                    .opacity(transcriptStaging.renderPhase == .live ? 0 : 0.999)
-                    .allowsHitTesting(!transcriptStaging.allowsTranscriptInteraction)
+                    .allowsHitTesting(true)
                     .accessibilityHidden(true)
                 }
 
@@ -319,6 +328,12 @@ struct GaryxConversationView: View {
                 .animation(motion.animation(.scrollLatest), value: showsScrollToBottomButton)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear {
+                    reportTranscriptPresentationInput(presentationInput)
+                }
+                .onChange(of: presentationInput) { _, input in
+                    reportTranscriptPresentationInput(input)
+                }
         }
         .garyxPageBackground()
         .garyxAdaptiveTopBar {
@@ -377,8 +392,61 @@ struct GaryxConversationView: View {
         transcriptStaging?.mountsLiveTranscript ?? true
     }
 
-    private var allowsTranscriptInteraction: Bool {
-        transcriptStaging?.allowsTranscriptInteraction ?? true
+    private func transcriptPresentationInput(
+        turnRows: [GaryxMobileTurnRow]
+    ) -> GaryxConversationTranscriptPresentationInput {
+        let hasTranscriptSnapshotPixels = liveStore.threadID.map {
+            GaryxConversationTranscriptSnapshotCache.shared.hasSnapshot(for: $0)
+        } ?? false
+        let treatment = GaryxConversationTranscriptTreatmentPolicy.treatment(
+            localRenderableRowCount: turnRows.count,
+            hasRenderedSnapshot: liveStore.hasRenderedSnapshot(in: model),
+            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels,
+            isAwaitingInitialHistory: liveStore.isAwaitingInitialHistory(
+                in: model,
+                isCanonicalTop: routeContext.isCanonicalTop
+            )
+        )
+        return GaryxConversationTranscriptPresentationInput(
+            treatment: treatment,
+            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels
+        )
+    }
+
+    private func transcriptPresentation(
+        for input: GaryxConversationTranscriptPresentationInput
+    ) -> GaryxConversationTranscriptPresentation {
+        guard let transcriptStaging else {
+            return .live(input.treatment)
+        }
+        return GaryxConversationTranscriptPresentationPolicy.presentation(
+            renderPhase: transcriptStaging.renderPhase,
+            input: input
+        )
+    }
+
+    private func mountsLiveTranscript(
+        for presentation: GaryxConversationTranscriptPresentation
+    ) -> Bool {
+        switch presentation {
+        case .live:
+            true
+        case .openingCover:
+            mountsLiveTranscript
+        }
+    }
+
+    private func allowsTranscriptInteraction(
+        for presentation: GaryxConversationTranscriptPresentation
+    ) -> Bool {
+        guard case .live = presentation else { return false }
+        return transcriptStaging?.allowsTranscriptInteraction ?? true
+    }
+
+    private func reportTranscriptPresentationInput(
+        _ input: GaryxConversationTranscriptPresentationInput
+    ) {
+        transcriptStaging?.presentationInputDidChange(input)
     }
 
     private var stagedHeaderMetadata: GaryxConversationOpeningMetadata? {
@@ -398,8 +466,16 @@ struct GaryxConversationView: View {
         transcriptStaging?.renderPhase != .openingPage
     }
 
-    private func liveTranscript(proxy: ScrollViewProxy) -> some View {
-        messageScroll(proxy: proxy)
+    private func liveTranscript(
+        proxy: ScrollViewProxy,
+        treatment: GaryxConversationTranscriptTreatment,
+        turnRows: [GaryxMobileTurnRow]
+    ) -> some View {
+        messageScroll(
+            proxy: proxy,
+            treatment: treatment,
+            turnRows: turnRows
+        )
             .onAppear {
                 GaryxConversationSendJitterProbe.shared?.attach(
                     routeIdentity: liveStore.routeIdentity,
@@ -583,7 +659,11 @@ struct GaryxConversationView: View {
         )
     }
 
-    private func messageScroll(proxy: ScrollViewProxy) -> some View {
+    private func messageScroll(
+        proxy: ScrollViewProxy,
+        treatment: GaryxConversationTranscriptTreatment,
+        turnRows: [GaryxMobileTurnRow]
+    ) -> some View {
         ScrollView {
             ZStack(alignment: .topLeading) {
                 // Give short transcripts a viewport-height content plane. The
@@ -615,71 +695,72 @@ struct GaryxConversationView: View {
                                 }
                             }
 
-                        let turnRows = routeTurnRows
-                        if turnRows.isEmpty,
-                           liveStore.isLoadingInitialHistory(
-                               in: model,
-                               isCanonicalTop: routeContext.isCanonicalTop
-                           )
-                        {
+                        switch treatment {
+                        case .skeleton:
                             GaryxThreadHistoryLoadingView()
                                 .padding(.top, 12)
                                 .onAppear {
                                     GaryxRoutePushPerformanceProbe.shared?.markConversationMessageLoading()
                                 }
-                        } else if turnRows.isEmpty {
-                            if liveStore.isThinking(in: model) {
-                                if showsDebouncedTailThinking {
-                                    GaryxThinkingLabel()
+                        case .content:
+                            if turnRows.isEmpty {
+                                if liveStore.isThinking(in: model) {
+                                    if showsDebouncedTailThinking {
+                                        GaryxThinkingLabel()
+                                            .padding(.top, 96)
+                                            .transition(.opacity)
+                                    }
+                                } else if liveStore.threadID != nil {
+                                    GaryxSelectedThreadEmptyConversationView()
                                         .padding(.top, 96)
-                                        .transition(.opacity)
                                 }
-                            } else if liveStore.threadID != nil {
-                                GaryxSelectedThreadEmptyConversationView()
-                                    .padding(.top, 96)
-                            }
-                        } else {
-                            if liveStore.hasMoreRenderableHistory(
-                                in: model,
-                                isCanonicalTop: routeContext.isCanonicalTop
-                            ) {
-                                // Older history loads automatically as the reader nears
-                                // the top (two-stage: reveal window-hidden in-memory rows
-                                // first, then page the network — TASK-1751 P3). This row
-                                // is the top boundary sentinel plus the only loading
-                                // affordance; there is no manual load button.
-                                GaryxEarlierHistoryLoadingIndicator(
-                                    isLoading: model.isLoadingOlderThreadHistory
+                            } else {
+                                if liveStore.hasMoreRenderableHistory(
+                                    in: model,
+                                    isCanonicalTop: routeContext.isCanonicalTop
+                                ) {
+                                    // Older history loads automatically as the reader nears
+                                    // the top (two-stage: reveal window-hidden in-memory rows
+                                    // first, then page the network — TASK-1751 P3). This row
+                                    // is the top boundary sentinel plus the only loading
+                                    // affordance; there is no manual load button.
+                                    GaryxEarlierHistoryLoadingIndicator(
+                                        isLoading: model.isLoadingOlderThreadHistory
+                                    )
+                                    .onAppear {
+                                        prefetchOlderHistoryIfNeeded()
+                                    }
+                                }
+                                GaryxMobileTurnRowsView(
+                                    rows: turnRows,
+                                    prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
+                                    onNearHistoryBoundary: {
+                                        prefetchOlderHistoryIfNeeded()
+                                    },
+                                    onRowContentMinYChange: { rowId, minY in
+                                        // Plain box write: content-space geometry never
+                                        // changes from scrolling, so this only fires on
+                                        // layout changes and never invalidates the body.
+                                        rowGeometryBox.record(rowId, minY: minY)
+                                    }
                                 )
                                 .onAppear {
-                                    prefetchOlderHistoryIfNeeded()
+                                    GaryxRoutePushPerformanceProbe.shared?
+                                        .markConversationLocalMessages()
                                 }
-                            }
-                            GaryxMobileTurnRowsView(
-                                rows: turnRows,
-                                prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
-                                onNearHistoryBoundary: {
-                                    prefetchOlderHistoryIfNeeded()
-                                },
-                                onRowContentMinYChange: { rowId, minY in
-                                    // Plain box write: content-space geometry never
-                                    // changes from scrolling, so this only fires on
-                                    // layout changes and never invalidates the body.
-                                    rowGeometryBox.record(rowId, minY: minY)
+                                if showsDebouncedTailThinking {
+                                    GaryxThinkingLabel()
+                                        .id(tailThinkingAnchorId)
+                                        .transition(.opacity)
                                 }
-                            )
-                            if showsDebouncedTailThinking {
-                                GaryxThinkingLabel()
-                                    .id(tailThinkingAnchorId)
-                                    .transition(.opacity)
-                            }
-                            if let rateLimit = liveStore.rateLimit(in: model),
-                               let threadId = liveStore.threadID
-                            {
-                                GaryxRateLimitBanner(rateLimit: rateLimit) {
-                                    try await model.retryThreadQuotaRecovery(threadId: threadId)
+                                if let rateLimit = liveStore.rateLimit(in: model),
+                                   let threadId = liveStore.threadID
+                                {
+                                    GaryxRateLimitBanner(rateLimit: rateLimit) {
+                                        try await model.retryThreadQuotaRecovery(threadId: threadId)
+                                    }
+                                    .transition(motion.transition(.transcriptAppear))
                                 }
-                                .transition(motion.transition(.transcriptAppear))
                             }
                         }
                     }

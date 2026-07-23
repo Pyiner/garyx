@@ -66,6 +66,46 @@ enum GaryxConversationRenderPrewarmFixture {
     }()
 }
 
+/// Startup-only copy of the live transcript's static layout seam. The real
+/// message rows stay mounted behind the same opaque skeleton cover production
+/// uses during materialization, so both pipelines warm without making them two
+/// visible transcript treatments.
+private struct GaryxConversationRenderPrewarmTranscriptView: View {
+    var body: some View {
+        ScrollView {
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                    .containerRelativeFrame(.vertical) { length, _ in length }
+                    .allowsHitTesting(false)
+
+                VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Color.clear.frame(height: 1)
+                        GaryxMobileTurnRowsView(
+                            rows: GaryxConversationRenderPrewarmFixture.representativeRows
+                        )
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    .garyxVerticalScrollContentWidth(alignment: .topLeading)
+
+                    Color.clear
+                        .frame(height: 24)
+                        .accessibilityHidden(true)
+                }
+            }
+            .background {
+                GaryxTranscriptBlankSpaceTapLayer(action: {})
+            }
+        }
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        .scrollDismissesKeyboard(.interactively)
+        .scrollDisabled(true)
+    }
+}
+
 /// Startup-only compositor warm-up. Its topmost non-zero-opacity placement is
 /// intentional: Core Animation may cull a hidden or fully transparent tree,
 /// which would defer glass/markdown Metal pipeline compilation to the first
@@ -77,12 +117,9 @@ struct GaryxConversationRenderPrewarmer: View {
     var body: some View {
         if driver.rendersWarmupSurface {
             ZStack {
-                GaryxConversationOpeningTranscriptView(metadata: .prewarmLocal)
+                GaryxConversationRenderPrewarmTranscriptView()
 
-                // The local fixture exercises real message rows; this overlay
-                // additionally compiles the exact empty-cache shimmer.
-                GaryxThreadHistoryLoadingView()
-                    .padding(.horizontal, 16)
+                GaryxConversationOpeningTranscriptView(cover: .skeleton)
             }
             .garyxPageBackground()
             .garyxAdaptiveTopBar {

@@ -172,17 +172,13 @@ extension GaryxMobileModel {
         // Capture visible chrome before the UIKit destination host mounts.
         // The moving conversation page can then render its real title without
         // subscribing to the large observable model during the push.
-        let openingLocalRows = GaryxConversationLiveStore(
-            destination: .conversation(threadID: thread.id)
-        ).turnRows(in: self, isCanonicalTop: false)
         GaryxConversationRouteMetadataCache.shared.store(
             thread,
             agentTarget: GaryxMobileAgentTargetMapper.selectedThreadTarget(
                 thread: thread,
                 selectedAgentTargetId: newThreadAgentTargetId(),
                 targets: agentTargets
-            ),
-            localRows: openingLocalRows
+            )
         )
     }
 

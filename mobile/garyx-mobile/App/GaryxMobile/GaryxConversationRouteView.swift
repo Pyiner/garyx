@@ -159,43 +159,34 @@ extension EnvironmentValues {
 struct GaryxConversationOpeningMetadata: Equatable {
     let title: String
     let agentTarget: GaryxMobileAgentTarget?
-    let transcriptPresentation: GaryxConversationOpeningTranscriptPresentation
-    let usesTranscriptSnapshot: Bool
-    let localRows: [GaryxMobileTurnRow]
 
     static let prewarmLocal = GaryxConversationOpeningMetadata(
         title: "Conversation",
-        agentTarget: nil,
-        transcriptPresentation: .localMessages,
-        usesTranscriptSnapshot: false,
-        localRows: GaryxConversationRenderPrewarmFixture.representativeRows
+        agentTarget: nil
     )
 
-    /// Reports the production opening treatment for the current push. A
-    /// touch-prepared route has already fired SwiftUI `onAppear` before the
-    /// probe starts, so the navigation owner also invokes this synchronously
-    /// after the push transaction is admitted and before its first frame.
+    /// Reports the production opening chrome for the current push. Transcript
+    /// treatment is deliberately absent: it is derived from live model inputs
+    /// in the mounted conversation and must never be frozen in this cache.
     @MainActor
     func markPushPresentation() {
         let probe = GaryxRoutePushPerformanceProbe.shared
         probe?.openingConversationPageMounted()
         probe?.markConversationHeaderLoadingIndicator()
-        if transcriptPresentation == .loading {
-            probe?.markConversationMessageLoading()
-        } else if usesTranscriptSnapshot || !localRows.isEmpty {
-            probe?.markConversationLocalMessages()
-        }
     }
 }
 
-/// Immutable staging inputs for one existing-thread transcript. Production
-/// header and composer chrome stay mounted outside this handoff; only the
-/// transcript implementation changes with the render phase.
-struct GaryxConversationTranscriptStaging: Equatable {
+/// Staging inputs for one existing-thread transcript. Production header and
+/// composer chrome stay mounted outside this handoff; the conversation derives
+/// one live treatment and reports that same value to the frame-clock driver.
+struct GaryxConversationTranscriptStaging {
     let metadata: GaryxConversationOpeningMetadata
     let snapshotThreadID: String
     let renderPhase: GaryxConversationRouteRenderPhase
     let allowsTranscriptInteraction: Bool
+    let presentationInputDidChange: @MainActor (
+        GaryxConversationTranscriptPresentationInput
+    ) -> Void
 
     var mountsLiveTranscript: Bool {
         renderPhase != .openingPage
@@ -216,21 +207,12 @@ final class GaryxConversationRouteMetadataCache {
 
     func store(
         _ thread: GaryxThreadSummary,
-        agentTarget: GaryxMobileAgentTarget?,
-        localRows: [GaryxMobileTurnRow]
+        agentTarget: GaryxMobileAgentTarget?
     ) {
         let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let usesTranscriptSnapshot = GaryxConversationTranscriptSnapshotCache.shared
-            .hasSnapshot(for: thread.id)
         let metadata = GaryxConversationOpeningMetadata(
             title: title.isEmpty ? "Thread" : title,
-            agentTarget: agentTarget,
-            transcriptPresentation: GaryxConversationOpeningTranscriptPolicy.presentation(
-                localRenderableRowCount: localRows.count,
-                hasRenderedSnapshot: usesTranscriptSnapshot
-            ),
-            usesTranscriptSnapshot: usesTranscriptSnapshot,
-            localRows: usesTranscriptSnapshot ? [] : Array(localRows.suffix(2))
+            agentTarget: agentTarget
         )
         if metadataByThreadID[thread.id] == nil {
             insertionOrder.append(thread.id)
@@ -245,10 +227,7 @@ final class GaryxConversationRouteMetadataCache {
         metadataByThreadID[threadID]
             ?? GaryxConversationOpeningMetadata(
                 title: "Thread",
-                agentTarget: nil,
-                transcriptPresentation: .loading,
-                usesTranscriptSnapshot: false,
-                localRows: []
+                agentTarget: nil
             )
     }
 }
@@ -324,7 +303,10 @@ private struct GaryxStagedConversationRouteView: View {
                 metadata: openingMetadata,
                 snapshotThreadID: threadID,
                 renderPhase: presentationDriver.renderPhase,
-                allowsTranscriptInteraction: presentationDriver.allowsTranscriptInteraction
+                allowsTranscriptInteraction: presentationDriver.allowsTranscriptInteraction,
+                presentationInputDidChange: { input in
+                    presentationDriver.updateTranscriptPresentation(input)
+                }
             )
         )
         .onAppear {
@@ -353,34 +335,47 @@ private struct GaryxStagedConversationRouteView: View {
     }
 }
 
-/// Model-free cached/loading pixels for the transcript viewport. The owning
-/// conversation supplies the production header, composer, page background,
-/// and safe-area geometry from the first destination frame.
+/// One opaque, model-free continuity surface for the transcript viewport. The
+/// owning conversation supplies production chrome and derives the treatment;
+/// this view only renders the Core-selected skeleton or cached-pixel cover.
 struct GaryxConversationOpeningTranscriptView: View {
-    let metadata: GaryxConversationOpeningMetadata
+    let cover: GaryxConversationOpeningTranscriptCover
     let snapshotThreadID: String?
 
     init(
-        metadata: GaryxConversationOpeningMetadata,
+        cover: GaryxConversationOpeningTranscriptCover,
         snapshotThreadID: String? = nil
     ) {
-        self.metadata = metadata
+        self.cover = cover
         self.snapshotThreadID = snapshotThreadID
     }
 
     var body: some View {
-        Group {
-            if metadata.usesTranscriptSnapshot, let snapshotThreadID {
-                GaryxConversationTranscriptSnapshotView(threadID: snapshotThreadID)
-                    .accessibilityHidden(true)
-            } else {
-                openingTranscript
+        ZStack {
+            GaryxTheme.background
+
+            switch cover {
+            case .snapshotPixels:
+                if let snapshotThreadID {
+                    GaryxConversationTranscriptSnapshotView(threadID: snapshotThreadID)
+                        .onAppear {
+                            GaryxRoutePushPerformanceProbe.shared?
+                                .markConversationLocalMessages()
+                        }
+                        .accessibilityHidden(true)
+                }
+            case .skeleton:
+                loadingTranscript
+                    .onAppear {
+                        GaryxRoutePushPerformanceProbe.shared?
+                            .markConversationMessageLoading()
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var openingTranscript: some View {
+    private var loadingTranscript: some View {
         ScrollView {
             ZStack(alignment: .topLeading) {
                 Color.clear
@@ -391,15 +386,8 @@ struct GaryxConversationOpeningTranscriptView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Color.clear.frame(height: 1)
 
-                        switch metadata.transcriptPresentation {
-                        case .loading:
-                            GaryxThreadHistoryLoadingView()
-                                .padding(.top, 12)
-                        case .localMessages:
-                            if !metadata.localRows.isEmpty {
-                                GaryxMobileTurnRowsView(rows: metadata.localRows)
-                            }
-                        }
+                        GaryxThreadHistoryLoadingView()
+                            .padding(.top, 12)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 18)
@@ -443,6 +431,17 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
     private var frameObservationToken: UUID?
     private var fallbackFrameTask: Task<Void, Never>?
     private var awaitsPresentedLiveReveal = false
+    private var latestTranscriptPresentationInput:
+        GaryxConversationTranscriptPresentationInput?
+
+    func updateTranscriptPresentation(
+        _ input: GaryxConversationTranscriptPresentationInput
+    ) {
+        guard latestTranscriptPresentationInput != input else { return }
+        latestTranscriptPresentationInput = input
+        reconcileTranscriptPresentation()
+        scheduleFallbackFrames()
+    }
 
     func connect(
         to registry: GaryxRouteLifecycleRegistry?,
@@ -507,10 +506,34 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
     }
 
     private func apply(lifecycle: GaryxRouteHostLifecyclePhase) {
+        let previousPhase = presentation.renderPhase
+        let hadBegunContentPreparation = presentation.hasBegunContentPreparation
         var next = presentation
         next.apply(lifecycle: lifecycle)
+        if let latestTranscriptPresentationInput {
+            _ = next.reconcileTranscriptPresentation(latestTranscriptPresentationInput)
+        }
         commit(next)
+        handleTransition(
+            previousPhase: previousPhase,
+            hadBegunContentPreparation: hadBegunContentPreparation,
+            next: next
+        )
         scheduleFallbackFrames()
+    }
+
+    private func reconcileTranscriptPresentation() {
+        guard let latestTranscriptPresentationInput else { return }
+        let previousPhase = presentation.renderPhase
+        let hadBegunContentPreparation = presentation.hasBegunContentPreparation
+        var next = presentation
+        _ = next.reconcileTranscriptPresentation(latestTranscriptPresentationInput)
+        commit(next)
+        handleTransition(
+            previousPhase: previousPhase,
+            hadBegunContentPreparation: hadBegunContentPreparation,
+            next: next
+        )
     }
 
     private func presentedFrame(interval: TimeInterval?) {
@@ -530,6 +553,18 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         var next = presentation
         _ = next.presentedFrame(interval: interval)
         commit(next)
+        handleTransition(
+            previousPhase: previousPhase,
+            hadBegunContentPreparation: hadBegunContentPreparation,
+            next: next
+        )
+    }
+
+    private func handleTransition(
+        previousPhase: GaryxConversationRouteRenderPhase,
+        hadBegunContentPreparation: Bool,
+        next: GaryxConversationRoutePresentationState
+    ) {
         if !hadBegunContentPreparation, next.hasBegunContentPreparation {
             beginContentPreparation()
         }
