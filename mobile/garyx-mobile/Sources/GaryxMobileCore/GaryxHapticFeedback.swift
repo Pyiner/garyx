@@ -50,7 +50,6 @@ public enum GaryxHapticEvent: String, CaseIterable, Hashable, Sendable {
     case threadFavoriteChanged
     case capsuleFavoriteChanged
     case capsuleDismissCommitted
-    case interactiveBackCommitted
     case messageActionMenuPresented
     case rowSwipeFullyRevealed
     case clipboardCopySucceeded
@@ -75,11 +74,6 @@ public enum GaryxHapticEvent: String, CaseIterable, Hashable, Sendable {
         case .capsuleDismissCommitted:
             GaryxHapticSpecification(
                 pattern: .impact(.medium),
-                preparationPoint: .gestureBegan
-            )
-        case .interactiveBackCommitted:
-            GaryxHapticSpecification(
-                pattern: .impact(.light),
                 preparationPoint: .gestureBegan
             )
         case .messageActionMenuPresented:

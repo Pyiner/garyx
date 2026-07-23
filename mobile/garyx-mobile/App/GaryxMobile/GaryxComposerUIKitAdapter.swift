@@ -18,7 +18,10 @@ protocol GaryxComposerInputAdapter: AnyObject {
     func makeReadOnly()
     func requestFocus()
     func replaceLiveText(_ text: String)
-    func finalizeInput() -> GaryxComposerAdapterCloseSnapshot
+    func finalizeInput(
+        preservingFocusUntilRouteTerminal: Bool
+    ) -> GaryxComposerAdapterCloseSnapshot
+    func releaseFinalizedFocus()
 }
 
 @MainActor
@@ -157,9 +160,12 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
 
     /// Main-actor critical section used by route commit-release:
     /// freeze admission, unmark synchronously, publish the exact resulting
-    /// sequence, then resign focus. Async dictation/scribble producers keep
-    /// their lease and may report terminal after this method returns.
-    func finalizeInput() -> GaryxComposerAdapterCloseSnapshot {
+    /// sequence, then optionally retain first-responder ownership until the
+    /// route reaches its static endpoint. Async dictation/scribble producers
+    /// keep their lease and may report terminal after this method returns.
+    func finalizeInput(
+        preservingFocusUntilRouteTerminal: Bool = false
+    ) -> GaryxComposerAdapterCloseSnapshot {
         let wasFocused = isFirstResponder
         guard !isFinalizing else {
             return GaryxComposerAdapterCloseSnapshot(
@@ -183,14 +189,25 @@ final class GaryxComposerOrderedTextView: UITextView, GaryxComposerInputAdapter 
         } else {
             publishCurrentText(force: true)
         }
-        isEditable = false
-        resignFirstResponder()
+        let retainsFocus = preservingFocusUntilRouteTerminal && wasFocused
+        if !retainsFocus {
+            isEditable = false
+            resignFirstResponder()
+        }
         return GaryxComposerAdapterCloseSnapshot(
             finalSequence: nextSequence &- 1,
             text: text,
             pendingProducers: producers.active,
             wasFocused: wasFocused
         )
+    }
+
+    func releaseFinalizedFocus() {
+        guard isFinalizing else { return }
+        isEditable = false
+        if isFirstResponder {
+            resignFirstResponder()
+        }
     }
 
     func observedTextDidChange() {
@@ -475,6 +492,10 @@ struct GaryxComposerUIKitField: UIViewRepresentable {
             shouldChangeTextIn range: NSRange,
             replacementText text: String
         ) -> Bool {
+            if let orderedTextView = textView as? GaryxComposerOrderedTextView,
+               !orderedTextView.isLive {
+                return false
+            }
             guard text == "\n",
                   textView.markedTextRange == nil else { return true }
             parent.onSubmit()

@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 import XCTest
@@ -976,6 +977,50 @@ final class GaryxComposerRuntimeIntegrationTests: XCTestCase {
 
         try await waitUntil { destination.isLive }
         XCTAssertNil(coordinator.finalizationFailureDescription)
+    }
+
+    func testRouteCommitDefersObservableComposerProjectionUntilTerminal() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = try GaryxComposerPayloadCoordinator(
+            applicationSupportDirectory: directory
+        )
+        let scope = GaryxGatewayScope(identity: "route-observation-gateway", epoch: 1)
+        let key = GaryxComposerKey.draft("route-observation")
+        await coordinator.activate(scope: scope, key: key)
+        let source = GaryxComposerOrderedTextView(
+            occurrenceID: .init(rawValue: "route-observation-source"),
+            composerKey: key
+        )
+        source.onOrderedText = coordinator.acceptText
+        coordinator.register(source, isCanonicalTop: true)
+        var publicationCount = 0
+        let publication = coordinator.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        coordinator.routeCommitReleased(
+            sourceOccurrenceID: source.occurrenceID,
+            sourceKey: key,
+            destinationOccurrenceID: nil,
+            destinationKey: nil
+        )
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertFalse(source.isLive)
+        XCTAssertEqual(
+            publicationCount,
+            0,
+            "release must freeze input without invalidating SwiftUI during settle"
+        )
+
+        coordinator.routeReachedTerminal(
+            .init(outcome: .committed, visibility: .visible)
+        )
+
+        XCTAssertGreaterThan(publicationCount, 0)
+        XCTAssertTrue(coordinator.snapshot.isReadOnly)
+        withExtendedLifetime(publication) {}
     }
 
     func testTransientFinalizationFailureRetriesWithoutAnotherLifecycleEvent() async throws {

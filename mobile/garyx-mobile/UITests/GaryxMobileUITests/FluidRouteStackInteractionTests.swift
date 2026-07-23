@@ -342,6 +342,57 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         waitForProductionStatus("liveAdapters=0", in: app)
         waitForProductionStatus("focusedAdapters=0", in: app)
         XCTAssertFalse(app.buttons["Back"].exists)
+        attachProductionStatus(from: app, name: "production-route-finish-performance")
+    }
+
+    func testProductionInteractivePopHasNoDisplayHitches() {
+        let app = launchProductionConversationForPopPerformance()
+
+        dragLeadingEdge(
+            in: app,
+            fromInset: 5,
+            travel: app.frame.width * 0.82,
+            y: app.frame.height * 0.30
+        )
+
+        let report = app.staticTexts["route-pop-probe-report"]
+        XCTAssertTrue(report.waitForExistence(timeout: 8))
+        let completed = NSPredicate(format: "value CONTAINS %@", "state=complete")
+        let completedExpectation = XCTNSPredicateExpectation(
+            predicate: completed,
+            object: report
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [completedExpectation], timeout: 8),
+            .completed,
+            "pop probe never completed; value=\(String(describing: report.value))"
+        )
+        let value = String(describing: report.value)
+        let attachment = XCTAttachment(string: value)
+        attachment.name = "production-interactive-pop-cadence"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(
+            value.contains("hitches=0"),
+            "interactive pop dropped a display frame: \(value)"
+        )
+        XCTAssertTrue(
+            value.contains("settleHitches=0"),
+            "interactive pop settle dropped a display frame: \(value)"
+        )
+        XCTAssertTrue(
+            value.contains("movingModelPublications=0"),
+            "model observation published while the route was moving: \(value)"
+        )
+        XCTAssertTrue(
+            value.contains("movingStorePublications=0"),
+            "route-store observation published while the route was moving: \(value)"
+        )
+        XCTAssertTrue(
+            value.contains("movingComposerPublications=0"),
+            "composer observation published while the route was moving: \(value)"
+        )
+        XCTAssertFalse(app.buttons["Back"].exists)
     }
 
     func testProductionConversationCancelSettleCanRegrabWithKeyboard() {
@@ -477,6 +528,24 @@ final class FluidRouteStackInteractionTests: XCTestCase {
         return app
     }
 
+    private func launchProductionConversationForPopPerformance() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_DEBUG_PANEL"] = "chat"
+        app.launchEnvironment["GARYX_MOBILE_PRODUCTION_ROUTE_AUTO_FOCUS"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_ROUTE_POP_PROBE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.staticTexts["route-pop-probe-report"].waitForExistence(timeout: 10)
+        )
+        let composer = app.textViews["garyx-composer-uikit-input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        return app
+    }
+
     private func waitForTitle(
         _ expected: String,
         in app: XCUIApplication,
@@ -529,6 +598,14 @@ final class FluidRouteStackInteractionTests: XCTestCase {
 
     private func attachStatus(from app: XCUIApplication, name: String) {
         let value = String(describing: app.staticTexts["fluid.fake.status"].value)
+        let attachment = XCTAttachment(string: value)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attachProductionStatus(from app: XCUIApplication, name: String) {
+        let value = String(describing: app.staticTexts["production.route.status"].value)
         let attachment = XCTAttachment(string: value)
         attachment.name = name
         attachment.lifetime = .keepAlways

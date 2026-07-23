@@ -467,7 +467,6 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             mutation: .pop(1)
         ) else { return false }
         gestureBaseProgress = 0
-        GaryxMobileHaptics.shared.prepare(.interactiveBackCommitted)
         return true
     }
 
@@ -494,7 +493,6 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         self.transition = transition
         callbacks.phaseChanged(transition.coordinator.phase)
         if outcome == .committed {
-            GaryxMobileHaptics.shared.play(.interactiveBackCommitted)
             callbacks.commitReleased(transition.source, transition.destination)
             commitPendingCanonicalMutation()
             deactivateSourceAtCommitBoundary()
@@ -1203,8 +1201,8 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
         destination?.wrapper.resetTransitionState()
         pendingMutation = nil
         committedRemovedIdentities = []
-        transition = nil
         applyPendingPayloadReplacements()
+        transition = nil
         interactionShield.isHidden = true
         reconcileHostVisibility()
         trimMountedHosts()
@@ -1214,6 +1212,7 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
             emitScreenChangedOnce(for: visibleCommittedDestination)
         }
         assertTerminalHasZeroResidue()
+        publishDeferredRouteContexts()
         callbacks.rendererBecameIdle()
         settleDriver.ensureSupplementalFrames()
     }
@@ -1333,13 +1332,20 @@ final class GaryxRouteStackContainer: UIViewController, UIGestureRecognizerDeleg
 
     private func refreshContext(for record: HostRecord) {
         record.contextStore.apply(
-            routeContext(node: record.node, lifecycle: record.lifecycle.phase)
+            routeContext(node: record.node, lifecycle: record.lifecycle.phase),
+            deferringObservationUntilRendererIdle: transition != nil
         )
     }
 
     private func refreshAllRouteContexts() {
         for record in hosts.values {
             refreshContext(for: record)
+        }
+    }
+
+    private func publishDeferredRouteContexts() {
+        for record in hosts.values {
+            record.contextStore.publishDeferredObservationIfNeeded()
         }
     }
 

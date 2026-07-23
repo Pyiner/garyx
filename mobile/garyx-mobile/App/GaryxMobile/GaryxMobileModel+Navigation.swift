@@ -34,16 +34,44 @@ extension GaryxMobileModel {
     /// The UIKit occurrence path is the navigation truth. Module selection and
     /// selectedThread are read-only projections for existing feature stores.
     func applyCanonicalRouteProjection(_ path: [GaryxRouteEntry]) {
+        commitCanonicalRouteDataOwnership(path)
+        applyCommittedCanonicalRouteProjection(path)
+    }
+
+    /// Canonical ownership changes at release, before the route settles.
+    /// Stop work owned by the departed route without publishing model state
+    /// into SwiftUI's graph while UIKit is still presenting moving frames.
+    func commitCanonicalRouteDataOwnership(_ path: [GaryxRouteEntry]) {
         forceTerminalGlobalRevealInteractions(.routeInvalidated)
+        guard let top = path.last else {
+            cancelConversationContentActivation()
+            stopSelectedThreadStreamForHome()
+            cancelSelectedThreadReconcileLoop()
+            return
+        }
+        switch top.destination {
+        case .conversation:
+            break
+        case .conversationDraft:
+            cancelConversationContentActivation()
+            stopSelectedThreadStream()
+            cancelSelectedThreadReconcileLoop()
+        case .panel, .settingsDetail, .workspaceDrilldown:
+            cancelConversationContentActivation()
+            stopSelectedThreadStreamForHome()
+            cancelSelectedThreadReconcileLoop()
+        }
+    }
+
+    /// Apply legacy observable projections only after the UIKit renderer has
+    /// reached its endpoint and removed all transition residue.
+    func applyCommittedCanonicalRouteProjection(_ path: [GaryxRouteEntry]) {
         let projectedNavigation = GaryxMobileNavigationState(projecting: path)
         if navigationState != projectedNavigation {
             navigationState = projectedNavigation
         }
 
         guard let top = path.last else {
-            cancelConversationContentActivation()
-            stopSelectedThreadStreamForHome()
-            cancelSelectedThreadReconcileLoop()
             selectedThread = nil
             return
         }
@@ -53,19 +81,13 @@ extension GaryxMobileModel {
                 ?? Self.placeholderThreadSummary(id: threadID)
             applySelectedThreadRouteProjection(summary, preparesContent: false)
         case .conversationDraft:
-            cancelConversationContentActivation()
             if selectedThread != nil {
                 resetSelectedTurnRowsWindow()
             }
-            stopSelectedThreadStream()
-            cancelSelectedThreadReconcileLoop()
             selectedThread = nil
             messages = []
             draftThreadTitle = ""
         case .panel, .settingsDetail, .workspaceDrilldown:
-            cancelConversationContentActivation()
-            stopSelectedThreadStreamForHome()
-            cancelSelectedThreadReconcileLoop()
             selectedThread = nil
         }
     }
