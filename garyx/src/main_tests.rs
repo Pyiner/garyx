@@ -6,8 +6,8 @@ use clap::{CommandFactory, Parser};
 
 use crate::cli::{
     AgentAction, AutomationAction, BotAction, BotEndpointAction, ChannelsAction, Cli,
-    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, ProviderAction, TaskAction,
-    ThreadAction, ToolAction,
+    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, ProviderAction, PushAction,
+    TaskAction, ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
@@ -60,6 +60,46 @@ fn parse_gateway_run() {
         }) => assert_eq!(port, Some(8080)),
         other => panic!("unexpected command: {:?}", other.is_some()),
     }
+}
+
+#[test]
+fn parse_push_send_maps_required_and_optional_arguments() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "push",
+        "send",
+        "--title",
+        "Build done",
+        "--body",
+        "Open Garyx",
+        "--thread-id",
+        "thread::synthetic",
+    ]);
+    match cli.command {
+        Some(Commands::Push {
+            action:
+                PushAction::Send {
+                    title,
+                    body,
+                    thread_id,
+                },
+        }) => {
+            assert_eq!(title, "Build done");
+            assert_eq!(body, "Open Garyx");
+            assert_eq!(thread_id.as_deref(), Some("thread::synthetic"));
+            assert_eq!(
+                crate::commands::push_send_request(title, body, thread_id).unwrap(),
+                serde_json::json!({
+                    "title": "Build done",
+                    "body": "Open Garyx",
+                    "thread_id": "thread::synthetic"
+                })
+            );
+        }
+        _ => panic!("expected push send"),
+    }
+
+    assert!(Cli::try_parse_from(["garyx", "push", "send", "--title", "Missing body"]).is_err());
 }
 
 #[test]

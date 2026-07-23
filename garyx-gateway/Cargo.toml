@@ -32,6 +32,7 @@ caseless = "0.2"
 iana-time-zone = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+jsonwebtoken = { workspace = true }
 cron = "0.12"
 tower = "0.5"
 tokio-stream = { version = "0.1", features = ["sync"] }

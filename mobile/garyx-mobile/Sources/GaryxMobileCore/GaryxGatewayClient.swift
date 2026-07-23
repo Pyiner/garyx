@@ -364,6 +364,16 @@ public final class GaryxGatewayClient {
         try await get("/api/status")
     }
 
+    public func registerPushDevice(
+        _ request: GaryxPushDeviceRegistrationRequest
+    ) async throws -> GaryxEmptyResponse {
+        try await post("/api/push/devices", body: request)
+    }
+
+    public func unregisterPushDevice(token: String) async throws -> GaryxEmptyResponse {
+        try await delete("/api/push/devices/\(token.urlPathEncoded)")
+    }
+
     public func codingUsage() async throws -> GaryxCodingUsage {
         try await get("/api/usage/coding")
     }

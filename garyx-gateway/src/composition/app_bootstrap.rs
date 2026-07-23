@@ -32,6 +32,7 @@ use crate::mcp_metrics::McpToolMetrics;
 use crate::meetings::MeetingService;
 use crate::prompt_attachment_lifecycle::PromptAttachmentLifecycle;
 use crate::provider_auth::ClaudeAuthSessionStore;
+use crate::push_notifications::{ApnsTransport, PushNotificationService, ReqwestApnsTransport};
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::routes::RestartTracker;
@@ -106,6 +107,7 @@ pub struct AppStateBuilder {
     /// the production runtime assembly explicitly wires
     /// [`crate::restart::process_restart_requester`].
     restart_requester: crate::restart::RestartRequester,
+    apns_transport: Option<Arc<dyn ApnsTransport>>,
 }
 
 impl AppStateBuilder {
@@ -178,6 +180,7 @@ impl AppStateBuilder {
             active_run_probe: None,
             provider_runtime_ready: true,
             restart_requester: crate::restart::unwired_restart_requester(),
+            apns_transport: None,
         }
     }
 
@@ -189,6 +192,21 @@ impl AppStateBuilder {
         restart_requester: crate::restart::RestartRequester,
     ) -> Self {
         self.restart_requester = restart_requester;
+        self
+    }
+
+    pub fn with_apns_transport(mut self, transport: Arc<dyn ApnsTransport>) -> Self {
+        self.apns_transport = Some(transport);
+        self
+    }
+
+    pub fn with_production_apns_transport(mut self) -> Self {
+        match ReqwestApnsTransport::new() {
+            Ok(transport) => self.apns_transport = Some(Arc::new(transport)),
+            Err(error) => {
+                tracing::error!(error = %error, "failed to initialize APNs transport; push is disabled")
+            }
+        }
         self
     }
 
@@ -371,6 +389,29 @@ impl AppStateBuilder {
             .unwrap_or_else(|error| {
                 panic!("failed to run thread-data startup migrations: {error}")
             });
+        let push_notifications = self
+            .config
+            .push
+            .as_ref()
+            .and_then(|push| match self.apns_transport.clone() {
+                Some(transport) => match PushNotificationService::from_config(
+                    self.garyx_db.clone(),
+                    &push.apns,
+                    transport,
+                ) {
+                    Ok(service) => Some(Arc::new(service)),
+                    Err(error) => {
+                        tracing::error!(error = %error, "failed to initialize APNs push; push is disabled");
+                        None
+                    }
+                },
+                None => {
+                    tracing::error!(
+                        "APNs push is configured but no production transport was wired; push is disabled"
+                    );
+                    None
+                }
+            });
         let active_run_probe: Arc<dyn ActiveRunProbe> = self
             .active_run_probe
             .clone()
@@ -518,6 +559,7 @@ impl AppStateBuilder {
                 skills: self.skills,
                 custom_agents: self.custom_agents,
                 garyx_db: self.garyx_db,
+                push_notifications,
                 quota_recovery_notify: Arc::new(Notify::new()),
                 conversation_admission,
                 prompt_attachments,

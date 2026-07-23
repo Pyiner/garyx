@@ -184,6 +184,7 @@ jobs:
             local label="$1"
             local profile_path="$2"
             local bundle_id="$3"
+            local expected_aps_environment="${4:-}"
             local plist_path="$RUNNER_TEMP/${label}-profile.plist"
 
             security cms -D -i "$profile_path" > "$plist_path"
@@ -200,9 +201,20 @@ jobs:
               echo "$label profile does not include expected App Group '$IOS_APP_GROUP_ID'." >&2
               exit 1
             fi
+
+            local aps_environment
+            aps_environment="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$plist_path" 2>/dev/null || true)"
+            if [[ -n "$expected_aps_environment" && "$aps_environment" != "$expected_aps_environment" ]]; then
+              echo "$label profile has aps-environment '$aps_environment', expected '$expected_aps_environment'." >&2
+              exit 1
+            fi
+            if [[ -z "$expected_aps_environment" && -n "$aps_environment" ]]; then
+              echo "$label profile unexpectedly includes aps-environment '$aps_environment'." >&2
+              exit 1
+            fi
           }
 
-          validate_profile "app" "$IOS_APP_PROVISIONING_PROFILE_PATH" "$IOS_BUNDLE_ID"
+          validate_profile "app" "$IOS_APP_PROVISIONING_PROFILE_PATH" "$IOS_BUNDLE_ID" "production"
           validate_profile "widget" "$IOS_WIDGET_PROVISIONING_PROFILE_PATH" "$IOS_WIDGET_BUNDLE_ID"
 
       - name: Archive Garyx iOS app
@@ -299,6 +311,32 @@ jobs:
             -archivePath "$RUNNER_TEMP/GaryxMobile.xcarchive" \
             -exportPath "$RUNNER_TEMP/GaryxMobileExport" \
             -exportOptionsPlist "$export_options"
+
+      - name: Validate exported app push entitlement
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa_path="$(find "$RUNNER_TEMP/GaryxMobileExport" -maxdepth 1 -name '*.ipa' -print -quit)"
+          if [[ -z "$ipa_path" ]]; then
+            echo "No IPA exported for entitlement validation." >&2
+            exit 1
+          fi
+          unpack_dir="$RUNNER_TEMP/GaryxMobileExportEntitlements"
+          mkdir -p "$unpack_dir"
+          ditto -x -k "$ipa_path" "$unpack_dir"
+          app_path="$(find "$unpack_dir/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "Exported IPA does not contain an app bundle." >&2
+            exit 1
+          fi
+          entitlements_path="$RUNNER_TEMP/exported-app-entitlements.plist"
+          codesign -d --entitlements :- "$app_path" > "$entitlements_path" 2>/dev/null
+          aps_environment="$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$entitlements_path" 2>/dev/null || true)"
+          if [[ "$aps_environment" != "production" ]]; then
+            echo "Exported app has aps-environment '$aps_environment', expected 'production'." >&2
+            exit 1
+          fi
 
       - name: Upload IPA to TestFlight
         if: inputs.upload_build

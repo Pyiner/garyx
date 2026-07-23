@@ -296,6 +296,11 @@ mod phases {
 
         let builder =
             AppStateBuilder::new(config.clone()).with_persistent_local_stores(garyx_db.clone());
+        let builder = if config.push.is_some() {
+            builder.with_production_apns_transport()
+        } else {
+            builder
+        };
         let state = builder
             .with_sqlite_thread_store(sqlite_thread_store)
             .with_thread_history(thread_history.clone())

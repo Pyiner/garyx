@@ -7,8 +7,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::server::AppState;
 use crate::{
     automation, capsules, chat, coding_usage, commands, create_dispatch, dashboard, gateway_auth,
-    mcp, mcp_config, meetings, provider_accounts, provider_auth, quota_resend, restart_wake,
-    routes, tasks, tool_image, workspace_files, workspaces,
+    mcp, mcp_config, meetings, provider_accounts, provider_auth, push_notifications, quota_resend,
+    restart_wake, routes, tasks, tool_image, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -47,6 +47,18 @@ fn protected_runtime_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/store-identity",
             axum::routing::get(routes::store_identity),
+        )
+        .route(
+            "/api/push/devices",
+            axum::routing::post(push_notifications::register_device),
+        )
+        .route(
+            "/api/push/devices/{token}",
+            axum::routing::delete(push_notifications::delete_device),
+        )
+        .route(
+            "/api/push/send",
+            axum::routing::post(push_notifications::send_manual),
         )
 }
 

@@ -73,7 +73,15 @@ fn load_merges_defaults_and_substitutes_env() {
         &config_path,
         &serde_json::json!({
             "gateway": { "host": "${GARYX_TEST_HOST}" },
-            "sessions": { "data_dir": "./data" }
+            "sessions": { "data_dir": "./data" },
+            "push": {
+                "apns": {
+                    "key_path": "./apns/AuthKey_TEST.p8",
+                    "key_id": "TESTKEY123",
+                    "team_id": "TESTTEAM12",
+                    "topic": "com.garyx.mobile"
+                }
+            }
         }),
     );
 
@@ -81,6 +89,15 @@ fn load_merges_defaults_and_substitutes_env() {
     assert_eq!(loaded.config.gateway.host, "127.0.0.1");
     assert_eq!(loaded.config.gateway.port, 31337);
     assert!(loaded.config.sessions.data_dir.unwrap().contains("data"));
+    assert!(
+        loaded
+            .config
+            .push
+            .unwrap()
+            .apns
+            .key_path
+            .contains("apns/AuthKey_TEST.p8")
+    );
 
     unsafe {
         std::env::remove_var("GARYX_TEST_HOST");
