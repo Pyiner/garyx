@@ -39,6 +39,10 @@ import { WorkspaceFilePreview } from "../../workspace-file-preview";
 import { Package } from "lucide-react";
 import { PanelIcon } from "../icons";
 import { useI18n } from "../../i18n";
+import type {
+  ThreadSideToolsPanelState,
+  ThreadSideToolsPanelStateUpdate,
+} from "../thread-side-tools-visibility";
 
 // Perf round 2026-07: xterm (and its CSS) only load when the Terminal
 // tool tab actually mounts — it was ~90 modules inside the boot bundle.
@@ -88,6 +92,7 @@ type ThreadSideToolsPanelProps = {
   activeWorkspaceName?: string | null;
   activeWorkspacePath?: string | null;
   activeThreadId?: string | null;
+  panelState: ThreadSideToolsPanelState;
   selectedWorkspaceFile?: SideToolWorkspaceFile | null;
   workspaceBranch?: string | null;
   workspaceDirectoryPanel: ReactNode;
@@ -114,6 +119,7 @@ type ThreadSideToolsPanelProps = {
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onCloseSideTools: () => void;
   onOpenSideChat: () => void;
+  onPanelStateChange: (update: ThreadSideToolsPanelStateUpdate) => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
 
@@ -128,6 +134,7 @@ export function ThreadSideToolsPanel({
   activeThreadId,
   activeThreadTitle,
   activeWorkspacePath,
+  panelState,
   selectedWorkspaceFile,
   sideChatPanel,
   workspaceDirectoryPanel,
@@ -148,6 +155,7 @@ export function ThreadSideToolsPanel({
   onAddBrowserAnnotationComment,
   onCloseSideTools,
   onOpenSideChat,
+  onPanelStateChange,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
   const { t } = useI18n();
@@ -163,13 +171,37 @@ export function ThreadSideToolsPanel({
   );
   const availableToolIds = availableThreadSideToolIds(hasWorkspace);
   const availableTools = tools.filter((tool) => availableToolIds.includes(tool.id));
-  // The panel opens with no tool chosen so the body shows a tool picker;
-  // workspace file previews still force the Files tool open below.
-  const [openTools, setOpenTools] = useState<ThreadSideToolId[]>([]);
-  // The active tab can be a built-in tool or a capsule (`capsule:<id>`); the
-  // panel owns this single source of truth so closing a tab repicks across
-  // both kinds without crossing component boundaries (#TASK-1470).
-  const [activeTabKey, setActiveTabKey] = useState<SideTabKey | null>(null);
+  // Open tools and the active tab are source-thread state. AppShell owns the
+  // keyed store so switching away and back restores this thread's exact rail,
+  // while a never-opened source starts closed with an empty picker.
+  const openTools = panelState.openTools;
+  const activeTabKey = panelState.activeTabKey;
+  function setOpenTools(
+    update:
+      | ThreadSideToolId[]
+      | ((current: ThreadSideToolId[]) => ThreadSideToolId[]),
+  ) {
+    onPanelStateChange((current) => {
+      const next =
+        typeof update === "function" ? update(current.openTools) : update;
+      return next === current.openTools
+        ? current
+        : {
+            ...current,
+            openTools: next,
+          };
+    });
+  }
+  function setActiveTabKey(next: SideTabKey | null) {
+    onPanelStateChange((current) =>
+      current.activeTabKey === next
+        ? current
+        : {
+            ...current,
+            activeTabKey: next,
+          },
+    );
+  }
   const [menuOpen, setMenuOpen] = useState(false);
   const [filePathCopied, setFilePathCopied] = useState(false);
   const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);

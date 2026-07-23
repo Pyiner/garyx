@@ -181,6 +181,11 @@ import {
   SideChatSessions,
 } from "./side-chat-sessions";
 import {
+  threadSideToolsPanelState,
+  ThreadSideToolsVisibility,
+  type ThreadSideToolsPanelStateUpdate,
+} from "./thread-side-tools-visibility";
+import {
   beginPinnedOrderGatewaySwitch,
   PinnedOrderIngress,
   installPinnedOrderIngress,
@@ -645,6 +650,13 @@ export function AppShell() {
   // 5b-7a: shell-owned side-chat session store (bindings/drafts/transients
   // outlive the inspector dock; its shadow refs feed the orchestration deps).
   const [sideChatSessions] = useState(() => new SideChatSessions());
+  const [threadSideToolsVisibility] = useState(
+    () =>
+      new ThreadSideToolsVisibility(
+        initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
+        restoredLayoutOccupancy?.sideTools ?? false,
+      ),
+  );
   const [desktopState, setDesktopStateRaw] = useState<DesktopState | null>(null);
   const setDesktopState = useCallback<
     React.Dispatch<React.SetStateAction<DesktopState | null>>
@@ -677,6 +689,7 @@ export function AppShell() {
       desktopState,
     });
     sideChatSessions.setGatewayScope(committedGatewayKey);
+    threadSideToolsVisibility.setGatewayScope(committedGatewayKey);
     // Pending automation-run reconciliation belongs to the previous
     // universe; its leased timers die on wake, and BOTH owners — the
     // rendered state and the timer bookkeeping ref — reset here (the ref
@@ -686,7 +699,12 @@ export function AppShell() {
     setPendingAutomationRunsByThread({});
     pendingAutomationRunsRef.current = {};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gatewayMirror, sideChatSessions, committedGatewayKey]);
+  }, [
+    gatewayMirror,
+    sideChatSessions,
+    threadSideToolsVisibility,
+    committedGatewayKey,
+  ]);
   const [desktopAgentCatalog, setDesktopAgentCatalog] =
     useState<DesktopAgentCatalog>(EMPTY_DESKTOP_AGENT_CATALOG);
   const desktopAgents = desktopAgentCatalog.agents;
@@ -769,8 +787,23 @@ export function AppShell() {
   const conversationTitleRef = useRef<ConversationTitleHandle | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [bindingMutation, setBindingMutation] = useState<string | null>(null);
-  const [inspectorOpen, setInspectorOpenLegacy] = useState(
-    restoredLayoutOccupancy?.sideTools ?? false,
+  const threadSideToolsVisibilitySnapshot = useSyncExternalStore(
+    threadSideToolsVisibility.subscribe,
+    threadSideToolsVisibility.getSnapshot,
+  );
+  const currentThreadSideToolsPanelState = threadSideToolsPanelState(
+    threadSideToolsVisibilitySnapshot,
+    selectedThreadId,
+  );
+  const inspectorOpen = currentThreadSideToolsPanelState.open;
+  useLayoutEffect(() => {
+    threadSideToolsVisibility.adoptInitialSource(selectedThreadId);
+  }, [selectedThreadId, threadSideToolsVisibility]);
+  const updateCurrentThreadSideToolsPanelState = useCallback(
+    (update: ThreadSideToolsPanelStateUpdate) => {
+      threadSideToolsVisibility.updatePanel(selectedThreadId, update);
+    },
+    [selectedThreadId, threadSideToolsVisibility],
   );
   const [botConversationGroupId, setBotConversationGroupIdLegacy] = useState<
     string | null
@@ -1273,7 +1306,10 @@ export function AppShell() {
     (nextApplied: LegacyLayoutIntentState) => {
       appliedLayoutIntentRef.current = nextApplied;
       setOpenCapsuleTabsLegacy(nextApplied.openCapsuleTabs);
-      setInspectorOpenLegacy(nextApplied.inspectorOpen);
+      threadSideToolsVisibility.setOpen(
+        selectedThreadId,
+        nextApplied.inspectorOpen,
+      );
       setRecentThreadsRailOpenLegacy(
         nextApplied.conversationRail.kind === "recent",
       );
@@ -1283,7 +1319,7 @@ export function AppShell() {
           : null,
       );
     },
-    [],
+    [selectedThreadId, threadSideToolsVisibility],
   );
 
   // Every horizontal panel writer enters here. The desired update is logged
@@ -1320,6 +1356,18 @@ export function AppShell() {
     },
     [applyLegacyLayoutIntentState, dispatchLayoutOccupancyEvent],
   );
+  useLayoutEffect(() => {
+    if (
+      desiredLayoutIntentRef.current.inspectorOpen === inspectorOpen &&
+      appliedLayoutIntentRef.current.inspectorOpen === inspectorOpen
+    ) {
+      return;
+    }
+    commitLegacyLayoutIntent("user-route", (current) => ({
+      ...current,
+      inspectorOpen,
+    }));
+  }, [commitLegacyLayoutIntent, inspectorOpen, selectedThreadId]);
   useEffect(() => {
     const currentApplied = appliedLayoutIntentRef.current;
     const settledRail = settleDeferredConversationRailUnmount(
@@ -4344,6 +4392,7 @@ export function AppShell() {
       activeWorkspaceName={activeWorkspace?.name || null}
       activeWorkspacePath={activeWorkspacePath}
       activeThreadId={selectedThreadId}
+      panelState={currentThreadSideToolsPanelState}
       selectedWorkspaceFile={selectedSideToolWorkspaceFile}
       sideChatPanel={sideChatPanel}
       workspaceBranch={composerWorkspaceBranch}
@@ -4386,6 +4435,7 @@ export function AppShell() {
       onOpenSideChat={() => {
         void ensureSideChatThreadOp(sideChatOpsContext());
       }}
+      onPanelStateChange={updateCurrentThreadSideToolsPanelState}
       onWorkspaceFileFilterChange={workspaceFilter.onChange}
     />
       )}
