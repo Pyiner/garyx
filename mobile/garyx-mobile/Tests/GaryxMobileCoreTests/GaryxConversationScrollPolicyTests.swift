@@ -385,12 +385,219 @@ final class GaryxConversationScrollStateTests: XCTestCase {
 
         XCTAssertTrue(scheduler.isCurrent(opening))
         XCTAssertFalse(scheduler.isCurrent(firstTailUpdate))
+        XCTAssertEqual(scheduler.lifecycle(of: firstTailUpdate), .superseded)
         XCTAssertTrue(scheduler.isCurrent(latestTailUpdate))
 
         let repair = scheduler.schedule(reason: .repair)
         XCTAssertFalse(scheduler.isCurrent(opening))
+        XCTAssertEqual(scheduler.lifecycle(of: opening), .superseded)
         XCTAssertFalse(scheduler.isCurrent(latestTailUpdate))
+        XCTAssertEqual(scheduler.lifecycle(of: latestTailUpdate), .superseded)
         XCTAssertTrue(scheduler.isCurrent(repair))
+        XCTAssertEqual(scheduler.lifecycle(of: repair), .requested)
+    }
+
+    func testTailScrollSchedulerSettlesStableSatisfiedPlacementPermanently() {
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
+        let stableBottom = GaryxConversationTailScrollAttemptInput(
+            policyAllowsAttempt: true,
+            targetPlacement: .satisfied,
+            geometryEpoch: 7
+        )
+
+        XCTAssertEqual(scheduler.lifecycle(of: token), .requested)
+        XCTAssertTrue(scheduler.authorizeAttempt(token, input: stableBottom))
+        XCTAssertEqual(scheduler.lifecycle(of: token), .attempting)
+
+        XCTAssertFalse(scheduler.authorizeAttempt(token, input: stableBottom))
+        XCTAssertEqual(scheduler.lifecycle(of: token), .settled)
+
+        XCTAssertFalse(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .unsatisfied,
+                    geometryEpoch: 8
+                )
+            ),
+            "Settlement is terminal; later callbacks from the same token are void."
+        )
+        XCTAssertEqual(scheduler.lifecycle(of: token), .settled)
+    }
+
+    func testTailScrollSchedulerAuthorizesGeometryMovementBeforeSettlement() {
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
+
+        XCTAssertTrue(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .satisfied,
+                    geometryEpoch: 10
+                )
+            )
+        )
+        XCTAssertTrue(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .satisfied,
+                    geometryEpoch: 11
+                )
+            ),
+            "Late Markdown/image geometry must re-qualify the next attempt."
+        )
+        XCTAssertEqual(scheduler.lifecycle(of: token), .attempting)
+
+        XCTAssertFalse(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .satisfied,
+                    geometryEpoch: 11
+                )
+            )
+        )
+        XCTAssertEqual(scheduler.lifecycle(of: token), .settled)
+    }
+
+    func testTailScrollSchedulerRetriesUntilTargetPlacementIsSatisfied() {
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
+        let unsatisfied = GaryxConversationTailScrollAttemptInput(
+            policyAllowsAttempt: true,
+            targetPlacement: .unsatisfied,
+            geometryEpoch: 3
+        )
+
+        XCTAssertTrue(scheduler.authorizeAttempt(token, input: unsatisfied))
+        XCTAssertTrue(scheduler.authorizeAttempt(token, input: unsatisfied))
+        XCTAssertEqual(scheduler.lifecycle(of: token), .attempting)
+
+        XCTAssertFalse(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .satisfied,
+                    geometryEpoch: 3
+                )
+            )
+        )
+        XCTAssertEqual(scheduler.lifecycle(of: token), .settled)
+    }
+
+    func testTailScrollSchedulerKeepsPolicySuppressedRequestPending() {
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
+
+        XCTAssertFalse(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: false,
+                    targetPlacement: .unsatisfied,
+                    geometryEpoch: 1
+                )
+            )
+        )
+        XCTAssertEqual(scheduler.lifecycle(of: token), .requested)
+
+        XCTAssertTrue(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationTailScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .unsatisfied,
+                    geometryEpoch: 1
+                )
+            ),
+            "An active reader gesture suppresses only the attempts that fire during it."
+        )
+        XCTAssertEqual(scheduler.lifecycle(of: token), .attempting)
+    }
+
+    func testTailGeometryEpochTracksLayoutButNotScrollOffsetMovement() {
+        var state = GaryxConversationScrollState()
+        XCTAssertEqual(state.tailGeometryEpoch, 0)
+
+        _ = state.contentChanged(
+            isInitialLoad: true,
+            isHistoryPrepend: false,
+            hasTailContent: true
+        )
+        XCTAssertEqual(state.tailGeometryEpoch, 1)
+
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -2_000,
+                contentBottomOffset: 800,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        let measuredEpoch = state.tailGeometryEpoch
+
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -1_900,
+                contentBottomOffset: 900,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertEqual(
+            state.tailGeometryEpoch,
+            measuredEpoch,
+            "Pure scrolling moves both edges together without changing layout geometry."
+        )
+
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -1_900,
+                contentBottomOffset: 1_100,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertEqual(state.tailGeometryEpoch, measuredEpoch + 1)
+    }
+
+    func testTailGeometryEpochTracksRenderOnlyRowChanges() {
+        var state = GaryxConversationScrollState()
+        let initialEpoch = state.tailGeometryEpoch
+
+        XCTAssertNil(
+            state.renderRowsChanged(
+                previousIds: ["turn:a"],
+                currentIds: ["turn:a", "turn:b"],
+                previousScopeIdentity: "thread:a",
+                currentScopeIdentity: "thread:a",
+                hasTailContent: true
+            )
+        )
+        XCTAssertEqual(state.tailGeometryEpoch, initialEpoch + 1)
+
+        XCTAssertNil(
+            state.renderRowsChanged(
+                previousIds: ["turn:a", "turn:b"],
+                currentIds: ["turn:a", "turn:b"],
+                previousScopeIdentity: "thread:a",
+                currentScopeIdentity: "thread:a",
+                hasTailContent: true
+            )
+        )
+        XCTAssertEqual(
+            state.tailGeometryEpoch,
+            initialEpoch + 1,
+            "An equal render-row reducer input is a geometry no-op."
+        )
     }
 
     func testPersistentTailGapRepairsOnlyOnRisingEdge() {
