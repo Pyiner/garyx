@@ -2,6 +2,8 @@
 
 Status: approved for implementation (v1)
 Date: 2026-07-24
+Rev 2 (2026-07-24)：老板裁定——v1 不做自动触发规则（规则未定），只打通
+推送能力，发送入口 = 手动 API + CLI。原触发模型草案移至文末附录存档。
 
 ## 背景与目标
 
@@ -17,37 +19,32 @@ JWT ES256 token auth），不引入任何第三方中转（无 Firebase/ntfy/rel
 ## v1 范围（明确边界）
 
 **做**：
-1. 服务端：APNs 客户端、device token 注册表 + API、事件订阅推送 listener。
+1. 服务端：APNs 客户端、device token 注册表 + API、手动推送 API
+   （`POST /api/push/send`）+ CLI（`garyx push send`）。
 2. 客户端：通知授权 + 远程通知注册、token 上报、前台抑制、点按深链进线程。
 3. 签名/CI：aps-environment entitlement、App ID capability、profile 校验。
 
 **不做（记债务、独立立项）**：
+- **自动触发规则**（run 完成/失败自动推送等）：老板规则未定，v1 只打通
+  能力；规则定了独立立项（候选方案见文末附录，仅存档不实现）
 - 每线程/每设备静音偏好、免打扰时段
 - badge 未读数管理（需要未读计数基础设施）
 - content-available 静默推送做数据预同步（v1 不加 UIBackgroundModes）
 - Notification Service Extension（富媒体/加密载荷）
 - Android / 桌面推送
 
-## 触发模型（v1 单一触发器）
+## 发送入口（v1：仅手动，无任何自动触发）
 
-**qualifying run 终止 → 推一条通知。**
+服务端不订阅任何事件、不含任何自动推送逻辑。唯一发送路径：
 
-- 事件源：订阅 `state.ops.events` 中央 broadcast（照
-  `garyx-gateway/src/task_notifications.rs` 的 `spawn_listener` 模式），
-  监听 top-level run 的终止事件（正常完成 / 失败）。
-- qualifying 线程 = 同时满足：
-  - `thread_kind != "task"`（agent 子任务线程不推，避免风暴）
-  - 非 hidden（automation 触发的隐藏线程不推）
-  - channel == `api`（telegram/discord 等外部渠道自带通知，推了是重复）
-- 内容：
-  - 完成：title = 线程标题，body = assistant 最终回复文本摘要（截断 ~300
-    字符，来源 = committed transcript 的最终回复，不另行推导）
-  - 失败：title = 线程标题，body = `运行失败：<错误摘要>`
-- task 通知（task_ready_for_review 等）不单独推：它们注入 Gary 线程后
-  Gary 的总结回复本身就是一次 qualifying run 完成，传递性覆盖。
-- 已知取舍：老板在 Mac 前时手机也会响（v1 不做"有活跃观看者就跳过"的
-  聪明逻辑——可预测 > 聪明；嫌吵时用 v2 静音偏好解决）。iOS 端唯一抑制：
-  当前正在前台看的那个线程的通知不弹横幅。
+- **API**：`POST /api/push/send`（protected route）。body =
+  `{title, body, thread_id?}`。行为：构造 payload 推给注册表中全部
+  token，返回 `{sent, failed, no_devices?}` 结果摘要。无注册设备 = 明确
+  的成功空投递（`no_devices: true`），不是错误。
+- **CLI**：`garyx push send --title <t> --body <b> [--thread-id <id>]`，
+  即调上述 API（子命令命名与参数风格对齐现有 `garyx` CLI 惯例）。CLI 是
+  规则未定期间的人工/Gary 发通知通道，也是后续自动规则的复用底座。
+- `thread_id` 可选：带 = 点按深链进该线程；不带 = 点按仅打开 app。
 
 ## 服务端设计（garyx-gateway）
 
@@ -90,8 +87,8 @@ JWT ES256 token auth），不引入任何第三方中转（无 Firebase/ntfy/rel
 - 结构：`ApnsTransport` trait 作为测试缝（additive seam，生产实现在组合根
   显式装配，`cfg(test)` 不替换生产行为——遵守仓库 structural-guard 规矩）。
 - Headers：`apns-push-type: alert`、`apns-priority: 10`、
-  `apns-topic: <bundle_id>`、`apns-collapse-id: <thread_id>`（同线程新回复
-  顶替旧横幅）、`apns-expiration: now+24h`。
+  `apns-topic: <bundle_id>`、`apns-collapse-id: <thread_id>`（仅在有
+  thread_id 时设置，同线程顶替旧横幅）、`apns-expiration: now+24h`。
 - 投递给注册表中全部 token；单 token 失败不影响其他 token；网络类失败
   有界重试后放弃（推送是尽力而为，绝不阻塞/影响 run 主流程）。
 
@@ -100,17 +97,18 @@ JWT ES256 token auth），不引入任何第三方中转（无 Firebase/ntfy/rel
 ```json
 {
   "aps": {
-    "alert": { "title": "<线程标题>", "body": "<回复摘要>" },
+    "alert": { "title": "<title>", "body": "<body>" },
     "sound": "default",
-    "thread-id": "<thread_id>"
+    "thread-id": "<thread_id，仅在提供时>"
   },
-  "garyx": { "v": 1, "kind": "run_completed" | "run_failed",
-             "thread_id": "<thread_id>" }
+  "garyx": { "v": 1, "kind": "manual", "thread_id": "<可选>" }
 }
 ```
 
 `garyx` 段是客户端深链与行为判定的唯一依据；`aps.thread-id` 仅供 iOS
-通知中心按线程分组。
+通知中心按线程分组（无 thread_id 时省略）。`kind` 预留给后续自动触发
+类型扩展；`apns-collapse-id` 仅在有 thread_id 时 = thread_id（同线程
+顶替），无 thread_id 的手动推送不设置（逐条展示）。
 
 ## 客户端设计（mobile/garyx-mobile）
 
@@ -124,7 +122,8 @@ JWT ES256 token auth），不引入任何第三方中转（无 Firebase/ntfy/rel
 - 前台抑制：`willPresent` 中，若通知的 `garyx.thread_id` == 当前前台打开
   的线程则不弹横幅，否则正常展示。
 - 点按深链：`didReceive` 解析 `garyx.thread_id` → 走共享
-  `GaryxMobileModel.openThread` 路径（与 home 行、widget、garyx:// 同源）。
+  `GaryxMobileModel.openThread` 路径（与 home 行、widget、garyx:// 同源）；
+  payload 无 `thread_id` 时仅打开 app（落在 home 列表）。
 - 可测性（红线）：payload 解析、注册状态机（何时该上报/该跳过）、
   environment 判定等纯逻辑全部放 `GaryxMobileCore`，SwiftPM 测试覆盖；
   App target 只做 SwiftUI/UIKit 绑定。模拟器行为验证用
@@ -150,13 +149,28 @@ JWT ES256 token auth），不引入任何第三方中转（无 Firebase/ntfy/rel
 
 ## 测试与验收
 
-- Rust：mock `ApnsTransport` 下的 listener 过滤规则（task/hidden/非 api
-  渠道不推）、payload 构造、token 注册 API、410 清理、JWT 生成（真实 key
-  格式的 fixture 密钥）。`cargo test -p garyx-gateway`。
+- Rust：mock `ApnsTransport` 下的 `POST /api/push/send` 行为（全量投递、
+  部分失败摘要、`no_devices` 空投递、有/无 thread_id 的 payload 与
+  collapse-id）、token 注册 API upsert/delete、410 清理、JWT 生成（合成
+  fixture 密钥）。`cargo test -p garyx-gateway`。CLI `push send` 子命令
+  参数→请求映射有测试。
 - iOS：GaryxMobileCore SwiftPM 测试（payload→路由映射、注册状态机）；
   模拟器 `simctl push` 验证前台抑制与点按深链（iPhone 17 Pro Max /
   iOS 26.5 / light）。
 - CI 脚本：capability ensure 逻辑做 dry-run 级验证；真实 workflow 跑通留
   到下一次 TestFlight 发布时确认。
 - 真实 APNs E2E：待 .p8 就位 + TestFlight 构建后，由 Gary 端到端验证
-  （发消息 → 锁屏收推送 → 点按进线程）。
+  （`garyx push send` → 锁屏收推送 → 点按进线程/打开 app）。
+
+## 附录：自动触发规则候选草案（未定，仅存档，不实现）
+
+老板尚未决定自动推送规则。以下为 Rev 1 的候选方案，供后续立项参考：
+
+- 事件源：订阅 `state.ops.events`（照 `task_notifications.rs` 的
+  `spawn_listener` 模式），监听 top-level run 终止（完成/失败）。
+- qualifying 线程：`thread_kind != "task"`（防子任务风暴）且非 hidden
+  （automation 不推）且 channel == `api`（外部渠道自带通知）。
+- 内容：完成 = 线程标题 + 最终回复摘要（截断 ~300 字符，来源 committed
+  transcript）；失败 = `运行失败：<错误摘要>`。
+- task 通知不单独推（Gary 总结回复传递性覆盖）。
+- 取舍：人在 Mac 前手机也响（可预测 > 聪明），靠静音偏好解决。
