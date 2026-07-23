@@ -6041,7 +6041,7 @@ async fn thread_store_backend_failure_answers_500_not_404() {
         "/api/threads/history",
         "/api/threads/history?include_messages=true",
         "/api/channel-endpoints",
-        "/api/configured-bots?include_endpoints=true",
+        "/api/configured-bots",
         "/api/bot-consoles",
         "/api/bot/status?bot_id=telegram:main",
     ] {
@@ -6229,7 +6229,7 @@ async fn endpoint_listing_surfaces_live_outage_despite_recent_cache_hit() {
         .store(true, std::sync::atomic::Ordering::SeqCst);
     for uri in [
         "/api/channel-endpoints",
-        "/api/configured-bots?include_endpoints=true",
+        "/api/configured-bots",
         "/api/bot-consoles",
         "/api/bot/status?bot_id=telegram:main",
     ] {
@@ -10547,7 +10547,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
     let router = build_router(state);
 
     let request = authed_request()
-        .uri("/api/configured-bots?include_endpoints=true")
+        .uri("/api/configured-bots")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -10776,7 +10776,7 @@ async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/configured-bots?include_endpoints=true")
+        .uri("/api/configured-bots")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -11072,7 +11072,7 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles?include_endpoints=true")
+        .uri("/api/bot-consoles")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -11136,7 +11136,7 @@ async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles?include_endpoints=true")
+        .uri("/api/bot-consoles")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
