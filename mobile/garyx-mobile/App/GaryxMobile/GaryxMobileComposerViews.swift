@@ -766,7 +766,9 @@ struct GaryxComposer: View {
 
     private func sendLocalDraft() async {
         guard canSendLocalPayload else { return }
-        _ = await model.sendDraft()
+        _ = await model.sendDraft(
+            presentationScopeIdentity: composerOccurrenceID.rawValue
+        )
     }
 
     private func attachPhotos(

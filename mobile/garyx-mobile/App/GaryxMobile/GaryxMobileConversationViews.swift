@@ -30,10 +30,10 @@ struct GaryxTranscriptBlankSpaceTapLayer: View {
     }
 }
 
-/// Single preference key carrying BOTH transcript content edges. The top
-/// sentinel and the bottom anchor each contribute their half and SwiftUI
-/// reduces them within one layout pass, so `onPreferenceChange` delivers an
-/// atomic frame. Do not split the edges back into separate keys: two
+/// Single preference key carrying all transcript content edges. The top
+/// sentinel, intrinsic tail, and bottom anchor contribute one atomic value
+/// that SwiftUI reduces within a layout pass. Do not split the edges back
+/// into separate keys: multiple
 /// callbacks make every scroll step look like a content-height change and
 /// permanently reset the state machine's upward-travel accumulator
 /// (#TASK-2073 P2).
@@ -57,8 +57,8 @@ private final class GaryxConversationScrollStateBox {
 
 /// Plain holder for retry-chain arbitration. Scheduling a scroll must not
 /// invalidate the conversation body just to advance an internal token.
-private final class GaryxConversationTailScrollSchedulerBox {
-    var state = GaryxConversationTailScrollScheduler()
+private final class GaryxConversationScrollSchedulerBox {
+    var state = GaryxConversationScrollScheduler()
 }
 
 /// Live route to the UIScrollView hosting the conversation transcript.
@@ -89,6 +89,7 @@ private final class GaryxConversationHostScrollViewBox {
 /// row's displacement out of this box — the exact height inserted above it.
 private final class GaryxTurnRowGeometryBox {
     private var minYByRowId: [String: CGFloat] = [:]
+    private(set) var intrinsicTailMinY: CGFloat?
 
     func record(_ rowId: String, minY: CGFloat) {
         minYByRowId[rowId] = minY
@@ -96,6 +97,18 @@ private final class GaryxTurnRowGeometryBox {
 
     func minY(of rowId: String) -> CGFloat? {
         minYByRowId[rowId]
+    }
+
+    func recordIntrinsicTail(minY: CGFloat) {
+        intrinsicTailMinY = minY
+    }
+
+    func contentBelowAnchorHeight(anchorRowId: String) -> CGFloat? {
+        guard let anchorMinY = minY(of: anchorRowId),
+              let intrinsicTailMinY else {
+            return nil
+        }
+        return max(0, intrinsicTailMinY - anchorMinY)
     }
 
     func bottommostRow() -> (id: String, minY: CGFloat)? {
@@ -197,7 +210,9 @@ struct GaryxConversationView: View {
     @State private var showsScrollToBottomButton = false
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
-    @State private var tailScrollSchedulerBox = GaryxConversationTailScrollSchedulerBox()
+    @State private var scrollSchedulerBox = GaryxConversationScrollSchedulerBox()
+    @State private var sendAnchorFillerState = GaryxSendAnchorFillerState()
+    @State private var sendAnchorFillerHeight: CGFloat = 0
     @State private var readingAnchorRestoreGeneration = 0
     @State private var tailThinkingPresentationState = GaryxTailThinkingPresentationState()
     @State private var showsDebouncedTailThinking = false
@@ -275,6 +290,7 @@ struct GaryxConversationView: View {
                 VStack(spacing: 12) {
                     if showsScrollToBottomButton {
                         Button {
+                            resetSendAnchorFiller()
                             updateScrollState(proxy: proxy) { $0.scrollToBottomTapped() }
                         } label: {
                             Image(systemName: "arrow.down")
@@ -489,6 +505,7 @@ struct GaryxConversationView: View {
                         rowGeometryBox.minY(of: rowID)
                     }
                 )
+                resetSendAnchorFiller()
                 updateScrollState(proxy: proxy) { $0.threadOpened() }
                 if isComposerFocused {
                     updateScrollState(proxy: proxy) { $0.composerFocused() }
@@ -501,15 +518,32 @@ struct GaryxConversationView: View {
                     routeIdentity: liveStore.routeIdentity
                 )
             }
-            .onChange(of: liveStore.routeIdentity) { _, _ in
+            .onChange(of: conversationScrollIdentity) { _, _ in
                 setRuntimePanelVisible(false)
                 pendingHistoryPrefetchThreadId = nil
+                resetSendAnchorFiller()
                 updateScrollState(proxy: proxy) { $0.threadOpened() }
                 resetTailThinkingPresentation(proxy: proxy)
             }
             .onChange(of: messageScrollObservation) { oldValue, newValue in
                 defer {
                     prefetchOlderHistoryIfNeeded()
+                }
+                if let localSend = newValue.localSendPresentation,
+                   localSend != oldValue.localSendPresentation,
+                   localSend.scopeIdentity == newValue.scopeIdentity {
+                    beginSendAnchorFiller(anchorRowId: localSend.anchorRowId)
+                    updateScrollState(proxy: proxy) {
+                        $0.localSendPresented(anchorRowId: localSend.anchorRowId)
+                    }
+                } else if let cancelledSend = oldValue.localSendPresentation,
+                          newValue.localSendPresentation == nil,
+                          scrollStateBox.state.sendAnchorRowId == cancelledSend.anchorRowId {
+                    // Durable presentation rollback means the send never
+                    // existed. Remove its run space and restore ordinary
+                    // opening ownership for the surviving transcript.
+                    resetSendAnchorFiller()
+                    updateScrollState(proxy: proxy) { $0.threadOpened() }
                 }
                 updateScrollState(proxy: proxy) {
                     $0.messagesChanged(
@@ -518,7 +552,7 @@ struct GaryxConversationView: View {
                         id: \.id,
                         previousScopeIdentity: oldValue.scopeIdentity,
                         currentScopeIdentity: newValue.scopeIdentity,
-                        hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
+                        hasTailContent: !newValue.value.isEmpty || showsPresentedTailThinking
                     )
                 }
                 scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
@@ -529,7 +563,7 @@ struct GaryxConversationView: View {
                     currentIds: newValue.value,
                     previousScopeIdentity: oldValue.scopeIdentity,
                     currentScopeIdentity: newValue.scopeIdentity,
-                    hasTailContent: !newValue.value.isEmpty || showsDebouncedTailThinking
+                    hasTailContent: !newValue.value.isEmpty || showsPresentedTailThinking
                 )
                 if let restore {
                     // Captured BEFORE the new rows lay out: the geometry box
@@ -544,7 +578,7 @@ struct GaryxConversationView: View {
                 rowGeometryBox.retain(only: Set(newValue.value))
                 scheduleTranscriptSnapshot(rowIDs: newValue.value)
             }
-            .onChange(of: liveStore.isThinking(in: model)) { _, _ in
+            .onChange(of: liveStore.tailThinkingPresentationMode(in: model)) { _, _ in
                 syncTailThinkingPresentation(proxy: proxy)
             }
             .onChange(of: isComposerFocused) { _, isFocused in
@@ -552,6 +586,7 @@ struct GaryxConversationView: View {
                 updateScrollState(proxy: proxy) { $0.composerFocused() }
             }
             .onChange(of: bottomChromeHeight) { _, _ in
+                reconcileSendAnchorFiller()
                 updateScrollState(proxy: proxy) { $0.bottomChromeChanged() }
             }
     }
@@ -629,7 +664,10 @@ struct GaryxConversationView: View {
                 await model.localFilePreview(target, reportsError: reportsError)
             },
             retryFailedUserMessage: { messageId in
-                await model.retryFailedUserMessage(messageId)
+                await model.retryFailedUserMessage(
+                    messageId,
+                    presentationScopeIdentity: conversationScrollIdentity
+                )
             },
             selectTaskNotification: { selection in
                 taskNotificationSelectionState.present(
@@ -705,7 +743,7 @@ struct GaryxConversationView: View {
                         case .content:
                             if turnRows.isEmpty {
                                 if liveStore.isThinking(in: model) {
-                                    if showsDebouncedTailThinking {
+                                    if showsPresentedTailThinking {
                                         GaryxThinkingLabel()
                                             .padding(.top, 96)
                                             .transition(.opacity)
@@ -742,13 +780,14 @@ struct GaryxConversationView: View {
                                         // changes from scrolling, so this only fires on
                                         // layout changes and never invalidates the body.
                                         rowGeometryBox.record(rowId, minY: minY)
+                                        reconcileSendAnchorFiller()
                                     }
                                 )
                                 .onAppear {
                                     GaryxRoutePushPerformanceProbe.shared?
                                         .markConversationLocalMessages()
                                 }
-                                if showsDebouncedTailThinking {
+                                if showsPresentedTailThinking {
                                     GaryxThinkingLabel()
                                         .id(tailThinkingAnchorId)
                                         .transition(.opacity)
@@ -767,10 +806,6 @@ struct GaryxConversationView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 18)
                     .padding(.bottom, 24)
-                    // Content coordinate space for row geometry: scroll-invariant, so
-                    // a row's minY here only moves when the layout itself changes —
-                    // the ruler for exact prepend compensation.
-                    .coordinateSpace(name: garyxConversationContentSpaceName)
                     .garyxVerticalScrollContentWidth(alignment: .topLeading)
                     // Resolve the hosting UIScrollView for exact older-history
                     // prepend offset compensation. Must sit on content INSIDE the
@@ -780,6 +815,38 @@ struct GaryxConversationView: View {
                     // container. A send changes the message count, composer height,
                     // spacer, and bottom anchor in the same layout pass; animating the
                     // whole stack makes the scroll view visibly wobble.
+
+                    // Intrinsic transcript tail BEFORE send-anchor run space.
+                    // It serves two independent pure-state inputs: content
+                    // below the anchored row (filler reconciliation), and
+                    // actual reply overflow (scroll-to-bottom visibility).
+                    Color.clear
+                        .frame(height: 0)
+                        .accessibilityHidden(true)
+                        .onGeometryChange(for: CGFloat.self) { geometry in
+                            geometry.frame(
+                                in: .named(garyxConversationContentSpaceName)
+                            ).minY
+                        } action: { minY in
+                            rowGeometryBox.recordIntrinsicTail(minY: minY)
+                            reconcileSendAnchorFiller()
+                        }
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: GaryxConversationContentEdgesKey.self,
+                                    value: GaryxConversationContentEdges(
+                                        tail: geometry.frame(
+                                            in: .named("garyx-conversation-scroll")
+                                        ).minY
+                                    )
+                                )
+                            }
+                        }
+
+                    Color.clear
+                        .frame(height: sendAnchorFillerHeight)
+                        .accessibilityHidden(true)
 
                     Color.clear
                         .frame(height: conversationBottomChromeClearance)
@@ -800,6 +867,12 @@ struct GaryxConversationView: View {
                             }
                         }
                 }
+                // Scroll-invariant ruler shared by row geometry and the
+                // intrinsic-tail sentinel. Moving it from the row stack to
+                // this parent keeps all existing prepend differences exact
+                // while allowing the filler sibling to stay outside the
+                // measured intrinsic content.
+                .coordinateSpace(name: garyxConversationContentSpaceName)
             }
             // Resolve the blank-space owner from the complete content plane:
             // max(viewport height, intrinsic transcript height). Row links,
@@ -810,10 +883,10 @@ struct GaryxConversationView: View {
         }
         .id(conversationScrollIdentity)
         .accessibilityIdentifier("garyx-conversation-transcript")
-        .garyxBottomAnchoredTranscript()
         // The transcript is laid out top-down: short conversations start at
         // the top of the viewport. Tail anchoring is driven explicitly by the
-        // scroll state machine instead of a bottom default anchor.
+        // scroll state machine; automatic size-change anchors would violate
+        // sendAnchored's zero-auto-scroll contract while a reply grows.
         .coordinateSpace(name: "garyx-conversation-scroll")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGFloat.self) { geometry in
@@ -833,6 +906,9 @@ struct GaryxConversationView: View {
             }
             if let bottom = edges.bottom {
                 metrics.contentBottomOffset = bottom
+            }
+            if let tail = edges.tail {
+                metrics.contentTailOffset = tail
             }
             applyMetrics(metrics, proxy: proxy)
         }
@@ -864,16 +940,22 @@ struct GaryxConversationView: View {
 
     private var messageScrollObservation: GaryxConversationScrollObservation<[GaryxMobileMessageGeometry]> {
         GaryxConversationScrollObservation(
-            scopeIdentity: liveStore.routeIdentity,
-            value: liveStore.messages(in: model).map(GaryxMobileMessageGeometry.init)
+            scopeIdentity: conversationScrollIdentity,
+            value: liveStore.messages(in: model).map(GaryxMobileMessageGeometry.init),
+            localSendPresentation: model.conversationLocalSendPresentation
         )
     }
 
     private var renderRowScrollObservation: GaryxConversationScrollObservation<[String]> {
         GaryxConversationScrollObservation(
-            scopeIdentity: liveStore.routeIdentity,
+            scopeIdentity: conversationScrollIdentity,
             value: routeTurnRows.map(\.id)
         )
+    }
+
+    private var showsPresentedTailThinking: Bool {
+        liveStore.tailThinkingPresentationMode(in: model) == .immediate
+            || showsDebouncedTailThinking
     }
 
     private func scheduleTranscriptSnapshot(rowIDs: [String]) {
@@ -906,25 +988,65 @@ struct GaryxConversationView: View {
         24
     }
 
+    private func beginSendAnchorFiller(anchorRowId: String) {
+        let contentBelowAnchorHeight =
+            rowGeometryBox.contentBelowAnchorHeight(anchorRowId: anchorRowId)
+            ?? 0
+        let height = sendAnchorFillerState.begin(
+            anchorRowId: anchorRowId,
+            viewportHeight: scrollStateBox.state.metrics.viewportHeight,
+            bottomChromeClearance: conversationBottomChromeClearance,
+            contentBelowAnchorHeight: contentBelowAnchorHeight
+        )
+        if sendAnchorFillerHeight != height {
+            sendAnchorFillerHeight = height
+        }
+    }
+
+    private func reconcileSendAnchorFiller() {
+        guard let anchorRowId = sendAnchorFillerState.anchorRowId,
+              let contentBelowAnchorHeight =
+                  rowGeometryBox.contentBelowAnchorHeight(anchorRowId: anchorRowId) else {
+            return
+        }
+        let height = sendAnchorFillerState.reconcile(
+            viewportHeight: scrollStateBox.state.metrics.viewportHeight,
+            bottomChromeClearance: conversationBottomChromeClearance,
+            contentBelowAnchorHeight: contentBelowAnchorHeight
+        )
+        if sendAnchorFillerHeight != height {
+            sendAnchorFillerHeight = height
+        }
+    }
+
+    private func resetSendAnchorFiller() {
+        sendAnchorFillerState.reset()
+        if sendAnchorFillerHeight != 0 {
+            sendAnchorFillerHeight = 0
+        }
+    }
+
     /// Feed a measurement update into the scroll state machine and run the
     /// follow-up work every metrics change shares.
     private func applyMetrics(_ metrics: GaryxConversationLayoutMetrics, proxy: ScrollViewProxy) {
         updateScrollState(proxy: proxy) {
             $0.metricsChanged(
                 metrics,
-                hasTailContent: !liveStore.messages(in: model).isEmpty || showsDebouncedTailThinking
+                hasTailContent: !liveStore.messages(in: model).isEmpty
+                    || showsPresentedTailThinking
             )
         }
+        reconcileSendAnchorFiller()
         prefetchOlderHistoryIfNeeded()
     }
 
-    /// Run a scroll state machine event, mirror the UI projection into
+    /// Run a scroll state-machine event, mirror the UI projection into
     /// SwiftUI state only when it flipped, and execute the returned scroll
     /// request. Routing every event through here keeps the per-frame
     /// measurement churn from re-evaluating the conversation body.
     private func updateScrollState(
         proxy: ScrollViewProxy,
-        _ event: (inout GaryxConversationScrollState) -> GaryxConversationScrollState.TailScrollRequest?
+        _ event: (inout GaryxConversationScrollState) -> GaryxConversationScrollState.ScrollRequest?
     ) {
         let request = event(&scrollStateBox.state)
         let showsButton = scrollStateBox.state.showsScrollToBottomButton
@@ -934,13 +1056,13 @@ struct GaryxConversationView: View {
         apply(request, proxy: proxy)
     }
 
-    /// Execute a tail-scroll request produced by the scroll state machine.
+    /// Execute a target-bearing request produced by the scroll state machine.
     private func apply(
-        _ request: GaryxConversationScrollState.TailScrollRequest?,
+        _ request: GaryxConversationScrollState.ScrollRequest?,
         proxy: ScrollViewProxy
     ) {
         guard let request else { return }
-        scheduleScrollToConversationTail(proxy, request: request)
+        scheduleConversationScroll(proxy, request: request)
     }
 
     /// Pin the reading position through an older-history prepend
@@ -1032,11 +1154,16 @@ struct GaryxConversationView: View {
 
     private func refreshTailThinkingPresentation(proxy: ScrollViewProxy, generation: Int) {
         let now = Date().timeIntervalSinceReferenceDate
+        let mode = liveStore.tailThinkingPresentationMode(in: model)
         let visible = tailThinkingPresentationState.update(
-            isThinking: liveStore.isThinking(in: model),
+            mode: mode,
             now: now
         )
-        setDebouncedTailThinking(visible, proxy: proxy)
+        setDebouncedTailThinking(
+            visible,
+            notifiesScrollState: mode == .debounced,
+            proxy: proxy
+        )
         if let delay = tailThinkingPresentationState.nextVisibilityCheck(now: now) {
             scheduleTailThinkingVisibilityCheck(delay: delay, proxy: proxy, generation: generation)
         }
@@ -1055,35 +1182,51 @@ struct GaryxConversationView: View {
         }
     }
 
-    private func setDebouncedTailThinking(_ visible: Bool, proxy: ScrollViewProxy) {
+    private func setDebouncedTailThinking(
+        _ visible: Bool,
+        notifiesScrollState: Bool = false,
+        proxy: ScrollViewProxy
+    ) {
         guard showsDebouncedTailThinking != visible else { return }
         let update = {
             showsDebouncedTailThinking = visible
         }
         withAnimation(motion.animation(.tailThinking), update)
-        if visible {
+        if visible, notifiesScrollState {
             updateScrollState(proxy: proxy) { $0.thinkingIndicatorShown() }
         }
     }
 
-    private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
+    private func executeConversationScroll(
+        _ proxy: ScrollViewProxy,
+        request: GaryxConversationScrollState.ScrollRequest
+    ) {
         // A `.scrollPosition` binding is deliberately avoided here: binding a
         // ScrollPosition disables ScrollViewReader.scrollTo, and positioning
         // by `edge: .bottom` makes the scroll view stick to the bottom on
         // every content change, which fights the reader while a run streams.
-        // The anchor jump plus the scheduled retry chain is reliable.
-        proxy.scrollTo(conversationBottomAnchorId, anchor: .bottom)
+        // The explicit target plus the scheduled retry chain is reliable.
+        let targetId: String
+        switch request.target {
+        case .transcriptTail:
+            targetId = conversationBottomAnchorId
+        case .row(let id):
+            targetId = id
+        }
+        let anchor: UnitPoint = request.alignment == .top ? .top : .bottom
+        proxy.scrollTo(targetId, anchor: anchor)
     }
 
-    /// Run a tail scroll now and retry across the next layout passes, so the
-    /// scroll lands even when row content (markdown, images, tool traces) is
-    /// still settling. The state machine decides whether late retries should
-    /// still run.
-    private func scheduleScrollToConversationTail(
+    /// Run one target-bearing request across its Core-owned settlement clock.
+    /// A local send uses the same long geometry horizon as opening, but its
+    /// stable row target settles after the first observed top placement.
+    private func scheduleConversationScroll(
         _ proxy: ScrollViewProxy,
-        request: GaryxConversationScrollState.TailScrollRequest
+        request: GaryxConversationScrollState.ScrollRequest
     ) {
-        let token = tailScrollSchedulerBox.state.schedule(reason: request.reason)
+        let schedule = scrollSchedulerBox.state.schedule(request: request)
+        guard schedule.enqueuesAttempts else { return }
+        let token = schedule.token
         let identity = conversationScrollIdentity
         // Long transcripts re-layout while scrolling, so a single scrollTo
         // can land short; the later attempts converge on the true bottom.
@@ -1097,11 +1240,14 @@ struct GaryxConversationView: View {
                     guard identity == conversationScrollIdentity else {
                         return
                     }
-                    let input = scrollStateBox.state.tailScrollAttemptInput(
+                    let input = scrollStateBox.state.scrollAttemptInput(
                         index: index,
-                        reason: request.reason
+                        request: request,
+                        rowTargetViewportOffset: rowTargetViewportOffset(
+                            for: request
+                        )
                     )
-                    guard tailScrollSchedulerBox.state.authorizeAttempt(
+                    guard scrollSchedulerBox.state.authorizeAttempt(
                         token,
                         input: input
                     ) else {
@@ -1109,14 +1255,27 @@ struct GaryxConversationView: View {
                     }
                     if request.animated && index == 0 {
                         withAnimation(motion.spatialAnimation(.scrollToTail)) {
-                            scrollToConversationTail(proxy)
+                            executeConversationScroll(proxy, request: request)
                         }
                     } else {
-                        scrollToConversationTail(proxy)
+                        executeConversationScroll(proxy, request: request)
                     }
                 }
             }
         }
+    }
+
+    private func rowTargetViewportOffset(
+        for request: GaryxConversationScrollState.ScrollRequest
+    ) -> CGFloat? {
+        guard case .row(let rowId) = request.target,
+              let rowMinY = rowGeometryBox.minY(of: rowId),
+              let scrollView = hostScrollViewBox.currentScrollView() else {
+            return nil
+        }
+        let visibleContentTop =
+            scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+        return rowMinY - visibleContentTop
     }
 
     private var conversationScrollIdentity: String {
@@ -1420,17 +1579,6 @@ private struct GaryxThreadRuntimeHeaderControl: View {
 }
 
 private extension View {
-    /// Opens the transcript anchored to its bottom from the very first
-    /// layout pass and keeps the tail pinned through content growth while
-    /// positioned there — no post-load programmatic scroll-down. The
-    /// alignment role is deliberately not anchored so short conversations
-    /// keep starting at the top.
-    func garyxBottomAnchoredTranscript() -> some View {
-        self
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .defaultScrollAnchor(.bottom, for: .sizeChanges)
-    }
-
     /// Reports whether the reader's gesture currently drives the scroll
     /// view (finger down or fling decelerating). Programmatic phases do not
     /// count.
