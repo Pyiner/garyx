@@ -66,7 +66,7 @@ export function recentFilterForArrowKey(
   current: RecentThreadFilter,
   key: "ArrowLeft" | "ArrowRight",
 ): RecentThreadFilter {
-  const filters: RecentThreadFilter[] = ["all", "nonTask", "favorites"];
+  const filters: RecentThreadFilter[] = ["nonTask", "all", "favorites"];
   const currentIndex = filters.indexOf(current);
   const delta = key === "ArrowRight" ? 1 : -1;
   return filters[(currentIndex + delta + filters.length) % filters.length];

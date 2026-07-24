@@ -8,12 +8,12 @@ import {
 import { threadRailIsNearListEnd } from "./thread-conversation-sidebar-model.ts";
 
 test("Recent segmented tabs switch with both arrow keys", () => {
-  assert.equal(recentFilterForArrowKey("all", "ArrowRight"), "nonTask");
-  assert.equal(recentFilterForArrowKey("nonTask", "ArrowRight"), "favorites");
-  assert.equal(recentFilterForArrowKey("favorites", "ArrowRight"), "all");
-  assert.equal(recentFilterForArrowKey("all", "ArrowLeft"), "favorites");
-  assert.equal(recentFilterForArrowKey("favorites", "ArrowLeft"), "nonTask");
-  assert.equal(recentFilterForArrowKey("nonTask", "ArrowLeft"), "all");
+  assert.equal(recentFilterForArrowKey("nonTask", "ArrowRight"), "all");
+  assert.equal(recentFilterForArrowKey("all", "ArrowRight"), "favorites");
+  assert.equal(recentFilterForArrowKey("favorites", "ArrowRight"), "nonTask");
+  assert.equal(recentFilterForArrowKey("nonTask", "ArrowLeft"), "favorites");
+  assert.equal(recentFilterForArrowKey("favorites", "ArrowLeft"), "all");
+  assert.equal(recentFilterForArrowKey("all", "ArrowLeft"), "nonTask");
 });
 
 test("shared rail near-tail seam triggers only inside the threshold", () => {

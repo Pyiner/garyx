@@ -38,7 +38,7 @@ type RecentConversationSidebarProps = {
   selectedFilter: RecentThreadFilter;
 };
 
-const FILTERS: RecentThreadFilter[] = ["all", "nonTask", "favorites"];
+const FILTERS: RecentThreadFilter[] = ["nonTask", "all", "favorites"];
 
 export function RecentConversationSidebar({
   collapseLabel,
