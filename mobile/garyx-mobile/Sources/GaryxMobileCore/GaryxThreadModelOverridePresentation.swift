@@ -12,6 +12,20 @@ public struct GaryxRuntimePickerOption: Equatable, Identifiable, Sendable {
     }
 }
 
+/// The runtime-settings write a model selection implies. `reasoningEffort` /
+/// `serviceTier` are `nil` to leave that cell untouched and `""` to clear it.
+public struct GaryxModelSelectionUpdate: Equatable, Sendable {
+    public let model: String
+    public let reasoningEffort: String?
+    public let serviceTier: String?
+
+    public init(model: String, reasoningEffort: String?, serviceTier: String?) {
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.serviceTier = serviceTier
+    }
+}
+
 /// Presentation rules for the per-thread model / thinking-level override chosen
 /// while drafting a new thread. The Mac app's composer model control is the
 /// source of truth for labels and semantics; mobile adapts only the layout.
@@ -88,6 +102,70 @@ public enum GaryxThreadModelOverridePresentation {
     /// showing the effective value without contradicting the checkmark.
     public static func selectedPickerOptionId(cell: String?) -> String {
         normalized(cell) ?? ""
+    }
+
+    /// The model a thread's bound agent configures, resolved from the FULL agent
+    /// catalog by the thread's own `agent_id`.
+    ///
+    /// This must not go through an enabled-only picker list: an existing thread
+    /// keeps its bound agent even when that agent is disabled, and the gateway
+    /// keeps applying that agent's model. Resolving through the filtered list
+    /// returned nil for a disabled bound agent, so the caller fell back to the
+    /// provider default and validated against the wrong model.
+    public static func boundAgentModel(
+        threadAgentId: String?,
+        agents: [GaryxAgentSummary]
+    ) -> String? {
+        guard let agentId = normalized(threadAgentId) else {
+            return nil
+        }
+        return agents.first(where: { $0.id == agentId }).flatMap { normalized($0.model) }
+    }
+
+    /// The complete write implied by choosing `selected` in the model picker.
+    ///
+    /// Owning this end to end keeps the decision testable: the model that will
+    /// actually run once the write lands is resolved the same way the gateway
+    /// resolves it (cell -> bound agent model -> provider default, see
+    /// `thread_runtime.rs`), and a pinned thinking level or service tier that
+    /// model does not support is cleared in the same request. Validating against
+    /// the provider default alone left an unsupported level pinned.
+    public static func modelSelectionUpdate(
+        providerModels: GaryxProviderModels?,
+        selected: String,
+        threadAgentId: String?,
+        agents: [GaryxAgentSummary],
+        reasoningEffortCell: String?,
+        serviceTierCell: String?
+    ) -> GaryxModelSelectionUpdate {
+        let resolvedModel = effortFilterModel(
+            override: selected,
+            agentConfiguredModel: boundAgentModel(threadAgentId: threadAgentId, agents: agents),
+            providerModels: providerModels
+        )
+        var reasoningEffort: String?
+        if normalized(reasoningEffortCell) != nil,
+           sanitizedReasoningEffort(
+            providerModels: providerModels,
+            model: resolvedModel,
+            reasoningEffort: reasoningEffortCell
+           ) == nil {
+            reasoningEffort = ""
+        }
+        var serviceTier: String?
+        if normalized(serviceTierCell) != nil,
+           sanitizedServiceTier(
+            providerModels: providerModels,
+            model: resolvedModel,
+            serviceTier: serviceTierCell
+           ) == nil {
+            serviceTier = ""
+        }
+        return GaryxModelSelectionUpdate(
+            model: selected,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier
+        )
     }
 
     /// Rows for the per-thread model picker.

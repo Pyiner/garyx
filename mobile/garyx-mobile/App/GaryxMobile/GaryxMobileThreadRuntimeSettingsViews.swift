@@ -768,38 +768,23 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     private func selectModel(_ selected: String) async {
-        // Sanitize against the model this thread will ACTUALLY run once the
-        // request lands. Choosing the follow-default row clears the cell, and
-        // the gateway then resolves cell -> bound agent model -> provider
-        // default (`thread_runtime.rs`). Sanitizing against the provider default
-        // alone kept a thinking level the bound agent's model does not support.
-        let selectedModel = GaryxThreadModelOverridePresentation.effortFilterModel(
-            override: selected,
-            agentConfiguredModel: model.selectedThreadAgentTarget?.model,
-            providerModels: providerModels
+        // The whole decision — which model will actually run once this write
+        // lands, and whether the pinned thinking level / speed survive it —
+        // belongs to Core. `agents` is the full catalog on purpose: a thread may
+        // stay bound to a disabled agent, and the gateway keeps applying that
+        // agent's model.
+        let update = GaryxThreadModelOverridePresentation.modelSelectionUpdate(
+            providerModels: providerModels,
+            selected: selected,
+            threadAgentId: selectedThread?.agentId,
+            agents: model.agents,
+            reasoningEffortCell: reasoningEffortOverride,
+            serviceTierCell: serviceTierOverride
         )
-        var nextReasoningEffort: String?
-        if let currentReasoning = reasoningEffortOverride,
-           GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
-            providerModels: providerModels,
-            model: selectedModel,
-            reasoningEffort: currentReasoning
-           ) == nil {
-            nextReasoningEffort = ""
-        }
-        var nextServiceTier: String?
-        if let currentTier = serviceTierOverride,
-           GaryxThreadModelOverridePresentation.sanitizedServiceTier(
-            providerModels: providerModels,
-            model: selectedModel,
-            serviceTier: currentTier
-           ) == nil {
-            nextServiceTier = ""
-        }
         await model.updateSelectedThreadRuntimeSettings(
-            model: selected,
-            reasoningEffort: nextReasoningEffort,
-            serviceTier: nextServiceTier
+            model: update.model,
+            reasoningEffort: update.reasoningEffort,
+            serviceTier: update.serviceTier
         )
     }
 

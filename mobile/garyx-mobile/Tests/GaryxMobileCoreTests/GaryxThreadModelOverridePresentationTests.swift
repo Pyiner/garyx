@@ -358,6 +358,92 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
+    /// Regression (#TASK-2701): a thread may stay bound to a DISABLED agent, and
+    /// the gateway keeps applying that agent's model. Resolving the bound model
+    /// through the enabled-only picker list yielded nil, so choosing
+    /// "follow default" validated against the provider default (Opus 4.8, which
+    /// supports `max`) instead of the bound Sonnet 4.6 (which does not) and left
+    /// `max` pinned on a model that rejects it.
+    func testFollowDefaultResolvesDisabledBoundAgentModel() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+        XCTAssertEqual(providerModels.defaultModel, "claude-opus-4-8")
+        let agents = [
+            makeAgent(id: "sonnet-agent", model: "claude-sonnet-4-6", enabled: false),
+            makeAgent(id: "other-agent", model: "claude-opus-4-8", enabled: true),
+        ]
+
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.boundAgentModel(
+                threadAgentId: "sonnet-agent",
+                agents: agents
+            ),
+            "claude-sonnet-4-6"
+        )
+
+        let update = GaryxThreadModelOverridePresentation.modelSelectionUpdate(
+            providerModels: providerModels,
+            selected: "",
+            threadAgentId: "sonnet-agent",
+            agents: agents,
+            reasoningEffortCell: "max",
+            serviceTierCell: nil
+        )
+        XCTAssertEqual(update.model, "")
+        // Sonnet 4.6 does not support `max`, so the cell must be cleared.
+        XCTAssertEqual(update.reasoningEffort, "")
+        XCTAssertNil(update.serviceTier)
+    }
+
+    /// The same selection on a thread whose bound agent configures no model
+    /// falls through to the provider default, which does support `max`, so the
+    /// pinned level survives.
+    func testFollowDefaultKeepsLevelSupportedByProviderDefault() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+        let agents = [makeAgent(id: "bare-agent", model: "", enabled: true)]
+
+        let update = GaryxThreadModelOverridePresentation.modelSelectionUpdate(
+            providerModels: providerModels,
+            selected: "",
+            threadAgentId: "bare-agent",
+            agents: agents,
+            reasoningEffortCell: "max",
+            serviceTierCell: nil
+        )
+        XCTAssertNil(update.reasoningEffort)
+    }
+
+    /// Pinning a concrete model validates against that model, not the default.
+    func testPinningModelSanitizesAgainstTheChosenModel() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+        let agents = [makeAgent(id: "opus-agent", model: "claude-opus-4-8", enabled: true)]
+
+        let update = GaryxThreadModelOverridePresentation.modelSelectionUpdate(
+            providerModels: providerModels,
+            selected: "claude-sonnet-4-6",
+            threadAgentId: "opus-agent",
+            agents: agents,
+            reasoningEffortCell: "max",
+            serviceTierCell: nil
+        )
+        XCTAssertEqual(update.model, "claude-sonnet-4-6")
+        XCTAssertEqual(update.reasoningEffort, "")
+    }
+
+    /// An unknown or missing binding leaves the provider default in charge and
+    /// never crashes on a stale agent id.
+    func testBoundAgentModelIgnoresUnknownAndBlankBindings() {
+        let agents = [makeAgent(id: "a", model: "model-a", enabled: true)]
+        XCTAssertNil(
+            GaryxThreadModelOverridePresentation.boundAgentModel(threadAgentId: "missing", agents: agents)
+        )
+        XCTAssertNil(
+            GaryxThreadModelOverridePresentation.boundAgentModel(threadAgentId: "  ", agents: agents)
+        )
+        XCTAssertNil(
+            GaryxThreadModelOverridePresentation.boundAgentModel(threadAgentId: nil, agents: agents)
+        )
+    }
+
     /// Regression: clearing the model cell makes the gateway resolve
     /// cell -> bound agent model -> provider default, so a thinking level must be
     /// validated against the agent's model, not the provider default. Opus
@@ -423,6 +509,16 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
 
         XCTAssertEqual(options.first?.label, "Agent default")
         XCTAssertEqual(options.map(\.id), ["", "low", "high", "max"])
+    }
+
+    private func makeAgent(id: String, model: String, enabled: Bool) -> GaryxAgentSummary {
+        GaryxAgentSummary(
+            id: id,
+            displayName: id,
+            providerType: "claude_code",
+            model: model,
+            enabled: enabled
+        )
     }
 
     private func decodeProviderModels(_ json: String) throws -> GaryxProviderModels {
