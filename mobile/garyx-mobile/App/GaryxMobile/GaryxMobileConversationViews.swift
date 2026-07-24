@@ -1069,7 +1069,21 @@ struct GaryxConversationView: View {
                     || showsPresentedTailThinking
             )
         }
-        reconcileSendAnchorFiller(proxy: proxy)
+        if sendAnchorFillerState.isRetiring {
+            // Shrink-wrap retirement: consume exactly the scrollable excess
+            // below the viewport bottom each measurement frame. Upward
+            // reading motion trims one-for-one, the content bottom stays
+            // glued to the viewport edge, and the session self-clears once
+            // the blank is gone — no clamp, no jump.
+            let height = sendAnchorFillerState.trim(
+                scrollableExcessBelowViewport: metrics.distanceFromBottom
+            )
+            if sendAnchorFillerHeight != height {
+                sendAnchorFillerHeight = height
+            }
+        } else {
+            reconcileSendAnchorFiller(proxy: proxy)
+        }
         prefetchOlderHistoryIfNeeded()
     }
 
@@ -1090,12 +1104,20 @@ struct GaryxConversationView: View {
         if sendAnchorSessionActive != sessionActive {
             sendAnchorSessionActive = sessionActive
             if !sessionActive {
-                // Single owner of run-space collapse: leaving the anchored
-                // session (any exit path) removes the blank filler in the
-                // same update. The filler sits below the viewport, so the
-                // collapse is invisible; if the reader was inside the blank,
-                // the clamp lands them on the real content bottom.
-                resetSendAnchorFiller()
+                // Single owner of run-space collapse. A gesture-driven exit
+                // must NOT collapse instantly: at the anchored offset the
+                // viewport sits above the blank, and shrinking contentSize
+                // clamps the offset a full screen backwards (#TASK-2698
+                // finding). It shrink-wraps instead: the spacer trims to the
+                // viewport bottom frame by frame until gone. Non-gesture
+                // exits (exhaustion: already zero; scroll-to-bottom, thread
+                // switch, rollback: an explicit reposition follows) collapse
+                // immediately.
+                if scrollStateBox.state.isUserScrollInteracting {
+                    sendAnchorFillerState.beginRetiring()
+                } else {
+                    resetSendAnchorFiller()
+                }
             }
         }
         apply(request, proxy: proxy)

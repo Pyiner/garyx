@@ -117,6 +117,20 @@ ACK 静默）、其余 `.hidden`。沿用 v1 实现。
 4. 进线程刷新前后位置不一致（偶发）由 #TASK-2697 独立复现定根因，
    不并入本修订。
 
+v2.1.1（评审 #TASK-2698 两项 finding 的修正）：
+
+- **手势收场改收缩包裹（shrink-wrap）**：瞬时收掉 filler 会使
+  contentSize 缩到当前 offset 之下，UIKit clamp 直接倒跳一屏（评审
+  真流实测）。改为：手势退出时 filler 进入 retiring 态，每个测量帧
+  按 `metrics.distanceFromBottom` 的可滚动过剩量单调裁剪——上滑多少
+  裁多少、内容底始终贴视口下沿、裁到 0 会话自清；期间 floor
+  reconcile 不得回涨。非手势退出（耗尽=已为零；回底/切线程/回滚=
+  紧随显式定位）仍立即收场。
+- **50ms 补位档只许首写前使用**：0ms 首写命中后动画在飞，50ms 档的
+  "未到位"判定会以无动画写入打断动画。`shouldRunScrollAttempt` 增加
+  `chainHasWritten` 事实：localSend 的 index 1 仅在链未写入时放行；
+  320ms+ 档保持动画后位置校核职责。
+
 ## 3. Scope 边界
 
 - 不触碰：服务端契约、SSE、桌面端、历史 prepend 机制、

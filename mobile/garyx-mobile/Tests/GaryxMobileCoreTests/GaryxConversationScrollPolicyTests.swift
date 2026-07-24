@@ -313,6 +313,26 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.isFollowingTail)
     }
 
+    func testEarlyCatchUpSlotNeverInterruptsAnInFlightFirstWrite() {
+        var state = GaryxConversationScrollState()
+        let request = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+
+        // The 50ms slot exists to catch a missed zero-delay attempt. Once
+        // the chain has written (the animated anchor move is in flight) it
+        // must not run — it would read mid-animation offsets as
+        // "unsatisfied" and snap the animation dead (#TASK-2698 finding).
+        XCTAssertTrue(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: false)
+        )
+        XCTAssertFalse(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: true)
+        )
+        // Post-animation placement checks stay eligible either way.
+        XCTAssertTrue(
+            state.shouldRunScrollAttempt(index: 2, request: request, chainHasWritten: true)
+        )
+    }
+
     func testSendAnchorOwnershipTransitionsAndFollowUpSend() {
         var state = GaryxConversationScrollState()
         let firstAnchor = "user_turn:origin:send-1"

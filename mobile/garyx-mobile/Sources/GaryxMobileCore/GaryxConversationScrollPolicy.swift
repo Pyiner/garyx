@@ -714,7 +714,8 @@ public struct GaryxConversationScrollState: Equatable {
     public func scrollAttemptInput(
         index: Int,
         request: ScrollRequest,
-        rowTargetViewportOffset: CGFloat? = nil
+        rowTargetViewportOffset: CGFloat? = nil,
+        chainHasWritten: Bool = false
     ) -> GaryxConversationScrollAttemptInput {
         let targetPlacement: GaryxConversationScrollAttemptInput.TargetPlacement
         let geometryEpoch: UInt64
@@ -743,7 +744,11 @@ public struct GaryxConversationScrollState: Equatable {
             }
         }
         return GaryxConversationScrollAttemptInput(
-            policyAllowsAttempt: shouldRunScrollAttempt(index: index, request: request),
+            policyAllowsAttempt: shouldRunScrollAttempt(
+                index: index,
+                request: request,
+                chainHasWritten: chainHasWritten
+            ),
             targetPlacement: targetPlacement,
             geometryEpoch: geometryEpoch
         )
@@ -756,7 +761,11 @@ public struct GaryxConversationScrollState: Equatable {
     /// scrolls always retry; tail updates and repairs are dropped as soon as
     /// the reader leaves the tail, so a streaming run can never pin a reader
     /// who is scrolling up toward history.
-    public func shouldRunScrollAttempt(index: Int, request: ScrollRequest) -> Bool {
+    public func shouldRunScrollAttempt(
+        index: Int,
+        request: ScrollRequest,
+        chainHasWritten: Bool = false
+    ) -> Bool {
         if isUserScrollInteracting, request.reason != .manual { return false }
         if case .row(let id) = request.target, request.reason == .localSend {
             guard sendAnchorRowId == id else { return false }
@@ -767,6 +776,14 @@ public struct GaryxConversationScrollState: Equatable {
             return true
         case .localSend:
             guard case .row(let id) = request.target else { return false }
+            // The 50ms slot exists solely to catch a zero-delay attempt that
+            // fired before the appended row laid out. Once the chain has
+            // written (the animated anchor move is in flight), that slot must
+            // not run — an early placement check reads mid-animation offsets
+            // as "unsatisfied" and snaps the animation dead (review
+            // #TASK-2698 finding). Post-animation slots (320ms+) remain the
+            // placement checks.
+            if chainHasWritten, index == 1 { return false }
             return sendAnchorRowId == id
         case .tailUpdate:
             return isFollowingTail

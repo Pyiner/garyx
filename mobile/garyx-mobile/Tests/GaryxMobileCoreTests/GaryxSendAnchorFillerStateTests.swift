@@ -211,6 +211,45 @@ final class GaryxSendAnchorFillerStateTests: XCTestCase {
         XCTAssertTrue(state.isExhausted)
     }
 
+    func testGestureRetirementShrinkWrapsInsteadOfClamping() {
+        var state = GaryxSendAnchorFillerState()
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send",
+            viewportHeight: 800,
+            bottomChromeClearance: 24,
+            anchorTopInset: 16,
+            contentBelowAnchorHeight: 120
+        )
+        let heightAtExit = state.height
+        XCTAssertEqual(heightAtExit, 640)
+
+        state.beginRetiring()
+        XCTAssertTrue(state.isRetiring)
+
+        // Floor reconciliation must not regrow a retiring spacer.
+        XCTAssertEqual(
+            state.reconcile(
+                viewportHeight: 900,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 120
+            ),
+            heightAtExit
+        )
+
+        // Upward reading motion trims exactly the scrollable excess; a
+        // bottom rubber-band (negative excess) trims nothing.
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: 25), 615)
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: -40), 615)
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: 0), 615)
+
+        // Consuming the rest clears the session entirely.
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: 10_000), 0)
+        XCTAssertNil(state.anchorRowId)
+        XCTAssertFalse(state.isRetiring)
+        XCTAssertEqual(state.runSpaceFloor, 0)
+    }
+
     func testReconcileWithoutSessionStaysEmpty() {
         var state = GaryxSendAnchorFillerState()
         XCTAssertEqual(

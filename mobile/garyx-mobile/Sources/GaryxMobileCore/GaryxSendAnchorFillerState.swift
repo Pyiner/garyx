@@ -44,6 +44,14 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
     /// hands this off to the scroll state machine (anchored session →
     /// tail following) and ends the session.
     public private(set) var isExhausted = false
+    /// v2.1.1: a reader gesture ends the anchored session but must never
+    /// cause a clamp jump — instantly removing the run space shrinks
+    /// contentSize below the current offset and UIKit snaps a full screen.
+    /// Instead the session enters retiring mode: the spacer shrink-wraps to
+    /// the viewport bottom, trimming exactly the scrollable excess each
+    /// measurement frame (monotonic), so the content bottom stays glued to
+    /// the viewport edge until the blank is gone.
+    public private(set) var isRetiring = false
 
     public init() {}
 
@@ -71,6 +79,8 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
 
     /// Reconcile a new layout sample. The floor only rises within a session;
     /// the height always tracks `floor - contentBelowAnchor` exactly.
+    /// A retiring session is owned by `trim` — floor reconciliation must not
+    /// regrow a spacer that is shrink-wrapping away.
     @discardableResult
     public mutating func reconcile(
         viewportHeight: CGFloat,
@@ -78,6 +88,7 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
         anchorTopInset: CGFloat = 0,
         contentBelowAnchorHeight: CGFloat
     ) -> CGFloat {
+        guard !isRetiring else { return height }
         guard anchorRowId != nil else {
             height = 0
             runSpaceFloor = 0
@@ -93,6 +104,28 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
         )
         height = max(0, runSpaceFloor - Self.valid(contentBelowAnchorHeight))
         updateExhaustion(contentBelowAnchorHeight: contentBelowAnchorHeight)
+        return height
+    }
+
+    /// The session ended under an active reader gesture: switch to
+    /// shrink-wrap retirement instead of an instant collapse.
+    public mutating func beginRetiring() {
+        guard anchorRowId != nil else { return }
+        isRetiring = true
+        isExhausted = false
+    }
+
+    /// Trim the retiring spacer by the currently scrollable excess below the
+    /// viewport bottom (`metrics.distanceFromBottom` when positive). Upward
+    /// reading motion trims one-for-one; the spacer never regrows, and the
+    /// session clears itself once the blank is fully consumed.
+    @discardableResult
+    public mutating func trim(scrollableExcessBelowViewport excess: CGFloat) -> CGFloat {
+        guard isRetiring, anchorRowId != nil else { return height }
+        height = max(0, height - Self.valid(excess))
+        if height == 0 {
+            reset()
+        }
         return height
     }
 
