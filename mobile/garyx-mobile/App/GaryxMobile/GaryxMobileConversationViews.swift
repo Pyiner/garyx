@@ -1264,11 +1264,17 @@ struct GaryxConversationView: View {
         }
     }
 
+    /// Returns true when a real positioned write happened: the target's
+    /// geometry was resolvable at execution time. A row target whose row has
+    /// not laid out yet falls back to `proxy.scrollTo` and returns false —
+    /// the chain's true first write (animation + haptic + catch-up gate) is
+    /// still ahead (#TASK-2698).
+    @discardableResult
     private func executeConversationScroll(
         _ proxy: ScrollViewProxy,
         request: GaryxConversationScrollState.ScrollRequest,
         animated: Bool = false
-    ) {
+    ) -> Bool {
         // A `.scrollPosition` binding is deliberately avoided here: binding a
         // ScrollPosition disables ScrollViewReader.scrollTo, and positioning
         // by `edge: .bottom` makes the scroll view stick to the bottom on
@@ -1299,7 +1305,7 @@ struct GaryxConversationView: View {
                     y: min(max(proposed, -topInset), maxOffset)
                 )
                 scrollView.setContentOffset(target, animated: animated)
-                return
+                return true
             }
             targetId = id
         }
@@ -1311,6 +1317,12 @@ struct GaryxConversationView: View {
         } else {
             proxy.scrollTo(targetId, anchor: anchor)
         }
+        // Row targets reaching this line lacked resolvable geometry; tail
+        // targets always position (the bottom anchor always exists).
+        if case .row = request.target {
+            return false
+        }
+        return true
     }
 
     /// Run one target-bearing request across its Core-owned settlement clock.
@@ -1339,29 +1351,33 @@ struct GaryxConversationView: View {
                         request: request,
                         rowTargetViewportOffset: rowTargetViewportOffset(
                             for: request
-                        )
+                        ),
+                        chainHasWritten: scrollSchedulerBox.state.hasWritten(token)
                     )
-                    // First authorized write of the chain: this is the moment
-                    // the transcript actually moves. The send animation and
-                    // its haptic key off it, so a missed zero-delay attempt
-                    // (row not laid out yet) still animates on the retry that
-                    // really lands instead of snapping (v2.1 alignment fix).
-                    let isFirstWrite =
-                        scrollSchedulerBox.state.lifecycle(of: token) == .requested
                     guard scrollSchedulerBox.state.authorizeAttempt(
                         token,
                         input: input
                     ) else {
                         return
                     }
-                    if isFirstWrite, request.reason == .localSend {
-                        GaryxMobileHaptics.shared.play(.messageSendCommitted)
-                    }
-                    executeConversationScroll(
+                    // The chain's first REAL write (authorization alone does
+                    // not count — a zero-delay attempt can authorize before
+                    // the appended row laid out and fail to position). The
+                    // send animation and its haptic key off this fact, so
+                    // the slot that actually lands carries both, and the
+                    // catch-up gate above stays open until then (#TASK-2698).
+                    let isFirstWrite = !scrollSchedulerBox.state.hasWritten(token)
+                    let wrote = executeConversationScroll(
                         proxy,
                         request: request,
                         animated: request.animated && isFirstWrite
                     )
+                    if wrote {
+                        if isFirstWrite, request.reason == .localSend {
+                            GaryxMobileHaptics.shared.play(.messageSendCommitted)
+                        }
+                        scrollSchedulerBox.state.markWrote(token)
+                    }
                 }
             }
         }

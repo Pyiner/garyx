@@ -250,6 +250,46 @@ final class GaryxSendAnchorFillerStateTests: XCTestCase {
         XCTAssertEqual(state.runSpaceFloor, 0)
     }
 
+    func testFollowUpSendDuringRetirementStartsACleanSession() {
+        var state = GaryxSendAnchorFillerState()
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send-1",
+            viewportHeight: 800,
+            bottomChromeClearance: 24,
+            anchorTopInset: 16,
+            contentBelowAnchorHeight: 120
+        )
+        state.beginRetiring()
+        _ = state.trim(scrollableExcessBelowViewport: 100)
+        XCTAssertTrue(state.isRetiring)
+
+        // A follow-up send while the previous session is still retiring must
+        // start a clean session: retirement must not leak in, or reconcile
+        // short-circuits forever and exhaustion never fires (#TASK-2698).
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send-2",
+            viewportHeight: 800,
+            bottomChromeClearance: 24,
+            anchorTopInset: 16,
+            contentBelowAnchorHeight: 100
+        )
+        XCTAssertFalse(state.isRetiring)
+        XCTAssertEqual(state.height, 660)
+
+        // Reconcile works again and exhaustion (the long-reply handoff)
+        // remains reachable.
+        XCTAssertEqual(
+            state.reconcile(
+                viewportHeight: 800,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 760
+            ),
+            0
+        )
+        XCTAssertTrue(state.isExhausted)
+    }
+
     func testReconcileWithoutSessionStaysEmpty() {
         var state = GaryxSendAnchorFillerState()
         XCTAssertEqual(

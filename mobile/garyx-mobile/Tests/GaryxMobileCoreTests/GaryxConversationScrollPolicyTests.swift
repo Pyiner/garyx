@@ -333,6 +333,45 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         )
     }
 
+    func testSchedulerTracksRealWritesNotAuthorizations() {
+        var state = GaryxConversationScrollState()
+        let request = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+        var scheduler = GaryxConversationScrollScheduler()
+        let token = scheduler.schedule(request: request)
+
+        // Authorization alone must not consume the chain's first write: a
+        // zero-delay attempt can authorize before the row laid out and fail
+        // to position (#TASK-2698).
+        XCTAssertTrue(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .unknown,
+                    geometryEpoch: 0
+                )
+            )
+        )
+        XCTAssertFalse(scheduler.hasWritten(token))
+
+        // The 50ms catch-up stays eligible until a REAL write happened...
+        XCTAssertTrue(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: scheduler.hasWritten(token))
+        )
+
+        // ...and closes exactly when one is recorded.
+        scheduler.markWrote(token)
+        XCTAssertTrue(scheduler.hasWritten(token))
+        XCTAssertFalse(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: scheduler.hasWritten(token))
+        )
+
+        // A superseding chain starts with a clean write fact.
+        let newer = scheduler.schedule(request: request)
+        XCTAssertFalse(scheduler.hasWritten(newer))
+        XCTAssertFalse(scheduler.hasWritten(token), "superseded token reports no write")
+    }
+
     func testSendAnchorOwnershipTransitionsAndFollowUpSend() {
         var state = GaryxConversationScrollState()
         let firstAnchor = "user_turn:origin:send-1"

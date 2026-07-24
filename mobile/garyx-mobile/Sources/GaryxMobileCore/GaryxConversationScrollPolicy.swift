@@ -975,6 +975,13 @@ public struct GaryxConversationScrollScheduler: Equatable {
         let generation: Int
         var lifecycle: Lifecycle
         var lastAuthorizedGeometryEpoch: UInt64?
+        /// Whether an attempt of this chain performed a REAL position write
+        /// (target geometry was resolvable at execution time). Authorization
+        /// alone must not count: a zero-delay attempt can be authorized
+        /// before the appended row has laid out and then fail to position,
+        /// in which case the next slot is still the chain's first true
+        /// write and must carry the animation and haptic (#TASK-2698).
+        var hasWritten = false
     }
 
     private var tailGrowthGeneration = 0
@@ -1025,6 +1032,25 @@ public struct GaryxConversationScrollScheduler: Equatable {
 
     public func isCurrent(_ token: Token) -> Bool {
         lifecycle(of: token) != .superseded
+    }
+
+    /// Whether this chain has performed a real position write yet. Fed back
+    /// into `shouldRunScrollAttempt(chainHasWritten:)` and used to key the
+    /// first-write animation and send haptic.
+    public func hasWritten(_ token: Token) -> Bool {
+        guard let chain = chain(for: token), chain.generation == token.generation else {
+            return false
+        }
+        return chain.hasWritten
+    }
+
+    /// Record that an attempt of this chain performed a real position write.
+    public mutating func markWrote(_ token: Token) {
+        guard var chain = chain(for: token), chain.generation == token.generation else {
+            return
+        }
+        chain.hasWritten = true
+        setChain(chain, for: token.retryHorizon)
     }
 
     public func lifecycle(of token: Token) -> Lifecycle {

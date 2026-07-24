@@ -67,6 +67,10 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
         contentBelowAnchorHeight: CGFloat
     ) -> CGFloat {
         self.anchorRowId = anchorRowId
+        // A fresh send owns a fresh session: a still-retiring previous
+        // session must not leak in, or reconcile short-circuits forever and
+        // exhaustion (the long-reply handoff) never fires (#TASK-2698).
+        isRetiring = false
         runSpaceFloor = Self.effectiveRunSpace(
             viewportHeight: viewportHeight,
             bottomChromeClearance: bottomChromeClearance,
