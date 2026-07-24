@@ -544,9 +544,13 @@ struct GaryxConversationView: View {
                 } else if let cancelledSend = oldValue.localSendPresentation,
                           newValue.localSendPresentation == nil,
                           scrollStateBox.state.sendAnchorRowId == cancelledSend.anchorRowId {
-                    // Durable presentation rollback means the send never
-                    // existed. Remove its run space and restore ordinary
-                    // opening ownership for the surviving transcript.
+                    // The send ended without a run to anchor for: durable
+                    // rollback (the send never existed) or a terminal
+                    // dispatch failure (busy / network / auth — the failed
+                    // row stays with its error state). Remove the run space
+                    // and restore ordinary opening ownership. A reader who
+                    // already scrolled away keeps their position; their run
+                    // space retires through the scroll-to-bottom control.
                     resetSendAnchorFiller()
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
                 }

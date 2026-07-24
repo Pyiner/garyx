@@ -366,7 +366,11 @@ extension GaryxMobileModel {
         }
         GaryxConversationSendJitterProbe.shared?.optimisticRowAppended()
         let localSendPresentation: GaryxConversationLocalSendPresentation?
-        if let scopeIdentity = presentationScopeIdentity?
+        // A send that already failed at present time (busy-at-present) never
+        // starts a send-anchor session: the row is marked failed in place and
+        // the transcript keeps its ordinary bottom-anchored behavior.
+        if shouldDispatch,
+           let scopeIdentity = presentationScopeIdentity?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !scopeIdentity.isEmpty {
             conversationLocalSendPresentationGeneration &+= 1
@@ -437,6 +441,21 @@ extension GaryxMobileModel {
         if conversationLocalSendPresentation == presentation.localSendPresentation {
             conversationLocalSendPresentation = nil
         }
+    }
+
+    /// A terminally failed send ends its send-anchor session: the failed row
+    /// stays in the transcript with its error state, but the anchored
+    /// presentation (blank run space, suspended size-change anchor) must not
+    /// outlive the send it was presenting. No-op when a newer send already
+    /// owns the signal.
+    private func endConversationLocalSendPresentation(
+        _ localSendPresentation: GaryxConversationLocalSendPresentation?
+    ) {
+        guard let localSendPresentation,
+              conversationLocalSendPresentation == localSendPresentation else {
+            return
+        }
+        conversationLocalSendPresentation = nil
     }
 
     private func dispatchPresentedSend(
@@ -553,6 +572,7 @@ extension GaryxMobileModel {
                     error: "Thread is busy"
                 )
                 refreshHomeThreadsAfterLocalRunStateChange()
+                endConversationLocalSendPresentation(presentation.localSendPresentation)
                 return
             }
             refreshHomeThreadsAfterLocalRunStart()
@@ -604,6 +624,7 @@ extension GaryxMobileModel {
                 )
                 refreshHomeThreadsAfterLocalRunStateChange()
             }
+            endConversationLocalSendPresentation(presentation.localSendPresentation)
             lastError = displayMessage(for: error)
         }
     }
