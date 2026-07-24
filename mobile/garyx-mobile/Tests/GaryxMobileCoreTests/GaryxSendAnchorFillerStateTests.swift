@@ -183,6 +183,113 @@ final class GaryxSendAnchorFillerStateTests: XCTestCase {
         XCTAssertEqual(state.runSpaceFloor, 800)
     }
 
+    func testAnchorTopInsetReducesRequiredRunSpace() {
+        var state = GaryxSendAnchorFillerState()
+        // The anchored row sits `anchorTopInset` below the viewport top
+        // (v2.1 breathing room under the title capsule), so exactly that
+        // much less run space is required underneath it.
+        XCTAssertEqual(
+            state.begin(
+                anchorRowId: "user_turn:origin:send",
+                viewportHeight: 800,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 200
+            ),
+            560
+        )
+        XCTAssertEqual(state.runSpaceFloor, 760)
+        XCTAssertEqual(
+            state.reconcile(
+                viewportHeight: 800,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 760
+            ),
+            0
+        )
+        XCTAssertTrue(state.isExhausted)
+    }
+
+    func testGestureRetirementShrinkWrapsInsteadOfClamping() {
+        var state = GaryxSendAnchorFillerState()
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send",
+            viewportHeight: 800,
+            bottomChromeClearance: 24,
+            anchorTopInset: 16,
+            contentBelowAnchorHeight: 120
+        )
+        let heightAtExit = state.height
+        XCTAssertEqual(heightAtExit, 640)
+
+        state.beginRetiring()
+        XCTAssertTrue(state.isRetiring)
+
+        // Floor reconciliation must not regrow a retiring spacer.
+        XCTAssertEqual(
+            state.reconcile(
+                viewportHeight: 900,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 120
+            ),
+            heightAtExit
+        )
+
+        // Upward reading motion trims exactly the scrollable excess; a
+        // bottom rubber-band (negative excess) trims nothing.
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: 25), 615)
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: -40), 615)
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: 0), 615)
+
+        // Consuming the rest clears the session entirely.
+        XCTAssertEqual(state.trim(scrollableExcessBelowViewport: 10_000), 0)
+        XCTAssertNil(state.anchorRowId)
+        XCTAssertFalse(state.isRetiring)
+        XCTAssertEqual(state.runSpaceFloor, 0)
+    }
+
+    func testFollowUpSendDuringRetirementStartsACleanSession() {
+        var state = GaryxSendAnchorFillerState()
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send-1",
+            viewportHeight: 800,
+            bottomChromeClearance: 24,
+            anchorTopInset: 16,
+            contentBelowAnchorHeight: 120
+        )
+        state.beginRetiring()
+        _ = state.trim(scrollableExcessBelowViewport: 100)
+        XCTAssertTrue(state.isRetiring)
+
+        // A follow-up send while the previous session is still retiring must
+        // start a clean session: retirement must not leak in, or reconcile
+        // short-circuits forever and exhaustion never fires (#TASK-2698).
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send-2",
+            viewportHeight: 800,
+            bottomChromeClearance: 24,
+            anchorTopInset: 16,
+            contentBelowAnchorHeight: 100
+        )
+        XCTAssertFalse(state.isRetiring)
+        XCTAssertEqual(state.height, 660)
+
+        // Reconcile works again and exhaustion (the long-reply handoff)
+        // remains reachable.
+        XCTAssertEqual(
+            state.reconcile(
+                viewportHeight: 800,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 760
+            ),
+            0
+        )
+        XCTAssertTrue(state.isExhausted)
+    }
+
     func testReconcileWithoutSessionStaysEmpty() {
         var state = GaryxSendAnchorFillerState()
         XCTAssertEqual(

@@ -241,7 +241,12 @@ extension GaryxMobileModel {
                 throw GaryxComposerPayloadRuntimeError.invalidTransition
             }
             guard optimisticPresentation.shouldDispatch else { return true }
-            GaryxMobileHaptics.shared.play(.messageSendCommitted)
+            // An anchored send plays its haptic at the first anchor write in
+            // the transcript view, aligned with the motion (v2.1); only
+            // non-anchored surfaces keep the immediate haptic here.
+            if optimisticPresentation.localSendPresentation == nil {
+                GaryxMobileHaptics.shared.play(.messageSendCommitted)
+            }
             await dispatchPresentedSend(
                 optimisticPresentation,
                 delivery: payload.delivery
@@ -291,7 +296,9 @@ extension GaryxMobileModel {
             presentationScopeIdentity: presentationScopeIdentity
         )
         guard presentation.shouldDispatch else { return }
-        GaryxMobileHaptics.shared.play(.messageSendCommitted)
+        if presentation.localSendPresentation == nil {
+            GaryxMobileHaptics.shared.play(.messageSendCommitted)
+        }
         await dispatchPresentedSend(presentation, delivery: delivery)
     }
 

@@ -313,10 +313,12 @@ public struct GaryxConversationScrollState: Equatable {
                 // transcript while composer geometry also settles.
                 [0, 40, 140]
             case .localSend:
-                // The first write is a 200 ms animation. Early retries would
-                // interrupt it with an unanimated snap, so placement is first
-                // checked after the animation has settled.
-                [0, 320, 650, 1_000]
+                // The zero-delay attempt can fire before the appended row has
+                // laid out; the 50 ms slot catches that case while the send
+                // haptic still reads as one moment (the animation and haptic
+                // key off the first authorized write, not off index 0). Later
+                // slots only re-check placement after the animation settled.
+                [0, 50, 320, 650, 1_000]
             case .openingThread, .manual, .repair:
                 [0, 16, 40, 140, 320, 650, 1_000]
             }
@@ -394,13 +396,6 @@ public struct GaryxConversationScrollState: Equatable {
     /// collapsed tail row) must not regenerate a repair on every frame, or
     /// the reader can never scroll away from the tail.
     private var hadVisibleTailGap = false
-    /// True from a local send until the reader explicitly returns to the tail
-    /// (scroll-to-bottom) or the thread is reopened. While set, the transcript
-    /// carries send-anchor run space (blank filler) below the real content:
-    /// the view disables the size-change bottom anchor, and near-bottom
-    /// measurements must not re-arm tail following — "near bottom" would mean
-    /// pinning to blank run space, not to the real tail.
-    public private(set) var hasSendRunSpace = false
     /// Monotonic signal for transcript geometry that can change the result of
     /// a bottom-anchor write. Content reducers advance it before their request
     /// is scheduled; measured content/viewport size changes advance it again
@@ -416,6 +411,17 @@ public struct GaryxConversationScrollState: Equatable {
 
     public var isFollowingTail: Bool {
         anchoring == .followingTail
+    }
+
+    /// True while a send-anchor session owns the viewport top. Run space
+    /// (blank filler) and the suspended size-change anchor live exactly as
+    /// long as this state: any reader gesture, run-space exhaustion, the
+    /// scroll-to-bottom control, or a thread switch ends the session and the
+    /// view collapses the filler in the same update (v2.1 — the boss's rule:
+    /// once touched, the blank below must be gone and ordinary bottom
+    /// semantics resume).
+    public var isSendAnchored: Bool {
+        sendAnchorRowId != nil
     }
 
     public var sendAnchorRowId: String? {
@@ -453,7 +459,6 @@ public struct GaryxConversationScrollState: Equatable {
     /// that starts a send-anchor request chain.
     public mutating func localSendPresented(anchorRowId: String) -> ScrollRequest {
         anchoring = .sendAnchored(anchorRowId: anchorRowId)
-        hasSendRunSpace = true
         hasTailContent = true
         markTailGeometryChanged()
         return ScrollRequest(
@@ -567,14 +572,7 @@ public struct GaryxConversationScrollState: Equatable {
             return nil
         }
         if metrics.isNearBottom {
-            // While send-anchor run space exists, "near bottom" means
-            // adjacency to blank filler, not to the real tail. Re-arming
-            // tail following there would pin the viewport to blank space;
-            // only the explicit scroll-to-bottom control (which clears the
-            // run space) resumes following.
-            if !hasSendRunSpace {
-                anchoring = .followingTail
-            }
+            anchoring = .followingTail
         } else if isFollowingTail, !hasUserScrolledSinceOpen, !isUserScrollInteracting {
             // The tail drifted away before the reader ever scrolled: late
             // layout settling pushed the content down (heavy markdown,
@@ -682,33 +680,27 @@ public struct GaryxConversationScrollState: Equatable {
     }
 
     /// The reader tapped the scroll-to-bottom control: resume following.
-    /// This is the only event that retires send-anchor run space — the view
-    /// collapses the filler in the same update, so the tail this scroll
-    /// lands on is the real content tail.
+    /// Leaving a send-anchor session here collapses its filler in the same
+    /// view update, so the tail this scroll lands on is the real content
+    /// tail.
     public mutating func scrollToBottomTapped() -> ScrollRequest {
         anchoring = .followingTail
-        hasSendRunSpace = false
         return ScrollRequest(reason: .manual, animated: false)
     }
 
     /// The send-anchor run space is exhausted: intrinsic reply content below
     /// the anchored row filled the session floor, so the blank filler is
     /// already zero. A reply longer than one screen is followed (product
-    /// decision 2026-07-24): a still-anchored session hands off seamlessly
-    /// to tail following — the viewport is already effectively at the
-    /// content bottom, so one short animated settle engages the system
-    /// size-change pinning without a visible jump. A reader who scrolled
-    /// away only has the run space retired; nothing moves their viewport,
-    /// and baseline near-bottom re-arming resumes.
+    /// decision 2026-07-24): the anchored session hands off seamlessly to
+    /// tail following — the viewport is already effectively at the content
+    /// bottom, so one short animated settle engages the system size-change
+    /// pinning without a visible jump. Outside an anchored session this is
+    /// a no-op (a reader gesture already ended the session, v2.1).
     public mutating func sendRunSpaceExhausted() -> ScrollRequest? {
-        guard hasSendRunSpace else { return nil }
-        hasSendRunSpace = false
-        if case .sendAnchored = anchoring {
-            anchoring = .followingTail
-            markTailGeometryChanged()
-            return ScrollRequest(reason: .tailUpdate, animated: true)
-        }
-        return nil
+        guard case .sendAnchored = anchoring else { return nil }
+        anchoring = .followingTail
+        markTailGeometryChanged()
+        return ScrollRequest(reason: .tailUpdate, animated: true)
     }
 
     // MARK: Scheduled scroll retries
@@ -722,7 +714,8 @@ public struct GaryxConversationScrollState: Equatable {
     public func scrollAttemptInput(
         index: Int,
         request: ScrollRequest,
-        rowTargetViewportOffset: CGFloat? = nil
+        rowTargetViewportOffset: CGFloat? = nil,
+        chainHasWritten: Bool = false
     ) -> GaryxConversationScrollAttemptInput {
         let targetPlacement: GaryxConversationScrollAttemptInput.TargetPlacement
         let geometryEpoch: UInt64
@@ -751,7 +744,11 @@ public struct GaryxConversationScrollState: Equatable {
             }
         }
         return GaryxConversationScrollAttemptInput(
-            policyAllowsAttempt: shouldRunScrollAttempt(index: index, request: request),
+            policyAllowsAttempt: shouldRunScrollAttempt(
+                index: index,
+                request: request,
+                chainHasWritten: chainHasWritten
+            ),
             targetPlacement: targetPlacement,
             geometryEpoch: geometryEpoch
         )
@@ -764,7 +761,11 @@ public struct GaryxConversationScrollState: Equatable {
     /// scrolls always retry; tail updates and repairs are dropped as soon as
     /// the reader leaves the tail, so a streaming run can never pin a reader
     /// who is scrolling up toward history.
-    public func shouldRunScrollAttempt(index: Int, request: ScrollRequest) -> Bool {
+    public func shouldRunScrollAttempt(
+        index: Int,
+        request: ScrollRequest,
+        chainHasWritten: Bool = false
+    ) -> Bool {
         if isUserScrollInteracting, request.reason != .manual { return false }
         if case .row(let id) = request.target, request.reason == .localSend {
             guard sendAnchorRowId == id else { return false }
@@ -775,6 +776,14 @@ public struct GaryxConversationScrollState: Equatable {
             return true
         case .localSend:
             guard case .row(let id) = request.target else { return false }
+            // The 50ms slot exists solely to catch a zero-delay attempt that
+            // fired before the appended row laid out. Once the chain has
+            // written (the animated anchor move is in flight), that slot must
+            // not run — an early placement check reads mid-animation offsets
+            // as "unsatisfied" and snaps the animation dead (review
+            // #TASK-2698 finding). Post-animation slots (320ms+) remain the
+            // placement checks.
+            if chainHasWritten, index == 1 { return false }
             return sendAnchorRowId == id
         case .tailUpdate:
             return isFollowingTail
@@ -966,6 +975,13 @@ public struct GaryxConversationScrollScheduler: Equatable {
         let generation: Int
         var lifecycle: Lifecycle
         var lastAuthorizedGeometryEpoch: UInt64?
+        /// Whether an attempt of this chain performed a REAL position write
+        /// (target geometry was resolvable at execution time). Authorization
+        /// alone must not count: a zero-delay attempt can be authorized
+        /// before the appended row has laid out and then fail to position,
+        /// in which case the next slot is still the chain's first true
+        /// write and must carry the animation and haptic (#TASK-2698).
+        var hasWritten = false
     }
 
     private var tailGrowthGeneration = 0
@@ -1016,6 +1032,25 @@ public struct GaryxConversationScrollScheduler: Equatable {
 
     public func isCurrent(_ token: Token) -> Bool {
         lifecycle(of: token) != .superseded
+    }
+
+    /// Whether this chain has performed a real position write yet. Fed back
+    /// into `shouldRunScrollAttempt(chainHasWritten:)` and used to key the
+    /// first-write animation and send haptic.
+    public func hasWritten(_ token: Token) -> Bool {
+        guard let chain = chain(for: token), chain.generation == token.generation else {
+            return false
+        }
+        return chain.hasWritten
+    }
+
+    /// Record that an attempt of this chain performed a real position write.
+    public mutating func markWrote(_ token: Token) {
+        guard var chain = chain(for: token), chain.generation == token.generation else {
+            return
+        }
+        chain.hasWritten = true
+        setChain(chain, for: token.retryHorizon)
     }
 
     public func lifecycle(of token: Token) -> Lifecycle {

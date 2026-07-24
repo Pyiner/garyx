@@ -246,55 +246,27 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertNil(state.bottomChromeChanged())
     }
 
-    func testSendRunSpaceSuppressesNearBottomFollowRearmUntilExplicitReturn() {
+    func testReaderGestureEndsAnchoredSessionAndRestoresBaselineSemantics() {
         var state = GaryxConversationScrollState()
         _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-        XCTAssertTrue(state.hasSendRunSpace)
+        XCTAssertTrue(state.isSendAnchored)
 
-        // The reader's gesture hands ownership to browsing.
+        // v2.1 (boss rule: once touched, the blank must go): the reader's
+        // gesture ends the session outright. The view collapses the filler
+        // on this flip; ordinary bottom semantics resume immediately.
         XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
         XCTAssertEqual(state.anchoring, .browsingHistory)
+        XCTAssertFalse(state.isSendAnchored)
         XCTAssertNil(state.userScrollInteractionChanged(isInteracting: false))
-        XCTAssertTrue(state.hasSendRunSpace)
 
-        // Near-bottom here means adjacency to blank run space (the filler
-        // keeps the content bottom exactly one viewport below the anchor).
-        // It must NOT re-arm tail following: following would pin the
-        // viewport to blank filler and re-enable auto-scroll mid-read.
+        // Near-bottom re-arms following exactly like the baseline — with the
+        // filler collapsed there is no blank space to mis-pin to.
         XCTAssertNil(
             state.metricsChanged(
                 GaryxConversationLayoutMetrics(
                     contentTopOffset: -1_000,
                     contentBottomOffset: 810,
-                    contentTailOffset: 500,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
-        XCTAssertEqual(state.anchoring, .browsingHistory)
-        XCTAssertTrue(state.hasSendRunSpace)
-
-        // The explicit scroll-to-bottom control retires the run space and
-        // resumes following; the view collapses the filler in the same
-        // update so the landing tail is the real content tail.
-        XCTAssertEqual(
-            state.scrollToBottomTapped(),
-            .init(reason: .manual, animated: false)
-        )
-        XCTAssertFalse(state.hasSendRunSpace)
-        XCTAssertTrue(state.isFollowingTail)
-
-        // With the run space retired, near-bottom re-arms following again
-        // (baseline semantics fully restored).
-        _ = state.userScrollInteractionChanged(isInteracting: true)
-        _ = state.userScrollInteractionChanged(isInteracting: false)
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: -1_000,
-                    contentBottomOffset: 805,
-                    contentTailOffset: 805,
+                    contentTailOffset: 810,
                     viewportHeight: 800
                 ),
                 hasTailContent: true
@@ -315,47 +287,89 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             .init(reason: .tailUpdate, animated: true)
         )
         XCTAssertTrue(state.isFollowingTail)
-        XCTAssertFalse(state.hasSendRunSpace)
+        XCTAssertFalse(state.isSendAnchored)
         XCTAssertNil(state.sendAnchorRowId)
         XCTAssertNil(state.sendRunSpaceExhausted(), "idempotent once retired")
     }
 
-    func testRunSpaceExhaustionWhileBrowsingOnlyRetiresRunSpace() {
+    func testExhaustionOutsideAnchoredSessionIsANoOp() {
         var state = GaryxConversationScrollState()
         _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
+        _ = state.userScrollInteractionChanged(isInteracting: true)
         XCTAssertEqual(state.anchoring, .browsingHistory)
 
-        // A reader who scrolled away is never yanked; the exhaustion only
-        // retires the run space so baseline near-bottom re-arming resumes.
+        // The gesture already ended the session (v2.1); a late exhaustion
+        // signal from a stale measurement must not move anything.
         XCTAssertNil(state.sendRunSpaceExhausted())
-        XCTAssertFalse(state.hasSendRunSpace)
         XCTAssertEqual(state.anchoring, .browsingHistory)
-        _ = state.userScrollInteractionChanged(isInteracting: false)
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: -1_000,
-                    contentBottomOffset: 810,
-                    contentTailOffset: 810,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
+    }
+
+    func testThreadOpenedEndsAnchoredSession() {
+        var state = GaryxConversationScrollState()
+        _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+        XCTAssertTrue(state.isSendAnchored)
+        _ = state.threadOpened()
+        XCTAssertFalse(state.isSendAnchored)
+        XCTAssertTrue(state.isFollowingTail)
+    }
+
+    func testEarlyCatchUpSlotNeverInterruptsAnInFlightFirstWrite() {
+        var state = GaryxConversationScrollState()
+        let request = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+
+        // The 50ms slot exists to catch a missed zero-delay attempt. Once
+        // the chain has written (the animated anchor move is in flight) it
+        // must not run — it would read mid-animation offsets as
+        // "unsatisfied" and snap the animation dead (#TASK-2698 finding).
         XCTAssertTrue(
-            state.isFollowingTail,
-            "with run space retired, near-bottom re-arms following again"
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: false)
+        )
+        XCTAssertFalse(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: true)
+        )
+        // Post-animation placement checks stay eligible either way.
+        XCTAssertTrue(
+            state.shouldRunScrollAttempt(index: 2, request: request, chainHasWritten: true)
         )
     }
 
-    func testThreadOpenedRetiresSendRunSpace() {
+    func testSchedulerTracksRealWritesNotAuthorizations() {
         var state = GaryxConversationScrollState()
-        _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-        XCTAssertTrue(state.hasSendRunSpace)
-        _ = state.threadOpened()
-        XCTAssertFalse(state.hasSendRunSpace)
-        XCTAssertTrue(state.isFollowingTail)
+        let request = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+        var scheduler = GaryxConversationScrollScheduler()
+        let token = scheduler.schedule(request: request)
+
+        // Authorization alone must not consume the chain's first write: a
+        // zero-delay attempt can authorize before the row laid out and fail
+        // to position (#TASK-2698).
+        XCTAssertTrue(
+            scheduler.authorizeAttempt(
+                token,
+                input: GaryxConversationScrollAttemptInput(
+                    policyAllowsAttempt: true,
+                    targetPlacement: .unknown,
+                    geometryEpoch: 0
+                )
+            )
+        )
+        XCTAssertFalse(scheduler.hasWritten(token))
+
+        // The 50ms catch-up stays eligible until a REAL write happened...
+        XCTAssertTrue(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: scheduler.hasWritten(token))
+        )
+
+        // ...and closes exactly when one is recorded.
+        scheduler.markWrote(token)
+        XCTAssertTrue(scheduler.hasWritten(token))
+        XCTAssertFalse(
+            state.shouldRunScrollAttempt(index: 1, request: request, chainHasWritten: scheduler.hasWritten(token))
+        )
+
+        // A superseding chain starts with a clean write fact.
+        let newer = scheduler.schedule(request: request)
+        XCTAssertFalse(scheduler.hasWritten(newer))
+        XCTAssertFalse(scheduler.hasWritten(token), "superseded token reports no write")
     }
 
     func testSendAnchorOwnershipTransitionsAndFollowUpSend() {
@@ -745,7 +759,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     func testLocalSendRetryClockDoesNotInterruptItsFirstAnimation() {
         XCTAssertEqual(
             GaryxConversationScrollState.ScrollReason.localSend.retryDelayMilliseconds,
-            [0, 320, 650, 1_000]
+            [0, 50, 320, 650, 1_000]
         )
     }
 
