@@ -160,22 +160,30 @@ public enum GaryxThreadModelOverridePresentation {
     /// 3. A current value the provider does not advertise is appended last so it
     ///    stays visible and re-selectable.
     ///
-    /// An empty advertised list yields no rows: a picker offering only "follow
-    /// default" has nothing to choose.
+    /// Advertised ids are normalized before use: a blank id would otherwise
+    /// produce a second row that the server trims back to the empty string, so
+    /// a concrete-looking row would silently clear the cell. Rows exist only
+    /// when at least one advertised option survives normalization — a picker
+    /// offering only "follow default" has nothing to choose.
     private static func pickerOptions(
         advertised: [GaryxProviderModelOption],
         current: String?,
         defaultRowLabel: String,
         label: (String) -> String?
     ) -> [GaryxRuntimePickerOption] {
-        guard !advertised.isEmpty else {
+        var seen = Set<String>([""])
+        var advertisedOptions: [GaryxRuntimePickerOption] = []
+        for option in advertised {
+            guard let id = normalized(option.id), seen.insert(id).inserted else {
+                continue
+            }
+            advertisedOptions.append(GaryxRuntimePickerOption(id: id, label: option.label))
+        }
+        guard !advertisedOptions.isEmpty else {
             return []
         }
-        var seen = Set<String>([""])
         var options = [GaryxRuntimePickerOption(id: "", label: defaultRowLabel)]
-        for option in advertised where seen.insert(option.id).inserted {
-            options.append(GaryxRuntimePickerOption(id: option.id, label: option.label))
-        }
+        options.append(contentsOf: advertisedOptions)
         if let current = normalized(current), seen.insert(current).inserted {
             options.append(
                 GaryxRuntimePickerOption(id: current, label: label(current) ?? current)

@@ -768,7 +768,16 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     private func selectModel(_ selected: String) async {
-        let selectedModel = selected.isEmpty ? providerDefaultModel : selected
+        // Sanitize against the model this thread will ACTUALLY run once the
+        // request lands. Choosing the follow-default row clears the cell, and
+        // the gateway then resolves cell -> bound agent model -> provider
+        // default (`thread_runtime.rs`). Sanitizing against the provider default
+        // alone kept a thinking level the bound agent's model does not support.
+        let selectedModel = GaryxThreadModelOverridePresentation.effortFilterModel(
+            override: selected,
+            agentConfiguredModel: model.selectedThreadAgentTarget?.model,
+            providerModels: providerModels
+        )
         var nextReasoningEffort: String?
         if let currentReasoning = reasoningEffortOverride,
            GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(

@@ -327,6 +327,78 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         XCTAssertEqual(options.last?.label, "claude-retired-9")
     }
 
+    /// Regression: a blank advertised id must never become a concrete row. The
+    /// server trims it back to the empty string, so such a row would read like a
+    /// pinnable value while actually clearing the cell.
+    func testModelPickerDropsBlankAndDuplicateAdvertisedIds() throws {
+        let providerModels = try decodeProviderModels(blankAndDuplicateIdProviderJSON)
+
+        let options = GaryxThreadModelOverridePresentation.modelPickerOptions(
+            providerModels: providerModels,
+            effectiveModel: "claude-retired-9",
+            defaultRowLabel: "Agent default"
+        )
+
+        XCTAssertEqual(options.map(\.id), ["", "model-a", "claude-retired-9"])
+        XCTAssertEqual(options.filter { $0.id.isEmpty }.count, 1)
+        XCTAssertFalse(options.contains { $0.id != $0.id.trimmingCharacters(in: .whitespaces) })
+    }
+
+    /// A provider advertising nothing usable yields no rows at all, so the
+    /// follow-default row never appears alone.
+    func testModelPickerHasNoRowsWhenEveryAdvertisedIdIsBlank() throws {
+        let providerModels = try decodeProviderModels(onlyBlankIdProviderJSON)
+
+        XCTAssertTrue(
+            GaryxThreadModelOverridePresentation.modelPickerOptions(
+                providerModels: providerModels,
+                effectiveModel: "claude-opus-5",
+                defaultRowLabel: "Agent default"
+            ).isEmpty
+        )
+    }
+
+    /// Regression: clearing the model cell makes the gateway resolve
+    /// cell -> bound agent model -> provider default, so a thinking level must be
+    /// validated against the agent's model, not the provider default. Opus
+    /// supports `max` and Sonnet does not; picking "follow default" on a
+    /// Sonnet-bound thread must not keep `max`.
+    func testFollowDefaultSanitizesAgainstTheBoundAgentModel() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+        XCTAssertEqual(providerModels.defaultModel, "claude-opus-4-8")
+
+        let resolved = GaryxThreadModelOverridePresentation.effortFilterModel(
+            override: "",
+            agentConfiguredModel: "claude-sonnet-4-6",
+            providerModels: providerModels
+        )
+        XCTAssertEqual(resolved, "claude-sonnet-4-6")
+        XCTAssertNil(
+            GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
+                providerModels: providerModels,
+                model: resolved,
+                reasoningEffort: "max"
+            )
+        )
+
+        // With no agent model configured the provider default applies, and Opus
+        // 4.8 does support `max`.
+        let withoutAgentModel = GaryxThreadModelOverridePresentation.effortFilterModel(
+            override: "",
+            agentConfiguredModel: "",
+            providerModels: providerModels
+        )
+        XCTAssertEqual(withoutAgentModel, "claude-opus-4-8")
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
+                providerModels: providerModels,
+                model: withoutAgentModel,
+                reasoningEffort: "max"
+            ),
+            "max"
+        )
+    }
+
     func testModelPickerHasNoRowsWithoutAdvertisedModels() {
         XCTAssertTrue(
             GaryxThreadModelOverridePresentation.modelPickerOptions(
@@ -464,6 +536,34 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
                     { "id": "max", "label": "Max", "recommended": false }
                 ]
             }
+        ]
+    }
+    """
+
+    private let blankAndDuplicateIdProviderJSON = """
+    {
+        "provider_type": "claude_code",
+        "supports_model_selection": true,
+        "default_model": "model-a",
+        "source": "claude_code_discovery",
+        "models": [
+            { "id": "   ", "label": "Blank Id", "recommended": false },
+            { "id": "model-a", "label": "Model A", "recommended": true },
+            { "id": " model-a ", "label": "Model A Padded", "recommended": false },
+            { "id": "", "label": "Empty Id", "recommended": false }
+        ]
+    }
+    """
+
+    private let onlyBlankIdProviderJSON = """
+    {
+        "provider_type": "claude_code",
+        "supports_model_selection": true,
+        "default_model": "claude-opus-5",
+        "source": "claude_code_discovery",
+        "models": [
+            { "id": "   ", "label": "Blank Id", "recommended": false },
+            { "id": "", "label": "Empty Id", "recommended": false }
         ]
     }
     """
