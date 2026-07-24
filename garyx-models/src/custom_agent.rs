@@ -138,7 +138,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             agent_id: "antigravity".to_owned(),
             display_name: "Antigravity".to_owned(),
             provider_type: ProviderType::AntigravityCli,
-            model: crate::provider::default_antigravity_model(),
+            model: String::new(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
             provider_env: HashMap::new(),
