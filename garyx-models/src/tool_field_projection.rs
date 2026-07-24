@@ -869,6 +869,8 @@ fn file_path_summary_selector(message: &Map<String, Value>) -> Option<RenderTool
             "file_path",
             "filePath",
             "AbsolutePath",
+            "target_file",
+            "targetFile",
             "TargetFile",
             "notebook_path",
             "path",
@@ -892,6 +894,8 @@ fn call_selector(
             "file_path",
             "filePath",
             "AbsolutePath",
+            "target_file",
+            "targetFile",
             "TargetFile",
             "notebook_path",
             "path",
@@ -901,6 +905,8 @@ fn call_selector(
             "file_path",
             "filePath",
             "AbsolutePath",
+            "target_file",
+            "targetFile",
             "TargetFile",
             "notebook_path",
             "path",
@@ -1145,7 +1151,14 @@ fn selector_for_value(
         (RenderToolFieldLabel::Command, RenderToolFieldFormat::Code)
     } else if matches!(
         key,
-        "file_path" | "filePath" | "AbsolutePath" | "TargetFile" | "notebook_path" | "file"
+        "file_path"
+            | "filePath"
+            | "AbsolutePath"
+            | "target_file"
+            | "targetFile"
+            | "TargetFile"
+            | "notebook_path"
+            | "file"
     ) {
         (RenderToolFieldLabel::File, RenderToolFieldFormat::Path)
     } else if matches!(key, "savedPath" | "saved_path" | "path") && kind == RenderToolKind::Image {
@@ -1430,6 +1443,44 @@ mod tests {
             ["input", "description"]
         );
         assert_eq!(projection.result.as_ref().unwrap().path, ["result"]);
+    }
+
+    #[test]
+    fn grok_read_file_projects_target_file_and_path_only_image_result() {
+        let call = direct_call(
+            "read_file",
+            json!({
+                "input": {
+                    "target_file": "/workspace/chart.png"
+                }
+            }),
+        );
+        let result = result(
+            "read_file",
+            json!({
+                "status": "completed",
+                "path": "/workspace/chart.png",
+                "mime_type": "image/png"
+            }),
+        );
+
+        let mut projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
+        projection.absorb_result(RenderToolFieldProjection::from_message(&result, true).unwrap());
+
+        assert_eq!(projection.kind, RenderToolKind::FileRead);
+        assert_eq!(
+            projection.call.as_ref().unwrap().path,
+            ["input", "target_file"]
+        );
+        assert_eq!(
+            projection.call.as_ref().unwrap().format,
+            RenderToolFieldFormat::Path
+        );
+        assert_eq!(projection.result.as_ref().unwrap().path, ["path"]);
+        assert_eq!(
+            projection.result.as_ref().unwrap().format,
+            RenderToolFieldFormat::Path
+        );
     }
 
     #[test]

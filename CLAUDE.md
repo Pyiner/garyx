@@ -95,6 +95,11 @@ for personal data and remove it.
 - Grok Build integration is ACP-native: pass MCP servers through `mcpServers`
   and Garyx instructions through session `_meta.rules`. Do not use
   `systemPromptOverride`, which replaces Grok's native tool instructions.
+- Grok ACP tool results persist one presentation payload: prefer ACP `content`,
+  fall back to cleaned `rawOutput`, and never retain duplicate envelopes,
+  opaque `_meta`, or numeric byte-array `output`. When `read_file` returns an
+  image and its call has a path, persist that path plus MIME type instead of
+  base64 image data.
 - Provider identity surfaces must reuse the same avatar component and branded
   artwork as Agent surfaces; do not substitute screen-local SF Symbols.
 - A Claude Code `result` is a turn boundary, not a process boundary. Normal

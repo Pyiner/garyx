@@ -314,6 +314,58 @@ test('native image generation resolves its result-owned prompt and saved image p
   assert.ok(!JSON.stringify(merged).includes(FAKE_BASE64), 'tool row must not leak base64');
 });
 
+test('path-only Grok image reads request a gateway preview without base64', () => {
+  const imagePath = '/Users/test/workspace/chart.png';
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        input: { target_file: imagePath },
+      },
+      toolUseId: 'tool:grok-image-read',
+      toolName: 'read_file',
+    },
+    {
+      role: 'tool_result',
+      content: {
+        status: 'completed',
+        path: imagePath,
+        mime_type: 'image/png',
+      },
+      toolUseId: 'tool:grok-image-read',
+      toolName: 'read_file',
+    },
+    {
+      tool_name: 'read_file',
+      kind: 'file_read',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['input', 'target_file'],
+        format: 'path',
+        label: 'file',
+      },
+      result: {
+        root: 'content',
+        path: ['path'],
+        format: 'path',
+        label: 'file',
+      },
+      status: 'completed',
+    },
+  );
+
+  assert.deepEqual(merged.resultImages, []);
+  assert.deepEqual(merged.pathImages, [
+    {
+      key: `projected-image:${imagePath}`,
+      path: imagePath,
+      alt: 'chart.png',
+    },
+  ]);
+  assert.ok(!JSON.stringify(merged).includes('base64'));
+});
+
 test('ordinary path-bearing tools do not request gateway image previews', () => {
   const merged = resolveMergedToolTrace(
     {

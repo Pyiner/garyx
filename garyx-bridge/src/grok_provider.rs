@@ -358,6 +358,151 @@ struct GrokEventMapper {
     tools: HashMap<String, ToolState>,
 }
 
+const GROK_TOOL_RESULT_RECURSIVE_DROP_FIELDS: &[&str] = &["_meta"];
+const GROK_READ_FILE_PATH_FIELDS: &[&str] = &[
+    "target_file",
+    "targetFile",
+    "file_path",
+    "filePath",
+    "AbsolutePath",
+    "TargetFile",
+    "path",
+    "file",
+];
+
+fn meaningful_tool_result_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(values) => !values.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
+fn numeric_byte_array(value: &Value) -> bool {
+    let Value::Array(values) = value else {
+        return false;
+    };
+    values
+        .iter()
+        .all(|value| value.as_u64().is_some_and(|value| value <= u8::MAX as u64))
+}
+
+fn remove_grok_tool_result_fields(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                remove_grok_tool_result_fields(value);
+            }
+        }
+        Value::Object(object) => {
+            object.retain(|field, _| {
+                !GROK_TOOL_RESULT_RECURSIVE_DROP_FIELDS.contains(&field.as_str())
+            });
+            if object.get("output").is_some_and(numeric_byte_array) {
+                object.remove("output");
+            }
+            for value in object.values_mut() {
+                remove_grok_tool_result_fields(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn read_file_path(state: &ToolState) -> Option<String> {
+    if !state.name.eq_ignore_ascii_case("read_file") {
+        return None;
+    }
+    let input = state.input.as_object()?;
+    GROK_READ_FILE_PATH_FIELDS.iter().find_map(|field| {
+        input
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+struct GrokImagePayload {
+    mime_type: Option<String>,
+}
+
+fn image_payload(value: &Value, depth: usize) -> Option<GrokImagePayload> {
+    if depth > 12 {
+        return None;
+    }
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| image_payload(value, depth + 1)),
+        Value::Object(object) => {
+            let mime_type = ["mimeType", "mime_type", "mediaType", "media_type"]
+                .iter()
+                .find_map(|field| object.get(*field).and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let typed_image = object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.eq_ignore_ascii_case("image"));
+            if object.get("data").is_some()
+                && (typed_image
+                    || mime_type.is_some_and(|mime_type| mime_type.starts_with("image/")))
+            {
+                return Some(GrokImagePayload {
+                    mime_type: mime_type.map(ToOwned::to_owned),
+                });
+            }
+            object
+                .values()
+                .find_map(|value| image_payload(value, depth + 1))
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+    }
+}
+
+fn clean_grok_tool_result(update: &Value, state: &ToolState, status: Option<&str>) -> Value {
+    let display_content = update
+        .get("content")
+        .filter(|value| meaningful_tool_result_value(value));
+    let raw_output = update
+        .get("rawOutput")
+        .filter(|value| meaningful_tool_result_value(value));
+
+    let image_path = read_file_path(state).and_then(|path| {
+        display_content
+            .and_then(|value| image_payload(value, 0))
+            .or_else(|| raw_output.and_then(|value| image_payload(value, 0)))
+            .map(|image| (path, image))
+    });
+
+    let mut result = serde_json::Map::new();
+    if let Some(status) = status {
+        result.insert("status".to_owned(), Value::String(status.to_owned()));
+    }
+    if let Some((path, image)) = image_path {
+        result.insert("path".to_owned(), Value::String(path));
+        if let Some(mime_type) = image.mime_type {
+            result.insert("mime_type".to_owned(), Value::String(mime_type));
+        }
+        return Value::Object(result);
+    }
+
+    let mut content = display_content.or(raw_output).cloned();
+
+    if let Some(content) = content.as_mut() {
+        remove_grok_tool_result_fields(content);
+    }
+
+    if let Some(content) = content.filter(meaningful_tool_result_value) {
+        result.insert("content".to_owned(), content);
+    }
+    Value::Object(result)
+}
+
 impl GrokEventMapper {
     fn apply(&mut self, event: GrokEvent, on_chunk: &StreamCallback) {
         match event {
@@ -426,15 +571,7 @@ impl GrokEventMapper {
         }
         state.finished = true;
         let is_error = matches!(status, Some("failed" | "cancelled"));
-        let content = json!({
-            "type": "acpToolResult",
-            "id": id,
-            "name": state.name,
-            "title": state.title,
-            "status": status,
-            "output": update.get("rawOutput").cloned().unwrap_or(Value::Null),
-            "content": update.get("content").cloned().unwrap_or(Value::Null),
-        });
+        let content = clean_grok_tool_result(update, state, status);
         let message = ProviderMessage::tool_result(
             content,
             Some(id),
@@ -1055,6 +1192,221 @@ mod tests {
         assert_eq!(
             mapper.session_messages[0].tool_use_id.as_deref(),
             Some("tool-1")
+        );
+    }
+
+    #[test]
+    fn tool_results_remove_redundant_raw_output_and_acp_metadata() {
+        let mut mapper = GrokEventMapper::default();
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-clean",
+                "title": "Run command",
+                "rawInput": {"command": "printf clean"},
+                "_meta": {"x.ai/tool": {"name": "run_terminal_command"}}
+            }),
+            &callback(),
+        );
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool-clean",
+                "status": "completed",
+                "content": [{
+                    "type": "content",
+                    "content": {"type": "text", "text": "clean"},
+                    "_meta": {"providerInternal": "duplicate content"}
+                }],
+                "rawOutput": {
+                    "command": "printf clean",
+                    "output": [99, 108, 101, 97, 110],
+                    "output_file": "/tmp/provider-internal.log",
+                    "output_for_prompt": "clean"
+                }
+            }),
+            &callback(),
+        );
+
+        assert_eq!(
+            mapper.session_messages[1].content,
+            json!({
+                "status": "completed",
+                "content": [{
+                    "type": "content",
+                    "content": {"type": "text", "text": "clean"}
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn tool_results_keep_raw_output_when_acp_content_is_missing() {
+        let mut mapper = GrokEventMapper::default();
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-fallback",
+                "title": "Collect background command",
+                "rawInput": {"task_id": "task-1"},
+                "_meta": {"x.ai/tool": {"name": "get_command_or_subagent_output"}}
+            }),
+            &callback(),
+        );
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool-fallback",
+                "status": "completed",
+                "rawOutput": {
+                    "type": "TaskOutput",
+                    "Result": {
+                        "exit_code": 0,
+                        "output": "finished"
+                    }
+                }
+            }),
+            &callback(),
+        );
+
+        assert_eq!(
+            mapper.session_messages[1].content,
+            json!({
+                "status": "completed",
+                "content": {
+                    "type": "TaskOutput",
+                    "Result": {
+                        "exit_code": 0,
+                        "output": "finished"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn tool_results_drop_numeric_byte_array_outputs_without_display_content() {
+        let mut mapper = GrokEventMapper::default();
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-bytes",
+                "title": "Run command",
+                "rawInput": {"command": "printf clean"},
+                "_meta": {"x.ai/tool": {"name": "run_terminal_command"}}
+            }),
+            &callback(),
+        );
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool-bytes",
+                "status": "completed",
+                "rawOutput": {
+                    "exit_code": 0,
+                    "output": [99, 108, 101, 97, 110],
+                    "output_for_prompt": "clean"
+                }
+            }),
+            &callback(),
+        );
+
+        assert_eq!(
+            mapper.session_messages[1].content,
+            json!({
+                "status": "completed",
+                "content": {
+                    "exit_code": 0,
+                    "output_for_prompt": "clean"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn image_file_results_keep_the_path_instead_of_base64() {
+        let mut mapper = GrokEventMapper::default();
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-image",
+                "title": "Read image",
+                "rawInput": {"target_file": "/workspace/chart.png"},
+                "_meta": {"x.ai/tool": {"name": "read_file"}}
+            }),
+            &callback(),
+        );
+        mapper.apply_update(
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool-image",
+                "status": "completed",
+                "content": [{
+                    "type": "content",
+                    "content": {
+                        "type": "image",
+                        "mimeType": "image/png",
+                        "data": "large-base64-payload"
+                    }
+                }],
+                "rawOutput": {
+                    "type": "ReadFile",
+                    "ImageContent": {
+                        "mime_type": "image/png",
+                        "data": "large-base64-payload"
+                    }
+                }
+            }),
+            &callback(),
+        );
+
+        assert_eq!(
+            mapper.session_messages[1].content,
+            json!({
+                "status": "completed",
+                "path": "/workspace/chart.png",
+                "mime_type": "image/png"
+            })
+        );
+        assert_eq!(
+            mapper.session_messages[0].content["input"]["target_file"],
+            "/workspace/chart.png"
+        );
+        assert!(
+            !mapper.session_messages[1]
+                .content
+                .to_string()
+                .contains("large-base64-payload")
+        );
+    }
+
+    #[test]
+    fn image_file_results_drop_base64_even_without_a_mime_type() {
+        let state = ToolState {
+            name: "read_file".to_owned(),
+            input: json!({"target_file": "/workspace/extensionless-image"}),
+            ..Default::default()
+        };
+        let result = clean_grok_tool_result(
+            &json!({
+                "content": [{
+                    "type": "content",
+                    "content": {
+                        "type": "image",
+                        "data": "large-base64-payload"
+                    }
+                }]
+            }),
+            &state,
+            Some("completed"),
+        );
+
+        assert_eq!(
+            result,
+            json!({
+                "status": "completed",
+                "path": "/workspace/extensionless-image"
+            })
         );
     }
 

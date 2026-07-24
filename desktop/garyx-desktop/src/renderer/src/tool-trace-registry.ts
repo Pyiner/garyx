@@ -65,11 +65,31 @@ export type MergedToolTrace = {
   resultLabel?: string;
   /** Image blocks extracted from the tool result, rendered as thumbnails. */
   resultImages: ToolResultImageSegment[];
-  /** Gateway-side image paths referenced by an Image view call. */
+  /** Gateway-side image paths referenced by an image or image-file read. */
   pathImages: ToolPathImageRef[];
   icon: string;
   isError: boolean;
 };
+
+const IMAGE_PATH_EXTENSIONS = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'heic',
+  'heif',
+  'bmp',
+  'tiff',
+  'svg',
+]);
+
+function isImagePath(path: string): boolean {
+  const fileName = path.split(/[\\/]/).filter(Boolean).pop() || '';
+  const separator = fileName.lastIndexOf('.');
+  return separator >= 0
+    && IMAGE_PATH_EXTENSIONS.has(fileName.slice(separator + 1).toLowerCase());
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -339,7 +359,7 @@ function collectProjectedPathImages(
   toolResult: ToolTraceMessage | undefined,
   projection: RenderToolFieldProjection,
 ): ToolPathImageRef[] {
-  if (projection.kind !== 'image') {
+  if (projection.kind !== 'image' && projection.kind !== 'file_read') {
     return [];
   }
   const candidates = [
@@ -357,7 +377,11 @@ function collectProjectedPathImages(
       continue;
     }
     const path = unwrapProjectedString(candidate).trim();
-    if (!path || seen.has(path)) {
+    if (
+      !path
+      || seen.has(path)
+      || (projection.kind === 'file_read' && !isImagePath(path))
+    ) {
       continue;
     }
     seen.add(path);
