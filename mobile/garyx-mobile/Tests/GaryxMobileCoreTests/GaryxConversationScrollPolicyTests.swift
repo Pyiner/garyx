@@ -246,55 +246,27 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertNil(state.bottomChromeChanged())
     }
 
-    func testSendRunSpaceSuppressesNearBottomFollowRearmUntilExplicitReturn() {
+    func testReaderGestureEndsAnchoredSessionAndRestoresBaselineSemantics() {
         var state = GaryxConversationScrollState()
         _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-        XCTAssertTrue(state.hasSendRunSpace)
+        XCTAssertTrue(state.isSendAnchored)
 
-        // The reader's gesture hands ownership to browsing.
+        // v2.1 (boss rule: once touched, the blank must go): the reader's
+        // gesture ends the session outright. The view collapses the filler
+        // on this flip; ordinary bottom semantics resume immediately.
         XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
         XCTAssertEqual(state.anchoring, .browsingHistory)
+        XCTAssertFalse(state.isSendAnchored)
         XCTAssertNil(state.userScrollInteractionChanged(isInteracting: false))
-        XCTAssertTrue(state.hasSendRunSpace)
 
-        // Near-bottom here means adjacency to blank run space (the filler
-        // keeps the content bottom exactly one viewport below the anchor).
-        // It must NOT re-arm tail following: following would pin the
-        // viewport to blank filler and re-enable auto-scroll mid-read.
+        // Near-bottom re-arms following exactly like the baseline — with the
+        // filler collapsed there is no blank space to mis-pin to.
         XCTAssertNil(
             state.metricsChanged(
                 GaryxConversationLayoutMetrics(
                     contentTopOffset: -1_000,
                     contentBottomOffset: 810,
-                    contentTailOffset: 500,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
-        XCTAssertEqual(state.anchoring, .browsingHistory)
-        XCTAssertTrue(state.hasSendRunSpace)
-
-        // The explicit scroll-to-bottom control retires the run space and
-        // resumes following; the view collapses the filler in the same
-        // update so the landing tail is the real content tail.
-        XCTAssertEqual(
-            state.scrollToBottomTapped(),
-            .init(reason: .manual, animated: false)
-        )
-        XCTAssertFalse(state.hasSendRunSpace)
-        XCTAssertTrue(state.isFollowingTail)
-
-        // With the run space retired, near-bottom re-arms following again
-        // (baseline semantics fully restored).
-        _ = state.userScrollInteractionChanged(isInteracting: true)
-        _ = state.userScrollInteractionChanged(isInteracting: false)
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: -1_000,
-                    contentBottomOffset: 805,
-                    contentTailOffset: 805,
+                    contentTailOffset: 810,
                     viewportHeight: 800
                 ),
                 hasTailContent: true
@@ -315,46 +287,29 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             .init(reason: .tailUpdate, animated: true)
         )
         XCTAssertTrue(state.isFollowingTail)
-        XCTAssertFalse(state.hasSendRunSpace)
+        XCTAssertFalse(state.isSendAnchored)
         XCTAssertNil(state.sendAnchorRowId)
         XCTAssertNil(state.sendRunSpaceExhausted(), "idempotent once retired")
     }
 
-    func testRunSpaceExhaustionWhileBrowsingOnlyRetiresRunSpace() {
+    func testExhaustionOutsideAnchoredSessionIsANoOp() {
         var state = GaryxConversationScrollState()
         _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
+        _ = state.userScrollInteractionChanged(isInteracting: true)
         XCTAssertEqual(state.anchoring, .browsingHistory)
 
-        // A reader who scrolled away is never yanked; the exhaustion only
-        // retires the run space so baseline near-bottom re-arming resumes.
+        // The gesture already ended the session (v2.1); a late exhaustion
+        // signal from a stale measurement must not move anything.
         XCTAssertNil(state.sendRunSpaceExhausted())
-        XCTAssertFalse(state.hasSendRunSpace)
         XCTAssertEqual(state.anchoring, .browsingHistory)
-        _ = state.userScrollInteractionChanged(isInteracting: false)
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: -1_000,
-                    contentBottomOffset: 810,
-                    contentTailOffset: 810,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
-        XCTAssertTrue(
-            state.isFollowingTail,
-            "with run space retired, near-bottom re-arms following again"
-        )
     }
 
-    func testThreadOpenedRetiresSendRunSpace() {
+    func testThreadOpenedEndsAnchoredSession() {
         var state = GaryxConversationScrollState()
         _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-        XCTAssertTrue(state.hasSendRunSpace)
+        XCTAssertTrue(state.isSendAnchored)
         _ = state.threadOpened()
-        XCTAssertFalse(state.hasSendRunSpace)
+        XCTAssertFalse(state.isSendAnchored)
         XCTAssertTrue(state.isFollowingTail)
     }
 
@@ -745,7 +700,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     func testLocalSendRetryClockDoesNotInterruptItsFirstAnimation() {
         XCTAssertEqual(
             GaryxConversationScrollState.ScrollReason.localSend.retryDelayMilliseconds,
-            [0, 320, 650, 1_000]
+            [0, 50, 320, 650, 1_000]
         )
     }
 

@@ -55,12 +55,14 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
         anchorRowId: String,
         viewportHeight: CGFloat,
         bottomChromeClearance: CGFloat,
+        anchorTopInset: CGFloat = 0,
         contentBelowAnchorHeight: CGFloat
     ) -> CGFloat {
         self.anchorRowId = anchorRowId
         runSpaceFloor = Self.effectiveRunSpace(
             viewportHeight: viewportHeight,
-            bottomChromeClearance: bottomChromeClearance
+            bottomChromeClearance: bottomChromeClearance,
+            anchorTopInset: anchorTopInset
         )
         height = max(0, runSpaceFloor - Self.valid(contentBelowAnchorHeight))
         updateExhaustion(contentBelowAnchorHeight: contentBelowAnchorHeight)
@@ -73,6 +75,7 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
     public mutating func reconcile(
         viewportHeight: CGFloat,
         bottomChromeClearance: CGFloat,
+        anchorTopInset: CGFloat = 0,
         contentBelowAnchorHeight: CGFloat
     ) -> CGFloat {
         guard anchorRowId != nil else {
@@ -84,7 +87,8 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
             runSpaceFloor,
             Self.effectiveRunSpace(
                 viewportHeight: viewportHeight,
-                bottomChromeClearance: bottomChromeClearance
+                bottomChromeClearance: bottomChromeClearance,
+                anchorTopInset: anchorTopInset
             )
         )
         height = max(0, runSpaceFloor - Self.valid(contentBelowAnchorHeight))
@@ -101,11 +105,21 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
             && Self.valid(contentBelowAnchorHeight) >= runSpaceFloor
     }
 
+    /// Run space required below the anchored row: the viewport minus the
+    /// bottom chrome clearance and the anchor's top inset (the anchored row
+    /// sits `anchorTopInset` below the viewport top, so that much less space
+    /// is needed underneath it).
     private static func effectiveRunSpace(
         viewportHeight: CGFloat,
-        bottomChromeClearance: CGFloat
+        bottomChromeClearance: CGFloat,
+        anchorTopInset: CGFloat
     ) -> CGFloat {
-        max(0, valid(viewportHeight) - valid(bottomChromeClearance))
+        max(
+            0,
+            valid(viewportHeight)
+                - valid(bottomChromeClearance)
+                - valid(anchorTopInset)
+        )
     }
 
     private static func valid(_ value: CGFloat) -> CGFloat {

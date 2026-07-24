@@ -183,6 +183,34 @@ final class GaryxSendAnchorFillerStateTests: XCTestCase {
         XCTAssertEqual(state.runSpaceFloor, 800)
     }
 
+    func testAnchorTopInsetReducesRequiredRunSpace() {
+        var state = GaryxSendAnchorFillerState()
+        // The anchored row sits `anchorTopInset` below the viewport top
+        // (v2.1 breathing room under the title capsule), so exactly that
+        // much less run space is required underneath it.
+        XCTAssertEqual(
+            state.begin(
+                anchorRowId: "user_turn:origin:send",
+                viewportHeight: 800,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 200
+            ),
+            560
+        )
+        XCTAssertEqual(state.runSpaceFloor, 760)
+        XCTAssertEqual(
+            state.reconcile(
+                viewportHeight: 800,
+                bottomChromeClearance: 24,
+                anchorTopInset: 16,
+                contentBelowAnchorHeight: 760
+            ),
+            0
+        )
+        XCTAssertTrue(state.isExhausted)
+    }
+
     func testReconcileWithoutSessionStaysEmpty() {
         var state = GaryxSendAnchorFillerState()
         XCTAssertEqual(

@@ -95,6 +95,28 @@ for: .initialOffset)` + `.defaultScrollAnchor(.bottom, for: .sizeChanges)`），
 （绕过 0.2s 出现去抖）、服务端 thinking `.debounced`（已可见则不重置，
 ACK 静默）、其余 `.hidden`。沿用 v1 实现。
 
+## 2.5 v2.1 真机反馈修订（2026-07-24 晚，老板真机试用）
+
+1. **手势即收场（会话状态合一）**：用户滚动手势开始的瞬间即退出锚定
+   会话，run space 空白同帧收场（空白在视口之下，收场无感；人在空白
+   里则 clamp 落到真实底部=“吸底”）。由此 `hasSendRunSpace` 独立
+   生命周期整体删除——run space 与 `sendAnchored` 态同生共死，
+   会话退出的 filler 收场由视图镜像（`isSendAnchored` 翻转）单一
+   拥有；near-bottom 重武装抑制等衍生状态一并删除，非会话语义回到
+   与基线完全一致。
+2. **锚顶 top inset**：锚定位置 = 视口顶 + `conversationSendAnchorTopInset`
+   （16pt 起步，模拟器对标题胶囊实调），给标题胶囊留呼吸距离。
+   行目标滚动改为宿主 UIScrollView 精确 setContentOffset（镜像
+   prepend-restore 模式，proxy.scrollTo 无法表达 inset），settle
+   判据与 filler floor 同步扣除 inset。
+3. **触觉与动画对齐**：发送触觉从 model 层（present 后立即）移到
+   转录视图**首次授权写入**的瞬间，与锚顶动画同帧启动；动画条件从
+   “index 0”改为“首次真实写入”（0ms 尝试因行未布局打空时，50ms
+   早期重试补位并仍带动画，而不是无动画 snap）；localSend 重试表
+   `[0,50,320,650,1000]ms`。
+4. 进线程刷新前后位置不一致（偶发）由 #TASK-2697 独立复现定根因，
+   不并入本修订。
+
 ## 3. Scope 边界
 
 - 不触碰：服务端契约、SSE、桌面端、历史 prepend 机制、
