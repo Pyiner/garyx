@@ -247,11 +247,21 @@ struct GaryxConversationRouteRenderInput: Equatable {
         }
     }
 
-    /// The existing transcript bubble is shared by server thinking and the
-    /// explicitly permitted optimistic pending-ack window. No transport or
-    /// run-projection state participates in this decision.
+    /// The optimistic pending-ack window bypasses only the appearance-side
+    /// debounce. Once the committed frame arrives, server thinking takes
+    /// ownership without unmounting an already-visible label.
+    var tailThinkingPresentationMode: GaryxTailThinkingPresentationMode {
+        if showsPendingAcknowledgement {
+            return .immediate
+        }
+        if snapshot?.tailActivity == .thinking {
+            return .debounced
+        }
+        return .hidden
+    }
+
     var showsTailThinking: Bool {
-        snapshot?.tailActivity == .thinking || showsPendingAcknowledgement
+        tailThinkingPresentationMode != .hidden
     }
 }
 

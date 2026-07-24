@@ -8,8 +8,8 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
     /// origin-bearing user turn. This pins both halves of the symptom:
     ///
     /// - optimistic -> committed keeps the exact same outer row and message id;
-    /// - the TASK-2523 baseline emitted a second programmatic tail-scroll
-    ///   request for that identity-preserving materialization, after the append.
+    /// - the send-anchored policy emits one local row-top request and treats
+    ///   identity-preserving materialization as completely scroll-silent.
     ///
     /// The last assertion failed on the TASK-2523 baseline and stays as the
     /// regression gate for identity-preserving materialization.
@@ -101,6 +101,16 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
 
         var scrollState = GaryxConversationScrollState()
         _ = scrollState.threadOpened()
+        let anchorRequest = scrollState.localSendPresented(anchorRowId: expectedTailID)
+        XCTAssertEqual(
+            anchorRequest,
+            .init(
+                reason: .localSend,
+                target: .row(id: expectedTailID),
+                alignment: .top,
+                animated: true
+            )
+        )
         let appendRequest = scrollState.messagesChanged(
             previous: priorMessages.map(GaryxMobileMessageGeometry.init),
             current: optimisticGeometry,
@@ -109,7 +119,10 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
             currentScopeIdentity: threadScope,
             hasTailContent: true
         )
-        XCTAssertEqual(appendRequest, .init(reason: .tailUpdate, animated: false))
+        XCTAssertNil(
+            appendRequest,
+            "the optimistic append is covered by the same-frame local-send request"
+        )
 
         let materializationRequest = scrollState.messagesChanged(
             previous: optimisticGeometry,
@@ -121,7 +134,7 @@ final class GaryxMessageSendJitterReproTests: XCTestCase {
         )
         XCTAssertNil(
             materializationRequest,
-            "FAILS ON BASELINE: stable committed materialization must not start another bottom-anchor retry chain"
+            "stable committed materialization must not start another anchor retry chain"
         )
     }
 
