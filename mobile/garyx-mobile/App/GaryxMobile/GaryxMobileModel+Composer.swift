@@ -20,6 +20,7 @@ private struct GaryxOptimisticSendPresentation {
     let previousRuntime: GaryxThreadRuntime?
     let previousActiveAssistantId: String?
     let beganRunDispatch: Bool
+    let localSendPresentation: GaryxConversationLocalSendPresentation?
 }
 
 extension GaryxMobileModel {
@@ -201,7 +202,7 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    func sendDraft() async -> Bool {
+    func sendDraft(presentationScopeIdentity: String? = nil) async -> Bool {
         let projectedText = activeComposerDraft
         let projectedItems = activeComposerPayloadItems
         guard composerPayloadCoordinator.canSend,
@@ -225,7 +226,8 @@ extension GaryxMobileModel {
                         optimisticPresentation = self.presentOptimisticSend(
                             text: Self.normalizedComposerSendText(prepared.text),
                             attachments: Self.mobileComposerAttachments(from: prepared.attachments),
-                            clientIntentId: prepared.clientIntentID
+                            clientIntentId: prepared.clientIntentID,
+                            presentationScopeIdentity: presentationScopeIdentity
                         )
                     },
                     rollback: {
@@ -279,12 +281,14 @@ extension GaryxMobileModel {
         _ text: String,
         attachments: [GaryxMobileComposerAttachment] = [],
         clientIntentId suppliedClientIntentId: String? = nil,
-        delivery: GaryxComposerDeliveryHandle? = nil
+        delivery: GaryxComposerDeliveryHandle? = nil,
+        presentationScopeIdentity: String? = nil
     ) async {
         let presentation = presentOptimisticSend(
             text: text,
             attachments: attachments,
-            clientIntentId: suppliedClientIntentId ?? "mobile-\(UUID().uuidString)"
+            clientIntentId: suppliedClientIntentId ?? "mobile-\(UUID().uuidString)",
+            presentationScopeIdentity: presentationScopeIdentity
         )
         guard presentation.shouldDispatch else { return }
         GaryxMobileHaptics.shared.play(.messageSendCommitted)
@@ -298,7 +302,8 @@ extension GaryxMobileModel {
     private func presentOptimisticSend(
         text: String,
         attachments: [GaryxMobileComposerAttachment],
-        clientIntentId: String
+        clientIntentId: String,
+        presentationScopeIdentity: String?
     ) -> GaryxOptimisticSendPresentation {
         let runtimeGeneration = gatewayRequestToken
         let clientTimestampLocal = Self.localChatTimestamp()
@@ -360,6 +365,25 @@ extension GaryxMobileModel {
             messages = draftOptimisticMessages
         }
         GaryxConversationSendJitterProbe.shared?.optimisticRowAppended()
+        let localSendPresentation: GaryxConversationLocalSendPresentation?
+        // A send that already failed at present time (busy-at-present) never
+        // starts a send-anchor session: the row is marked failed in place and
+        // the transcript keeps its ordinary bottom-anchored behavior.
+        if shouldDispatch,
+           let scopeIdentity = presentationScopeIdentity?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !scopeIdentity.isEmpty {
+            conversationLocalSendPresentationGeneration &+= 1
+            let presentation = GaryxConversationLocalSendPresentation(
+                scopeIdentity: scopeIdentity,
+                anchorRowId: "user_turn:\(userMessage.id)",
+                generation: conversationLocalSendPresentationGeneration
+            )
+            conversationLocalSendPresentation = presentation
+            localSendPresentation = presentation
+        } else {
+            localSendPresentation = nil
+        }
         let presentedMessages = initialThreadId.map { cachedMessages(for: $0) } ?? messages
         return GaryxOptimisticSendPresentation(
             runtimeGeneration: runtimeGeneration,
@@ -377,7 +401,8 @@ extension GaryxMobileModel {
             presentedMessages: presentedMessages,
             previousRuntime: previousRuntime,
             previousActiveAssistantId: previousActiveAssistantId,
-            beganRunDispatch: beganRunDispatch
+            beganRunDispatch: beganRunDispatch,
+            localSendPresentation: localSendPresentation
         )
     }
 
@@ -413,6 +438,24 @@ extension GaryxMobileModel {
         } else {
             messages.removeAll { $0.id == presentation.userMessage.id }
         }
+        if conversationLocalSendPresentation == presentation.localSendPresentation {
+            conversationLocalSendPresentation = nil
+        }
+    }
+
+    /// A terminally failed send ends its send-anchor session: the failed row
+    /// stays in the transcript with its error state, but the anchored
+    /// presentation (blank run space, suspended size-change anchor) must not
+    /// outlive the send it was presenting. No-op when a newer send already
+    /// owns the signal.
+    private func endConversationLocalSendPresentation(
+        _ localSendPresentation: GaryxConversationLocalSendPresentation?
+    ) {
+        guard let localSendPresentation,
+              conversationLocalSendPresentation == localSendPresentation else {
+            return
+        }
+        conversationLocalSendPresentation = nil
     }
 
     private func dispatchPresentedSend(
@@ -529,6 +572,7 @@ extension GaryxMobileModel {
                     error: "Thread is busy"
                 )
                 refreshHomeThreadsAfterLocalRunStateChange()
+                endConversationLocalSendPresentation(presentation.localSendPresentation)
                 return
             }
             refreshHomeThreadsAfterLocalRunStart()
@@ -580,6 +624,7 @@ extension GaryxMobileModel {
                 )
                 refreshHomeThreadsAfterLocalRunStateChange()
             }
+            endConversationLocalSendPresentation(presentation.localSendPresentation)
             lastError = displayMessage(for: error)
         }
     }
@@ -897,7 +942,10 @@ extension GaryxMobileModel {
     /// Re-send a user message that previously failed. Removes the failed user bubble +
     /// any trailing failed assistant placeholder and runs the normal send pipeline.
     @discardableResult
-    func retryFailedUserMessage(_ messageId: String) async -> Bool {
+    func retryFailedUserMessage(
+        _ messageId: String,
+        presentationScopeIdentity: String? = nil
+    ) async -> Bool {
         guard let threadId = selectedThread?.id else { return false }
         var capturedText: String?
         var capturedAttachments: [GaryxMobileMessageAttachment] = []
@@ -918,7 +966,11 @@ extension GaryxMobileModel {
         guard let text = capturedText else { return false }
         let composerPayloadItems = capturedAttachments.compactMap(Self.composerAttachment(from:))
         lastError = nil
-        await send(text, attachments: composerPayloadItems)
+        await send(
+            text,
+            attachments: composerPayloadItems,
+            presentationScopeIdentity: presentationScopeIdentity
+        )
         return true
     }
 
