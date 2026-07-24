@@ -274,24 +274,83 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
-    func testSelectedOptionIdReflectsEffectiveValueNotDefault() {
-        // Effective equals the default -> the "use default" row ("") is selected.
+    func testSelectedPickerOptionIdFollowsTheThreadCell() {
+        // A pinned cell checks its own row — including when that value is also
+        // the current default. Resolving the effective value instead checked the
+        // follow-default row and left the pinned row with no checkmark.
+        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: "max"), "max")
         XCTAssertEqual(
-            GaryxThreadModelOverridePresentation.selectedOptionId(effective: "high", default: "high"),
-            ""
+            GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: "claude-opus-5"),
+            "claude-opus-5"
         )
-        // Effective differs from the default -> the effective value's own row is
-        // selected, so the picker checkmark matches the summary row instead of
-        // falling back to the default (the "Max outside, High in the picker" bug).
+        // An empty cell follows the default, so the empty-id row is checked.
+        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: nil), "")
+        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: "  "), "")
+    }
+
+    /// Regression: the provider default must keep its own real-id row.
+    ///
+    /// The picker used to label the empty follow-default row with the default
+    /// model's own label and then suppress that model's real row. With
+    /// `default_model: claude-opus-5` the only row reading "Claude Opus 5" sent
+    /// `{"model":""}`, which cleared the thread cell and silently fell back to
+    /// the bound agent's model instead of pinning Opus 5.
+    func testModelPickerKeepsARealRowForTheProviderDefault() throws {
+        let providerModels = try decodeProviderModels(defaultIsFirstModelProviderJSON)
+        XCTAssertEqual(providerModels.defaultModel, "claude-opus-5")
+
+        let options = GaryxThreadModelOverridePresentation.modelPickerOptions(
+            providerModels: providerModels,
+            effectiveModel: "claude-opus-5",
+            defaultRowLabel: "Agent default"
+        )
+
+        XCTAssertEqual(options.map(\.id), ["", "claude-opus-5", "claude-sonnet-5"])
+        // Row 0 never borrows a concrete model's label.
+        XCTAssertEqual(options.first?.label, "Agent default")
         XCTAssertEqual(
-            GaryxThreadModelOverridePresentation.selectedOptionId(effective: "max", default: "high"),
-            "max"
+            options.first(where: { $0.id == "claude-opus-5" })?.label,
+            "Claude Opus 5"
         )
-        // No effective value, or whitespace -> default row.
-        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedOptionId(effective: nil, default: "high"), "")
-        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedOptionId(effective: "  ", default: "high"), "")
-        // No default known -> any effective value selects its own row.
-        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedOptionId(effective: "max", default: nil), "max")
+    }
+
+    func testModelPickerAppendsAnUnadvertisedRunningModel() throws {
+        let providerModels = try decodeProviderModels(defaultIsFirstModelProviderJSON)
+
+        let options = GaryxThreadModelOverridePresentation.modelPickerOptions(
+            providerModels: providerModels,
+            effectiveModel: "claude-retired-9",
+            defaultRowLabel: "Agent default"
+        )
+
+        XCTAssertEqual(options.map(\.id), ["", "claude-opus-5", "claude-sonnet-5", "claude-retired-9"])
+        XCTAssertEqual(options.last?.label, "claude-retired-9")
+    }
+
+    func testModelPickerHasNoRowsWithoutAdvertisedModels() {
+        XCTAssertTrue(
+            GaryxThreadModelOverridePresentation.modelPickerOptions(
+                providerModels: nil,
+                effectiveModel: "claude-opus-5",
+                defaultRowLabel: "Agent default"
+            ).isEmpty
+        )
+    }
+
+    /// Same contract for thinking levels: the model's default effort keeps its
+    /// own row, so choosing it pins that level instead of clearing the cell.
+    func testReasoningEffortPickerKeepsARealRowForTheDefaultLevel() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+
+        let options = GaryxThreadModelOverridePresentation.reasoningEffortPickerOptions(
+            providerModels: providerModels,
+            model: nil,
+            effectiveReasoningEffort: "max",
+            defaultRowLabel: "Agent default"
+        )
+
+        XCTAssertEqual(options.first?.label, "Agent default")
+        XCTAssertEqual(options.map(\.id), ["", "low", "high", "max"])
     }
 
     private func decodeProviderModels(_ json: String) throws -> GaryxProviderModels {
@@ -359,6 +418,45 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
             {
                 "id": "claude-opus-4-8",
                 "label": "Claude Opus 4.8",
+                "recommended": false,
+                "supported_reasoning_efforts": [
+                    { "id": "low", "label": "Low", "recommended": false },
+                    { "id": "high", "label": "High", "recommended": true },
+                    { "id": "max", "label": "Max", "recommended": false }
+                ]
+            }
+        ]
+    }
+    """
+
+    /// Shape the live gateway returns for `claude_code`: discovery advertises
+    /// the newest models and `default_model` names one of them, so the default
+    /// and a real catalog row are the same value.
+    private let defaultIsFirstModelProviderJSON = """
+    {
+        "provider_type": "claude_code",
+        "supports_model_selection": true,
+        "supports_reasoning_effort_selection": true,
+        "default_model": "claude-opus-5",
+        "source": "claude_code_discovery",
+        "reasoning_efforts": [
+            { "id": "low", "label": "Low", "recommended": false },
+            { "id": "high", "label": "High", "recommended": true }
+        ],
+        "models": [
+            {
+                "id": "claude-opus-5",
+                "label": "Claude Opus 5",
+                "recommended": true,
+                "supported_reasoning_efforts": [
+                    { "id": "low", "label": "Low", "recommended": false },
+                    { "id": "high", "label": "High", "recommended": true },
+                    { "id": "max", "label": "Max", "recommended": false }
+                ]
+            },
+            {
+                "id": "claude-sonnet-5",
+                "label": "Claude Sonnet 5",
                 "recommended": false,
                 "supported_reasoning_efforts": [
                     { "id": "low", "label": "Low", "recommended": false },

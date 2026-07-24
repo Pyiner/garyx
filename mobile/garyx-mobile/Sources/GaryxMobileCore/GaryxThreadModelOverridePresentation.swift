@@ -1,5 +1,17 @@
 import Foundation
 
+/// One row in a runtime-settings picker. The empty id is the follow-default row
+/// (clears the thread's cell); any other id pins exactly that value.
+public struct GaryxRuntimePickerOption: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
 /// Presentation rules for the per-thread model / thinking-level override chosen
 /// while drafting a new thread. The Mac app's composer model control is the
 /// source of truth for labels and semantics; mobile adapts only the layout.
@@ -64,23 +76,112 @@ public enum GaryxThreadModelOverridePresentation {
             ?? options.first.flatMap { normalized($0.id) }
     }
 
-    /// The option id a model / thinking-level picker should mark as selected,
-    /// given the value the thread ACTUALLY runs at (`effective`) and the default
-    /// for the current model. The empty-id "use default" row is selected when the
-    /// effective value is the default; otherwise the effective value's own row is.
+    /// The row a runtime-settings picker marks as selected. The thread's own
+    /// cell is the truth: a pinned value marks its own row, an empty cell marks
+    /// the follow-default row.
     ///
-    /// The picker must reflect the effective value — the same value the summary
-    /// row shows — not just the per-thread override. Reading the override alone
-    /// made the picker fall back to the default row (e.g. "High") while the row
-    /// outside showed the real effective level (e.g. "Max").
-    public static func selectedOptionId(effective: String?, default defaultValue: String?) -> String {
-        guard let effective = normalized(effective) else {
-            return ""
+    /// This must not resolve the effective value. A cell pinned to the value
+    /// that also happens to be the current default would then mark the
+    /// follow-default row and read as "not pinned", and the pinned row would
+    /// show no checkmark at all. The follow-default row carries a fixed label
+    /// (never a concrete value's label), so the summary row outside can keep
+    /// showing the effective value without contradicting the checkmark.
+    public static func selectedPickerOptionId(cell: String?) -> String {
+        normalized(cell) ?? ""
+    }
+
+    /// Rows for the per-thread model picker.
+    public static func modelPickerOptions(
+        providerModels: GaryxProviderModels?,
+        effectiveModel: String?,
+        defaultRowLabel: String
+    ) -> [GaryxRuntimePickerOption] {
+        pickerOptions(
+            advertised: providerModels?.models ?? [],
+            current: effectiveModel,
+            defaultRowLabel: defaultRowLabel
+        ) { value in
+            modelLabel(providerModels: providerModels, model: value)
         }
-        if let defaultValue = normalized(defaultValue), effective == defaultValue {
-            return ""
+    }
+
+    /// Rows for the per-thread thinking-level picker, scoped to the model that
+    /// will actually run.
+    public static func reasoningEffortPickerOptions(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        effectiveReasoningEffort: String?,
+        defaultRowLabel: String
+    ) -> [GaryxRuntimePickerOption] {
+        pickerOptions(
+            advertised: reasoningEffortOptions(providerModels: providerModels, model: model),
+            current: effectiveReasoningEffort,
+            defaultRowLabel: defaultRowLabel
+        ) { value in
+            reasoningEffortLabel(
+                providerModels: providerModels,
+                model: model,
+                reasoningEffort: value
+            )
         }
-        return effective
+    }
+
+    /// Rows for the per-thread service-tier picker, scoped to the model that
+    /// will actually run.
+    public static func serviceTierPickerOptions(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        effectiveServiceTier: String?,
+        defaultRowLabel: String
+    ) -> [GaryxRuntimePickerOption] {
+        pickerOptions(
+            advertised: serviceTierOptions(providerModels: providerModels, model: model),
+            current: effectiveServiceTier,
+            defaultRowLabel: defaultRowLabel
+        ) { value in
+            serviceTierLabel(
+                providerModels: providerModels,
+                model: model,
+                serviceTier: value
+            )
+        }
+    }
+
+    /// Shared row contract for every runtime-settings picker:
+    ///
+    /// 1. Row 0 is always the follow-default row (empty id) carrying the given
+    ///    fixed label. It never borrows a concrete value's label: a row reading
+    ///    "Claude Opus 5" is expected to pin Opus 5, not to clear the cell.
+    /// 2. Every advertised option keeps its own real-id row, including the one
+    ///    that happens to be the current default. Suppressing that row left the
+    ///    default's label reachable only through the empty-id row, so choosing
+    ///    it cleared the cell and the thread silently fell back to the bound
+    ///    agent's model instead.
+    /// 3. A current value the provider does not advertise is appended last so it
+    ///    stays visible and re-selectable.
+    ///
+    /// An empty advertised list yields no rows: a picker offering only "follow
+    /// default" has nothing to choose.
+    private static func pickerOptions(
+        advertised: [GaryxProviderModelOption],
+        current: String?,
+        defaultRowLabel: String,
+        label: (String) -> String?
+    ) -> [GaryxRuntimePickerOption] {
+        guard !advertised.isEmpty else {
+            return []
+        }
+        var seen = Set<String>([""])
+        var options = [GaryxRuntimePickerOption(id: "", label: defaultRowLabel)]
+        for option in advertised where seen.insert(option.id).inserted {
+            options.append(GaryxRuntimePickerOption(id: option.id, label: option.label))
+        }
+        if let current = normalized(current), seen.insert(current).inserted {
+            options.append(
+                GaryxRuntimePickerOption(id: current, label: label(current) ?? current)
+            )
+        }
+        return options
     }
 
     /// Drops a thinking level the current model selection does not support.

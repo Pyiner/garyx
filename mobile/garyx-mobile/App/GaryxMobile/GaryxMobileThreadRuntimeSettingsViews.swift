@@ -207,13 +207,6 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         )
     }
 
-    private var reasoningEfforts: [GaryxProviderModelOption] {
-        GaryxThreadModelOverridePresentation.reasoningEffortOptions(
-            providerModels: providerModels,
-            model: effortFilterModel
-        )
-    }
-
     private var canSelectModel: Bool {
         providerModels?.supportsModelSelection == true && !modelOptions.isEmpty
     }
@@ -388,7 +381,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     /// no filled card, hairline separators, trailing checkmark. The panel
     /// itself is the menu surface.
     private func optionsMenu(
-        options: [(id: String, label: String)],
+        options: [GaryxRuntimePickerOption],
         selectedId: String,
         onSelect: @escaping (String) -> Void
     ) -> some View {
@@ -713,94 +706,53 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         .disabled(!enabled)
     }
 
-    /// The model the empty "use default" row represents: the provider default,
-    /// or the effective model when the provider advertises no default (e.g.
-    /// `claude_code` reports `default_model: null`). `selectedModelOptionId` is
-    /// resolved against the same basis, so a missing provider default still maps
-    /// the running model to the default row instead of a phantom id with no row.
-    private var modelDefaultBasis: String? {
-        providerDefaultModel ?? effectiveModel
-    }
+    /// Every picker's first row follows the thread's default instead of pinning
+    /// a value. Its label stays fixed and never borrows the default model's own
+    /// label: a row reading "Claude Opus 5" is expected to pin Opus 5, and the
+    /// provider default keeps its own real-id row to do exactly that.
+    private static let followDefaultRowLabel = "Agent default"
 
-    private var modelOptions: [(id: String, label: String)] {
-        var seen = Set<String>()
-        var options: [(id: String, label: String)] = []
-        if let defaultModel = modelDefaultBasis,
-           seen.insert("").inserted {
-            options.append((id: "", label: modelLabel(defaultModel) ?? defaultModel))
-            seen.insert(defaultModel)
-        }
-        for option in providerModels?.models ?? [] where seen.insert(option.id).inserted {
-            options.append((id: option.id, label: option.label))
-        }
-        if let effective = effectiveModel,
-           seen.insert(effective).inserted {
-            options.append((id: effective, label: modelLabel(effective) ?? effective))
-        }
-        return options
+    private var modelOptions: [GaryxRuntimePickerOption] {
+        GaryxThreadModelOverridePresentation.modelPickerOptions(
+            providerModels: providerModels,
+            effectiveModel: effectiveModel,
+            defaultRowLabel: Self.followDefaultRowLabel
+        )
     }
 
     private var selectedModelOptionId: String {
-        // Reflect the model the thread actually runs (the summary row's value),
-        // not just the per-thread override, so the picker checkmark agrees. The
-        // default basis matches the empty row in `modelOptions`.
-        GaryxThreadModelOverridePresentation.selectedOptionId(
-            effective: effectiveModel,
-            default: modelDefaultBasis
-        )
+        // The thread's own cell decides the checkmark: pinning the model that
+        // also happens to be the provider default must still check that model's
+        // row, not the follow-default row.
+        GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: modelOverride)
     }
 
-    private var reasoningEffortOptions: [(id: String, label: String)] {
-        var seen = Set<String>()
-        var options: [(id: String, label: String)] = []
-        if let defaultEffort = defaultReasoningEffort(for: effortFilterModel),
-           seen.insert("").inserted {
-            options.append((id: "", label: reasoningEffortLabel(defaultEffort) ?? defaultEffort))
-            seen.insert(defaultEffort)
-        }
-        for option in reasoningEfforts where seen.insert(option.id).inserted {
-            options.append((id: option.id, label: option.label))
-        }
-        if let effective = effectiveReasoningEffort,
-           seen.insert(effective).inserted {
-            options.append((id: effective, label: reasoningEffortLabel(effective) ?? effective))
-        }
-        return options
+    private var reasoningEffortOptions: [GaryxRuntimePickerOption] {
+        GaryxThreadModelOverridePresentation.reasoningEffortPickerOptions(
+            providerModels: providerModels,
+            model: effortFilterModel,
+            effectiveReasoningEffort: effectiveReasoningEffort,
+            defaultRowLabel: Self.followDefaultRowLabel
+        )
     }
 
     private var selectedReasoningEffortOptionId: String {
-        // Check the level the thread actually runs (the summary row's value), not
-        // just the per-thread override, so "Max" outside no longer shows "High"
-        // checked in the picker.
-        GaryxThreadModelOverridePresentation.selectedOptionId(
-            effective: effectiveReasoningEffort,
-            default: defaultReasoningEffort(for: effortFilterModel)
-        )
+        GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: reasoningEffortOverride)
     }
 
-    private var serviceTierOptions: [(id: String, label: String)] {
-        let tiers = serviceTiers
-        guard !tiers.isEmpty else { return [] }
-        var seen = Set<String>()
-        var options: [(id: String, label: String)] = [(id: "", label: "Standard")]
-        seen.insert("")
-        for option in tiers where seen.insert(option.id).inserted {
-            options.append((id: option.id, label: option.label))
-        }
-        if let effective = effectiveServiceTier, seen.insert(effective).inserted {
-            options.append((id: effective, label: serviceTierLabel(effective) ?? effective))
-        }
-        return options
+    private var serviceTierOptions: [GaryxRuntimePickerOption] {
+        // No provider-default tier: an empty cell IS standard speed, so this
+        // picker's follow-default row keeps the concrete "Standard" wording.
+        GaryxThreadModelOverridePresentation.serviceTierPickerOptions(
+            providerModels: providerModels,
+            model: effortFilterModel,
+            effectiveServiceTier: effectiveServiceTier,
+            defaultRowLabel: "Standard"
+        )
     }
 
     private var selectedServiceTierOptionId: String {
-        // No provider-default tier ("Standard" = no explicit tier), so the
-        // default basis is nil: an effective tier marks its own row, otherwise
-        // the empty "Standard" row is selected.
-        GaryxThreadModelOverridePresentation.selectedOptionId(
-            effective: effectiveServiceTier,
-            default: nil
-        )
+        GaryxThreadModelOverridePresentation.selectedPickerOptionId(cell: serviceTierOverride)
     }
 
     private var actualServiceTierLabel: String {
