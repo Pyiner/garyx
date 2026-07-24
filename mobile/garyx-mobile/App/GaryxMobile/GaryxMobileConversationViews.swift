@@ -68,6 +68,7 @@ private final class GaryxConversationScrollSchedulerBox {
 /// then motion". Arming a KVO observation on `contentOffset` fires exactly
 /// on the first real movement; a 250ms fallback guarantees the send always
 /// has its haptic even if the animation is pre-empted.
+@MainActor
 private final class GaryxSendAnchorHapticArmer {
     private var observation: NSKeyValueObservation?
     private var fallback: DispatchWorkItem?
@@ -80,10 +81,17 @@ private final class GaryxSendAnchorHapticArmer {
                   abs(newY - startOffsetY) > 0.5 else {
                 return
             }
-            self?.fire()
+            // Scroll-driven contentOffset KVO always delivers on the main
+            // thread; assumeIsolated keeps the fire on the exact same
+            // callback (no queue hop that would delay the haptic).
+            MainActor.assumeIsolated {
+                self?.fire()
+            }
         }
         let work = DispatchWorkItem { [weak self] in
-            self?.fire()
+            MainActor.assumeIsolated {
+                self?.fire()
+            }
         }
         fallback = work
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250), execute: work)
