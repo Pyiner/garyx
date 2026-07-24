@@ -126,6 +126,12 @@ v2.1.1（评审 #TASK-2698 两项 finding 的修正）：
   裁多少、内容底始终贴视口下沿、裁到 0 会话自清；期间 floor
   reconcile 不得回涨。非手势退出（耗尽=已为零；回底/切线程/回滚=
   紧随显式定位）仍立即收场。
+- **触觉挂真实运动（v2.1.3，#TASK-2698 第三轮）**：
+  `setContentOffset(animated:)` 返回时刻早于 UIKit 首次真实位移
+  84–94ms（第 2 个 display-link 帧，评审零 I/O 探针实测）。发送触觉
+  改为写入前武装的一次性 KVO：`contentOffset` 首次真实变化（>0.5pt）
+  时触发，250ms 兜底保证触觉不哑火；线程切换 disarm。非锚定 surface
+  维持 model 层触觉。
 - **50ms 补位档只许首写前使用**：0ms 首写命中后动画在飞，50ms 档的
   "未到位"判定会以无动画写入打断动画。`shouldRunScrollAttempt` 增加
   `chainHasWritten` 事实：localSend 的 index 1 仅在链未写入时放行；

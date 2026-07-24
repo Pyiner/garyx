@@ -61,6 +61,48 @@ private final class GaryxConversationScrollSchedulerBox {
     var state = GaryxConversationScrollScheduler()
 }
 
+/// One-shot bridge that fires the send haptic at the moment the anchor
+/// animation VISIBLY starts. `setContentOffset(animated:)` returns ~84–94ms
+/// before UIKit's first real offset change (second display-link callback,
+/// measured in #TASK-2698 round 3), so playing at call time reads as "thunk,
+/// then motion". Arming a KVO observation on `contentOffset` fires exactly
+/// on the first real movement; a 250ms fallback guarantees the send always
+/// has its haptic even if the animation is pre-empted.
+private final class GaryxSendAnchorHapticArmer {
+    private var observation: NSKeyValueObservation?
+    private var fallback: DispatchWorkItem?
+
+    func arm(on scrollView: UIScrollView) {
+        disarm()
+        let startOffsetY = scrollView.contentOffset.y
+        observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
+            guard let newY = change.newValue?.y,
+                  abs(newY - startOffsetY) > 0.5 else {
+                return
+            }
+            self?.fire()
+        }
+        let work = DispatchWorkItem { [weak self] in
+            self?.fire()
+        }
+        fallback = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250), execute: work)
+    }
+
+    func disarm() {
+        observation?.invalidate()
+        observation = nil
+        fallback?.cancel()
+        fallback = nil
+    }
+
+    private func fire() {
+        guard observation != nil || fallback != nil else { return }
+        disarm()
+        GaryxMobileHaptics.shared.play(.messageSendCommitted)
+    }
+}
+
 /// Live route to the UIScrollView hosting the conversation transcript.
 ///
 /// Deliberately NOT a cached weak scroll-view reference: SwiftUI can replace
@@ -213,6 +255,7 @@ struct GaryxConversationView: View {
     @State private var scrollSchedulerBox = GaryxConversationScrollSchedulerBox()
     @State private var sendAnchorFillerState = GaryxSendAnchorFillerState()
     @State private var sendAnchorFillerHeight: CGFloat = 0
+    @State private var sendAnchorHapticArmer = GaryxSendAnchorHapticArmer()
     /// Mirror of `scrollStateBox.state.isSendAnchored`, mirrored only on
     /// flips (like the scroll-to-bottom button) so per-frame measurement
     /// churn never re-evaluates the body. Suspends the size-change bottom
@@ -528,6 +571,7 @@ struct GaryxConversationView: View {
             .onChange(of: conversationScrollIdentity) { _, _ in
                 setRuntimePanelVisible(false)
                 pendingHistoryPrefetchThreadId = nil
+                sendAnchorHapticArmer.disarm()
                 resetSendAnchorFiller()
                 updateScrollState(proxy: proxy) { $0.threadOpened() }
                 resetTailThinkingPresentation(proxy: proxy)
@@ -1273,7 +1317,8 @@ struct GaryxConversationView: View {
     private func executeConversationScroll(
         _ proxy: ScrollViewProxy,
         request: GaryxConversationScrollState.ScrollRequest,
-        animated: Bool = false
+        animated: Bool = false,
+        armsSendHaptic: Bool = false
     ) -> Bool {
         // A `.scrollPosition` binding is deliberately avoided here: binding a
         // ScrollPosition disables ScrollViewReader.scrollTo, and positioning
@@ -1304,6 +1349,12 @@ struct GaryxConversationView: View {
                     x: scrollView.contentOffset.x,
                     y: min(max(proposed, -topInset), maxOffset)
                 )
+                if armsSendHaptic {
+                    // Armed BEFORE the write so the observation cannot miss
+                    // the first movement; fires when the offset visibly
+                    // starts changing, not when the API returns.
+                    sendAnchorHapticArmer.arm(on: scrollView)
+                }
                 scrollView.setContentOffset(target, animated: animated)
                 return true
             }
@@ -1370,12 +1421,10 @@ struct GaryxConversationView: View {
                     let wrote = executeConversationScroll(
                         proxy,
                         request: request,
-                        animated: request.animated && isFirstWrite
+                        animated: request.animated && isFirstWrite,
+                        armsSendHaptic: isFirstWrite && request.reason == .localSend
                     )
                     if wrote {
-                        if isFirstWrite, request.reason == .localSend {
-                            GaryxMobileHaptics.shared.play(.messageSendCommitted)
-                        }
                         scrollSchedulerBox.state.markWrote(token)
                     }
                 }
