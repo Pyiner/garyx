@@ -181,11 +181,14 @@ struct GaryxConversationOpeningMetadata: Equatable {
 /// one live treatment and reports that same value to the frame-clock driver.
 struct GaryxConversationTranscriptStaging {
     let metadata: GaryxConversationOpeningMetadata
-    let snapshotThreadID: String
     let renderPhase: GaryxConversationRouteRenderPhase
     let allowsTranscriptInteraction: Bool
     let presentationInputDidChange: @MainActor (
         GaryxConversationTranscriptPresentationInput
+    ) -> Void
+    let openingViewportReadinessDidChange: @MainActor (
+        _ contractID: String,
+        _ readiness: GaryxConversationOpeningViewportRevealReadiness
     ) -> Void
 
     var mountsLiveTranscript: Bool {
@@ -301,11 +304,16 @@ private struct GaryxStagedConversationRouteView: View {
             destination: destination,
             transcriptStaging: GaryxConversationTranscriptStaging(
                 metadata: openingMetadata,
-                snapshotThreadID: threadID,
                 renderPhase: presentationDriver.renderPhase,
                 allowsTranscriptInteraction: presentationDriver.allowsTranscriptInteraction,
                 presentationInputDidChange: { input in
                     presentationDriver.updateTranscriptPresentation(input)
+                },
+                openingViewportReadinessDidChange: { contractID, readiness in
+                    presentationDriver.updateOpeningViewportReadiness(
+                        contractID: contractID,
+                        readiness: readiness
+                    )
                 }
             )
         )
@@ -340,14 +348,14 @@ private struct GaryxStagedConversationRouteView: View {
 /// this view only renders the Core-selected skeleton or cached-pixel cover.
 struct GaryxConversationOpeningTranscriptView: View {
     let cover: GaryxConversationOpeningTranscriptCover
-    let snapshotThreadID: String?
+    let snapshotHandle: GaryxConversationTranscriptSnapshotHandle?
 
     init(
         cover: GaryxConversationOpeningTranscriptCover,
-        snapshotThreadID: String? = nil
+        snapshotHandle: GaryxConversationTranscriptSnapshotHandle? = nil
     ) {
         self.cover = cover
-        self.snapshotThreadID = snapshotThreadID
+        self.snapshotHandle = snapshotHandle
     }
 
     var body: some View {
@@ -356,8 +364,8 @@ struct GaryxConversationOpeningTranscriptView: View {
 
             switch cover {
             case .snapshotPixels:
-                if let snapshotThreadID {
-                    GaryxConversationTranscriptSnapshotView(threadID: snapshotThreadID)
+                if let snapshotHandle {
+                    GaryxConversationTranscriptSnapshotView(handle: snapshotHandle)
                         .onAppear {
                             GaryxRoutePushPerformanceProbe.shared?
                                 .markConversationLocalMessages()
@@ -433,13 +441,34 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
     private var awaitsPresentedLiveReveal = false
     private var latestTranscriptPresentationInput:
         GaryxConversationTranscriptPresentationInput?
+    private var openingViewportContractID: String?
+    private var openingViewportReadiness:
+        GaryxConversationOpeningViewportRevealReadiness = .notRequired
 
     func updateTranscriptPresentation(
         _ input: GaryxConversationTranscriptPresentationInput
     ) {
         guard latestTranscriptPresentationInput != input else { return }
+        if openingViewportContractID != input.openingViewportContractID {
+            openingViewportContractID = input.openingViewportContractID
+            openingViewportReadiness =
+                input.openingViewportContractID == nil ? .notRequired : .pending
+        }
         latestTranscriptPresentationInput = input
         reconcileTranscriptPresentation()
+        scheduleFallbackFrames()
+    }
+
+    func updateOpeningViewportReadiness(
+        contractID: String,
+        readiness: GaryxConversationOpeningViewportRevealReadiness
+    ) {
+        guard openingViewportContractID == contractID,
+              readiness != .notRequired,
+              openingViewportReadiness != readiness else {
+            return
+        }
+        openingViewportReadiness = readiness
         scheduleFallbackFrames()
     }
 
@@ -458,6 +487,9 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         if startsNewOccurrence {
             presentation = GaryxConversationRoutePresentationState()
             renderPhase = .openingPage
+            latestTranscriptPresentationInput = nil
+            openingViewportContractID = nil
+            openingViewportReadiness = .notRequired
         }
         guard let registry else {
             apply(lifecycle: .active)
@@ -551,7 +583,10 @@ private final class GaryxConversationRoutePresentationDriver: ObservableObject {
         let previousPhase = presentation.renderPhase
         let hadBegunContentPreparation = presentation.hasBegunContentPreparation
         var next = presentation
-        _ = next.presentedFrame(interval: interval)
+        _ = next.presentedFrame(
+            interval: interval,
+            openingViewportReadiness: openingViewportReadiness
+        )
         commit(next)
         handleTransition(
             previousPhase: previousPhase,

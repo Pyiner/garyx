@@ -88,14 +88,20 @@ public enum GaryxConversationTranscriptTreatmentPolicy {
 /// from deriving different treatments for the same frame.
 public struct GaryxConversationTranscriptPresentationInput: Equatable, Sendable {
     public let treatment: GaryxConversationTranscriptTreatment
-    public let hasTranscriptSnapshotPixels: Bool
+    /// Identity of the exact snapshot contract admitted for this route
+    /// occurrence. Pixels without a contract ID are never a legal cover.
+    public let openingViewportContractID: String?
+
+    public var hasTranscriptSnapshotPixels: Bool {
+        openingViewportContractID != nil
+    }
 
     public init(
         treatment: GaryxConversationTranscriptTreatment,
-        hasTranscriptSnapshotPixels: Bool
+        openingViewportContractID: String?
     ) {
         self.treatment = treatment
-        self.hasTranscriptSnapshotPixels = hasTranscriptSnapshotPixels
+        self.openingViewportContractID = openingViewportContractID
     }
 }
 
@@ -225,6 +231,296 @@ public enum GaryxConversationTranscriptSnapshotGeometry {
     }
 }
 
+/// One directly measured candidate for the "open at tail" viewport contract.
+///
+/// The compositor viewport is the real UIKit scroll view. The visible frame
+/// is the SwiftUI transcript region that clips those pixels between the live
+/// header and composer. Both are retained because equal scroll-view bounds do
+/// not prove equal visible chrome geometry.
+public struct GaryxConversationOpeningViewportSample: Equatable, Sendable {
+    public let captureGeometry: GaryxConversationTranscriptSnapshotCaptureGeometry
+    public let visibleViewportFrameInPage: CGRect
+    public let contentSize: CGSize
+    public let displayScale: CGFloat
+    public let layoutEpoch: UInt64
+    public let isFollowingTail: Bool
+    public let isUserInteracting: Bool
+
+    public init(
+        captureGeometry: GaryxConversationTranscriptSnapshotCaptureGeometry,
+        visibleViewportFrameInPage: CGRect,
+        contentSize: CGSize,
+        displayScale: CGFloat,
+        layoutEpoch: UInt64,
+        isFollowingTail: Bool,
+        isUserInteracting: Bool
+    ) {
+        self.captureGeometry = captureGeometry
+        self.visibleViewportFrameInPage = visibleViewportFrameInPage
+        self.contentSize = contentSize
+        self.displayScale = displayScale
+        self.layoutEpoch = layoutEpoch
+        self.isFollowingTail = isFollowingTail
+        self.isUserInteracting = isUserInteracting
+    }
+
+    /// The exact UIKit offset targeted by opening-at-tail semantics.
+    public var canonicalTailContentOffsetY: CGFloat {
+        let insets = captureGeometry.adjustedContentInsets
+        let geometricOffset = max(
+            -insets.top,
+            contentSize.height
+                - captureGeometry.viewportFrameInPage.height
+                + insets.bottom
+        )
+        // UIKit settles scroll offsets on the owning display's pixel grid.
+        // Contract equality remains exact; this canonicalizes the geometric
+        // target to the same representable point instead of admitting a
+        // numeric-difference tolerance.
+        return (geometricOffset * displayScale).rounded() / displayScale
+    }
+
+    /// Positive while the captured pixels are above the canonical live tail.
+    public var distanceFromCanonicalTail: CGFloat {
+        canonicalTailContentOffsetY - captureGeometry.contentOffset.y
+    }
+
+    public var isNearCanonicalTail: Bool {
+        distanceFromCanonicalTail >= 0
+            && distanceFromCanonicalTail
+                <= GaryxConversationLayoutMetrics.nearBottomThreshold
+    }
+
+    /// Opening pixels must encode the same offset `threadOpened()` resolves.
+    /// This is deliberately exact: a tolerance here would reintroduce two
+    /// position owners and merely make the visible jump smaller.
+    public var isAtCanonicalTail: Bool {
+        captureGeometry.contentOffset.y == canonicalTailContentOffsetY
+    }
+
+    public var hasValidGeometry: Bool {
+        captureGeometry.viewportFrameInPage.width > 0
+            && captureGeometry.viewportFrameInPage.height > 0
+            && visibleViewportFrameInPage.width > 0
+            && visibleViewportFrameInPage.height > 0
+            && contentSize.width > 0
+            && contentSize.height >= 0
+            && displayScale.isFinite
+            && displayScale > 0
+    }
+}
+
+/// Immutable proof retained beside one compositor snapshot.
+public struct GaryxConversationOpeningViewportContract: Equatable, Sendable {
+    public enum Anchor: String, Equatable, Sendable {
+        case tail
+    }
+
+    public let anchor: Anchor
+    public let captureGeometry: GaryxConversationTranscriptSnapshotCaptureGeometry
+    public let visibleViewportFrameInPage: CGRect
+    public let contentSize: CGSize
+    public let displayScale: CGFloat
+    public let distanceFromCanonicalTail: CGFloat
+    public let layoutEpoch: UInt64
+
+    public init(
+        anchor: Anchor = .tail,
+        captureGeometry: GaryxConversationTranscriptSnapshotCaptureGeometry,
+        visibleViewportFrameInPage: CGRect,
+        contentSize: CGSize,
+        displayScale: CGFloat,
+        distanceFromCanonicalTail: CGFloat,
+        layoutEpoch: UInt64
+    ) {
+        self.anchor = anchor
+        self.captureGeometry = captureGeometry
+        self.visibleViewportFrameInPage = visibleViewportFrameInPage
+        self.contentSize = contentSize
+        self.displayScale = displayScale
+        self.distanceFromCanonicalTail = distanceFromCanonicalTail
+        self.layoutEpoch = layoutEpoch
+    }
+}
+
+public enum GaryxConversationOpeningViewportRevealReadiness: Equatable, Sendable {
+    /// A skeleton opening has no pixel position to prove.
+    case notRequired
+    /// Live geometry is incomplete or does not yet equal the served contract.
+    case pending
+    /// The mounted live transcript exactly resolves the served tail contract.
+    case matched
+}
+
+private func garyxOpeningViewportPixelAlignedValue(
+    _ value: CGFloat,
+    displayScale: CGFloat
+) -> CGFloat {
+    (value * displayScale).rounded() / displayScale
+}
+
+private func garyxOpeningViewportPixelAlignedRect(
+    _ rect: CGRect,
+    displayScale: CGFloat
+) -> CGRect {
+    let minX = garyxOpeningViewportPixelAlignedValue(
+        rect.minX,
+        displayScale: displayScale
+    )
+    let minY = garyxOpeningViewportPixelAlignedValue(
+        rect.minY,
+        displayScale: displayScale
+    )
+    let maxX = garyxOpeningViewportPixelAlignedValue(
+        rect.maxX,
+        displayScale: displayScale
+    )
+    let maxY = garyxOpeningViewportPixelAlignedValue(
+        rect.maxY,
+        displayScale: displayScale
+    )
+    return CGRect(
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY
+    )
+}
+
+private func garyxOpeningViewportPixelAlignedCaptureGeometry(
+    _ geometry: GaryxConversationTranscriptSnapshotCaptureGeometry,
+    displayScale: CGFloat
+) -> GaryxConversationTranscriptSnapshotCaptureGeometry {
+    GaryxConversationTranscriptSnapshotCaptureGeometry(
+        viewportFrameInPage: garyxOpeningViewportPixelAlignedRect(
+            geometry.viewportFrameInPage,
+            displayScale: displayScale
+        ),
+        adjustedContentInsets: geometry.adjustedContentInsets,
+        contentOffset: geometry.contentOffset
+    )
+}
+
+/// Pure policy shared by capture, cache service, and compositor reveal.
+public enum GaryxConversationOpeningViewportContractPolicy {
+    /// Returns a cacheable tail contract for one eligible measured frame.
+    public static func captureContract(
+        for sample: GaryxConversationOpeningViewportSample
+    ) -> GaryxConversationOpeningViewportContract? {
+        guard sample.hasValidGeometry,
+              sample.isFollowingTail,
+              !sample.isUserInteracting,
+              sample.isNearCanonicalTail,
+              sample.isAtCanonicalTail
+        else {
+            return nil
+        }
+        return GaryxConversationOpeningViewportContract(
+            captureGeometry: garyxOpeningViewportPixelAlignedCaptureGeometry(
+                sample.captureGeometry,
+                displayScale: sample.displayScale
+            ),
+            visibleViewportFrameInPage: garyxOpeningViewportPixelAlignedRect(
+                sample.visibleViewportFrameInPage,
+                displayScale: sample.displayScale
+            ),
+            contentSize: sample.contentSize,
+            displayScale: sample.displayScale,
+            distanceFromCanonicalTail: sample.distanceFromCanonicalTail,
+            layoutEpoch: sample.layoutEpoch
+        )
+    }
+
+    /// Cache service is fail-closed: the caller must prove the complete render
+    /// revision independently, and the current visible viewport must exactly
+    /// equal the one whose pixels were captured.
+    public static func canServe(
+        _ contract: GaryxConversationOpeningViewportContract,
+        revisionMatches: Bool,
+        visibleViewportFrameInPage: CGRect
+    ) -> Bool {
+        revisionMatches
+            && contract.anchor == .tail
+            && contract.distanceFromCanonicalTail == 0
+            && contract.visibleViewportFrameInPage
+                == garyxOpeningViewportPixelAlignedRect(
+                    visibleViewportFrameInPage,
+                    displayScale: contract.displayScale
+                )
+    }
+
+    /// Reveal requires the live UIKit viewport to reproduce every
+    /// position-bearing value retained by the cover. A semantic tail label
+    /// alone is insufficient: content size, insets, viewport placement, and
+    /// the exact canonical offset must all agree.
+    public static func revealReadiness(
+        for contract: GaryxConversationOpeningViewportContract,
+        live sample: GaryxConversationOpeningViewportSample,
+        revisionMatches: Bool
+    ) -> GaryxConversationOpeningViewportRevealReadiness {
+        guard revisionMatches,
+              sample.hasValidGeometry,
+              sample.isFollowingTail,
+              !sample.isUserInteracting,
+              sample.isNearCanonicalTail,
+              sample.isAtCanonicalTail,
+              garyxOpeningViewportPixelAlignedCaptureGeometry(
+                  sample.captureGeometry,
+                  displayScale: sample.displayScale
+              ) == contract.captureGeometry,
+              garyxOpeningViewportPixelAlignedRect(
+                  sample.visibleViewportFrameInPage,
+                  displayScale: sample.displayScale
+              ) == contract.visibleViewportFrameInPage,
+              sample.contentSize == contract.contentSize,
+              sample.displayScale == contract.displayScale,
+              sample.distanceFromCanonicalTail == contract.distanceFromCanonicalTail
+        else {
+            return .pending
+        }
+        return .matched
+    }
+}
+
+/// Consecutive-frame capture gate. Any anchor, interaction, offset, content
+/// geometry, viewport, or layout-epoch change restarts the proof.
+public struct GaryxConversationOpeningViewportCaptureState: Equatable, Sendable {
+    public static let defaultRequiredStableSampleCount = 60
+
+    private let requiredStableSampleCount: Int
+    private var candidate: GaryxConversationOpeningViewportContract?
+    private var stableSampleCount = 0
+
+    public init(
+        requiredStableSampleCount: Int = Self.defaultRequiredStableSampleCount
+    ) {
+        precondition(requiredStableSampleCount > 0)
+        self.requiredStableSampleCount = requiredStableSampleCount
+    }
+
+    @discardableResult
+    public mutating func observe(
+        _ sample: GaryxConversationOpeningViewportSample
+    ) -> GaryxConversationOpeningViewportContract? {
+        guard let next =
+            GaryxConversationOpeningViewportContractPolicy.captureContract(for: sample)
+        else {
+            candidate = nil
+            stableSampleCount = 0
+            return nil
+        }
+
+        if candidate == next {
+            stableSampleCount += 1
+        } else {
+            candidate = next
+            stableSampleCount = 1
+        }
+        guard stableSampleCount >= requiredStableSampleCount else { return nil }
+        return next
+    }
+}
+
 /// Render inputs owned by one mounted conversation route occurrence.
 ///
 /// The route chooses the local body pool; `GaryxMobileRenderStateMapper`
@@ -309,6 +605,7 @@ enum GaryxConversationRouteRenderInputResolver {
 public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public static let defaultTerminalOpeningFrameCount = 2
     public static let defaultMaterializationFrameCount = 12
+    public static let defaultOpeningViewportTimeoutFrameCount = 120
 
     public private(set) var lifecycle: GaryxRouteHostLifecyclePhase
     public private(set) var renderPhase: GaryxConversationRouteRenderPhase
@@ -317,7 +614,9 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
 
     private let terminalOpeningFrameCount: Int
     private let materializationFrameCount: Int
+    private let openingViewportTimeoutFrameCount: Int
     private var deliveredFramesInPhase = 0
+    private var deliveredMaterializationFrames = 0
     /// The candidate cadence sample anchoring the current proof.
     ///
     /// This is deliberately not a historical minimum. ProMotion may deliver
@@ -330,13 +629,17 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     public init(
         lifecycle: GaryxRouteHostLifecyclePhase = .mounted,
         terminalOpeningFrameCount: Int = Self.defaultTerminalOpeningFrameCount,
-        materializationFrameCount: Int = Self.defaultMaterializationFrameCount
+        materializationFrameCount: Int = Self.defaultMaterializationFrameCount,
+        openingViewportTimeoutFrameCount: Int =
+            Self.defaultOpeningViewportTimeoutFrameCount
     ) {
         precondition(terminalOpeningFrameCount > 0)
         precondition(materializationFrameCount > 0)
+        precondition(openingViewportTimeoutFrameCount >= materializationFrameCount)
         self.lifecycle = lifecycle
         self.terminalOpeningFrameCount = terminalOpeningFrameCount
         self.materializationFrameCount = materializationFrameCount
+        self.openingViewportTimeoutFrameCount = openingViewportTimeoutFrameCount
         renderPhase = .openingPage
         hasBegunContentPreparation = false
         hasPresentedLiveTranscript = false
@@ -395,6 +698,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         renderPhase = .live
         hasPresentedLiveTranscript = true
         deliveredFramesInPhase = 0
+        deliveredMaterializationFrames = 0
         cadenceReferenceFrameInterval = nil
         return resolved
     }
@@ -408,6 +712,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
         if hasPresentedLiveTranscript {
             renderPhase = .live
             deliveredFramesInPhase = 0
+            deliveredMaterializationFrames = 0
             return
         }
 
@@ -415,6 +720,7 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
             renderPhase = .openingPage
             hasBegunContentPreparation = false
             deliveredFramesInPhase = 0
+            deliveredMaterializationFrames = 0
             cadenceReferenceFrameInterval = nil
             return
         }
@@ -424,7 +730,9 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
     /// fresh measurement series and never proves materialization stability.
     @discardableResult
     public mutating func presentedFrame(
-        interval: TimeInterval?
+        interval: TimeInterval?,
+        openingViewportReadiness: GaryxConversationOpeningViewportRevealReadiness =
+            .notRequired
     ) -> GaryxConversationRouteRenderPhase {
         guard lifecycle == .active, !hasPresentedLiveTranscript else {
             return renderPhase
@@ -447,8 +755,22 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
             }
             renderPhase = .materializingConversation
             deliveredFramesInPhase = 0
+            deliveredMaterializationFrames = 0
 
         case .materializingConversation:
+            deliveredMaterializationFrames += 1
+            if openingViewportReadiness == .pending,
+               deliveredMaterializationFrames >= openingViewportTimeoutFrameCount {
+                // The capture/service gates make a mismatched pixel cover
+                // unreachable. This bound only prevents a missing UIKit
+                // measurement callback from retaining an otherwise-correct
+                // continuity cover indefinitely.
+                renderPhase = .live
+                hasPresentedLiveTranscript = true
+                deliveredFramesInPhase = 0
+                deliveredMaterializationFrames = 0
+                return renderPhase
+            }
             guard let interval,
                   interval > 0
             else {
@@ -479,14 +801,21 @@ public struct GaryxConversationRoutePresentationState: Equatable, Sendable {
                 self.cadenceReferenceFrameInterval = interval
                 deliveredFramesInPhase = 1
             } else {
-                deliveredFramesInPhase += 1
+                deliveredFramesInPhase = min(
+                    deliveredFramesInPhase + 1,
+                    materializationFrameCount
+                )
             }
             guard deliveredFramesInPhase >= materializationFrameCount else {
+                return renderPhase
+            }
+            guard openingViewportReadiness != .pending else {
                 return renderPhase
             }
             renderPhase = .live
             hasPresentedLiveTranscript = true
             deliveredFramesInPhase = 0
+            deliveredMaterializationFrames = 0
 
         case .live:
             break

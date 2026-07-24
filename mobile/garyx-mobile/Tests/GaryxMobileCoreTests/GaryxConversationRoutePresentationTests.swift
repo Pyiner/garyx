@@ -83,6 +83,272 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         XCTAssertEqual(installationFrame.size, CGSize(width: 402, height: 874))
     }
 
+    func testOpeningViewportCaptureRequiresCanonicalTailNoInteractionAndStableGeometry() throws {
+        var capture = GaryxConversationOpeningViewportCaptureState(
+            requiredStableSampleCount: 2
+        )
+        XCTAssertNil(
+            capture.observe(openingSample(offsetY: 2_304, isFollowingTail: true)),
+            "near-bottom state is not a substitute for the canonical opening offset"
+        )
+        XCTAssertNil(
+            capture.observe(openingSample(offsetY: 2_400, isUserInteracting: true))
+        )
+
+        let tail = openingSample(offsetY: 2_400)
+        XCTAssertNil(capture.observe(tail))
+        let changedGeometry = openingSample(offsetY: 2_500, contentHeight: 3_300)
+        XCTAssertNil(
+            capture.observe(changedGeometry),
+            "a content-size/offset change must restart the consecutive proof"
+        )
+        let contract = try XCTUnwrap(capture.observe(changedGeometry))
+        XCTAssertEqual(contract.captureGeometry.contentOffset.y, 2_500)
+        XCTAssertEqual(contract.contentSize.height, 3_300)
+
+        var changedEpoch = changedGeometry
+        changedEpoch = GaryxConversationOpeningViewportSample(
+            captureGeometry: changedEpoch.captureGeometry,
+            visibleViewportFrameInPage: changedEpoch.visibleViewportFrameInPage,
+            contentSize: changedEpoch.contentSize,
+            displayScale: changedEpoch.displayScale,
+            layoutEpoch: changedEpoch.layoutEpoch + 1,
+            isFollowingTail: changedEpoch.isFollowingTail,
+            isUserInteracting: changedEpoch.isUserInteracting
+        )
+        XCTAssertNil(
+            capture.observe(changedEpoch),
+            "a layout epoch change must restart the capture proof"
+        )
+    }
+
+    func testOpeningViewportServiceRequiresSameRevisionAndVisibleGeometry() throws {
+        var capture = GaryxConversationOpeningViewportCaptureState(
+            requiredStableSampleCount: 1
+        )
+        let sample = openingSample(offsetY: 2_400)
+        let contract = try XCTUnwrap(capture.observe(sample))
+
+        XCTAssertTrue(
+            GaryxConversationOpeningViewportContractPolicy.canServe(
+                contract,
+                revisionMatches: true,
+                visibleViewportFrameInPage: sample.visibleViewportFrameInPage
+            )
+        )
+        XCTAssertFalse(
+            GaryxConversationOpeningViewportContractPolicy.canServe(
+                contract,
+                revisionMatches: false,
+                visibleViewportFrameInPage: sample.visibleViewportFrameInPage
+            )
+        )
+        XCTAssertFalse(
+            GaryxConversationOpeningViewportContractPolicy.canServe(
+                contract,
+                revisionMatches: true,
+                visibleViewportFrameInPage:
+                    sample.visibleViewportFrameInPage.offsetBy(dx: 0, dy: 1)
+            )
+        )
+    }
+
+    func testOpeningViewportCanonicalTailUsesExactDisplayPixelGrid() throws {
+        let viewport = CGRect(x: 0, y: 0, width: 440, height: 956)
+        let contentSize = CGSize(width: 440, height: 1_157)
+        let settledTailOffset = CGFloat(1_196) / 3
+        let captureGeometry =
+            GaryxConversationTranscriptSnapshotCaptureGeometry(
+                viewportFrameInPage: viewport,
+                adjustedContentInsets: .init(
+                    top: 124,
+                    left: 0,
+                    bottom: 197.6015625,
+                    right: 0
+                ),
+                contentOffset: CGPoint(x: 0, y: settledTailOffset)
+            )
+        let sample = GaryxConversationOpeningViewportSample(
+            captureGeometry: captureGeometry,
+            visibleViewportFrameInPage: CGRect(x: 0, y: 0, width: 440, height: 798),
+            contentSize: contentSize,
+            displayScale: 3,
+            layoutEpoch: 4,
+            isFollowingTail: true,
+            isUserInteracting: false
+        )
+
+        XCTAssertEqual(sample.canonicalTailContentOffsetY, settledTailOffset)
+        XCTAssertEqual(sample.distanceFromCanonicalTail, 0)
+        let contract = try XCTUnwrap(
+            GaryxConversationOpeningViewportContractPolicy.captureContract(for: sample)
+        )
+
+        let coordinateRoundTripSample = GaryxConversationOpeningViewportSample(
+            captureGeometry:
+                GaryxConversationTranscriptSnapshotCaptureGeometry(
+                    viewportFrameInPage: viewport.offsetBy(
+                        dx: 0,
+                        dy: -5.6843418860808015e-14
+                    ),
+                    adjustedContentInsets: captureGeometry.adjustedContentInsets,
+                    contentOffset: captureGeometry.contentOffset
+                ),
+            visibleViewportFrameInPage: sample.visibleViewportFrameInPage,
+            contentSize: contentSize,
+            displayScale: 3,
+            layoutEpoch: sample.layoutEpoch,
+            isFollowingTail: true,
+            isUserInteracting: false
+        )
+        XCTAssertEqual(
+            GaryxConversationOpeningViewportContractPolicy.revealReadiness(
+                for: contract,
+                live: coordinateRoundTripSample,
+                revisionMatches: true
+            ),
+            .matched,
+            "coordinate conversion round-off that resolves to the same pixels is exact"
+        )
+
+        let shiftedPixelSample = GaryxConversationOpeningViewportSample(
+            captureGeometry:
+                GaryxConversationTranscriptSnapshotCaptureGeometry(
+                    viewportFrameInPage: viewport.offsetBy(dx: 0, dy: 1.0 / 3.0),
+                    adjustedContentInsets: captureGeometry.adjustedContentInsets,
+                    contentOffset: captureGeometry.contentOffset
+                ),
+            visibleViewportFrameInPage: sample.visibleViewportFrameInPage,
+            contentSize: contentSize,
+            displayScale: 3,
+            layoutEpoch: sample.layoutEpoch,
+            isFollowingTail: true,
+            isUserInteracting: false
+        )
+        XCTAssertEqual(
+            GaryxConversationOpeningViewportContractPolicy.revealReadiness(
+                for: contract,
+                live: shiftedPixelSample,
+                revisionMatches: true
+            ),
+            .pending,
+            "one real display pixel remains a geometry mismatch"
+        )
+
+        let unalignedSample = GaryxConversationOpeningViewportSample(
+            captureGeometry:
+                GaryxConversationTranscriptSnapshotCaptureGeometry(
+                    viewportFrameInPage: viewport,
+                    adjustedContentInsets: captureGeometry.adjustedContentInsets,
+                    contentOffset: CGPoint(x: 0, y: 398.6015625)
+                ),
+            visibleViewportFrameInPage: sample.visibleViewportFrameInPage,
+            contentSize: contentSize,
+            displayScale: 3,
+            layoutEpoch: sample.layoutEpoch,
+            isFollowingTail: true,
+            isUserInteracting: false
+        )
+        XCTAssertNil(
+            GaryxConversationOpeningViewportContractPolicy.captureContract(
+                for: unalignedSample
+            ),
+            "the pixel-grid rule defines one exact target; it is not a difference tolerance"
+        )
+    }
+
+    func testSnapshotRevealRequiresExactLiveTailContractAfterCadenceProof() throws {
+        var capture = GaryxConversationOpeningViewportCaptureState(
+            requiredStableSampleCount: 1
+        )
+        let capturedTail = openingSample(offsetY: 2_400)
+        let contract = try XCTUnwrap(capture.observe(capturedTail))
+        let changedContentGeometry = openingSample(
+            offsetY: 2_500,
+            contentHeight: 3_300
+        )
+        XCTAssertEqual(
+            GaryxConversationOpeningViewportContractPolicy.revealReadiness(
+                for: contract,
+                live: changedContentGeometry,
+                revisionMatches: true
+            ),
+            .pending
+        )
+        XCTAssertEqual(
+            GaryxConversationOpeningViewportContractPolicy.revealReadiness(
+                for: contract,
+                live: capturedTail,
+                revisionMatches: false
+            ),
+            .pending
+        )
+
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 2,
+            openingViewportTimeoutFrameCount: 5
+        )
+        state.apply(lifecycle: .active)
+        state.presentedFrame(interval: 1.0 / 120.0)
+        state.presentedFrame(
+            interval: 1.0 / 120.0,
+            openingViewportReadiness: .pending
+        )
+        state.presentedFrame(
+            interval: 1.0 / 120.0,
+            openingViewportReadiness: .pending
+        )
+        XCTAssertEqual(state.renderPhase, .materializingConversation)
+
+        let matched =
+            GaryxConversationOpeningViewportContractPolicy.revealReadiness(
+                for: contract,
+                live: capturedTail,
+                revisionMatches: true
+            )
+        XCTAssertEqual(matched, .matched)
+        XCTAssertEqual(
+            state.presentedFrame(
+                interval: 1.0 / 120.0,
+                openingViewportReadiness: matched
+            ),
+            .live
+        )
+    }
+
+    func testOpeningViewportProofTimeoutCannotRetainCoverForever() {
+        var state = GaryxConversationRoutePresentationState(
+            terminalOpeningFrameCount: 1,
+            materializationFrameCount: 1,
+            openingViewportTimeoutFrameCount: 3
+        )
+        state.apply(lifecycle: .active)
+        state.presentedFrame(interval: 1.0 / 120.0)
+
+        XCTAssertEqual(
+            state.presentedFrame(
+                interval: 1.0 / 120.0,
+                openingViewportReadiness: .pending
+            ),
+            .materializingConversation
+        )
+        XCTAssertEqual(
+            state.presentedFrame(
+                interval: 1.0 / 120.0,
+                openingViewportReadiness: .pending
+            ),
+            .materializingConversation
+        )
+        XCTAssertEqual(
+            state.presentedFrame(
+                interval: 1.0 / 120.0,
+                openingViewportReadiness: .pending
+            ),
+            .live
+        )
+    }
+
     func testConversationPageIsTheOnlyFullScreenSurfaceFromMount() {
         var state = GaryxConversationRoutePresentationState()
 
@@ -557,7 +823,8 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
                 hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels,
                 isAwaitingInitialHistory: isAwaitingInitialHistory
             ),
-            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels
+            openingViewportContractID:
+                hasTranscriptSnapshotPixels ? "presentation-test-contract" : nil
         )
     }
 
@@ -568,6 +835,28 @@ final class GaryxConversationRoutePresentationTests: XCTestCase {
         GaryxConversationTranscriptPresentationPolicy.presentation(
             renderPhase: state.renderPhase,
             input: input
+        )
+    }
+
+    private func openingSample(
+        offsetY: CGFloat,
+        contentHeight: CGFloat = 3_200,
+        isFollowingTail: Bool = true,
+        isUserInteracting: Bool = false
+    ) -> GaryxConversationOpeningViewportSample {
+        let viewport = CGRect(x: 0, y: 120, width: 440, height: 800)
+        return GaryxConversationOpeningViewportSample(
+            captureGeometry: GaryxConversationTranscriptSnapshotCaptureGeometry(
+                viewportFrameInPage: viewport,
+                adjustedContentInsets: .init(top: 0, left: 0, bottom: 0, right: 0),
+                contentOffset: CGPoint(x: 0, y: offsetY)
+            ),
+            visibleViewportFrameInPage: viewport,
+            contentSize: CGSize(width: viewport.width, height: contentHeight),
+            displayScale: 3,
+            layoutEpoch: 9,
+            isFollowingTail: isFollowingTail,
+            isUserInteracting: isUserInteracting
         )
     }
 }

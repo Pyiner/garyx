@@ -62,7 +62,8 @@ final class GaryxActiveThreadBottomReachabilityReproTests: XCTestCase {
         )
         let input = GaryxConversationTranscriptPresentationInput(
             treatment: treatment,
-            hasTranscriptSnapshotPixels: reproduction.warmReentryHasSnapshotPixels
+            openingViewportContractID:
+                reproduction.warmReentryHasSnapshotPixels ? "repro-contract" : nil
         )
         var presentation = GaryxConversationRoutePresentationState()
         presentation.apply(lifecycle: .active)

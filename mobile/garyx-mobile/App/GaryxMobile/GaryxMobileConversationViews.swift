@@ -6,6 +6,8 @@ import UIKit
 import UniformTypeIdentifiers
 
 private let garyxHistoryPrefetchBoundaryRows = 3
+private let garyxConversationOpeningViewportCoordinateSpace =
+    "garyx-conversation-opening-viewport"
 
 private func garyxDismissKeyboard() {
     UIApplication.shared.sendAction(
@@ -59,6 +61,13 @@ private final class GaryxConversationScrollStateBox {
 /// invalidate the conversation body just to advance an internal token.
 private final class GaryxConversationScrollSchedulerBox {
     var state = GaryxConversationScrollScheduler()
+}
+
+private struct GaryxConversationOpeningSnapshotContext: Equatable {
+    let revision: GaryxConversationTranscriptSnapshotRevision
+    let visibleViewportFrameInPage: CGRect
+    let handle: GaryxConversationTranscriptSnapshotHandle?
+    let presentationInput: GaryxConversationTranscriptPresentationInput
 }
 
 /// One-shot bridge that fires the send haptic at the moment the anchor
@@ -244,6 +253,8 @@ struct GaryxConversationView: View {
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @Environment(\.garyxMotion) private var motion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.displayScale) private var displayScale
     @FocusState private var isComposerFocused: Bool
     private let liveStore: GaryxConversationLiveStore
     private let transcriptStaging: GaryxConversationTranscriptStaging?
@@ -277,6 +288,9 @@ struct GaryxConversationView: View {
     @State private var showsDebouncedTailThinking = false
     @State private var tailThinkingDebounceGeneration = 0
     @State private var taskNotificationSelectionState = GaryxTaskNotificationSelectionState()
+    @State private var transcriptSnapshotSourceID = UUID()
+    @State private var openingViewportReadinessSampler =
+        GaryxConversationOpeningViewportReadinessSampler()
     /// Runtime-panel morph state machine. `Presented` mounts the overlay
     /// surface (collapsed, exactly over the top-bar capsule) and hides the
     /// in-bar capsule; `Expanded` drives the spring morph. Close animates
@@ -293,68 +307,76 @@ struct GaryxConversationView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            let turnRows = routeTurnRows
-            let presentationInput = transcriptPresentationInput(turnRows: turnRows)
-            let transcriptPresentation = transcriptPresentation(for: presentationInput)
-
-            ZStack(alignment: .bottom) {
-                if mountsLiveTranscript(for: transcriptPresentation) {
-                    liveTranscript(
-                        proxy: proxy,
-                        treatment: presentationInput.treatment,
-                        turnRows: turnRows
+            GeometryReader { openingViewportGeometry in
+                let turnRows = routeTurnRows
+                let openingSnapshotContext = transcriptPresentationContext(
+                    turnRows: turnRows,
+                    visibleViewportFrameInPage: openingViewportGeometry.frame(
+                        in: .named(garyxConversationOpeningViewportCoordinateSpace)
                     )
-                    .allowsHitTesting(
-                        allowsTranscriptInteraction(for: transcriptPresentation)
-                    )
-                    .accessibilityHidden(transcriptPresentation.showsOpeningCover)
-                }
+                )
+                let presentationInput = openingSnapshotContext.presentationInput
+                let transcriptPresentation = transcriptPresentation(for: presentationInput)
 
-                if case .openingCover(let cover) = transcriptPresentation,
-                   let transcriptStaging
-                {
-                    GaryxConversationOpeningTranscriptView(
-                        cover: cover,
-                        snapshotThreadID: transcriptStaging.snapshotThreadID
-                    )
-                    .allowsHitTesting(true)
-                    .accessibilityHidden(true)
-                }
+                ZStack(alignment: .bottom) {
+                    if mountsLiveTranscript(for: transcriptPresentation) {
+                        liveTranscript(
+                            proxy: proxy,
+                            treatment: presentationInput.treatment,
+                            turnRows: turnRows,
+                            openingSnapshotContext: openingSnapshotContext
+                        )
+                        .allowsHitTesting(
+                            allowsTranscriptInteraction(for: transcriptPresentation)
+                        )
+                        .accessibilityHidden(transcriptPresentation.showsOpeningCover)
+                    }
 
-                // The new-thread empty state lives outside the transcript
-                // scroll so it stays anchored between the header and the
-                // composer. The bottom padding lifts the visual center above
-                // the true midpoint (by half the padding) so the title and
-                // workspace picker sit slightly high on the page.
-                if showsNewThreadEmptyState {
-                    GaryxEmptyConversationView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .padding(.bottom, 100)
+                    if case .openingCover(let cover) = transcriptPresentation,
+                       transcriptStaging != nil
+                    {
+                        GaryxConversationOpeningTranscriptView(
+                            cover: cover,
+                            snapshotHandle: openingSnapshotContext.handle
+                        )
+                        .allowsHitTesting(true)
+                        .accessibilityHidden(true)
+                    }
+
+                    // The new-thread empty state lives outside the transcript
+                    // scroll so it stays anchored between the header and the
+                    // composer. The bottom padding lifts the visual center above
+                    // the true midpoint (by half the padding) so the title and
+                    // workspace picker sit slightly high on the page.
+                    if showsNewThreadEmptyState {
+                        GaryxEmptyConversationView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                            .padding(.bottom, 100)
+                    }
                 }
-            }
-            // Floating long-press menus render here, outside the transcript
-            // scroll, so panels are never clipped and the pressed message
-            // itself stays untouched.
-            .garyxMessageMenuHost(
-                bottomInset: bottomChromeHeight,
-                dismissToken: messageMenuDismissToken
-            )
-            // Scroll-to-bottom hovers directly above the composer. It lives
-            // INSIDE the bottom chrome: hosting it in a content overlay made
-            // the safe-area inset shift its visuals without its hit-test
-            // region, so taps fell through to the transcript rows behind it.
-            .garyxFloatingBottomChrome(onHeightChange: { height in
-                bottomChromeHeight = height
-            }) {
-                VStack(spacing: 12) {
-                    if showsScrollToBottomButton {
-                        Button {
-                            updateScrollState(proxy: proxy) { $0.scrollToBottomTapped() }
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 42, height: 42)
+                // Floating long-press menus render here, outside the transcript
+                // scroll, so panels are never clipped and the pressed message
+                // itself stays untouched.
+                .garyxMessageMenuHost(
+                    bottomInset: bottomChromeHeight,
+                    dismissToken: messageMenuDismissToken
+                )
+                // Scroll-to-bottom hovers directly above the composer. It lives
+                // INSIDE the bottom chrome: hosting it in a content overlay made
+                // the safe-area inset shift its visuals without its hit-test
+                // region, so taps fell through to the transcript rows behind it.
+                .garyxFloatingBottomChrome(onHeightChange: { height in
+                    bottomChromeHeight = height
+                }) {
+                    VStack(spacing: 12) {
+                        if showsScrollToBottomButton {
+                            Button {
+                                updateScrollState(proxy: proxy) { $0.scrollToBottomTapped() }
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(GaryxFont.fixedSystem(size: 15, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 42, height: 42)
                                 // Glass is decoration only: an iOS 26
                                 // glassEffect applied to this button gets no
                                 // working hit-test region inside the bottom
@@ -371,36 +393,36 @@ struct GaryxConversationView: View {
                                             in: Circle()
                                         )
                                         .allowsHitTesting(false)
-                                }
-                                .contentShape(Circle())
-                                .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+                                    }
+                                    .contentShape(Circle())
+                                    .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+                            }
+                            .buttonStyle(GaryxPressableRowStyle())
+                            .garyxMaterializeTransition(
+                                .scrollLatest,
+                                anchor: .bottom
+                            )
+                            .accessibilityLabel("Scroll to latest message")
                         }
-                        .buttonStyle(GaryxPressableRowStyle())
-                        .garyxMaterializeTransition(
-                            .scrollLatest,
-                            anchor: .bottom
+
+                        if model.isNewThreadAgentBindingUnavailable {
+                            Label("Enable an agent to start a new thread", systemImage: "exclamationmark.circle")
+                                .font(GaryxFont.caption(weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 18)
+                                .accessibilityIdentifier("new-thread-agent-unavailable")
+                        }
+
+                        GaryxComposer(
+                            payload: model.composerPayloadCoordinator,
+                            isFocused: $isComposerFocused
                         )
-                        .accessibilityLabel("Scroll to latest message")
+                            .disabled(model.isNewThreadAgentBindingUnavailable)
                     }
-
-                    if model.isNewThreadAgentBindingUnavailable {
-                        Label("Enable an agent to start a new thread", systemImage: "exclamationmark.circle")
-                            .font(GaryxFont.caption(weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 18)
-                            .accessibilityIdentifier("new-thread-agent-unavailable")
-                    }
-
-                    GaryxComposer(
-                        payload: model.composerPayloadCoordinator,
-                        isFocused: $isComposerFocused
-                    )
-                        .disabled(model.isNewThreadAgentBindingUnavailable)
+                    .frame(maxWidth: .infinity)
+                    .animation(motion.animation(.scrollLatest), value: showsScrollToBottomButton)
                 }
-                .frame(maxWidth: .infinity)
-                .animation(motion.animation(.scrollLatest), value: showsScrollToBottomButton)
-            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
                     reportTranscriptPresentationInput(presentationInput)
@@ -408,7 +430,9 @@ struct GaryxConversationView: View {
                 .onChange(of: presentationInput) { _, input in
                     reportTranscriptPresentationInput(input)
                 }
+            }
         }
+        .coordinateSpace(name: garyxConversationOpeningViewportCoordinateSpace)
         .garyxPageBackground()
         .garyxAdaptiveTopBar {
             GaryxConversationHeader(
@@ -466,24 +490,64 @@ struct GaryxConversationView: View {
         transcriptStaging?.mountsLiveTranscript ?? true
     }
 
-    private func transcriptPresentationInput(
-        turnRows: [GaryxMobileTurnRow]
-    ) -> GaryxConversationTranscriptPresentationInput {
-        let hasTranscriptSnapshotPixels = liveStore.threadID.map {
-            GaryxConversationTranscriptSnapshotCache.shared.hasSnapshot(for: $0)
-        } ?? false
-        let treatment = GaryxConversationTranscriptTreatmentPolicy.treatment(
+    private func transcriptPresentationContext(
+        turnRows: [GaryxMobileTurnRow],
+        visibleViewportFrameInPage: CGRect
+    ) -> GaryxConversationOpeningSnapshotContext {
+        let hasMoreRenderableHistory = liveStore.hasMoreRenderableHistory(
+            in: model,
+            isCanonicalTop: routeContext.isCanonicalTop
+        )
+        let baseTreatment = GaryxConversationTranscriptTreatmentPolicy.treatment(
             localRenderableRowCount: turnRows.count,
             hasRenderedSnapshot: liveStore.hasRenderedSnapshot(in: model),
-            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels,
+            hasTranscriptSnapshotPixels: false,
             isAwaitingInitialHistory: liveStore.isAwaitingInitialHistory(
                 in: model,
                 isCanonicalTop: routeContext.isCanonicalTop
             )
         )
-        return GaryxConversationTranscriptPresentationInput(
+        let revision = GaryxConversationTranscriptSnapshotRevision(
+            renderSnapshot: liveStore.renderSnapshot(in: model),
+            messages: liveStore.messages(in: model),
+            turnRows: turnRows,
+            treatment: baseTreatment,
+            showsTailThinking: showsPresentedTailThinking,
+            hasMoreRenderableHistory: hasMoreRenderableHistory,
+            isLoadingOlderHistory: model.isLoadingOlderThreadHistory,
+            capsuleHTMLCacheEpoch: model.capsuleHTMLCacheEpoch,
+            dynamicTypeSize: dynamicTypeSize,
+            horizontalSizeClass: horizontalSizeClass,
+            displayScale: displayScale
+        )
+        let handle: GaryxConversationTranscriptSnapshotHandle?
+        if transcriptStaging != nil, let threadID = liveStore.threadID {
+            handle = GaryxConversationTranscriptSnapshotCache.shared.qualifiedSnapshot(
+                for: threadID,
+                revision: revision,
+                visibleViewportFrameInPage: visibleViewportFrameInPage
+            )
+        } else {
+            handle = nil
+        }
+        let treatment = GaryxConversationTranscriptTreatmentPolicy.treatment(
+            localRenderableRowCount: turnRows.count,
+            hasRenderedSnapshot: liveStore.hasRenderedSnapshot(in: model),
+            hasTranscriptSnapshotPixels: handle != nil,
+            isAwaitingInitialHistory: liveStore.isAwaitingInitialHistory(
+                in: model,
+                isCanonicalTop: routeContext.isCanonicalTop
+            )
+        )
+        let input = GaryxConversationTranscriptPresentationInput(
             treatment: treatment,
-            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels
+            openingViewportContractID: handle?.openingViewportContractID
+        )
+        return GaryxConversationOpeningSnapshotContext(
+            revision: revision,
+            visibleViewportFrameInPage: visibleViewportFrameInPage,
+            handle: handle,
+            presentationInput: input
         )
     }
 
@@ -543,12 +607,14 @@ struct GaryxConversationView: View {
     private func liveTranscript(
         proxy: ScrollViewProxy,
         treatment: GaryxConversationTranscriptTreatment,
-        turnRows: [GaryxMobileTurnRow]
+        turnRows: [GaryxMobileTurnRow],
+        openingSnapshotContext: GaryxConversationOpeningSnapshotContext
     ) -> some View {
         messageScroll(
             proxy: proxy,
             treatment: treatment,
-            turnRows: turnRows
+            turnRows: turnRows,
+            openingSnapshotContext: openingSnapshotContext
         )
             .onAppear {
                 GaryxConversationSendJitterProbe.shared?.attach(
@@ -569,9 +635,11 @@ struct GaryxConversationView: View {
                     updateScrollState(proxy: proxy) { $0.composerFocused() }
                 }
                 resetTailThinkingPresentation(proxy: proxy)
-                scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
+                scheduleTranscriptSnapshot(openingSnapshotContext)
+                updateOpeningViewportReadinessSampling(openingSnapshotContext)
             }
             .onDisappear {
+                openingViewportReadinessSampler.stop()
                 GaryxConversationSendJitterProbe.shared?.detach(
                     routeIdentity: liveStore.routeIdentity
                 )
@@ -618,7 +686,7 @@ struct GaryxConversationView: View {
                         hasTailContent: !newValue.value.isEmpty || showsPresentedTailThinking
                     )
                 }
-                scheduleTranscriptSnapshot(rowIDs: routeTurnRows.map(\.id))
+                scheduleTranscriptSnapshot(openingSnapshotContext)
             }
             .onChange(of: renderRowScrollObservation) { oldValue, newValue in
                 let restore = scrollStateBox.state.renderRowsChanged(
@@ -639,7 +707,22 @@ struct GaryxConversationView: View {
                     )
                 }
                 rowGeometryBox.retain(only: Set(newValue.value))
-                scheduleTranscriptSnapshot(rowIDs: newValue.value)
+                scheduleTranscriptSnapshot(openingSnapshotContext)
+            }
+            .onChange(of: openingSnapshotContext.revision) { _, _ in
+                scheduleTranscriptSnapshot(openingSnapshotContext)
+            }
+            .onChange(of: openingSnapshotContext.visibleViewportFrameInPage) { _, _ in
+                scheduleTranscriptSnapshot(openingSnapshotContext)
+            }
+            .onChange(of: openingSnapshotContext) { _, context in
+                updateOpeningViewportReadinessSampling(context)
+            }
+            .onChange(of: transcriptStaging?.renderPhase) { _, phase in
+                updateOpeningViewportReadinessSampling(openingSnapshotContext)
+                if phase == .live {
+                    scheduleTranscriptSnapshot(openingSnapshotContext)
+                }
             }
             .onChange(of: liveStore.tailThinkingPresentationMode(in: model)) { _, _ in
                 syncTailThinkingPresentation(proxy: proxy)
@@ -763,7 +846,8 @@ struct GaryxConversationView: View {
     private func messageScroll(
         proxy: ScrollViewProxy,
         treatment: GaryxConversationTranscriptTreatment,
-        turnRows: [GaryxMobileTurnRow]
+        turnRows: [GaryxMobileTurnRow],
+        openingSnapshotContext: GaryxConversationOpeningSnapshotContext
     ) -> some View {
         ScrollView {
             ZStack(alignment: .topLeading) {
@@ -962,7 +1046,11 @@ struct GaryxConversationView: View {
         } action: { height in
             var metrics = scrollStateBox.state.metrics
             metrics.viewportHeight = height
-            applyMetrics(metrics, proxy: proxy)
+            applyMetrics(
+                metrics,
+                proxy: proxy,
+                openingSnapshotContext: openingSnapshotContext
+            )
         }
         .onPreferenceChange(GaryxConversationContentEdgesKey.self) { edges in
             // One atomic frame per layout pass: both edges arrive together,
@@ -978,13 +1066,21 @@ struct GaryxConversationView: View {
             if let tail = edges.tail {
                 metrics.contentTailOffset = tail
             }
-            applyMetrics(metrics, proxy: proxy)
+            applyMetrics(
+                metrics,
+                proxy: proxy,
+                openingSnapshotContext: openingSnapshotContext
+            )
         }
         .scrollDisabled(sidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
         .garyxUserScrollInteraction { isInteracting in
             updateScrollState(proxy: proxy) {
                 $0.userScrollInteractionChanged(isInteracting: isInteracting)
+            }
+            reportOpeningViewportReadiness(openingSnapshotContext)
+            if !isInteracting {
+                scheduleTranscriptSnapshot(openingSnapshotContext)
             }
         }
         // Deliberately no `.refreshable`: the transcript is live (SSE +
@@ -1026,26 +1122,81 @@ struct GaryxConversationView: View {
             || showsDebouncedTailThinking
     }
 
-    private func scheduleTranscriptSnapshot(rowIDs: [String]) {
-        guard let threadID = liveStore.threadID, !rowIDs.isEmpty else { return }
-        let messages = liveStore.messages(in: model)
-        let tail = messages.last
-        let revision = [
-            String(rowIDs.count),
-            rowIDs.first ?? "",
-            rowIDs.last ?? "",
-            String(messages.count),
-            tail?.id ?? "",
-            String(tail?.text.utf8.count ?? 0),
-            String(tail?.isStreaming == true),
-        ].joined(separator: ":")
+    private func scheduleTranscriptSnapshot(
+        _ context: GaryxConversationOpeningSnapshotContext
+    ) {
+        guard let threadID = liveStore.threadID,
+              !context.revision.turnRows.isEmpty else {
+            return
+        }
+        if let transcriptStaging, transcriptStaging.renderPhase != .live {
+            return
+        }
+        let state = scrollStateBox.state
+        guard state.isFollowingTail, !state.isUserScrollInteracting else {
+            return
+        }
         GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
             threadID: threadID,
-            revision: revision,
+            sourceID: transcriptSnapshotSourceID,
+            revision: context.revision,
+            visibleViewportFrameInPage: context.visibleViewportFrameInPage,
+            layoutEpoch: state.tailGeometryEpoch,
+            captureStatus: { [scrollStateBox] in
+                let state = scrollStateBox.state
+                return (
+                    isFollowingTail: state.isFollowingTail,
+                    isUserInteracting: state.isUserScrollInteracting,
+                    layoutEpoch: state.tailGeometryEpoch
+                )
+            },
             scrollView: { [hostScrollViewBox] in
                 hostScrollViewBox.currentScrollView()
             }
         )
+    }
+
+    @discardableResult
+    private func reportOpeningViewportReadiness(
+        _ context: GaryxConversationOpeningSnapshotContext
+    ) -> GaryxConversationOpeningViewportRevealReadiness {
+        guard let transcriptStaging,
+              let handle = context.handle else {
+            return .notRequired
+        }
+        let state = scrollStateBox.state
+        let readiness: GaryxConversationOpeningViewportRevealReadiness
+        if let scrollView = hostScrollViewBox.currentScrollView() {
+            readiness = GaryxConversationTranscriptSnapshotCache.shared.revealReadiness(
+                for: handle,
+                revision: context.revision,
+                visibleViewportFrameInPage: context.visibleViewportFrameInPage,
+                layoutEpoch: state.tailGeometryEpoch,
+                isFollowingTail: state.isFollowingTail,
+                isUserInteracting: state.isUserScrollInteracting,
+                scrollView: scrollView
+            )
+        } else {
+            readiness = .pending
+        }
+        transcriptStaging.openingViewportReadinessDidChange(
+            handle.openingViewportContractID,
+            readiness
+        )
+        return readiness
+    }
+
+    private func updateOpeningViewportReadinessSampling(
+        _ context: GaryxConversationOpeningSnapshotContext
+    ) {
+        guard transcriptStaging?.renderPhase == .materializingConversation,
+              context.handle != nil else {
+            openingViewportReadinessSampler.stop()
+            return
+        }
+        openingViewportReadinessSampler.start {
+            reportOpeningViewportReadiness(context)
+        }
     }
 
     /// Breathing room between the viewport top and an anchored user row so
@@ -1113,7 +1264,11 @@ struct GaryxConversationView: View {
 
     /// Feed a measurement update into the scroll state machine and run the
     /// follow-up work every metrics change shares.
-    private func applyMetrics(_ metrics: GaryxConversationLayoutMetrics, proxy: ScrollViewProxy) {
+    private func applyMetrics(
+        _ metrics: GaryxConversationLayoutMetrics,
+        proxy: ScrollViewProxy,
+        openingSnapshotContext: GaryxConversationOpeningSnapshotContext
+    ) {
         updateScrollState(proxy: proxy) {
             $0.metricsChanged(
                 metrics,
@@ -1135,6 +1290,11 @@ struct GaryxConversationView: View {
             }
         } else {
             reconcileSendAnchorFiller(proxy: proxy)
+        }
+        reportOpeningViewportReadiness(openingSnapshotContext)
+        if scrollStateBox.state.isFollowingTail,
+           !scrollStateBox.state.isUserScrollInteracting {
+            scheduleTranscriptSnapshot(openingSnapshotContext)
         }
         prefetchOlderHistoryIfNeeded()
     }
