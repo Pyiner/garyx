@@ -21,6 +21,15 @@ This observation is outside the send-anchor scope:
   not affect the send-anchored state machine.
 - No title-path root cause was established during the scroll-focused review.
 
-Disposition: investigate new-thread title ownership and server title
-generation in an independent task with its own deterministic reproduction. Do
-not fold a title fix into the send-anchored transcript change.
+Disposition: RESOLVED as accepted behavior (2026-07-24). Deterministic
+reproduction and root cause were established in a dedicated investigation:
+the gateway first writes a prompt-derived label (`garyx_prompt`), and after
+the run completes the bridge applies the provider's native session title
+(Claude `ai-title`), which is generated from the metadata/memory-wrapped
+first message and may therefore diverge from the submitted prompt
+(`garyx-bridge/src/multi_provider/run_management/thread_title.rs`,
+`should_apply_provider_thread_title`). The product owner reviewed the
+mechanism and decided to KEEP provider titles: `ai-title` results are
+generally satisfactory, and the provider override of `garyx_prompt` labels
+is intentional accepted behavior. Do not remove or weaken the provider
+thread-title path, and do not re-open this as a bug.
