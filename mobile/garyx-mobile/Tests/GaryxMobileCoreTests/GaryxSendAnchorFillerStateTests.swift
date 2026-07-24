@@ -38,7 +38,11 @@ final class GaryxSendAnchorFillerStateTests: XCTestCase {
             ),
             676
         )
-        // Content beyond the floor leaves no run space.
+        XCTAssertFalse(state.isExhausted)
+
+        // Content reaching the floor leaves no run space and marks the
+        // session exhausted: the reply is growing below the screen and the
+        // view hands the session off to tail following.
         XCTAssertEqual(
             state.reconcile(
                 viewportHeight: 800,
@@ -46,6 +50,21 @@ final class GaryxSendAnchorFillerStateTests: XCTestCase {
                 contentBelowAnchorHeight: 900
             ),
             0
+        )
+        XCTAssertTrue(state.isExhausted)
+    }
+
+    func testUnmeasuredSessionCannotExhaust() {
+        var state = GaryxSendAnchorFillerState()
+        _ = state.begin(
+            anchorRowId: "user_turn:origin:send",
+            viewportHeight: 0,
+            bottomChromeClearance: 24,
+            contentBelowAnchorHeight: 500
+        )
+        XCTAssertFalse(
+            state.isExhausted,
+            "a zero floor means no viewport was measured; content cannot exhaust it"
         )
     }
 

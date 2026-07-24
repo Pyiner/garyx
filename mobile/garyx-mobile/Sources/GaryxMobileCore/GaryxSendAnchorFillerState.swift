@@ -37,6 +37,13 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
     public private(set) var anchorRowId: String?
     public private(set) var runSpaceFloor: CGFloat = 0
     public private(set) var height: CGFloat = 0
+    /// True once intrinsic content below the anchor filled the session
+    /// floor: the reply is growing below the screen. Content-space
+    /// measurement, so it cannot false-positive from the viewport still
+    /// sitting at the pre-anchor scroll position at send time. The view
+    /// hands this off to the scroll state machine (anchored session →
+    /// tail following) and ends the session.
+    public private(set) var isExhausted = false
 
     public init() {}
 
@@ -56,6 +63,7 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
             bottomChromeClearance: bottomChromeClearance
         )
         height = max(0, runSpaceFloor - Self.valid(contentBelowAnchorHeight))
+        updateExhaustion(contentBelowAnchorHeight: contentBelowAnchorHeight)
         return height
     }
 
@@ -80,11 +88,17 @@ public struct GaryxSendAnchorFillerState: Equatable, Sendable {
             )
         )
         height = max(0, runSpaceFloor - Self.valid(contentBelowAnchorHeight))
+        updateExhaustion(contentBelowAnchorHeight: contentBelowAnchorHeight)
         return height
     }
 
     public mutating func reset() {
         self = Self()
+    }
+
+    private mutating func updateExhaustion(contentBelowAnchorHeight: CGFloat) {
+        isExhausted = runSpaceFloor > 0
+            && Self.valid(contentBelowAnchorHeight) >= runSpaceFloor
     }
 
     private static func effectiveRunSpace(

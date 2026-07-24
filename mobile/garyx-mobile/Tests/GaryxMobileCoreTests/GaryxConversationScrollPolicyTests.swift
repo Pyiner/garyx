@@ -303,6 +303,52 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.isFollowingTail)
     }
 
+    func testRunSpaceExhaustionHandsAnchoredSessionToTailFollowing() {
+        var state = GaryxConversationScrollState()
+        _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+
+        // The reply grew below the screen (content-space signal from the
+        // filler state): the anchored session hands off to tail following
+        // with one short animated settle (product decision 2026-07-24).
+        XCTAssertEqual(
+            state.sendRunSpaceExhausted(),
+            .init(reason: .tailUpdate, animated: true)
+        )
+        XCTAssertTrue(state.isFollowingTail)
+        XCTAssertFalse(state.hasSendRunSpace)
+        XCTAssertNil(state.sendAnchorRowId)
+        XCTAssertNil(state.sendRunSpaceExhausted(), "idempotent once retired")
+    }
+
+    func testRunSpaceExhaustionWhileBrowsingOnlyRetiresRunSpace() {
+        var state = GaryxConversationScrollState()
+        _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
+        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
+        XCTAssertEqual(state.anchoring, .browsingHistory)
+
+        // A reader who scrolled away is never yanked; the exhaustion only
+        // retires the run space so baseline near-bottom re-arming resumes.
+        XCTAssertNil(state.sendRunSpaceExhausted())
+        XCTAssertFalse(state.hasSendRunSpace)
+        XCTAssertEqual(state.anchoring, .browsingHistory)
+        _ = state.userScrollInteractionChanged(isInteracting: false)
+        XCTAssertNil(
+            state.metricsChanged(
+                GaryxConversationLayoutMetrics(
+                    contentTopOffset: -1_000,
+                    contentBottomOffset: 810,
+                    contentTailOffset: 810,
+                    viewportHeight: 800
+                ),
+                hasTailContent: true
+            )
+        )
+        XCTAssertTrue(
+            state.isFollowingTail,
+            "with run space retired, near-bottom re-arms following again"
+        )
+    }
+
     func testThreadOpenedRetiresSendRunSpace() {
         var state = GaryxConversationScrollState()
         _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")

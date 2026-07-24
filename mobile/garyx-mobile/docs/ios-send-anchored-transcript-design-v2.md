@@ -35,8 +35,9 @@ for: .initialOffset)` + `.defaultScrollAnchor(.bottom, for: .sizeChanges)`），
 
 ## 2. 设计 v2：系统级锚定不拆，两模式共存
 
-产品目标与 v1 相同（发送即锚顶、消息+thinking 同帧上屏、锚定期零自动
-滚动、手势即回正常逻辑），机制全部重来：
+产品目标（2026-07-24 老板修订）：发送即锚顶、消息+thinking 同帧上屏、
+回复在一屏内生长时锚点纹丝不动；**回复一旦长过一屏（出现屏下生长），
+无缝转入贴底跟随**，不是停住等按钮；手势随时接管。机制全部重来：
 
 ### 2.1 defaultScrollAnchor 按会话切换角色（核心）
 
@@ -60,12 +61,22 @@ for: .initialOffset)` + `.defaultScrollAnchor(.bottom, for: .sizeChanges)`），
 - 会话内：`messagesChanged` / `thinkingIndicatorShown` /
   `metricsChanged` 不产生滚动请求（同 v1）；**`bottomChromeChanged`
   也返回 nil（修 A2）**；`composerFocused` 返回 nil（同 v1）。
-- 退出：用户滚动手势 → browsingHistory（现有 ownership 语义）；
-  回底按钮 → followingTail + 贴底（此刻恢复 `.bottom` sizeChanges，
-  人已在底部，恢复瞬间无位移）；线程切换/占据变化 → reset。
+- **耗尽移交（老板 2026-07-24 修订：出现屏下生长就要跟）**：锚点
+  以下真实内容填满会话 floor（= 回复开始屏下生长、filler 已自然归零）
+  时，会话「耗尽」：`sendRunSpaceExhausted()` 把锚定态无缝移交给
+  followingTail，发出一次短动画 settle 贴到真实尾部，随后由系统
+  sizeChanges 钉底接管持续跟随。耗尽判定用**内容坐标系**测量
+  （filler 状态的 `isExhausted`），不用视口坐标——发送瞬间视口还没
+  锚过去时不会误判。若读者此刻在浏览历史，耗尽只收掉 run space 标记
+  （绝不拽人），近底重新武装跟随的基线语义随之恢复。
+- 退出：耗尽移交（上条）；用户滚动手势 → browsingHistory（现有
+  ownership 语义）；回底按钮 → followingTail + 贴底（此刻恢复
+  `.bottom` sizeChanges，人已在底部，恢复瞬间无位移）；线程切换/
+  占据变化 → reset。
 - 回底按钮可见性沿用 v1 的 intrinsic-tail 判据
   （`isContentTailBelowViewport`：真实内容尾部在视口之下才显示，
-  filler 空白不算）。
+  filler 空白不算）；正常路径下耗尽移交先于按钮出现，按钮主要服务
+  浏览态。
 
 ### 2.3 filler v2：floor 规则（修 A3）
 
@@ -103,7 +114,8 @@ ACK 静默）、其余 `.hidden`。沿用 v1 实现。
    - 观看一个正在流式的 run：贴底跟随丝滑，无程序化抖动；
    - 手动上滑 → 回底按钮 → 恢复跟随；
    - 存量线程发送：一次动画锚顶、thinking 同帧、流式零抖动；
-   - 回复超一屏停住、按钮出现；锚定期上滑不被打断；
+   - 回复长过一屏：无缝转入贴底跟随（用户消息滑出屏顶、一路跟到
+     run 结束），衔接处无跳变；锚定期/跟随期上滑均不被打断；
    - 多行草稿输入/键盘出没：锚定不 snap；
    - 键盘弹起状态发送 → 键盘收起：锚位仍正确（A3 回归）；
    - 新线程首发一致；历史下拉 prepend 保位；

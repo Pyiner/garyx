@@ -691,6 +691,26 @@ public struct GaryxConversationScrollState: Equatable {
         return ScrollRequest(reason: .manual, animated: false)
     }
 
+    /// The send-anchor run space is exhausted: intrinsic reply content below
+    /// the anchored row filled the session floor, so the blank filler is
+    /// already zero. A reply longer than one screen is followed (product
+    /// decision 2026-07-24): a still-anchored session hands off seamlessly
+    /// to tail following — the viewport is already effectively at the
+    /// content bottom, so one short animated settle engages the system
+    /// size-change pinning without a visible jump. A reader who scrolled
+    /// away only has the run space retired; nothing moves their viewport,
+    /// and baseline near-bottom re-arming resumes.
+    public mutating func sendRunSpaceExhausted() -> ScrollRequest? {
+        guard hasSendRunSpace else { return nil }
+        hasSendRunSpace = false
+        if case .sendAnchored = anchoring {
+            anchoring = .followingTail
+            markTailGeometryChanged()
+            return ScrollRequest(reason: .tailUpdate, animated: true)
+        }
+        return nil
+    }
+
     // MARK: Scheduled scroll retries
 
     /// Complete fire-time input for the Core-owned settlement scheduler.

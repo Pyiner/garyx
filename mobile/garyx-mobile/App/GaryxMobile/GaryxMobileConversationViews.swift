@@ -591,7 +591,7 @@ struct GaryxConversationView: View {
                 updateScrollState(proxy: proxy) { $0.composerFocused() }
             }
             .onChange(of: bottomChromeHeight) { _, _ in
-                reconcileSendAnchorFiller()
+                reconcileSendAnchorFiller(proxy: proxy)
                 updateScrollState(proxy: proxy) { $0.bottomChromeChanged() }
             }
     }
@@ -785,7 +785,7 @@ struct GaryxConversationView: View {
                                         // changes from scrolling, so this only fires on
                                         // layout changes and never invalidates the body.
                                         rowGeometryBox.record(rowId, minY: minY)
-                                        reconcileSendAnchorFiller()
+                                        reconcileSendAnchorFiller(proxy: proxy)
                                     }
                                 )
                                 .onAppear {
@@ -834,7 +834,7 @@ struct GaryxConversationView: View {
                             ).minY
                         } action: { minY in
                             rowGeometryBox.recordIntrinsicTail(minY: minY)
-                            reconcileSendAnchorFiller()
+                            reconcileSendAnchorFiller(proxy: proxy)
                         }
                         .background {
                             GeometryReader { geometry in
@@ -1013,7 +1013,7 @@ struct GaryxConversationView: View {
         }
     }
 
-    private func reconcileSendAnchorFiller() {
+    private func reconcileSendAnchorFiller(proxy: ScrollViewProxy) {
         guard let anchorRowId = sendAnchorFillerState.anchorRowId,
               let contentBelowAnchorHeight =
                   rowGeometryBox.contentBelowAnchorHeight(anchorRowId: anchorRowId) else {
@@ -1026,6 +1026,14 @@ struct GaryxConversationView: View {
         )
         if sendAnchorFillerHeight != height {
             sendAnchorFillerHeight = height
+        }
+        if sendAnchorFillerState.isExhausted {
+            // The reply grew below the screen: the run space is used up
+            // (filler already zero), so end the session and hand off to
+            // tail following (product decision 2026-07-24 — a reply longer
+            // than one screen is followed, not parked).
+            resetSendAnchorFiller()
+            updateScrollState(proxy: proxy) { $0.sendRunSpaceExhausted() }
         }
     }
 
@@ -1046,7 +1054,7 @@ struct GaryxConversationView: View {
                     || showsPresentedTailThinking
             )
         }
-        reconcileSendAnchorFiller()
+        reconcileSendAnchorFiller(proxy: proxy)
         prefetchOlderHistoryIfNeeded()
     }
 
