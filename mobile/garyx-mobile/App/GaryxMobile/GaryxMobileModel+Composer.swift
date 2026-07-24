@@ -20,7 +20,6 @@ private struct GaryxOptimisticSendPresentation {
     let previousRuntime: GaryxThreadRuntime?
     let previousActiveAssistantId: String?
     let beganRunDispatch: Bool
-    let localSendPresentation: GaryxConversationLocalSendPresentation?
 }
 
 extension GaryxMobileModel {
@@ -202,7 +201,7 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    func sendDraft(presentationScopeIdentity: String? = nil) async -> Bool {
+    func sendDraft() async -> Bool {
         let projectedText = activeComposerDraft
         let projectedItems = activeComposerPayloadItems
         guard composerPayloadCoordinator.canSend,
@@ -226,8 +225,7 @@ extension GaryxMobileModel {
                         optimisticPresentation = self.presentOptimisticSend(
                             text: Self.normalizedComposerSendText(prepared.text),
                             attachments: Self.mobileComposerAttachments(from: prepared.attachments),
-                            clientIntentId: prepared.clientIntentID,
-                            presentationScopeIdentity: presentationScopeIdentity
+                            clientIntentId: prepared.clientIntentID
                         )
                     },
                     rollback: {
@@ -281,14 +279,12 @@ extension GaryxMobileModel {
         _ text: String,
         attachments: [GaryxMobileComposerAttachment] = [],
         clientIntentId suppliedClientIntentId: String? = nil,
-        delivery: GaryxComposerDeliveryHandle? = nil,
-        presentationScopeIdentity: String? = nil
+        delivery: GaryxComposerDeliveryHandle? = nil
     ) async {
         let presentation = presentOptimisticSend(
             text: text,
             attachments: attachments,
-            clientIntentId: suppliedClientIntentId ?? "mobile-\(UUID().uuidString)",
-            presentationScopeIdentity: presentationScopeIdentity
+            clientIntentId: suppliedClientIntentId ?? "mobile-\(UUID().uuidString)"
         )
         guard presentation.shouldDispatch else { return }
         GaryxMobileHaptics.shared.play(.messageSendCommitted)
@@ -302,8 +298,7 @@ extension GaryxMobileModel {
     private func presentOptimisticSend(
         text: String,
         attachments: [GaryxMobileComposerAttachment],
-        clientIntentId: String,
-        presentationScopeIdentity: String?
+        clientIntentId: String
     ) -> GaryxOptimisticSendPresentation {
         let runtimeGeneration = gatewayRequestToken
         let clientTimestampLocal = Self.localChatTimestamp()
@@ -365,21 +360,6 @@ extension GaryxMobileModel {
             messages = draftOptimisticMessages
         }
         GaryxConversationSendJitterProbe.shared?.optimisticRowAppended()
-        let localSendPresentation: GaryxConversationLocalSendPresentation?
-        if let scopeIdentity = presentationScopeIdentity?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !scopeIdentity.isEmpty {
-            conversationLocalSendPresentationGeneration &+= 1
-            let presentation = GaryxConversationLocalSendPresentation(
-                scopeIdentity: scopeIdentity,
-                anchorRowId: "user_turn:\(userMessage.id)",
-                generation: conversationLocalSendPresentationGeneration
-            )
-            conversationLocalSendPresentation = presentation
-            localSendPresentation = presentation
-        } else {
-            localSendPresentation = nil
-        }
         let presentedMessages = initialThreadId.map { cachedMessages(for: $0) } ?? messages
         return GaryxOptimisticSendPresentation(
             runtimeGeneration: runtimeGeneration,
@@ -397,8 +377,7 @@ extension GaryxMobileModel {
             presentedMessages: presentedMessages,
             previousRuntime: previousRuntime,
             previousActiveAssistantId: previousActiveAssistantId,
-            beganRunDispatch: beganRunDispatch,
-            localSendPresentation: localSendPresentation
+            beganRunDispatch: beganRunDispatch
         )
     }
 
@@ -433,9 +412,6 @@ extension GaryxMobileModel {
             messages = presentation.previousMessages
         } else {
             messages.removeAll { $0.id == presentation.userMessage.id }
-        }
-        if conversationLocalSendPresentation == presentation.localSendPresentation {
-            conversationLocalSendPresentation = nil
         }
     }
 
@@ -921,10 +897,7 @@ extension GaryxMobileModel {
     /// Re-send a user message that previously failed. Removes the failed user bubble +
     /// any trailing failed assistant placeholder and runs the normal send pipeline.
     @discardableResult
-    func retryFailedUserMessage(
-        _ messageId: String,
-        presentationScopeIdentity: String? = nil
-    ) async -> Bool {
+    func retryFailedUserMessage(_ messageId: String) async -> Bool {
         guard let threadId = selectedThread?.id else { return false }
         var capturedText: String?
         var capturedAttachments: [GaryxMobileMessageAttachment] = []
@@ -945,11 +918,7 @@ extension GaryxMobileModel {
         guard let text = capturedText else { return false }
         let composerPayloadItems = capturedAttachments.compactMap(Self.composerAttachment(from:))
         lastError = nil
-        await send(
-            text,
-            attachments: composerPayloadItems,
-            presentationScopeIdentity: presentationScopeIdentity
-        )
+        await send(text, attachments: composerPayloadItems)
         return true
     }
 

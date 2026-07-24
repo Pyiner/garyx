@@ -52,12 +52,6 @@ struct GaryxConversationLiveStore {
         renderInput(in: model).showsTailThinking
     }
 
-    func tailThinkingPresentationMode(
-        in model: GaryxMobileModel
-    ) -> GaryxTailThinkingPresentationMode {
-        renderInput(in: model).tailThinkingPresentationMode
-    }
-
     func rateLimit(in model: GaryxMobileModel) -> GaryxRenderRateLimit? {
         guard let threadID else { return nil }
         return model.renderSnapshot(for: threadID)?.rateLimit

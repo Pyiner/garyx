@@ -95,32 +95,9 @@ final class GaryxConversationLayoutMetricsTests: XCTestCase {
         metrics.viewportHeight = 0
         XCTAssertFalse(metrics.isPulledPastTop)
     }
-
-    func testIntrinsicTailExcludesSendAnchorFillerFromOverflow() {
-        var metrics = GaryxConversationLayoutMetrics(
-            contentTopOffset: 0,
-            contentBottomOffset: 1_600,
-            contentTailOffset: 720,
-            viewportHeight: 800
-        )
-        XCTAssertFalse(
-            metrics.isContentTailBelowViewport,
-            "blank run space must not make the scroll-to-bottom button appear"
-        )
-
-        metrics.contentTailOffset = 801
-        XCTAssertTrue(metrics.isContentTailBelowViewport)
-    }
 }
 
 final class GaryxConversationScrollStateTests: XCTestCase {
-    private func tailRequest(
-        _ reason: GaryxConversationScrollState.ScrollReason,
-        animated: Bool = false
-    ) -> GaryxConversationScrollState.ScrollRequest {
-        .init(reason: reason, animated: animated)
-    }
-
     /// The position-based browsing flip only happens after a real reader
     /// gesture; tests that browse history must first simulate one.
     private func simulateUserScroll(_ state: inout GaryxConversationScrollState) {
@@ -184,190 +161,6 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             hasTailContent: true
         )
         XCTAssertEqual(request, .init(reason: .openingThread, animated: false))
-    }
-
-    func testLocalSendDecisionTableAnchorsOnceAndSilencesContentGrowth() {
-        var state = GaryxConversationScrollState()
-        _ = state.metricsChanged(
-            GaryxConversationLayoutMetrics(
-                contentTopOffset: -1_000,
-                contentBottomOffset: 820,
-                contentTailOffset: 780,
-                viewportHeight: 800
-            ),
-            hasTailContent: true
-        )
-
-        let anchorRowId = "user_turn:origin:send-1"
-        XCTAssertEqual(
-            state.localSendPresented(anchorRowId: anchorRowId),
-            .init(
-                reason: .localSend,
-                target: .row(id: anchorRowId),
-                alignment: .top,
-                animated: true
-            )
-        )
-        XCTAssertEqual(state.anchoring, .sendAnchored(anchorRowId: anchorRowId))
-        XCTAssertNil(
-            state.messagesChanged(
-                previous: ["history"],
-                current: ["history", anchorRowId],
-                id: { $0 },
-                previousScopeIdentity: "conversation-occurrence",
-                currentScopeIdentity: "conversation-occurrence",
-                hasTailContent: true
-            )
-        )
-        XCTAssertNil(state.thinkingIndicatorShown())
-        XCTAssertNil(
-            state.contentChanged(
-                isInitialLoad: false,
-                isHistoryPrepend: false,
-                hasTailContent: true
-            )
-        )
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: -1_000,
-                    contentBottomOffset: 1_700,
-                    contentTailOffset: 1_020,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
-        XCTAssertNil(state.composerFocused())
-        XCTAssertTrue(state.showsScrollToBottomButton)
-        XCTAssertEqual(
-            state.bottomChromeChanged(),
-            .init(
-                reason: .repair,
-                target: .row(id: anchorRowId),
-                alignment: .top,
-                animated: false
-            )
-        )
-    }
-
-    func testSendAnchorOwnershipTransitionsAndFollowUpSend() {
-        var state = GaryxConversationScrollState()
-        let firstAnchor = "user_turn:origin:send-1"
-        _ = state.localSendPresented(anchorRowId: firstAnchor)
-        _ = state.metricsChanged(
-            GaryxConversationLayoutMetrics(
-                contentTopOffset: -1_000,
-                contentBottomOffset: 1_800,
-                contentTailOffset: 1_200,
-                viewportHeight: 800
-            ),
-            hasTailContent: true
-        )
-
-        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
-        XCTAssertEqual(state.anchoring, .browsingHistory)
-        XCTAssertTrue(state.showsScrollToBottomButton)
-        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: false))
-
-        let secondAnchor = "user_turn:origin:send-2"
-        XCTAssertEqual(
-            state.localSendPresented(anchorRowId: secondAnchor),
-            .init(
-                reason: .localSend,
-                target: .row(id: secondAnchor),
-                alignment: .top,
-                animated: true
-            )
-        )
-        XCTAssertEqual(state.anchoring, .sendAnchored(anchorRowId: secondAnchor))
-
-        XCTAssertEqual(
-            state.scrollToBottomTapped(),
-            .init(reason: .manual, animated: false)
-        )
-        XCTAssertTrue(state.isFollowingTail)
-        XCTAssertFalse(state.showsScrollToBottomButton)
-
-        _ = state.localSendPresented(anchorRowId: secondAnchor)
-        let opening = state.threadOpened()
-        XCTAssertEqual(opening, .init(reason: .openingThread, animated: false))
-        XCTAssertTrue(state.isFollowingTail)
-        XCTAssertNil(state.sendAnchorRowId)
-    }
-
-    func testStaleAnchorRetryStopsWhenANewerSendOwnsTheViewport() {
-        var state = GaryxConversationScrollState()
-        let firstRequest = state.localSendPresented(
-            anchorRowId: "user_turn:origin:send-1"
-        )
-        XCTAssertTrue(state.shouldRunScrollAttempt(index: 0, request: firstRequest))
-
-        _ = state.localSendPresented(anchorRowId: "user_turn:origin:send-2")
-        XCTAssertFalse(state.shouldRunScrollAttempt(index: 0, request: firstRequest))
-        XCTAssertFalse(state.shouldRunScrollAttempt(index: 1, request: firstRequest))
-    }
-
-    func testSendAnchorButtonUsesIntrinsicTailInsteadOfFillerBottom() {
-        var state = GaryxConversationScrollState()
-        _ = state.localSendPresented(anchorRowId: "user_turn:origin:send")
-
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: 0,
-                    contentBottomOffset: 1_600,
-                    contentTailOffset: 720,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
-        XCTAssertFalse(state.showsScrollToBottomButton)
-
-        XCTAssertNil(
-            state.metricsChanged(
-                GaryxConversationLayoutMetrics(
-                    contentTopOffset: 0,
-                    contentBottomOffset: 1_600,
-                    contentTailOffset: 900,
-                    viewportHeight: 800
-                ),
-                hasTailContent: true
-            )
-        )
-        XCTAssertTrue(state.showsScrollToBottomButton)
-    }
-
-    func testLocalSendRetrySettlesAfterOneObservedTopPlacementWrite() {
-        var state = GaryxConversationScrollState()
-        let request = state.localSendPresented(
-            anchorRowId: "user_turn:origin:send"
-        )
-        var scheduler = GaryxConversationScrollScheduler()
-        let token = scheduler.schedule(request: request).token
-
-        XCTAssertTrue(
-            scheduler.authorizeAttempt(
-                token,
-                input: state.scrollAttemptInput(
-                    index: 0,
-                    request: request,
-                    rowTargetViewportOffset: 420
-                )
-            )
-        )
-        XCTAssertFalse(
-            scheduler.authorizeAttempt(
-                token,
-                input: state.scrollAttemptInput(
-                    index: 1,
-                    request: request,
-                    rowTargetViewportOffset: 0
-                )
-            )
-        )
-        XCTAssertEqual(scheduler.lifecycle(of: token), .settled)
     }
 
     func testTailGrowthFollowsWhileFollowingWithoutAnimatedScroll() {
@@ -517,60 +310,38 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         var state = GaryxConversationScrollState()
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
 
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 0, request: tailRequest(.repair))
-        )
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 1, request: tailRequest(.repair))
-        )
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
 
         // Before the first gesture, repair retries keep chasing late layout
         // settling even while the measured position is far from the bottom.
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 1, request: tailRequest(.repair))
-        )
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
 
         // Once the reader scrolls away themselves, retries stop.
         simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 0, request: tailRequest(.repair))
-        )
-        XCTAssertFalse(
-            state.shouldRunScrollAttempt(index: 1, request: tailRequest(.repair))
-        )
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(
-                index: 1,
-                request: tailRequest(.openingThread)
-            )
-        )
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .openingThread))
     }
 
     func testTailUpdateRetriesStopAfterReaderLeavesTail() {
         var state = GaryxConversationScrollState()
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
 
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 1, request: tailRequest(.tailUpdate))
-        )
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
 
         simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 0, request: tailRequest(.tailUpdate))
-        )
-        XCTAssertFalse(
-            state.shouldRunScrollAttempt(index: 1, request: tailRequest(.tailUpdate))
-        )
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .tailUpdate))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
     }
 
     func testCrossScopeMessageTailUpdateCannotCancelOpeningRetryChain() throws {
         var state = GaryxConversationScrollState()
-        var scheduler = GaryxConversationScrollScheduler()
-        let openingRequest = state.threadOpened()
-        let opening = scheduler.schedule(request: openingRequest).token
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let opening = scheduler.schedule(reason: state.threadOpened().reason)
         let switchUpdate = state.messagesChanged(
             previous: ["history:5"],
             current: ["history:5"],
@@ -581,9 +352,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         )
 
         XCTAssertEqual(switchUpdate?.reason, .tailUpdate)
-        let switchToken = scheduler.schedule(
-            request: try XCTUnwrap(switchUpdate)
-        ).token
+        let switchToken = scheduler.schedule(reason: try XCTUnwrap(switchUpdate).reason)
 
         XCTAssertTrue(
             scheduler.isCurrent(opening),
@@ -594,13 +363,12 @@ final class GaryxConversationScrollStateTests: XCTestCase {
 
     func testCachedThinkingTailUpdateCannotCancelOpeningRetryChain() throws {
         var state = GaryxConversationScrollState()
-        var scheduler = GaryxConversationScrollScheduler()
-        let openingRequest = state.threadOpened()
-        let opening = scheduler.schedule(request: openingRequest).token
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let opening = scheduler.schedule(reason: state.threadOpened().reason)
         let thinkingReveal = try XCTUnwrap(state.thinkingIndicatorShown())
 
         XCTAssertEqual(thinkingReveal.reason, .tailUpdate)
-        let thinkingToken = scheduler.schedule(request: thinkingReveal).token
+        let thinkingToken = scheduler.schedule(reason: thinkingReveal.reason)
 
         XCTAssertTrue(
             scheduler.isCurrent(opening),
@@ -610,23 +378,17 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     }
 
     func testTailScrollSchedulerCoalescesWithinHorizonAndLongChainSupersedesAll() {
-        var scheduler = GaryxConversationScrollScheduler()
-        let opening = scheduler.schedule(
-            request: tailRequest(.openingThread)
-        ).token
-        let firstTailUpdate = scheduler.schedule(
-            request: tailRequest(.tailUpdate)
-        ).token
-        let latestTailUpdate = scheduler.schedule(
-            request: tailRequest(.tailUpdate)
-        ).token
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let opening = scheduler.schedule(reason: .openingThread)
+        let firstTailUpdate = scheduler.schedule(reason: .tailUpdate)
+        let latestTailUpdate = scheduler.schedule(reason: .tailUpdate)
 
         XCTAssertTrue(scheduler.isCurrent(opening))
         XCTAssertFalse(scheduler.isCurrent(firstTailUpdate))
         XCTAssertEqual(scheduler.lifecycle(of: firstTailUpdate), .superseded)
         XCTAssertTrue(scheduler.isCurrent(latestTailUpdate))
 
-        let repair = scheduler.schedule(request: tailRequest(.repair)).token
+        let repair = scheduler.schedule(reason: .repair)
         XCTAssertFalse(scheduler.isCurrent(opening))
         XCTAssertEqual(scheduler.lifecycle(of: opening), .superseded)
         XCTAssertFalse(scheduler.isCurrent(latestTailUpdate))
@@ -635,74 +397,10 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertEqual(scheduler.lifecycle(of: repair), .requested)
     }
 
-    func testAnchorRepairCoalescesIntoPendingLocalSendAnimation() {
-        let anchorRowId = "user_turn:origin:send"
-        let localSend = GaryxConversationScrollState.ScrollRequest(
-            reason: .localSend,
-            target: .row(id: anchorRowId),
-            alignment: .top,
-            animated: true
-        )
-        let chromeRepair = GaryxConversationScrollState.ScrollRequest(
-            reason: .repair,
-            target: .row(id: anchorRowId),
-            alignment: .top,
-            animated: false
-        )
-        var scheduler = GaryxConversationScrollScheduler()
-
-        let localSchedule = scheduler.schedule(request: localSend)
-        XCTAssertTrue(localSchedule.enqueuesAttempts)
-        let repairSchedule = scheduler.schedule(request: chromeRepair)
-        XCTAssertFalse(
-            repairSchedule.enqueuesAttempts,
-            "same-frame composer collapse must not replace the send animation"
-        )
-        XCTAssertEqual(repairSchedule.token, localSchedule.token)
-
-        XCTAssertTrue(
-            scheduler.authorizeAttempt(
-                localSchedule.token,
-                input: GaryxConversationScrollAttemptInput(
-                    policyAllowsAttempt: true,
-                    targetPlacement: .unsatisfied,
-                    geometryEpoch: 0
-                )
-            )
-        )
-        XCTAssertFalse(
-            scheduler.authorizeAttempt(
-                localSchedule.token,
-                input: GaryxConversationScrollAttemptInput(
-                    policyAllowsAttempt: true,
-                    targetPlacement: .satisfied,
-                    geometryEpoch: 0
-                )
-            )
-        )
-        XCTAssertEqual(scheduler.lifecycle(of: localSchedule.token), .settled)
-
-        let laterRepair = scheduler.schedule(request: chromeRepair)
-        XCTAssertTrue(
-            laterRepair.enqueuesAttempts,
-            "a later chrome change after settlement starts a real anchor repair"
-        )
-        XCTAssertNotEqual(laterRepair.token, localSchedule.token)
-    }
-
-    func testLocalSendRetryClockDoesNotInterruptItsFirstAnimation() {
-        XCTAssertEqual(
-            GaryxConversationScrollState.ScrollReason.localSend.retryDelayMilliseconds,
-            [0, 320, 650, 1_000]
-        )
-    }
-
     func testTailScrollSchedulerSettlesStableSatisfiedPlacementPermanently() {
-        var scheduler = GaryxConversationScrollScheduler()
-        let token = scheduler.schedule(
-            request: tailRequest(.openingThread)
-        ).token
-        let stableBottom = GaryxConversationScrollAttemptInput(
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
+        let stableBottom = GaryxConversationTailScrollAttemptInput(
             policyAllowsAttempt: true,
             targetPlacement: .satisfied,
             geometryEpoch: 7
@@ -718,7 +416,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertFalse(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: true,
                     targetPlacement: .unsatisfied,
                     geometryEpoch: 8
@@ -730,15 +428,13 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     }
 
     func testTailScrollSchedulerAuthorizesGeometryMovementBeforeSettlement() {
-        var scheduler = GaryxConversationScrollScheduler()
-        let token = scheduler.schedule(
-            request: tailRequest(.openingThread)
-        ).token
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
 
         XCTAssertTrue(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: true,
                     targetPlacement: .satisfied,
                     geometryEpoch: 10
@@ -748,7 +444,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: true,
                     targetPlacement: .satisfied,
                     geometryEpoch: 11
@@ -761,7 +457,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertFalse(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: true,
                     targetPlacement: .satisfied,
                     geometryEpoch: 11
@@ -772,11 +468,9 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     }
 
     func testTailScrollSchedulerRetriesUntilTargetPlacementIsSatisfied() {
-        var scheduler = GaryxConversationScrollScheduler()
-        let token = scheduler.schedule(
-            request: tailRequest(.openingThread)
-        ).token
-        let unsatisfied = GaryxConversationScrollAttemptInput(
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
+        let unsatisfied = GaryxConversationTailScrollAttemptInput(
             policyAllowsAttempt: true,
             targetPlacement: .unsatisfied,
             geometryEpoch: 3
@@ -789,7 +483,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertFalse(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: true,
                     targetPlacement: .satisfied,
                     geometryEpoch: 3
@@ -800,15 +494,13 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     }
 
     func testTailScrollSchedulerKeepsPolicySuppressedRequestPending() {
-        var scheduler = GaryxConversationScrollScheduler()
-        let token = scheduler.schedule(
-            request: tailRequest(.openingThread)
-        ).token
+        var scheduler = GaryxConversationTailScrollScheduler()
+        let token = scheduler.schedule(reason: .openingThread)
 
         XCTAssertFalse(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: false,
                     targetPlacement: .unsatisfied,
                     geometryEpoch: 1
@@ -820,7 +512,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(
             scheduler.authorizeAttempt(
                 token,
-                input: GaryxConversationScrollAttemptInput(
+                input: GaryxConversationTailScrollAttemptInput(
                     policyAllowsAttempt: true,
                     targetPlacement: .unsatisfied,
                     geometryEpoch: 1
@@ -936,21 +628,10 @@ final class GaryxConversationScrollStateTests: XCTestCase {
 
         XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
         XCTAssertNil(state.metricsChanged(tailGapMetrics(), hasTailContent: true))
-        XCTAssertFalse(
-            state.shouldRunScrollAttempt(index: 0, request: tailRequest(.repair))
-        )
-        XCTAssertFalse(
-            state.shouldRunScrollAttempt(index: 0, request: tailRequest(.tailUpdate))
-        )
-        XCTAssertFalse(
-            state.shouldRunScrollAttempt(
-                index: 1,
-                request: tailRequest(.openingThread)
-            )
-        )
-        XCTAssertTrue(
-            state.shouldRunScrollAttempt(index: 0, request: tailRequest(.manual))
-        )
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 0, reason: .tailUpdate))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .openingThread))
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .manual))
     }
 
     func testGestureEndOverTailGapRepairsOnce() {
@@ -1008,27 +689,25 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.showsScrollToBottomButton)
     }
 
-    /// The top, intrinsic-tail, and bottom emitters contribute parts of one
-    /// preference value; merge must assemble the atomic frame in any reduce
-    /// order and let later contributions win their side.
+    /// The two edge emitters (top sentinel, bottom anchor) contribute halves
+    /// of one preference value; merge must assemble the atomic frame in
+    /// either reduce order and let later contributions win their side.
     func testContentEdgesMergeAssemblesAtomicFrame() {
         let topHalf = GaryxConversationContentEdges(top: -120)
         let bottomHalf = GaryxConversationContentEdges(bottom: 900)
-        let tailThird = GaryxConversationContentEdges(tail: 840)
 
         XCTAssertEqual(
-            topHalf.merging(bottomHalf).merging(tailThird),
-            GaryxConversationContentEdges(top: -120, bottom: 900, tail: 840)
+            topHalf.merging(bottomHalf),
+            GaryxConversationContentEdges(top: -120, bottom: 900)
         )
         XCTAssertEqual(
-            tailThird.merging(bottomHalf).merging(topHalf),
-            GaryxConversationContentEdges(top: -120, bottom: 900, tail: 840)
+            bottomHalf.merging(topHalf),
+            GaryxConversationContentEdges(top: -120, bottom: 900)
         )
         // A later contribution for the same side wins.
         XCTAssertEqual(
-            GaryxConversationContentEdges(top: -20, bottom: 700, tail: 650)
-                .merging(GaryxConversationContentEdges(top: -80, tail: 670)),
-            GaryxConversationContentEdges(top: -80, bottom: 700, tail: 670)
+            topHalf.merging(GaryxConversationContentEdges(top: -80)),
+            GaryxConversationContentEdges(top: -80, bottom: nil)
         )
     }
 
@@ -1827,50 +1506,34 @@ final class GaryxConversationScrollStateTests: XCTestCase {
 }
 
 final class GaryxTailThinkingPresentationStateTests: XCTestCase {
-    func testLocalSendThinkingIsVisibleImmediatelyAndAckHandoffIsSilent() {
-        var state = GaryxTailThinkingPresentationState()
-
-        XCTAssertTrue(
-            state.update(mode: .immediate, now: 1.0, delay: 0.2),
-            "the optimistic send path must not wait for the appearance debounce"
-        )
-        XCTAssertNil(state.nextVisibilityCheck(now: 1.0, delay: 0.2))
-        XCTAssertTrue(
-            state.update(mode: .debounced, now: 1.01, delay: 0.2),
-            "server thinking ownership must not unmount the visible optimistic label"
-        )
-        XCTAssertNil(state.nextVisibilityCheck(now: 1.01, delay: 0.2))
-        XCTAssertFalse(state.update(mode: .hidden, now: 1.02, delay: 0.2))
-    }
-
     func testThinkingShorterThanDelayNeverBecomesVisible() {
         var state = GaryxTailThinkingPresentationState()
-        XCTAssertFalse(state.update(mode: .debounced, now: 1.0, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: true, now: 1.0, delay: 0.2))
         XCTAssertEqual(state.nextVisibilityCheck(now: 1.0, delay: 0.2) ?? -1, 0.2, accuracy: 0.001)
 
-        XCTAssertFalse(state.update(mode: .hidden, now: 1.12, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: false, now: 1.12, delay: 0.2))
         XCTAssertNil(state.nextVisibilityCheck(now: 1.12, delay: 0.2))
 
-        XCTAssertFalse(state.update(mode: .hidden, now: 1.25, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: false, now: 1.25, delay: 0.2))
     }
 
     func testThinkingLongerThanDelayAppearsThenHidesWhenTextArrives() {
         var state = GaryxTailThinkingPresentationState()
-        XCTAssertFalse(state.update(mode: .debounced, now: 10.0, delay: 0.2))
-        XCTAssertFalse(state.update(mode: .debounced, now: 10.19, delay: 0.2))
-        XCTAssertTrue(state.update(mode: .debounced, now: 10.21, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: true, now: 10.0, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: true, now: 10.19, delay: 0.2))
+        XCTAssertTrue(state.update(isThinking: true, now: 10.21, delay: 0.2))
         XCTAssertNil(state.nextVisibilityCheck(now: 10.21, delay: 0.2))
 
-        XCTAssertFalse(state.update(mode: .hidden, now: 10.3, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: false, now: 10.3, delay: 0.2))
     }
 
     func testThinkingDelayRestartsAfterCancellation() {
         var state = GaryxTailThinkingPresentationState()
-        XCTAssertFalse(state.update(mode: .debounced, now: 2.0, delay: 0.2))
-        XCTAssertFalse(state.update(mode: .hidden, now: 2.1, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: true, now: 2.0, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: false, now: 2.1, delay: 0.2))
 
-        XCTAssertFalse(state.update(mode: .debounced, now: 3.0, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: true, now: 3.0, delay: 0.2))
         XCTAssertEqual(state.nextVisibilityCheck(now: 3.05, delay: 0.2) ?? -1, 0.15, accuracy: 0.001)
-        XCTAssertTrue(state.update(mode: .debounced, now: 3.21, delay: 0.2))
+        XCTAssertTrue(state.update(isThinking: true, now: 3.21, delay: 0.2))
     }
 }

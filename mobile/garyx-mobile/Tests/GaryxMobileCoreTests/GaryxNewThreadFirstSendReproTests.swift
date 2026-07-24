@@ -51,11 +51,6 @@ final class GaryxNewThreadFirstSendReproTests: XCTestCase {
         )
         XCTAssertTrue(beforeCommit.showsPendingAcknowledgement)
         XCTAssertTrue(beforeCommit.showsTailThinking)
-        XCTAssertEqual(
-            beforeCommit.tailThinkingPresentationMode,
-            .immediate,
-            "the first local row and its thinking label present in one frame"
-        )
 
         let promoted = GaryxConversationRouteRenderInputResolver.resolve(
             destination: .conversation(threadID: "thread::send-jitter-capture"),
@@ -72,11 +67,6 @@ final class GaryxNewThreadFirstSendReproTests: XCTestCase {
         XCTAssertEqual(promotedRows.map(\.id), [expectedRowID])
         XCTAssertTrue(promoted.showsPendingAcknowledgement)
         XCTAssertTrue(promoted.showsTailThinking)
-        XCTAssertEqual(
-            promoted.tailThinkingPresentationMode,
-            .immediate,
-            "draft promotion must preserve the local-send presentation mode"
-        )
 
         let firstThreadSnapshot = GaryxRenderSnapshot(
             basedOnSeq: capturedSnapshot.basedOnSeq,
@@ -116,11 +106,6 @@ final class GaryxNewThreadFirstSendReproTests: XCTestCase {
             "the captured committed frame owns the continuing thinking state"
         )
         XCTAssertEqual(
-            afterCommit.tailThinkingPresentationMode,
-            .debounced,
-            "ACK hands ownership to server thinking without changing the row"
-        )
-        XCTAssertEqual(
             afterCommitRows.filter { $0.userBlock?.message.id == expectedMessageID }.count,
             1,
             "the committed origin must replace the optimistic row exactly once"
@@ -140,7 +125,6 @@ final class GaryxNewThreadFirstSendReproTests: XCTestCase {
             settled.showsTailThinking,
             "committed provenance plus an idle server snapshot must settle all pending chrome"
         )
-        XCTAssertEqual(settled.tailThinkingPresentationMode, .hidden)
     }
 
     private func fixture(named name: String) throws -> String {

@@ -163,13 +163,6 @@ final class GaryxMobileModel: ObservableObject {
     /// GaryxMobileConversationViews). Refreshed on real selection changes,
     /// preserved across draft promotion.
     @Published var conversationSessionToken = UUID().uuidString
-    /// Same-transaction presentation signal for the mounted conversation
-    /// occurrence. The transcript combines this with message geometry in one
-    /// observation so the optimistic append enters send-anchored state before
-    /// ordinary content-change policy runs.
-    @Published var conversationLocalSendPresentation:
-        GaryxConversationLocalSendPresentation? = nil
-    var conversationLocalSendPresentationGeneration: UInt64 = 0
     /// One-shot flag set by the draft-promotion write in ensureThread.
     var adoptsDraftConversationToken = false
 

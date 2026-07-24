@@ -13,21 +13,15 @@ public struct GaryxConversationLayoutMetrics: Equatable {
     public var contentTopOffset: CGFloat?
     /// Content bottom edge offset.
     public var contentBottomOffset: CGFloat
-    /// Intrinsic transcript tail before send-anchor filler and the existing
-    /// bottom chrome clearance. This lets the button policy distinguish real
-    /// reply content below the viewport from blank run space.
-    public var contentTailOffset: CGFloat?
     public var viewportHeight: CGFloat
 
     public init(
         contentTopOffset: CGFloat? = nil,
         contentBottomOffset: CGFloat = 0,
-        contentTailOffset: CGFloat? = nil,
         viewportHeight: CGFloat = 0
     ) {
         self.contentTopOffset = contentTopOffset
         self.contentBottomOffset = contentBottomOffset
-        self.contentTailOffset = contentTailOffset
         self.viewportHeight = viewportHeight
     }
 
@@ -60,14 +54,6 @@ public struct GaryxConversationLayoutMetrics: Equatable {
     public var isNearBottom: Bool {
         guard viewportHeight > 0 else { return true }
         return distanceFromBottom <= Self.nearBottomThreshold
-    }
-
-    /// Whether real transcript content, excluding send-anchor filler, extends
-    /// below the visible viewport.
-    public var isContentTailBelowViewport: Bool {
-        guard viewportHeight > 0 else { return false }
-        guard let contentTailOffset else { return !isNearBottom }
-        return contentTailOffset > viewportHeight
     }
 
     /// True when scrollable content has been pulled past the bottom, leaving
@@ -105,10 +91,10 @@ public struct GaryxConversationLayoutMetrics: Equatable {
 
 // MARK: - Atomic content-edge measurement
 
-/// One atomic transcript measurement carrying all relevant content edges.
+/// One transcript content-edge measurement carrying BOTH edges.
 ///
-/// The top sentinel, intrinsic tail, and bottom anchor each contribute one
-/// part; the view layer reduces them into a single value per layout pass
+/// The top sentinel and the bottom anchor each contribute their half; the
+/// view layer reduces every contribution into a single value per layout pass
 /// (one SwiftUI preference key), so the scroll state machine only ever
 /// observes atomic frames. Feeding the edges through two separate callbacks
 /// made every real scroll step look like a content-height change (top moved,
@@ -117,27 +103,17 @@ public struct GaryxConversationLayoutMetrics: Equatable {
 public struct GaryxConversationContentEdges: Equatable {
     public var top: CGFloat?
     public var bottom: CGFloat?
-    public var tail: CGFloat?
 
-    public init(
-        top: CGFloat? = nil,
-        bottom: CGFloat? = nil,
-        tail: CGFloat? = nil
-    ) {
+    public init(top: CGFloat? = nil, bottom: CGFloat? = nil) {
         self.top = top
         self.bottom = bottom
-        self.tail = tail
     }
 
     /// Combine two contributions; a later non-nil half wins its side.
     /// Merge order between the two emitters does not matter because each
     /// emitter only sets its own half.
     public func merging(_ other: Self) -> Self {
-        Self(
-            top: other.top ?? top,
-            bottom: other.bottom ?? bottom,
-            tail: other.tail ?? tail
-        )
+        Self(top: other.top ?? top, bottom: other.bottom ?? bottom)
     }
 }
 
@@ -152,31 +128,25 @@ public struct GaryxConversationContentEdges: Equatable {
 public struct GaryxConversationScrollObservation<Value: Equatable>: Equatable {
     public let scopeIdentity: String
     public let value: Value
-    public let localSendPresentation: GaryxConversationLocalSendPresentation?
 
-    public init(
-        scopeIdentity: String,
-        value: Value,
-        localSendPresentation: GaryxConversationLocalSendPresentation? = nil
-    ) {
+    public init(scopeIdentity: String, value: Value) {
         self.scopeIdentity = scopeIdentity
         self.value = value
-        self.localSendPresentation = localSendPresentation
     }
 }
 
-/// Fire-time facts used by the scroll-settlement state machine.
+/// Fire-time facts used by the tail-scroll settlement state machine.
 ///
 /// The adapter only reports these facts. Core owns the decision to authorize
 /// a position write, including the existing reader-interaction policy and the
 /// target-placement/geometry settlement policy.
-public struct GaryxConversationScrollAttemptInput: Equatable {
+public struct GaryxConversationTailScrollAttemptInput: Equatable {
     public enum TargetPlacement: Equatable {
         /// The scroll surface has not reported a complete geometry frame yet.
         case unknown
-        /// The scroll surface currently holds the requested target placement.
+        /// The transcript tail currently holds the target placement.
         case satisfied
-        /// The scroll surface is currently away from the requested placement.
+        /// The transcript tail is currently away from the target placement.
         case unsatisfied
     }
 
@@ -197,14 +167,6 @@ public struct GaryxConversationScrollAttemptInput: Equatable {
 
 // MARK: - Tail thinking presentation
 
-public enum GaryxTailThinkingPresentationMode: Equatable, Sendable {
-    case hidden
-    /// Server-owned thinking keeps the existing appearance debounce.
-    case debounced
-    /// A local send presents its optimistic user row and thinking together.
-    case immediate
-}
-
 /// Presentation-only debounce for the server-owned tail thinking state.
 ///
 /// The raw `tailActivity == .thinking` value still comes from render_state.
@@ -220,31 +182,23 @@ public struct GaryxTailThinkingPresentationState: Equatable {
 
     @discardableResult
     public mutating func update(
-        mode: GaryxTailThinkingPresentationMode,
+        isThinking: Bool,
         now: TimeInterval,
         delay: TimeInterval = Self.defaultDelay
     ) -> Bool {
-        switch mode {
-        case .hidden:
+        if !isThinking {
             thinkingStartedAt = nil
             isVisible = false
             return isVisible
-        case .immediate:
-            thinkingStartedAt = nil
-            isVisible = true
-            return isVisible
-        case .debounced:
-            // An optimistic immediate label stays mounted when the committed
-            // server frame takes ownership; ACK must be visually silent.
-            guard !isVisible else { return true }
-            if thinkingStartedAt == nil {
-                thinkingStartedAt = now
-            }
-            if let thinkingStartedAt, now - thinkingStartedAt >= delay {
-                isVisible = true
-            }
-            return isVisible
         }
+
+        if thinkingStartedAt == nil {
+            thinkingStartedAt = now
+        }
+        if let thinkingStartedAt, now - thinkingStartedAt >= delay {
+            isVisible = true
+        }
+        return isVisible
     }
 
     public func nextVisibilityCheck(
@@ -267,34 +221,30 @@ public struct GaryxTailThinkingPresentationState: Equatable {
 /// - `.followingTail`: the viewport tracks the transcript tail. New
 ///   messages, streaming growth, tool activity, the thinking indicator,
 ///   keyboard appearance, and chrome resizes all keep the tail visible.
-/// - `.sendAnchored`: one locally presented user row owns the viewport top.
-///   Content grows below it without moving the viewport.
 /// - `.browsingHistory`: the reader scrolled up; nothing moves the viewport,
 ///   and the scroll-to-bottom control is shown instead.
 ///
 /// UI reads projections of this state (`showsScrollToBottomButton`,
 /// `isFollowingTail`); the view feeds events in and executes the returned
-/// `ScrollRequest`s. Position math lives in
+/// `TailScrollRequest`s. Position math lives in
 /// `GaryxConversationLayoutMetrics`.
 public struct GaryxConversationScrollState: Equatable {
     public enum Anchoring: Equatable {
         case followingTail
-        case sendAnchored(anchorRowId: String)
         case browsingHistory
     }
 
-    public enum ScrollReason: Equatable {
+    public enum TailScrollReason: Equatable {
         case openingThread
-        case localSend
         case tailUpdate
         case manual
         case repair
 
-        public var retryHorizon: ScrollRetryHorizon {
+        public var retryHorizon: TailScrollRetryHorizon {
             switch self {
             case .tailUpdate:
                 .tailGrowth
-            case .openingThread, .localSend, .manual, .repair:
+            case .openingThread, .manual, .repair:
                 .settling
             }
         }
@@ -306,53 +256,29 @@ public struct GaryxConversationScrollState: Equatable {
         /// still owns `ScrollViewProxy.scrollTo`; Core owns when its queued
         /// attempts become eligible.
         public var retryDelayMilliseconds: [Int] {
-            switch self {
-            case .tailUpdate:
+            switch retryHorizon {
+            case .tailGrowth:
                 // Ordinary tail growth during send/streaming should stay
                 // pinned, but a long retry chain visibly wobbles the
                 // transcript while composer geometry also settles.
                 [0, 40, 140]
-            case .localSend:
-                // The first write is a 200 ms animation. Early retries would
-                // interrupt it with an unanimated snap, so placement is first
-                // checked after the animation has settled.
-                [0, 320, 650, 1_000]
-            case .openingThread, .manual, .repair:
+            case .settling:
                 [0, 16, 40, 140, 320, 650, 1_000]
             }
         }
     }
 
-    public enum ScrollRetryHorizon: Equatable {
+    public enum TailScrollRetryHorizon: Equatable {
         case tailGrowth
         case settling
     }
 
-    public enum ScrollTarget: Equatable {
-        case transcriptTail
-        case row(id: String)
-    }
-
-    public enum ScrollAlignment: Equatable {
-        case top
-        case bottom
-    }
-
-    public struct ScrollRequest: Equatable {
-        public let reason: ScrollReason
-        public let target: ScrollTarget
-        public let alignment: ScrollAlignment
+    public struct TailScrollRequest: Equatable {
+        public let reason: TailScrollReason
         public let animated: Bool
 
-        public init(
-            reason: ScrollReason,
-            target: ScrollTarget = .transcriptTail,
-            alignment: ScrollAlignment = .bottom,
-            animated: Bool
-        ) {
+        public init(reason: TailScrollReason, animated: Bool) {
             self.reason = reason
-            self.target = target
-            self.alignment = alignment
             self.animated = animated
         }
     }
@@ -411,23 +337,10 @@ public struct GaryxConversationScrollState: Equatable {
         anchoring == .followingTail
     }
 
-    public var sendAnchorRowId: String? {
-        guard case .sendAnchored(let anchorRowId) = anchoring else { return nil }
-        return anchorRowId
-    }
-
     /// The glass down-arrow above the composer: visible whenever the reader
     /// left the tail and there is a tail to return to.
     public var showsScrollToBottomButton: Bool {
-        guard hasTailContent else { return false }
-        switch anchoring {
-        case .followingTail:
-            return false
-        case .sendAnchored:
-            return metrics.isContentTailBelowViewport
-        case .browsingHistory:
-            return true
-        }
+        anchoring == .browsingHistory && hasTailContent
     }
 
     // MARK: Events
@@ -435,25 +348,11 @@ public struct GaryxConversationScrollState: Equatable {
     /// A thread was opened or switched: reset and jump straight to the tail.
     /// The measured viewport survives the reset — it belongs to the scroll
     /// surface, not the thread, and is not re-reported on switch.
-    public mutating func threadOpened() -> ScrollRequest {
+    public mutating func threadOpened() -> TailScrollRequest {
         let viewportHeight = metrics.viewportHeight
         self = GaryxConversationScrollState()
         metrics.viewportHeight = viewportHeight
-        return ScrollRequest(reason: .openingThread, animated: false)
-    }
-
-    /// The optimistic user row was appended locally. This is the only event
-    /// that starts a send-anchor request chain.
-    public mutating func localSendPresented(anchorRowId: String) -> ScrollRequest {
-        anchoring = .sendAnchored(anchorRowId: anchorRowId)
-        hasTailContent = true
-        markTailGeometryChanged()
-        return ScrollRequest(
-            reason: .localSend,
-            target: .row(id: anchorRowId),
-            alignment: .top,
-            animated: true
-        )
+        return TailScrollRequest(reason: .openingThread, animated: false)
     }
 
     /// Transcript content changed.
@@ -468,24 +367,21 @@ public struct GaryxConversationScrollState: Equatable {
         isInitialLoad: Bool,
         isHistoryPrepend: Bool,
         hasTailContent: Bool
-    ) -> ScrollRequest? {
+    ) -> TailScrollRequest? {
         markTailGeometryChanged()
         self.hasTailContent = hasTailContent
         guard hasTailContent, !isHistoryPrepend else { return nil }
-        if case .sendAnchored = anchoring {
-            return nil
-        }
         if isInitialLoad {
             anchoring = .followingTail
-            return ScrollRequest(reason: .openingThread, animated: false)
+            return TailScrollRequest(reason: .openingThread, animated: false)
         }
         guard isFollowingTail else { return nil }
-        return ScrollRequest(reason: .tailUpdate, animated: false)
+        return TailScrollRequest(reason: .tailUpdate, animated: false)
     }
 
     /// Route-scoped message geometry changed. The observed values deliberately
     /// exclude storage-only materialization fields, so an optimistic message
-    /// becoming committed does not start another scroll chain when its
+    /// becoming committed does not start another tail-scroll chain when its
     /// visible layout stayed identical. Identity still comes from the values
     /// themselves, so prepends and cross-thread switches remain unambiguous.
     public mutating func messagesChanged<Layout: Equatable>(
@@ -495,7 +391,7 @@ public struct GaryxConversationScrollState: Equatable {
         previousScopeIdentity: String,
         currentScopeIdentity: String,
         hasTailContent: Bool
-    ) -> ScrollRequest? {
+    ) -> TailScrollRequest? {
         let threadUnchanged = previousScopeIdentity == currentScopeIdentity
         self.hasTailContent = hasTailContent
         guard !threadUnchanged || previous != current else { return nil }
@@ -515,14 +411,11 @@ public struct GaryxConversationScrollState: Equatable {
 
     /// The tail thinking indicator appeared (run started with no visible
     /// activity yet).
-    public mutating func thinkingIndicatorShown() -> ScrollRequest? {
+    public mutating func thinkingIndicatorShown() -> TailScrollRequest? {
         markTailGeometryChanged()
         hasTailContent = true
-        if case .sendAnchored = anchoring {
-            return nil
-        }
         guard isFollowingTail else { return nil }
-        return ScrollRequest(reason: .tailUpdate, animated: false)
+        return TailScrollRequest(reason: .tailUpdate, animated: false)
     }
 
     /// Live measurement update from the scroll view. Derives the anchoring
@@ -535,7 +428,7 @@ public struct GaryxConversationScrollState: Equatable {
     public mutating func metricsChanged(
         _ metrics: GaryxConversationLayoutMetrics,
         hasTailContent: Bool
-    ) -> ScrollRequest? {
+    ) -> TailScrollRequest? {
         let previousMetrics = self.metrics
         if Self.tailLayoutGeometryChanged(from: previousMetrics, to: metrics) {
             markTailGeometryChanged()
@@ -551,13 +444,6 @@ public struct GaryxConversationScrollState: Equatable {
             // iOS 18 where no scroll-phase gesture reporting exists.
             hasMovedTowardOlderHistory = true
         }
-        if case .sendAnchored = anchoring {
-            // Filler and intrinsic-tail measurements may change on every
-            // streamed frame. They update projections only; the anchored row
-            // is never re-scrolled from a content or metrics event.
-            hadVisibleTailGap = metrics.hasVisibleTailGap
-            return nil
-        }
         if metrics.isNearBottom {
             anchoring = .followingTail
         } else if isFollowingTail, !hasUserScrolledSinceOpen, !isUserScrollInteracting {
@@ -565,7 +451,7 @@ public struct GaryxConversationScrollState: Equatable {
             // layout settling pushed the content down (heavy markdown,
             // async thumbnails). Stay anchored and pull the tail back —
             // the reader's first real gesture disables this for good.
-            return ScrollRequest(reason: .repair, animated: false)
+            return TailScrollRequest(reason: .repair, animated: false)
         } else {
             anchoring = .browsingHistory
             hasMovedTowardOlderHistory = true
@@ -578,7 +464,7 @@ public struct GaryxConversationScrollState: Equatable {
         let gapAppeared = metrics.hasVisibleTailGap && !hadVisibleTailGap
         hadVisibleTailGap = metrics.hasVisibleTailGap
         if isFollowingTail, hasTailContent, gapAppeared, !isUserScrollInteracting {
-            return ScrollRequest(reason: .repair, animated: false)
+            return TailScrollRequest(reason: .repair, animated: false)
         }
         return nil
     }
@@ -622,15 +508,11 @@ public struct GaryxConversationScrollState: Equatable {
     /// still decelerating). While interacting, no programmatic tail scroll
     /// may run. When the interaction ends over a visible tail gap while
     /// still following, one repair closes it.
-    public mutating func userScrollInteractionChanged(isInteracting: Bool) -> ScrollRequest? {
+    public mutating func userScrollInteractionChanged(isInteracting: Bool) -> TailScrollRequest? {
         guard isUserScrollInteracting != isInteracting else { return nil }
         isUserScrollInteracting = isInteracting
         if isInteracting {
             hasUserScrolledSinceOpen = true
-            if case .sendAnchored = anchoring {
-                anchoring = .browsingHistory
-                hasMovedTowardOlderHistory = true
-            }
         }
         guard !isInteracting,
               isFollowingTail,
@@ -638,38 +520,27 @@ public struct GaryxConversationScrollState: Equatable {
               metrics.hasVisibleTailGap else {
             return nil
         }
-        return ScrollRequest(reason: .repair, animated: false)
+        return TailScrollRequest(reason: .repair, animated: false)
     }
 
     /// The composer gained focus. Keep the tail visible above the keyboard
     /// while following; never move a reader who is browsing history.
-    public mutating func composerFocused() -> ScrollRequest? {
-        if case .sendAnchored = anchoring {
-            return nil
-        }
+    public mutating func composerFocused() -> TailScrollRequest? {
         guard isFollowingTail, hasTailContent else { return nil }
-        return ScrollRequest(reason: .manual, animated: true)
+        return TailScrollRequest(reason: .manual, animated: true)
     }
 
     /// The floating bottom chrome (composer tray) changed height.
-    public mutating func bottomChromeChanged() -> ScrollRequest? {
+    public mutating func bottomChromeChanged() -> TailScrollRequest? {
         markTailGeometryChanged()
-        if case .sendAnchored(let anchorRowId) = anchoring {
-            return ScrollRequest(
-                reason: .repair,
-                target: .row(id: anchorRowId),
-                alignment: .top,
-                animated: false
-            )
-        }
         guard isFollowingTail, hasTailContent else { return nil }
-        return ScrollRequest(reason: .repair, animated: false)
+        return TailScrollRequest(reason: .repair, animated: false)
     }
 
     /// The reader tapped the scroll-to-bottom control: resume following.
-    public mutating func scrollToBottomTapped() -> ScrollRequest {
+    public mutating func scrollToBottomTapped() -> TailScrollRequest {
         anchoring = .followingTail
-        return ScrollRequest(reason: .manual, animated: false)
+        return TailScrollRequest(reason: .manual, animated: false)
     }
 
     // MARK: Scheduled scroll retries
@@ -680,70 +551,41 @@ public struct GaryxConversationScrollState: Equatable {
     /// both content edges and the viewport are known, retries remain eligible
     /// so an early zero-delay attempt cannot terminate the chain before the
     /// transcript materializes.
-    public func scrollAttemptInput(
+    public func tailScrollAttemptInput(
         index: Int,
-        request: ScrollRequest,
-        rowTargetViewportOffset: CGFloat? = nil
-    ) -> GaryxConversationScrollAttemptInput {
-        let targetPlacement: GaryxConversationScrollAttemptInput.TargetPlacement
-        let geometryEpoch: UInt64
-        switch request.target {
-        case .transcriptTail:
-            geometryEpoch = tailGeometryEpoch
-            if metrics.viewportHeight <= 0 || metrics.contentTopOffset == nil {
-                targetPlacement = .unknown
-            } else if metrics.isNearBottom {
-                targetPlacement = .satisfied
-            } else {
-                targetPlacement = .unsatisfied
-            }
-        case .row:
-            // Reply growth below a top-anchored row does not invalidate its
-            // placement. A constant epoch lets the chain settle as soon as
-            // the adapter observes the row at the viewport top.
-            geometryEpoch = 0
-            if let rowTargetViewportOffset {
-                targetPlacement =
-                    abs(rowTargetViewportOffset) <= Self.stableLayoutTolerance
-                    ? .satisfied
-                    : .unsatisfied
-            } else {
-                targetPlacement = .unknown
-            }
+        reason: TailScrollReason
+    ) -> GaryxConversationTailScrollAttemptInput {
+        let targetPlacement: GaryxConversationTailScrollAttemptInput.TargetPlacement
+        if metrics.viewportHeight <= 0 || metrics.contentTopOffset == nil {
+            targetPlacement = .unknown
+        } else if metrics.isNearBottom {
+            targetPlacement = .satisfied
+        } else {
+            targetPlacement = .unsatisfied
         }
-        return GaryxConversationScrollAttemptInput(
-            policyAllowsAttempt: shouldRunScrollAttempt(index: index, request: request),
+        return GaryxConversationTailScrollAttemptInput(
+            policyAllowsAttempt: shouldRunTailScrollAttempt(index: index, reason: reason),
             targetPlacement: targetPlacement,
-            geometryEpoch: geometryEpoch
+            geometryEpoch: tailGeometryEpoch
         )
     }
 
-    /// Whether a delayed retry of a scheduled scroll should still run.
+    /// Whether a delayed retry of a scheduled tail scroll should still run.
     ///
     /// Nothing but the reader's finger may move the viewport while a scroll
     /// gesture is active. After that, opening jumps and explicit manual
     /// scrolls always retry; tail updates and repairs are dropped as soon as
     /// the reader leaves the tail, so a streaming run can never pin a reader
     /// who is scrolling up toward history.
-    public func shouldRunScrollAttempt(index: Int, request: ScrollRequest) -> Bool {
-        if isUserScrollInteracting, request.reason != .manual { return false }
-        if case .row(let id) = request.target,
-           request.reason == .localSend || request.reason == .repair {
-            guard sendAnchorRowId == id else { return false }
-        }
+    public func shouldRunTailScrollAttempt(index: Int, reason: TailScrollReason) -> Bool {
+        if isUserScrollInteracting, reason != .manual { return false }
         guard index > 0 else { return true }
-        switch request.reason {
+        switch reason {
         case .openingThread, .manual:
             return true
-        case .localSend:
-            guard case .row(let id) = request.target else { return false }
-            return sendAnchorRowId == id
         case .tailUpdate:
             return isFollowingTail
         case .repair:
-            if case .row(let id) = request.target {
-                return sendAnchorRowId == id
-            }
             // Until the reader's first gesture, repairs chase late layout
             // settling across their whole retry window — single attempts
             // cannot catch up with a heavy transcript that keeps reflowing.
@@ -902,7 +744,7 @@ public struct GaryxConversationScrollState: Equatable {
     }
 }
 
-/// Owns scroll retry-chain arbitration and target settlement.
+/// Owns tail-scroll retry-chain arbitration and target settlement.
 ///
 /// The view owns only the delayed callbacks and the actual position write.
 /// Every callback asks this state machine for authorization at fire time:
@@ -914,7 +756,7 @@ public struct GaryxConversationScrollState: Equatable {
 /// An unsatisfied target or geometry movement since the last authorized write
 /// permits the next attempt. Scheduling a newer request preserves the existing
 /// retry-horizon arbitration while explicitly superseding affected tokens.
-public struct GaryxConversationScrollScheduler: Equatable {
+public struct GaryxConversationTailScrollScheduler: Equatable {
     public enum Lifecycle: Equatable {
         case requested
         case attempting
@@ -923,26 +765,12 @@ public struct GaryxConversationScrollScheduler: Equatable {
     }
 
     public struct Token: Equatable {
-        fileprivate let retryHorizon: GaryxConversationScrollState.ScrollRetryHorizon
+        fileprivate let retryHorizon: GaryxConversationScrollState.TailScrollRetryHorizon
         fileprivate let generation: Int
-    }
-
-    public struct Schedule: Equatable {
-        public let token: Token
-        /// False when an already-live chain for the exact same target covers
-        /// this request. The adapter must not enqueue a duplicate callback
-        /// clock in that case.
-        public let enqueuesAttempts: Bool
-
-        fileprivate init(token: Token, enqueuesAttempts: Bool) {
-            self.token = token
-            self.enqueuesAttempts = enqueuesAttempts
-        }
     }
 
     private struct Chain: Equatable {
         let generation: Int
-        let request: GaryxConversationScrollState.ScrollRequest
         var lifecycle: Lifecycle
         var lastAuthorizedGeometryEpoch: UInt64?
     }
@@ -955,9 +783,9 @@ public struct GaryxConversationScrollScheduler: Equatable {
     public init() {}
 
     public mutating func schedule(
-        request: GaryxConversationScrollState.ScrollRequest
-    ) -> Schedule {
-        switch request.reason.retryHorizon {
+        reason: GaryxConversationScrollState.TailScrollReason
+    ) -> Token {
+        switch reason.retryHorizon {
         case .tailGrowth:
             // Coalesce ordinary streaming/tail-growth chains with each other,
             // but never let their short retry window truncate a still-live
@@ -970,31 +798,11 @@ public struct GaryxConversationScrollScheduler: Equatable {
             )
             tailGrowthChain = Chain(
                 generation: token.generation,
-                request: request,
                 lifecycle: .requested,
                 lastAuthorizedGeometryEpoch: nil
             )
-            return Schedule(token: token, enqueuesAttempts: true)
+            return token
         case .settling:
-            if request.reason == .repair,
-               case .row = request.target,
-               let chain = settlingChain,
-               chain.lifecycle == .requested || chain.lifecycle == .attempting,
-               chain.request.target == request.target,
-               chain.request.alignment == request.alignment {
-                // Composer/chrome geometry can report several times in the
-                // same presentation frame. A repair for the exact row/top
-                // target is already covered by the live local-send (or prior
-                // repair) chain and must not steal its animated first write.
-                return Schedule(
-                    token: Token(
-                        retryHorizon: .settling,
-                        generation: chain.generation
-                    ),
-                    enqueuesAttempts: false
-                )
-            }
-
             // A fresh long-horizon chain covers every earlier attempt. Cancel
             // both lanes so stale short retries cannot outlive the new owner.
             settlingGeneration &+= 1
@@ -1006,11 +814,10 @@ public struct GaryxConversationScrollScheduler: Equatable {
             )
             settlingChain = Chain(
                 generation: token.generation,
-                request: request,
                 lifecycle: .requested,
                 lastAuthorizedGeometryEpoch: nil
             )
-            return Schedule(token: token, enqueuesAttempts: true)
+            return token
         }
     }
 
@@ -1033,7 +840,7 @@ public struct GaryxConversationScrollScheduler: Equatable {
     /// observable yet. Stable satisfied placement is terminal for the token.
     public mutating func authorizeAttempt(
         _ token: Token,
-        input: GaryxConversationScrollAttemptInput
+        input: GaryxConversationTailScrollAttemptInput
     ) -> Bool {
         guard var chain = chain(for: token),
               chain.generation == token.generation,
@@ -1072,7 +879,7 @@ public struct GaryxConversationScrollScheduler: Equatable {
 
     private mutating func setChain(
         _ chain: Chain,
-        for retryHorizon: GaryxConversationScrollState.ScrollRetryHorizon
+        for retryHorizon: GaryxConversationScrollState.TailScrollRetryHorizon
     ) {
         switch retryHorizon {
         case .tailGrowth:
