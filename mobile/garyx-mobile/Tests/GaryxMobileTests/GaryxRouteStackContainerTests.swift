@@ -14,18 +14,23 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             threadID: previousThreadID,
             size: CGSize(width: 393, height: 600)
         )
+        let previousHandle = try XCTUnwrap(
+            GaryxConversationTranscriptSnapshotCache.shared.testSnapshotHandle(
+                for: previousThreadID
+            )
+        )
 
         // Keep a direct reference to the cache's compositor view so the test
         // can distinguish a truly removed old snapshot from a new empty host.
         let probeContainer = UIView(frame: CGRect(origin: .zero, size: hostSize))
         GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
-            for: previousThreadID,
+            for: previousHandle,
             in: probeContainer
         )
         let previousSnapshot = try XCTUnwrap(probeContainer.subviews.first)
 
         let previousRoot = GaryxConversationTranscriptSnapshotView(
-            threadID: previousThreadID
+            handle: previousHandle
         )
         .frame(width: hostSize.width, height: hostSize.height)
         let hostingController = UIHostingController(rootView: previousRoot)
@@ -41,7 +46,9 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         XCTAssertNotNil(previousSnapshot.window)
 
         hostingController.rootView = GaryxConversationTranscriptSnapshotView(
-            threadID: nextThreadID
+            handle: GaryxConversationTranscriptSnapshotCache.shared.testSnapshotHandle(
+                for: nextThreadID
+            )
         )
         .frame(width: hostSize.width, height: hostSize.height)
         hostingController.view.setNeedsLayout()
@@ -61,12 +68,14 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             threadID: previousThreadID,
             size: CGSize(width: 393, height: 600)
         )
+        let previousHandle = GaryxConversationTranscriptSnapshotCache.shared
+            .testSnapshotHandle(for: previousThreadID)
 
         let reusedRepresentableContainer = UIView(
             frame: CGRect(x: 0, y: 0, width: 393, height: 180)
         )
         GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
-            for: previousThreadID,
+            for: previousHandle,
             in: reusedRepresentableContainer
         )
         XCTAssertEqual(reusedRepresentableContainer.subviews.count, 1)
@@ -76,7 +85,9 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         // thread has no snapshot, so no pixels from the previous route may
         // remain in the container.
         GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
-            for: nextThreadID,
+            for: GaryxConversationTranscriptSnapshotCache.shared.testSnapshotHandle(
+                for: nextThreadID
+            ),
             in: reusedRepresentableContainer
         )
 
@@ -121,10 +132,9 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         sourceScrollView.addSubview(transcript)
         sourceWindow.layoutIfNeeded()
 
-        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+        GaryxConversationTranscriptSnapshotCache.shared.testScheduleCapture(
             threadID: threadID,
-            revision: "captured-600pt-transcript",
-            scrollView: { sourceScrollView }
+            scrollView: sourceScrollView
         )
         let snapshotCaptured = waitForTranscriptSnapshot(threadID: threadID)
         XCTAssertTrue(
@@ -136,7 +146,8 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         // zero-sized container before SwiftUI supplies the first real frame.
         let openingContainer = UIView(frame: .zero)
         GaryxConversationTranscriptSnapshotCache.shared.installSnapshot(
-            for: threadID,
+            for: GaryxConversationTranscriptSnapshotCache.shared
+                .testSnapshotHandle(for: threadID),
             in: openingContainer
         )
         openingContainer.frame = CGRect(origin: .zero, size: firstPresentedSize)
@@ -215,10 +226,9 @@ final class GaryxRouteStackContainerTests: XCTestCase {
 
         XCTAssertEqual(sourceScrollView.adjustedContentInset.top, 124, accuracy: 0.001)
         XCTAssertEqual(sourceScrollView.contentOffset.y, -124, accuracy: 0.001)
-        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+        GaryxConversationTranscriptSnapshotCache.shared.testScheduleCapture(
             threadID: threadID,
-            revision: "full-page-402x874-inset-124",
-            scrollView: { sourceScrollView }
+            scrollView: sourceScrollView
         )
         XCTAssertTrue(
             waitForTranscriptSnapshot(threadID: threadID),
@@ -239,7 +249,10 @@ final class GaryxRouteStackContainerTests: XCTestCase {
         }
         destinationWindow.layoutIfNeeded()
 
-        openingContainer.displaySnapshot(for: threadID)
+        openingContainer.displaySnapshot(
+            for: GaryxConversationTranscriptSnapshotCache.shared
+                .testSnapshotHandle(for: threadID)
+        )
         openingContainer.layoutIfNeeded()
 
         let installedSnapshot = try XCTUnwrap(openingContainer.subviews.first)
@@ -258,6 +271,139 @@ final class GaryxRouteStackContainerTests: XCTestCase {
             liveFirstRowPageY,
             accuracy: 0.001,
             "the cached opening pixels must keep the live transcript's page position"
+        )
+    }
+
+    func testOpeningSnapshotRejectsMiddleAndServesOnlyExactTailRevisionGeometry() throws {
+        let threadID = "thread::opening-contract-\(UUID().uuidString)"
+        let viewport = CGRect(x: 0, y: 0, width: 440, height: 800)
+        let sourceController = UIViewController()
+        let sourceScrollView = UIScrollView(frame: viewport)
+        sourceScrollView.contentSize = CGSize(width: viewport.width, height: 3_200)
+        sourceScrollView.contentOffset = CGPoint(x: 0, y: 800)
+        sourceController.view = sourceScrollView
+
+        let sourceWindow = makeTestWindow(frame: viewport)
+        sourceWindow.rootViewController = sourceController
+        sourceWindow.isHidden = false
+        defer {
+            sourceWindow.isHidden = true
+            sourceWindow.rootViewController = nil
+        }
+        sourceWindow.layoutIfNeeded()
+
+        let revision = GaryxConversationTranscriptSnapshotRevision(
+            renderSnapshot: GaryxRenderSnapshot(basedOnSeq: 42, rows: []),
+            messages: [],
+            turnRows: [],
+            treatment: .content,
+            showsTailThinking: false,
+            hasMoreRenderableHistory: false,
+            isLoadingOlderHistory: false,
+            capsuleHTMLCacheEpoch: 0,
+            dynamicTypeSize: .large,
+            horizontalSizeClass: .compact,
+            displayScale: sourceScrollView.traitCollection.displayScale
+        )
+        let sourceID = UUID()
+        let isFollowingTail = true
+        var isInteracting = false
+        let layoutEpoch: UInt64 = 7
+        GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+            threadID: threadID,
+            sourceID: sourceID,
+            revision: revision,
+            visibleViewportFrameInPage: viewport,
+            layoutEpoch: layoutEpoch,
+            captureStatus: {
+                (
+                    isFollowingTail: isFollowingTail,
+                    isUserInteracting: isInteracting,
+                    layoutEpoch: layoutEpoch
+                )
+            },
+            scrollView: { sourceScrollView }
+        )
+
+        pumpMainRunLoop(duration: 1.2)
+        XCTAssertNil(
+            GaryxConversationTranscriptSnapshotCache.shared.testSnapshotHandle(
+                for: threadID
+            ),
+            "the stable 800pt browsing offset must not enter the opening-cover cache"
+        )
+
+        isInteracting = true
+        sourceScrollView.contentOffset = CGPoint(x: 0, y: 2_400)
+        pumpMainRunLoop(duration: 0.1)
+        isInteracting = false
+        pumpMainRunLoop(duration: 1.2)
+
+        let handle = try XCTUnwrap(
+            GaryxConversationTranscriptSnapshotCache.shared.qualifiedSnapshot(
+                for: threadID,
+                revision: revision,
+                visibleViewportFrameInPage: viewport
+            )
+        )
+        XCTAssertEqual(
+            handle.openingViewportContract.captureGeometry.contentOffset.y,
+            2_400
+        )
+        XCTAssertEqual(handle.openingViewportContract.distanceFromCanonicalTail, 0)
+
+        let changedRevision = GaryxConversationTranscriptSnapshotRevision(
+            renderSnapshot: GaryxRenderSnapshot(basedOnSeq: 43, rows: []),
+            messages: revision.messages,
+            turnRows: revision.turnRows,
+            treatment: revision.treatment,
+            showsTailThinking: revision.showsTailThinking,
+            hasMoreRenderableHistory: revision.hasMoreRenderableHistory,
+            isLoadingOlderHistory: revision.isLoadingOlderHistory,
+            capsuleHTMLCacheEpoch: revision.capsuleHTMLCacheEpoch,
+            dynamicTypeSize: revision.dynamicTypeSize,
+            horizontalSizeClass: revision.horizontalSizeClass,
+            displayScale: revision.displayScale
+        )
+        XCTAssertNil(
+            GaryxConversationTranscriptSnapshotCache.shared.qualifiedSnapshot(
+                for: threadID,
+                revision: changedRevision,
+                visibleViewportFrameInPage: viewport
+            )
+        )
+        XCTAssertNil(
+            GaryxConversationTranscriptSnapshotCache.shared.qualifiedSnapshot(
+                for: threadID,
+                revision: revision,
+                visibleViewportFrameInPage: viewport.offsetBy(dx: 0, dy: 1)
+            )
+        )
+        XCTAssertEqual(
+            GaryxConversationTranscriptSnapshotCache.shared.revealReadiness(
+                for: handle,
+                revision: revision,
+                visibleViewportFrameInPage: viewport,
+                layoutEpoch: layoutEpoch,
+                isFollowingTail: isFollowingTail,
+                isUserInteracting: isInteracting,
+                scrollView: sourceScrollView
+            ),
+            .matched
+        )
+
+        sourceScrollView.contentOffset = CGPoint(x: 0, y: 800)
+        XCTAssertEqual(
+            GaryxConversationTranscriptSnapshotCache.shared.revealReadiness(
+                for: handle,
+                revision: revision,
+                visibleViewportFrameInPage: viewport,
+                layoutEpoch: layoutEpoch,
+                isFollowingTail: false,
+                isUserInteracting: false,
+                scrollView: sourceScrollView
+            ),
+            .pending
         )
     }
 
@@ -2226,12 +2372,14 @@ private func waitForTranscriptSnapshot(
 ) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
-        if GaryxConversationTranscriptSnapshotCache.shared.hasSnapshot(for: threadID) {
+        if GaryxConversationTranscriptSnapshotCache.shared
+            .testSnapshotHandle(for: threadID) != nil {
             return true
         }
         pumpMainRunLoop(duration: 0.02)
     }
-    return GaryxConversationTranscriptSnapshotCache.shared.hasSnapshot(for: threadID)
+    return GaryxConversationTranscriptSnapshotCache.shared
+        .testSnapshotHandle(for: threadID) != nil
 }
 
 @MainActor
@@ -2267,10 +2415,9 @@ private func cacheTranscriptSnapshot(threadID: String, size: CGSize) {
         sourceWindow.rootViewController = nil
     }
 
-    GaryxConversationTranscriptSnapshotCache.shared.scheduleCapture(
+    GaryxConversationTranscriptSnapshotCache.shared.testScheduleCapture(
         threadID: threadID,
-        revision: "cross-thread-snapshot-repro",
-        scrollView: { sourceScrollView }
+        scrollView: sourceScrollView
     )
     let snapshotCaptured = waitForTranscriptSnapshot(threadID: threadID)
     XCTAssertTrue(

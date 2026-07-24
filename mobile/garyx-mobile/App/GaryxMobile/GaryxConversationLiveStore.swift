@@ -92,6 +92,11 @@ struct GaryxConversationLiveStore {
         return model.renderSnapshot(for: threadID) != nil
     }
 
+    func renderSnapshot(in model: GaryxMobileModel) -> GaryxRenderSnapshot? {
+        guard let threadID else { return nil }
+        return model.renderSnapshot(for: threadID)
+    }
+
     private func renderInput(in model: GaryxMobileModel) -> GaryxConversationRouteRenderInput {
         let threadMessages = threadID.map { model.cachedMessages(for: $0) } ?? []
         let snapshot = threadID.flatMap { model.renderSnapshot(for: $0) }

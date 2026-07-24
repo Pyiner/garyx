@@ -281,7 +281,8 @@ final class GaryxExistingThreadLoadingFlashReproTests: XCTestCase {
                 hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels,
                 isAwaitingInitialHistory: isAwaitingInitialHistory
             ),
-            hasTranscriptSnapshotPixels: hasTranscriptSnapshotPixels
+            openingViewportContractID:
+                hasTranscriptSnapshotPixels ? "flash-repro-contract" : nil
         )
     }
 
