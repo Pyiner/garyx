@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		269500000000000000000002 /* GaryxCapsulePreviewShellLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 269500000000000000000001 /* GaryxCapsulePreviewShellLayoutTests.swift */; };
 		0082D7AB4C45BA3A763C68FF /* GaryxMobileModel+Usage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C2DC63388C22894723B5E33 /* GaryxMobileModel+Usage.swift */; };
 		0121FCDB905043DAD0FE5660 /* GaryxCustomAgentDraftRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 599E6F9AC8AA6BE5198550DA /* GaryxCustomAgentDraftRules.swift */; };
 		04BD59205299EC62A3073C12 /* GaryxTurnRowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C69847E6B292DC6EF80BD77 /* GaryxTurnRowsCache.swift */; };
@@ -323,6 +324,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		269500000000000000000001 /* GaryxCapsulePreviewShellLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxCapsulePreviewShellLayoutTests.swift; sourceTree = "<group>"; };
 		0015CCE5442760BBF458B549 /* GaryxPushNotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxPushNotificationCoordinator.swift; sourceTree = "<group>"; };
 		023FEFBEB36F91EA2C20F1F4 /* GaryxHorizontalRevealGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxHorizontalRevealGesture.swift; sourceTree = "<group>"; };
 		03118985A16E839F37BC35D1 /* GaryxCapsuleFocusedPreviewLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxCapsuleFocusedPreviewLoader.swift; sourceTree = "<group>"; };
@@ -631,6 +633,7 @@
 				2598B0012598B0012598B001 /* GaryxAgentDetailPresentationTests.swift */,
 				88D2136515E18DD0C6A3093B /* GaryxCapsuleCacheEpochTests.swift */,
 				E2A0FFBBDB8131BEC2537044 /* GaryxCapsuleFocusedPreviewLoadingTests.swift */,
+				269500000000000000000001 /* GaryxCapsulePreviewShellLayoutTests.swift */,
 				D5223B0AAC0643559494DE7A /* GaryxCapsuleThumbnailScrollbarTests.swift */,
 				F92B4253C80CB095FA34E483 /* GaryxComposerDurabilityFileProtectionTests.swift */,
 				2CB0FD35E03C46196DC7EAC1 /* GaryxComposerRuntimeIntegrationTests.swift */,
@@ -1113,6 +1116,7 @@
 				2598A0012598A0012598A001 /* GaryxAgentDetailPresentationTests.swift in Sources */,
 				5922C8D648DD76BE0F1E977A /* GaryxCapsuleCacheEpochTests.swift in Sources */,
 				B6784187B3722B41C26C7297 /* GaryxCapsuleFocusedPreviewLoadingTests.swift in Sources */,
+				269500000000000000000002 /* GaryxCapsulePreviewShellLayoutTests.swift in Sources */,
 				8EC63D7C77B8B96D12F5E703 /* GaryxCapsuleThumbnailScrollbarTests.swift in Sources */,
 				BEB666C8229CC6B6AD5BB504 /* GaryxComposerDurabilityFileProtectionTests.swift in Sources */,
 				C7A132008BD8990A8A75D970 /* GaryxComposerRuntimeIntegrationTests.swift in Sources */,

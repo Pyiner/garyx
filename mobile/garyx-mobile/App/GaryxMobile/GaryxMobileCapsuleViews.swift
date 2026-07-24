@@ -298,7 +298,6 @@ private struct GaryxCapsuleGalleryCard: View {
                     cornerRadius: 0,
                     showsBorder: false
                 )
-                .aspectRatio(16.0 / 10.0, contentMode: .fit)
                 .anchorPreference(
                     key: GaryxCapsuleGalleryThumbnailAnchorKey.self,
                     value: .bounds
@@ -411,6 +410,52 @@ struct GaryxCapsulePreviewThumbnail: View {
     }
 
     var body: some View {
+        GaryxCapsulePreviewShell(
+            phase: phase,
+            rendition: rendition,
+            cornerRadius: cornerRadius,
+            showsBorder: showsBorder
+        )
+        .task(id: LoadKey(capsuleId: capsuleId, revision: revision, epoch: cacheEpoch)) {
+            await reconcile()
+        }
+    }
+
+    private func reconcile() async {
+        let result = await model.capsuleThumbnail(
+            capsuleId: capsuleId,
+            revision: revision,
+            rendition: rendition
+        )
+        switch result {
+        case let .image(image):
+            phase = .image(image)
+        case .deleted:
+            phase = .deleted
+        case .failed:
+            phase = .failed
+        }
+    }
+}
+
+/// One geometry owner for every thumbnail surface and load phase. The parent
+/// supplies the available card width; this shell derives the matching
+/// rendition height and never consults the glyph, image, or placeholder's
+/// intrinsic size.
+struct GaryxCapsulePreviewShell: View {
+    let phase: GaryxCapsulePreviewThumbnail.Phase
+    let rendition: GaryxCapsuleThumbnailRendition
+    let cornerRadius: CGFloat
+    let showsBorder: Bool
+
+    var body: some View {
+        GaryxCapsulePreviewShellLayout(rendition: rendition) {
+            surface
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var surface: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(Color.primary.opacity(0.045))
@@ -422,9 +467,6 @@ struct GaryxCapsulePreviewThumbnail: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(GaryxTheme.hairline, lineWidth: 1)
             }
-        }
-        .task(id: LoadKey(capsuleId: capsuleId, revision: revision, epoch: cacheEpoch)) {
-            await reconcile()
         }
     }
 
@@ -458,21 +500,43 @@ struct GaryxCapsulePreviewThumbnail: View {
         .padding(8)
         .multilineTextAlignment(.center)
     }
+}
 
-    private func reconcile() async {
-        let result = await model.capsuleThumbnail(
-            capsuleId: capsuleId,
-            revision: revision,
-            rendition: rendition
-        )
-        switch result {
-        case let .image(image):
-            phase = .image(image)
-        case .deleted:
-            phase = .deleted
-        case .failed:
-            phase = .failed
+private struct GaryxCapsulePreviewShellLayout: Layout {
+    let rendition: GaryxCapsuleThumbnailRendition
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty,
+              let proposedWidth = proposal.width,
+              proposedWidth.isFinite else {
+            return .zero
         }
+        let width = max(0, proposedWidth)
+        let height = width
+            * CGFloat(rendition.aspectHeight)
+            / CGFloat(rendition.aspectWidth)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let preview = subviews.first else { return }
+        preview.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(
+                width: bounds.width,
+                height: bounds.height
+            )
+        )
     }
 }
 
@@ -1116,7 +1180,6 @@ private struct GaryxMobileCapsuleChatCard: View {
                     cornerRadius: 0,
                     showsBorder: false
                 )
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(displayTitle)
